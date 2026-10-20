@@ -280,11 +280,40 @@ def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,r
     monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=0))
     process=SimpleNamespace(pid=100,poll=lambda:None)
     limits=isolated_runtime_limits(1024,2,100,100,.1)
+    observation={"latest":None,"observed_peak_rss":None,"observed_peak_threads":None}
     if accepted:
-        _check_scene_runtime(process,child,limits)
+        monkeypatch.setattr(psutil,'process_iter',lambda:[])
+        _check_scene_runtime(process,child,limits,observation)
+        assert observation["last_attempt"]["state"] == "unknown"
+        assert observation["latest"] is observation["observed_peak_rss"] is None
+        monkeypatch.setattr(psutil,'process_iter',lambda:[current])
+        _check_scene_runtime(process,child,limits,observation)
     else:
         with pytest.raises(GrantedCommandResourceLimit):
-            _check_scene_runtime(process,child,limits)
+            _check_scene_runtime(process,child,limits,observation)
+    assert observation["latest"]["rss_bytes"] == rss
+    assert observation["latest"]["threads"] == threads
+    assert observation["observed_peak_rss"]["rss_bytes"] == rss
+    assert observation["observed_peak_threads"]["threads"] == threads
+    if accepted:
+        current.memory_info=lambda:SimpleNamespace(rss=512)
+        current.num_threads=lambda:1
+        _check_scene_runtime(process,child,limits,observation)
+        assert observation["latest"]["rss_bytes"] == 512
+        assert observation["observed_peak_rss"]["rss_bytes"] == rss
+        assert observation["observed_peak_threads"]["threads"] == threads
+        assert observation["observed_peak_rss"]["observed_monotonic"] <= observation["latest"]["observed_monotonic"]
+        before=observation["latest"]
+        monkeypatch.setattr(psutil,'process_iter',lambda:[current,SimpleNamespace(pid=101)])
+        def group(pid):
+            if pid == 101:
+                raise ProcessLookupError()
+            return 100
+        monkeypatch.setattr(os,'getpgid',group)
+        _check_scene_runtime(process,child,limits,observation)
+        assert observation["last_attempt"]["sample_complete"] is False
+        assert observation["last_attempt"]["reason"] == "process_disappeared_during_enumeration"
+        assert observation["latest"] == before
 
 
 def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
@@ -1106,6 +1135,9 @@ def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, m
     assert payload["decision"]["checks"]["disk_io_bytes_per_second"] == decision.checks["disk_io_bytes_per_second"]
     assert payload["qwen_markers"]["stderr"] == ["QWEN_PHASE importing_runtime"]
     assert payload["group_released"] is (None if release_unknown else True)
+    release = payload["release_observations"]["final_after_parent_wait"]
+    assert release["released"] is True
+    assert release["group"]["registered"]["pid"] == payload["child"]["pid"]
     assert "PRIVATE_BODY" not in record.getMessage()
     assert scheduler.processes.children_released(tuple(scheduler.children)) is True
 
@@ -1145,6 +1177,9 @@ def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_field
         "cpu_percent": {"actual": 95, "maximum": 91, "passed": False, "raw": "PRIVATE_BODY"},
         "disk_free_bytes:/PRIVATE_PATH": {"actual": 50, "minimum": 100, "passed": False},
         "memory_policy": {"passed": False, "system_reserve_bytes": 100,
+            "recovery_reset": {"reason":"memory_observation_gap", "source":"background_observer",
+                "previous_observed_monotonic":38.0, "observed_monotonic":42.0, "interval_seconds":4.0,
+                "pressure":"warning", "available_bytes":200, "raw":"PRIVATE_BODY"},
             "policy_evidence_reference": "PRIVATE_PATH", "sample": {
                 "platform": "darwin", "observed_monotonic": 42.0,
                 "observed_at_utc": "2026-10-18T05:15:28+00:00", "pressure": "critical",
@@ -1152,6 +1187,8 @@ def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_field
         "private": {"raw": "PRIVATE_TOKEN"},
     }, "memory_pressure_critical", 0.1)
     payload = decision.diagnostic_payload()
+    assert payload["checks"]["memory_policy"]["recovery_reset"]["interval_seconds"] == 4.0
+    assert payload["checks"]["memory_policy"]["recovery_reset"]["source"] == "background_observer"
     assert payload["checks"]["memory_policy"]["sample"]["native_pressure_value"] == 4
     assert payload["checks"]["memory_policy"]["sample"]["observed_at_utc"] == "2026-10-18T05:15:28+00:00"
     assert payload["checks"]["cpu_percent"] == {"actual": 95, "maximum": 91, "passed": False}

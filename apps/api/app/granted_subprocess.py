@@ -59,6 +59,10 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
         payload["output_file_sample"] = diagnostic["output_file_sample"]
     if diagnostic.get("process_cpu_observation") is not None:
         payload["process_cpu_observation"] = diagnostic["process_cpu_observation"]
+    if diagnostic.get("release_observations"):
+        payload["release_observations"] = diagnostic["release_observations"]
+    if diagnostic.get("process_resource_observation") is not None:
+        payload["process_resource_observation"] = diagnostic["process_resource_observation"]
     # These bounded execution receipts must reach the existing API stderr log,
     # including successful worker runs when application INFO logging is disabled.
     logger.warning("Granted command diagnostic: %s", json.dumps(payload, ensure_ascii=False))
@@ -124,7 +128,11 @@ class GrantedCommandMemoryPressure(GrantedCommandResourceUnavailable, HostResour
 
 
 def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentity,
-                         limits: SceneRuntimeLimits) -> dict | None:
+                         limits: SceneRuntimeLimits, resource_observation=None) -> dict | None:
+    resource_sample = None
+    sampled_members = 0
+    enumeration_complete = True
+    incomplete_reason = "no_complete_group_sample"
     try:
         if process.poll() is None and f"{psutil.Process(process.pid).create_time():.6f}" != child.start_token:
             raise GrantedCommandResourceUnavailable("Child identity changed during sampling")
@@ -134,9 +142,13 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                 if os.getpgid(current.pid) == child.pid:
                     processes.append(current)
             except ProcessLookupError:
+                enumeration_complete = False
+                incomplete_reason = "process_disappeared_during_enumeration"
                 continue
             except PermissionError:
                 # An unrelated process cannot be in our own accessible group.
+                enumeration_complete = False
+                incomplete_reason = "process_identity_unreadable_during_enumeration"
                 continue
         rss = 0
         threads = 0
@@ -147,6 +159,7 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
             try:
                 rss += current.memory_info().rss
                 threads += current.num_threads()
+                sampled_members += 1
                 if limits.collect_cpu:
                     try:
                         times = current.cpu_times()
@@ -157,6 +170,7 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                     except (psutil.Error, OSError, ValueError):
                         cpu_available = False  # Diagnostic failure does not negate verified OS scheduling.
             except psutil.NoSuchProcess as exc:
+                incomplete_reason = "process_disappeared_during_sample"
                 if current.pid == process.pid and process.poll() is None:
                     # macOS can remove the pid just before waitpid exposes its
                     # exit. Reap only this registered Popen; unknown/live stays refused.
@@ -164,6 +178,9 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                         process.wait(timeout=.01)
                     except subprocess.TimeoutExpired:
                         raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling") from exc
+        if resource_observation is not None and enumeration_complete and processes and sampled_members == len(processes):
+            resource_sample = {"rss_bytes": rss, "threads": threads, "sample_complete": True,
+                "observed_monotonic": time.monotonic(), "observed_at_utc": datetime.now(timezone.utc).isoformat()}
         if rss > limits.max_process_rss_bytes or threads > limits.max_process_threads:
             raise GrantedCommandResourceLimit(rss=rss, threads=threads, limits=limits)
         if limits.memory_monitor is None:
@@ -188,12 +205,41 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                 raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
     except (psutil.Error, OSError) as exc:
         raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
+    finally:
+        if resource_observation is not None:
+            if resource_sample is None:
+                resource_observation["last_attempt"] = {"state": "unknown", "sample_complete": False, "reason": incomplete_reason,
+                    "observed_monotonic": time.monotonic(), "observed_at_utc": datetime.now(timezone.utc).isoformat()}
+            else:
+                resource_observation["last_attempt"] = {"state": "ready", "sample_complete": True,
+                    "observed_monotonic": resource_sample["observed_monotonic"],
+                    "observed_at_utc": resource_sample["observed_at_utc"]}
+                resource_observation["latest"] = resource_sample
+                for metric, peak in (("rss_bytes", "observed_peak_rss"), ("threads", "observed_peak_threads")):
+                    previous = resource_observation.get(peak)
+                    if previous is None or resource_sample[metric] > previous[metric]:
+                        resource_observation[peak] = {metric: resource_sample[metric], "sample_complete": True,
+                            "observed_monotonic": resource_sample["observed_monotonic"],
+                            "observed_at_utc": resource_sample["observed_at_utc"]}
 
 
 def _terminate_and_verify(process: subprocess.Popen[bytes], child: ProcessIdentity | None,
-                          probe: HostProcessProbe) -> None:
+                          probe: HostProcessProbe, release_observations=None) -> None:
+    def group_check(phase):
+        released = probe.children_released((child,))
+        if release_observations is not None:
+            # Capture this check; never issue another probe for diagnostics.
+            observed = {"released": released, "observed_monotonic": time.monotonic(),
+                "group": getattr(probe, "last_group_observation", None)}
+            release_observations[phase] = observed
+            if released is None:
+                release_observations.setdefault("first_unknown", {"phase": phase, **observed})
+        return released
+    phase = "TERM"
     try:
-        if process.poll() is None or (child and probe.children_released((child,)) is not True):
+        if process.poll() is None or (child and group_check("before_term") is not True):
+            if release_observations is not None:
+                release_observations["signal_phase"] = phase
             try:
                 if os.getpgid(process.pid) == process.pid:
                     os.killpg(process.pid, signal.SIGTERM)
@@ -208,20 +254,27 @@ def _terminate_and_verify(process: subprocess.Popen[bytes], child: ProcessIdenti
             # Reaping the parent and the orphaned group is asynchronous on
             # macOS. Give the group a bounded chance to disappear before KILL.
             group_deadline = time.monotonic() + 0.25
-            while child and probe.children_released((child,)) is not True and time.monotonic() < group_deadline:
+            while child and group_check("after_term") is not True and time.monotonic() < group_deadline:
                 time.sleep(0.01)
-            if child and probe.children_released((child,)) is not True:
+            if child and group_check("before_kill") is not True:
+                phase = "KILL"
+                if release_observations is not None:
+                    release_observations["signal_phase"] = phase
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
     except (OSError, PermissionError) as exc:
+        if release_observations is not None:
+            release_observations["termination_error"] = {"phase": phase, "type": type(exc).__name__, "errno": exc.errno}
         raise RecoveryBlocked("子进程组无法停止，设备许可须保留") from exc
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired as exc:
+        if release_observations is not None:
+            release_observations["parent_wait_timeout"] = True
         raise RecoveryBlocked("子进程未退出，设备许可须保留") from exc
-    if child is not None and probe.children_released((child,)) is not True:
+    if child is not None and group_check("final_after_parent_wait") is not True:
         raise RecoveryBlocked("子进程组释放状态未知，设备许可须保留")
 
 
@@ -292,6 +345,9 @@ def run_granted_command(
     exec_ack = False
     process_cpu_observation = None
     last_cpu_record = None
+    release_observations = {}
+    process_resource_observation = {"latest": None, "observed_peak_rss": None, "observed_peak_threads": None,
+                                    "last_attempt": {"state": "unknown", "sample_complete": False, "reason": "not_sampled"}}
     entrypoint = [sys.executable]
     if not getattr(sys, "frozen", False):
         entrypoint.append(str(Path(__file__).resolve().parents[1] / "server.py"))
@@ -324,7 +380,7 @@ def run_granted_command(
 
         def sample_scene_runtime():
             nonlocal process_cpu_observation, last_cpu_record
-            current = _check_scene_runtime(process, child, scene_limits)
+            current = _check_scene_runtime(process, child, scene_limits, process_resource_observation)
             if current is None:
                 return
             previous = last_cpu_record
@@ -404,7 +460,7 @@ def run_granted_command(
             else:
                 cancel_event.wait(pause)
         if probe.children_released((child,)) is not True:
-            _terminate_and_verify(process, child, probe)
+            _terminate_and_verify(process, child, probe, release_observations)
             raise GrantedCommandError("Command left a live process-group descendant")
         check_running_unit()
         _record_command_diagnostics(grant, child, {
@@ -413,6 +469,7 @@ def run_granted_command(
             "exec_ack": exec_ack, "group_released": True,
             "before_termination_returncode": process.returncode, "returncode": process.returncode,
             "process_cpu_observation": process_cpu_observation,
+            "process_resource_observation": process_resource_observation,
         })
         return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
     except BaseException as exc:
@@ -420,7 +477,7 @@ def run_granted_command(
         group_released = True if process is None else None
         try:
             if process is not None:
-                _terminate_and_verify(process, child, probe)
+                _terminate_and_verify(process, child, probe, release_observations)
                 group_released = True
                 # Drain only this released group's pipes, within the original caps.
                 for name in outputs:
@@ -445,6 +502,8 @@ def run_granted_command(
                 "before_termination_returncode": before_termination_returncode,
                 "returncode": process.returncode if process is not None else None,
                 "process_cpu_observation": process_cpu_observation,
+                "release_observations": release_observations,
+                "process_resource_observation": process_resource_observation,
             }
             if isinstance(exc, GrantedCommandOutputLimit) and exc.file_sample is not None:
                 exc.command_diagnostics["output_file_sample"] = exc.file_sample

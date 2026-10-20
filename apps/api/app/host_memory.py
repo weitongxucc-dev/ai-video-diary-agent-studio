@@ -80,6 +80,7 @@ class MemoryDecision:
     policy_evidence_reference: str | None = None
     system_reserve_bytes: int | None = None
     additional_memory_bytes: int | None = None
+    recovery_reset: dict[str, object] | None = None
 
     def payload(self):
         return asdict(self)
@@ -245,6 +246,7 @@ class HostMemoryMonitor:
     def __init__(self, policy: MemoryPolicy | None, *, sampler=sample_host_memory, clock=time.monotonic):
         self.policy, self.sampler, self.clock = policy, sampler, clock
         self._healthy_since = self._last_observed = None
+        self._previous_sample = self._last_reset = None
         self._lock = threading.Lock()
 
     def check(self, *, system_reserve_bytes: int, additional_memory_bytes: int = 0,
@@ -271,11 +273,28 @@ class HostMemoryMonitor:
             commit_required = (policy.min_commit_headroom_bytes + additional_commit_bytes
                                if policy is not None and policy.platform == "win32" and additional_commit_bytes is not None else None)
             def result(verdict, reason, elapsed):
+                self._previous_sample = {"observed_monotonic": now, "pressure": sample.pressure,
+                                         "available_bytes": sample.available_bytes}
                 return MemoryDecision(verdict, reason, sample, required_available_bytes, commit_required, elapsed,
                     policy.recovery_stable_seconds if policy else None,
                     policy.max_sample_gap_seconds if policy else None,
-                    policy.evidence_reference if policy else None, system_reserve_bytes, additional_memory_bytes)
+                    policy.evidence_reference if policy else None, system_reserve_bytes, additional_memory_bytes,
+                    self._last_reset)
+            def remember_reset(reason, caller_depth=2):
+                caller = sys._getframe(caller_depth)
+                module = caller.f_globals["__name__"]
+                source = ("background_observer" if module == "app.host_resource_probes" and caller.f_code.co_name == "_observe_base"
+                          else "host_probe" if module == "app.host_resource_probes"
+                          else "child_guard" if module == "app.granted_subprocess" else "other")
+                previous = self._previous_sample or {}
+                self._last_reset = {"reason": reason, "source": source,
+                    "previous_observed_monotonic": self._last_observed, "observed_monotonic": now,
+                    "interval_seconds": now - self._last_observed if self._last_observed is not None else None,
+                    "previous_pressure": previous.get("pressure"), "pressure": sample.pressure,
+                    "previous_available_bytes": previous.get("available_bytes"),
+                    "available_bytes": sample.available_bytes, "system_reserve_bytes": system_reserve_bytes}
             def refuse(verdict, reason):
+                remember_reset(reason, 3)
                 self._healthy_since = None
                 self._last_observed = now
                 return result(verdict, reason, 0.)
@@ -297,6 +316,8 @@ class HostMemoryMonitor:
                 return refuse(None, "memory_observation_stale")
             gap = self._last_observed is not None and now - self._last_observed > policy.max_sample_gap_seconds
             if self._last_observed is None or now < self._last_observed or gap:
+                remember_reset("initial_observation" if self._last_observed is None
+                               else "memory_observation_gap" if gap else "clock_regressed")
                 self._healthy_since = now
             if self._healthy_since is None:
                 self._healthy_since = now

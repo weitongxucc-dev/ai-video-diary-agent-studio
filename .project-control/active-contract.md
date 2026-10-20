@@ -34,7 +34,7 @@ B当前只读恢复核对自然交付后，按用户在G线程批准的治理1�
 
 ### 3.1 恢复后的责任分工
 
-B针对6db5c59f真实配音的两处缺失回执，新增独占 `apps/api/app/host_memory.py`、`apps/api/app/granted_subprocess.py`，连同既有 `host_resource_probes.py`，仅补内存稳定窗口重置原因和子进程组释放unknown的同次探测依据。复用既有拒绝诊断，不新增轮询、状态系统或逐样本日志，不改变保护判定、资源门限或进程释放规则；只在重置/失败时保留有限原因、时间和身份/errno。相关现有 `apps/api/tests/test_host_memory.py`、`apps/api/tests/test_host_resource_probes.py` 仅在确需验证诊断对应关系时选最小用例，不新增套件。C先保存本候选终态并正常退出；未获新候选交接不得重复运行。
+B针对6db5c59f真实配音的缺失回执，新增独占 `apps/api/app/host_memory.py`、`apps/api/app/granted_subprocess.py`，连同既有 `host_resource_probes.py`，仅补内存稳定窗口重置原因、子进程组释放unknown的同次探测依据，以及既有RSS/线程采样的最近值、峰值和对应时间。RSS不是MLX完整内存或系统压力的替代指标，不从它单独推断归因。复用既有最终/拒绝诊断，不新增采样、轮询、状态系统或逐样本日志，不改变保护判定、资源门限或进程释放规则；只保留有限原因、时间、占用标量和身份/errno。相关现有 `apps/api/tests/test_host_memory.py`、`apps/api/tests/test_host_resource_probes.py` 仅在确需验证诊断对应关系时选最小用例，不新增套件。C先保存本候选终态并正常退出；未获新候选交接不得重复运行。
 
 | 负责人 | 负责的用户结果与交付 | 依赖及不可越过的边界 |
 | --- | --- | --- |

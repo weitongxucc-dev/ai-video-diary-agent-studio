@@ -702,6 +702,21 @@ class HostResourceDecision:
                 pressure = sample.get("facts", {}).get("pressure", {})
                 if type(pressure.get("native_value")) is int:
                     item["sample"]["native_pressure_value"] = pressure["native_value"]
+                reset = check.get("recovery_reset")
+                if isinstance(reset, dict):
+                    evidence = {key: value for key, value in reset.items()
+                        if key in {"previous_observed_monotonic", "observed_monotonic", "interval_seconds",
+                                   "previous_available_bytes", "available_bytes", "system_reserve_bytes"}
+                        and (value is None or type(value) in {int, float} and math.isfinite(value))}
+                    for key in ("previous_pressure", "pressure"):
+                        if reset.get(key) in {"normal", "warning", "critical", "unknown"}:
+                            evidence[key] = reset[key]
+                    if reset.get("source") in {"background_observer", "host_probe", "child_guard", "other"}:
+                        evidence["source"] = reset["source"]
+                    reason = reset.get("reason")
+                    if isinstance(reason, str) and re.fullmatch(r"memory_[a-z_]+|initial_observation|clock_regressed", reason):
+                        evidence["reason"] = reason
+                    item["recovery_reset"] = evidence
             if metric == "disk_free_bytes":
                 checks.setdefault(metric, []).append(item)
             else:
@@ -1666,6 +1681,7 @@ class HostProcessProbe:
     def __init__(self) -> None:
         if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
             raise RuntimeError("Host process probe supports macOS and Linux only")
+        self.last_group_observation = None  # Diagnostic only; never a release verdict cache.
 
     @staticmethod
     def _boot_id() -> str:
@@ -1680,17 +1696,32 @@ class HostProcessProbe:
         return self.identity(os.getpid())
 
     def _state(self, child: ProcessIdentity, *, group: bool) -> RecoveryState:
+        observation = {"registered": {"pid": child.pid, "start_token": child.start_token, "boot_id": child.boot_id},
+                       "step": "boot"}
+        if group:
+            self.last_group_observation = observation
+        def unknown(reason, exc=None):
+            observation["reason"] = reason
+            if exc is not None:
+                observation["error"] = {"type": type(exc).__name__, "errno": getattr(exc, "errno", None),
+                                        "message": str(exc)[:160]}
+            return "unknown"
         try:
             boot = self._boot_id()
+            observation["observed_boot_id"] = boot
             if not boot:
-                return "unknown"
+                return unknown("boot_id_unavailable")
             if child.boot_id != boot:
                 return "released"
             try:
+                observation["step"] = "identity"
                 observed = self.identity(child.pid)
             except psutil.NoSuchProcess:
                 observed = None
+                observation["identity_not_found"] = True
             except (OSError, psutil.Error, RuntimeError) as exc:
+                observation["identity_error"] = {"type": type(exc).__name__, "errno": getattr(exc, "errno", None),
+                                                  "message": str(exc)[:160]}
                 # macOS create_time reads kinfo_proc through sysctl. Its exact
                 # short-read error can race exit; unrelated RuntimeError still
                 # propagates, and holder handling retains the original rule.
@@ -1699,31 +1730,41 @@ class HostProcessProbe:
                 ):
                     raise
                 if not group:
-                    return "unknown"
+                    return unknown("identity_unavailable")
                 # Only the already registered PGID's definite absence proves
                 # release. A surviving descendant, EPERM or any other error
                 # keeps the metadata failure unknown.
                 try:
+                    observation["step"] = "pgid"
                     os.killpg(child.pid, 0)
+                    observation["killpg_result"] = "exists"
                 except OSError as group_error:
+                    observation["killpg_errno"] = group_error.errno
                     if group_error.errno == errno.ESRCH:
                         return "released"
-                return "unknown"
+                return unknown("identity_unavailable_group_unproven")
+            if observed is not None:
+                observation["observed_identity"] = {"pid": observed.pid, "start_token": observed.start_token,
+                                                    "boot_id": observed.boot_id}
             if observed is not None and observed.start_token != child.start_token:
-                return "unknown" if group else "released"
+                return unknown("identity_mismatch") if group else "released"
             if group:
                 # Wrapper makes its PID the session and process-group ID before
                 # registration. A surviving grandchild retains this group ID.
                 try:
+                    observation["step"] = "pgid"
                     os.killpg(child.pid, 0)
+                    observation["killpg_result"] = "exists"
                 except ProcessLookupError:
+                    observation["killpg_errno"] = errno.ESRCH
                     return "released"
-                except PermissionError:
-                    return "unknown"
+                except PermissionError as exc:
+                    observation["killpg_errno"] = exc.errno
+                    return unknown("pgid_permission_denied", exc)
                 return "active"
             return "active" if observed is not None else "released"
-        except (OSError, psutil.Error, ValueError):
-            return "unknown"
+        except (OSError, psutil.Error, ValueError) as exc:
+            return unknown("process_probe_error", exc)
 
     def children_released(self, children: tuple[ProcessIdentity, ...]) -> bool | None:
         states = tuple(self._state(child, group=True) for child in children)

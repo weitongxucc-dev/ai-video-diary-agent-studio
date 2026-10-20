@@ -64,14 +64,22 @@ def test_critical_is_immediate_and_recovery_requires_continuous_window():
     world = World()
     assert world.stabilize().verdict is True
     world.pressure = "critical"
-    assert world.check().verdict is False
+    critical = world.check()
+    assert critical.verdict is False
+    assert critical.recovery_reset["reason"] == "memory_pressure_critical"
+    assert critical.recovery_reset["pressure"] == "critical"
     world.now += 1
     world.pressure = "warning"
-    assert world.check().reason == "memory_recovery_stabilizing"
+    recovering = world.check()
+    assert recovering.reason == "memory_recovery_stabilizing"
+    assert recovering.recovery_reset == critical.recovery_reset
     world.now += 1
     assert world.check().verdict is False
     world.now += 3  # Missing observations reset the window, even when memory looks normal.
-    assert world.check().stable_elapsed_seconds == 0
+    gap = world.check()
+    assert gap.stable_elapsed_seconds == 0
+    assert gap.recovery_reset["reason"] == "memory_observation_gap"
+    assert gap.recovery_reset["interval_seconds"] == 3
     assert world.stabilize().verdict is True
 
 
