@@ -8,7 +8,7 @@
 
 既定产品目标未取消：Mac端一次目标自动完成“30秒脱壳机介绍，中英文各一条”，随后连续精修、撤销重做、真实输出及同一候选Quit/重启恢复。手机联动在桌面核心闭环后恢复，Windows在下一阶段；需求差额、长时长范围和用户接受点仍见[开发清单](0.11-development-plan.md)。本轮不把文档整改或旧测试结果当产品验收通过。
 
-用户2026-10-20在G线程明确批准按审查项1、2、4优先，随后3、5处理，具体顺序见[开发清单§1.1.1a](0.11-development-plan.md#111a-本次批准的优先修复与尺度验证)。随后逐项确认任务授权、退出保存暂停和有效授权下的自动接续；授权唯一规则见[认证§5](../docs/auth-workspace-boundary.md#5-后台任务)，退出默认行为见[产品§12.1](../docs/product-requirements.md#121-同一台主机的任务安排011)。诊断修改不代表行为已修复。C已保存候选证据并正常退出，根因未解决前不重复跑配音；G继续候选增量审查与验收把关。B先交最小实施差额与所需文件，主控按下表独占绑定恢复实施，不重复询问已批准决定；新绑定下发前源码保持冻结。资源保护、数据归属和独立设计工作不受此变更放宽或取消。
+用户2026-10-20在G线程明确批准按审查项1、2、4优先，随后3、5处理，具体顺序见[开发清单§1.1.1a](0.11-development-plan.md#111a-本次批准的优先修复与尺度验证)。随后逐项确认任务授权、退出保存暂停和有效授权下的自动接续；授权唯一规则见[认证§5](../docs/auth-workspace-boundary.md#5-后台任务)，退出默认行为见[产品§12.1](../docs/product-requirements.md#121-同一台主机的任务安排011)。诊断修改不代表行为已修复。C已保存候选证据并正常退出，根因未解决前不重复跑配音；G继续候选增量审查与验收把关。A/B按§3.2新绑定恢复实施，不重复询问已批准决定；旧诊断与UI任务不继续扩展。资源保护、数据归属和独立设计工作不受此变更放宽或取消。
 
 ## 2. 直接权威与事实源
 
@@ -24,21 +24,15 @@
 | 负责人 | 当前独占文件 / 状态 |
 | --- | --- |
 | 主控 | 本合同、开发清单及必要共享权威、原验收入口。负责集成提交和候选打包、根因判断与修复调度；当前桌面运行操作已移交C，不同时点击、重启或提交制作。无未绑定产品源码写权。 |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | 当前新增独占 `apps/web/src/components/ui/button.tsx`、`apps/web/src/components/ui/workbench-controls.module.css`、`apps/web/src/components/AppSelect.tsx`、`apps/web/src/components/AppSelect.module.css`：按DESIGN§3及§4.5接入首批正式按钮/选择器，复用已审议Base Nova来源和现有Base UI，保留调用契约、表单/模态/键盘行为；不改其它公共控件或导航，不引入依赖、不新增测试套件。只做必要静态与现有定向检查，真实GUI交C；不启动当前候选。原绑定 `apps/api/app/topics.py`、`apps/api/agent_tools/diary/script-tools.ts`、现有 `apps/api/tests/test_creation_task_script_grounding.py` 保留，已集成协议修复与HTTP诊断不重做，新的后端修复按主控具体故障派发，不写main.py。 |
-| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 当前新增独占 `apps/api/app/host_resource_probes.py`，修复9ffdb20b实证的运行IO历史未被既有后台观察器持续更新，以及 `io_observation_gap` 未接入现有安全让出回执导致遗留granted/held/running。复用原观察线程和yield/recovery，隔离许可generation，真实断档仍拒绝，不放宽窗口或预算。现有 `apps/api/tests/test_host_resource_probes.py`、`apps/api/tests/test_creation_execution.py` 仅局部覆盖这两个实际缺口；不新增套件。原独占 `apps/api/app/main.py`、`apps/api/app/creation/editing/timeline_restore_use_case.py`、`apps/api/app/creation/editing/metadata_use_case.py`、`apps/api/app/device_scheduler.py`、`apps/api/app/creation/person_stage_use_case.py`、`apps/api/app/creation_execution.py` 保持，已集成修复不重做；main.py唯一写者，不做无关整理。当前运行候选由C操作，不直接改业务数据库或释放其许可。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | 当前仅§3.2桌面退出绑定；此前UI与Agent补丁已集成，不继续从旧范围施工。 |
+| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 当前仅§3.2任务授权与执行/退出绑定；main.py唯一写者。此前诊断和恢复补丁不重做，不手动修改验收库或释放许可。 |
 | C `01a14301-b182-7a92-a973-66fe11baf450` | 2026-10-20按用户要求改为独立真实验收线程，使用较轻量模型；此前Web修复已集成，源码写权收回。独占当前Mac候选的GUI操作、实播、正常退出/重启及受控中断恢复；只写验收目录中 `desktop-c-20261020-*` 定向证据。接手当前正在执行的目标，不重建账号、不重复提交、不并行启动媒体任务。不修改代码、数据库业务记录、资源门限或模型设置，不补人工制作步骤；首个失败保留回执与复现步骤并反馈主控，由主控判断与派修。 |
 | G “G · 代码治理与增量质量审查” `01a15854-9259-7231-977f-32bec26fd119` | 只读现有生产代码、相关测试/配置和明确候选diff；结论保留在线程中，无产品源码、测试、共享文档或设计产物写权。先交付当前质量基线，此后由主控随候选提交触发增量审查，不自行轮询或扩大为实现。 |
 | “建立桌面端设计语言” `01a1582b-200c-7220-8187-5925f6082fc5` | 用户单独授权继续；当前独立产物目录 `designs/yaohe-desktop-language-20261020/` 由该线程维护，主控不写入或顺手提交。按用户最新要求逐项学习对比上传包全部590项；上一版样板已被否决，不能作为采用基线。正式规范/产品接入由主控审核后另行绑定，不能由本表推导新代码写权。 |
 
 复用现有可见线程，不新增内部代理、平行计划或治理日志。实施者确认当前绑定后直接工作，不等待逐次批准；需要范围外文件时只回报证据，由主控原位分配。每个文件同一时间一个写者；不自行提交/推送，只有C在本次验收范围内操作当前候选运行与恢复，其余线程不得启停服务或运行重型验收。最小检查按风险选现有入口，不预设新增测试文件，不重复全套检查。主控审核后提交共同候选，G按该diff审查。
 
-B当前只读恢复核对自然交付后，按用户在G线程批准的治理1、2、4接续实施；新增独占 `apps/api/app/production.py` 中本次作业/任务/事件状态仓储方法、`apps/api/app/device_runtime.py` 的具体停止投影入口及 `apps/api/app/creation/execution_control.py` 的原启动恢复入口，连同原绑定的 `creation_execution.py`、`device_scheduler.py`、`main.py` 仅处理同事务让出、unknown停止原因及启动恢复接线。复用已有 `defer_unit` 回调和恢复/状态响应，不改共享schema或引入新枚举；如现有契约不足，先给主控具体差额。已有 `apps/api/tests/test_creation_execution.py` 与 `apps/api/tests/test_device_scheduler.py` 仅按真实缺口局部验证，不新增套件。C本次0任务/旧许可未恢复的首个证据须先核实际workspace和初始化入口，不能从旧数据库单独推断根因；不得人工改库或释放当前许可，不接管C的运行环境。A控件工作独立继续。
-
 ### 3.1 恢复后的责任分工
-
-B针对6db5c59f真实配音的缺失回执，新增独占 `apps/api/app/host_memory.py`、`apps/api/app/granted_subprocess.py`，连同既有 `host_resource_probes.py`，仅补内存稳定窗口重置原因、子进程组释放unknown的同次探测依据，以及既有RSS/线程采样的最近值、峰值和对应时间。RSS不是MLX完整内存或系统压力的替代指标，不从它单独推断归因。复用既有最终/拒绝诊断，不新增采样、轮询、状态系统或逐样本日志，不改变保护判定、资源门限或进程释放规则；只保留有限原因、时间、占用标量和身份/errno。相关现有 `apps/api/tests/test_host_memory.py`、`apps/api/tests/test_host_resource_probes.py` 仅在确需验证诊断对应关系时选最小用例，不新增套件。C先保存本候选终态并正常退出；未获新候选交接不得重复运行。
-
-551b852d腾出内存后的实际执行在generation65/66因owner许可核查unknown中断，并暴露不完整RSS样本被全部丢弃。B在上述范围补存已测组成员的占用下界及完整性，另独占 `apps/api/app/device_accounts.py`，与原 `main.py`、`creation_execution.py`、`device_scheduler.py` 仅补同次身份核查的安全失败分类和对应关系（来源、时间、HTTP状态/异常类别）。不记录凭据、响应正文或请求内容，不新增网络调用、授权缓存或重试，不改变授权/执行判定。未知与失效必须区分；运行检查与云端依赖的契约调整须先由主控审议，不借诊断修改越过安全边界。
 
 | 负责人 | 负责的用户结果与交付 | 依赖及不可越过的边界 |
 | --- | --- | --- |
@@ -50,6 +44,15 @@ B针对6db5c59f真实配音的缺失回执，新增独占 `apps/api/app/host_mem
 | 主控 | 接续成果、核实首个实际断点；共享契约、唯一文件写权、diff审核、组件采用、集成提交、真实整链验收及GitHub同步。 | 不与实施者同时改同一文件；不以子线程结案代替用户结果。共享入口必须指定单一写者，其余提交改动建议；设计研究不阻断独立的制作链修复。 |
 
 具体顺序与每步出口唯一见[开发清单§1.1.1](0.11-development-plan.md#111-固定推进批次)，本表只定义责任。每次交付报告实际变更、复用/退役内容、已验证证据、首个失败和未验证项；不报测试数量代替进度。
+
+### 3.2 本地授权与退出整改的当前绑定
+
+本节替代A/B此前的本批写入范围；未列文件不得由旧绑定推导写权。基线为权威提交`9cd321cc`，实现按实时Git与本节核对。
+
+- B独占：新增 `apps/api/app/creation/task_authorization.py`；现有 `apps/api/app/creation/contracts.py`、`apps/api/app/member_permits.py`、`apps/api/app/production.py`、`apps/api/app/database_migrations.py`、`apps/api/app/creation_execution.py`、`apps/api/app/creation/execution_control.py`、`apps/api/app/device_scheduler.py`、`apps/api/app/device_runtime.py`、`apps/api/app/granted_subprocess.py`、`apps/api/app/main.py`。实现审查项1/2及4的后端：任务范围授权持久化/本地核验/异步续期、unknown停止重载循环、停止派发/执行器通知/回收/中断保存。业务留在所属用例/仓储，main只装配；原RPC复用，不新增云端授权服务。自动目标接续须覆盖已批准范围，若原登录令牌消费者需要新增文件，先给主控确切差额，不宣布局部制作许可等于整体完成。
+- A独占：`apps/desktop/runtime/service-supervisor.js`、`apps/desktop/main.js`，以及确需验证退出协议时局部调整既有 `apps/desktop/scripts/lifecycle-smoke.js`。实现审查项4壳端，不修改Web导航/UI或后端源码，不独立定义另一套退出事实。
+- 退出接口由A/B复用现有本机API传输接线：仅主进程持有的本次启动控制凭据，绑定一次退出请求与共同截止；不依赖用户JWT、不暴露给Renderer、不写日志。复用原30秒作为整个API收尾总预算，各阶段消费剩余时间；后端停止派发、通知在途执行、确认登记进程回收和中断/检查点持久化后，才返回同请求的`ready_to_exit`，否则返回`unconfirmed`及有限未完成项。A随后关闭服务；超期升级终止记录实际信号和未确认释放，不无条件标记安全停止。具体线协议由主控消息固定，两端不能各自猜测。
+- 已有定向检查按实际风险选择，不预设新增测试文件；B如需调整现有验证文件先列确切路径。两线程不运行当前用户数据或真实模型、不提交/推送；G按冻结diff审查，主控集成。3/5在前批行为交付后绑定，C仍保持停止。
 
 ## 4. 本轮接受条件
 
