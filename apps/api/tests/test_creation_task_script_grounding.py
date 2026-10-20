@@ -278,6 +278,122 @@ def test_invalid_candidate_quotes_still_stop_with_bounded_resolution_diagnostic(
     assert 'private-' not in text and FACT not in text and len(text) < 1200
 
 
+@pytest.mark.parametrize('case,expected_code,expected_reason,request_count', [
+    ('success', None, None, 3),
+    ('still_string', 'script_review_invalid', 'issue_shape', 3),
+    ('extra_field', 'script_review_invalid', 'issue_shape', 3),
+    ('cross_section', 'script_review_invalid', 'issue_quote', 3),
+    ('known_issue', 'script_fact_unsupported', 'unsupported_fact', 3),
+    ('missing_usage', 'script_review_invalid', 'issue_shape', 2),
+    ('zero_usage', 'script_review_invalid', 'issue_shape', 2),
+    ('exhausted_tokens', 'script_review_invalid', 'issue_shape', 2),
+    ('exhausted_time', 'script_review_invalid', 'issue_shape', 2),
+])
+def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
+    monkeypatch, case, expected_code, expected_reason, request_count,
+):
+    document = draft()
+    document['script']['sections'] *= 2
+    calls, frozen = [], {}
+    clock = [0.0]
+    monkeypatch.setattr('app.topics.monotonic', lambda: clock[0])
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        if len(calls) == 2:
+            data = json.loads(body['messages'][1]['content'])
+            review = bound_review(reviewed(document), data)
+            if case == 'known_issue':
+                review['sections'][0]['issues'] = [{'kind': 'unsupported_fact',
+                    'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
+                    'reference_ids': ['evidence_1'], 'missing_or_conflicting': '保留原有有效问题'}]
+            review['sections'][1]['issues'] = 'private-malformed-array'
+            frozen.update(data=copy.deepcopy(data), report=copy.deepcopy(review), payload=copy.deepcopy(body))
+            envelope = _review_tool_response(review).json()
+            if case != 'missing_usage':
+                envelope['usage'] = {'completion_tokens': 0 if case == 'zero_usage'
+                    else 8192 if case == 'exhausted_tokens' else 100}
+            clock[0] = 121.0 if case == 'exhausted_time' else 30.0
+            return httpx.Response(200, json=envelope)
+        assert body['max_tokens'] == 8192 - 100
+        assert request.extensions['timeout']['read'] == 90.0
+        assert json.loads(body['messages'][1]['content']) == frozen['data']
+        assert json.loads(body['messages'][2]['content']) == {
+            'field_path': 'sections[1].issues', 'section_index': 2, 'expected_type': 'array',
+            'report': frozen['report']}
+        function = body['tools'][0]['function']
+        assert function['name'] == 'repair_script_review_issues'
+        assert 'submit_script_review' not in body['messages'][0]['content']
+        schema = function['parameters']
+        assert schema['required'] == ['issues'] and schema['additionalProperties'] is False
+        assert schema['properties'] == {'issues': frozen['payload']['tools'][0]['function']['parameters']
+            ['properties']['sections']['items']['anyOf'][1]['properties']['issues']}
+        patch = {'issues': []}
+        if case == 'still_string':
+            patch['issues'] = '[]'
+        elif case == 'extra_field':
+            patch['supports'] = []
+        elif case == 'cross_section':
+            patch['issues'] = [{'kind': 'unsupported_fact',
+                'candidate_quote_id': frozen['data']['script']['sections'][0]['content'][0]['quote_id'],
+                'reference_ids': ['evidence_1'], 'missing_or_conflicting': '不允许跨段引用'}]
+        envelope = _review_tool_response(patch).json()
+        envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
+        return httpx.Response(200, json=envelope)
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(respond))
+    if expected_code is None:
+        assert generator.generate(inputs()).sections[1].content == FACT
+    else:
+        with pytest.raises(CreationTaskScriptGenerationError) as failure:
+            generator.generate(inputs())
+        assert failure.value.code == expected_code and failure.value.reason_code == expected_reason
+        assert failure.value.retryable is False
+        if case == 'known_issue':
+            assert len(failure.value.review_issues) == 1
+            assert failure.value.review_issues[0]['review_explanation'] == '保留原有有效问题'
+    assert len(calls) == request_count
+
+
+@pytest.mark.parametrize('phase', ['initial', 'repair'])
+def test_review_deadline_cancels_inflight_request_including_field_repair(phase):
+    import asyncio
+    from app.topics import CreationTaskGeneratedScript, CreationTaskGeneratedScriptSection
+
+    document = draft()
+    section = document['script']['sections'][0]
+    candidate = CreationTaskGeneratedScript(title=document['script']['title'], language='zh-CN', sections=(
+        CreationTaskGeneratedScriptSection(title=section['title'], content=section['content'],
+            visual_prompt=section['visual_prompt'], evidence_reference_ids=('knowledge:fixture:v1',)),))
+    calls, cancelled = [], []
+
+    async def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if phase == 'initial' or len(calls) == 2:
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+        review = bound_review(reviewed(document), json.loads(body['messages'][1]['content']))
+        review['sections'][0]['issues'] = 'private-malformed-array'
+        envelope = _review_tool_response(review).json()
+        envelope['usage'] = {'completion_tokens': 100}
+        return httpx.Response(200, json=envelope)
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        timeout=0.03, transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.check_draft(inputs(), candidate)
+    assert failure.value.code == ('transport_failed' if phase == 'initial' else 'script_review_invalid')
+    assert len(calls) == (1 if phase == 'initial' else 2) and cancelled == [True]
+
+
 @pytest.mark.parametrize('returned,type_name,actual_count,reason', [
     ('less', 'array', 1, 'section_count'),
     ('more', 'array', 3, 'section_count'),
