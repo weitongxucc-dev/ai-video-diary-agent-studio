@@ -184,8 +184,14 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       '/assistant/script-context': 'read_assistant_script_context',
       '/assistant/edit-capabilities': 'read_task_edit_capabilities',
       '/assistant/media-script-capabilities': 'read_media_script_capabilities',
+      '/observations': 'read_task_observations',
     };
     if (reads[suffix] && !search) return result(reads[suffix], args);
+    const observationRequest = suffix.match(/^\/assistant\/edit-requests\/([^/]+)$/);
+    if (observationRequest && only('phase') && query.get('phase') === 'observation')
+      return result('read_task_observation_request', {...args, request_id: decodeURIComponent(observationRequest[1])});
+    const mediaJob = suffix.match(/^\/media-jobs\/([^/]+)$/);
+    if (mediaJob && !search) return result('read_task_media_job', {...args, job_id: decodeURIComponent(mediaJob[1])});
   }
   if (method !== 'POST' || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
   if (['/execution/start', '/execution/resume'].includes(suffix) && only('assistant_turn_id'))
@@ -196,6 +202,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     '/assistant/script-draft': 'save_assistant_script_draft',
     '/execution/cancel': 'cancel_creation_execution',
     '/topics/generate': 'generate_creation_task_topics',
+    '/observations': 'observe_task_output',
   };
   if (writes[suffix]) return result(writes[suffix], {...args, payload});
   const script = suffix.match(/^\/scripts\/([^/]+)\/confirm$/);
