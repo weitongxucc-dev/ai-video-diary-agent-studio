@@ -268,8 +268,9 @@ class TaskBusiness:
         binding={**{key:goal[key] for key in ('workspace_id','member_id','task_id','conversation_id')},
             'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),
             'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')}
+        from fastapi.encoders import jsonable_encoder
         self.conversations.finish_turn(claim['turn_id'],'completed',reply,
-            {'kind':'task_turn','response':response,'goal_business_actions':proofs},
+            jsonable_encoder({'kind':'task_turn','response':response,'goal_business_actions':proofs}),
             write_guard=lambda conn:self.check(binding,Event(),float('inf'),connection=conn,check_version=False),
             completed_input_id=goal.get('source_input_id') if goal.get('source_input_turn_id')==claim['turn_id'] else None)
         return response

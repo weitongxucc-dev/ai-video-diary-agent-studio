@@ -8,7 +8,7 @@
 
 既定产品目标未取消：Mac端一次目标自动完成“30秒脱壳机介绍，中英文各一条”，随后连续精修、撤销重做、真实输出及同一候选Quit/重启恢复。手机联动在桌面核心闭环后恢复，Windows在下一阶段；需求差额、长时长范围和用户接受点仍见[开发清单](0.11-development-plan.md)。本轮不把文档整改或旧测试结果当产品验收通过。
 
-用户2026-10-20在G线程明确批准按审查项1、2、4优先，随后3、5处理，具体顺序见[开发清单§1.1.1a](0.11-development-plan.md#111a-本次批准的优先修复与尺度验证)。随后逐项确认任务授权、退出保存暂停和有效授权下的自动接续；授权唯一规则见[认证§5](../docs/auth-workspace-boundary.md#5-后台任务)，退出默认行为见[产品§12.1](../docs/product-requirements.md#121-同一台主机的任务安排011)。诊断修改不代表行为已修复。C已保存候选证据并正常退出，根因未解决前不重复跑配音；G继续候选增量审查与验收把关。A/B按§3.2新绑定恢复实施，不重复询问已批准决定；旧诊断与UI任务不继续扩展。资源保护、数据归属和独立设计工作不受此变更放宽或取消。
+用户2026-10-20在G线程明确批准按审查项1、2、4优先，随后3、5处理，具体顺序见[开发清单§1.1.1a](0.11-development-plan.md#111a-本次批准的优先修复与尺度验证)。随后逐项确认任务授权、退出保存暂停和有效授权下的自动接续；授权唯一规则见[认证§5](../docs/auth-workspace-boundary.md#5-后台任务)，退出默认行为见[产品§12.1](../docs/product-requirements.md#121-同一台主机的任务安排011)。诊断修改不代表行为已修复。C已保存候选证据并正常退出，根因未解决前不重复跑配音；G继续候选增量审查与验收把关。A/B仅按§3.2当前绑定实施，不重复询问已批准决定；旧诊断与UI任务不继续扩展。资源保护、数据归属和独立设计工作不受此变更放宽或取消。
 
 ## 2. 直接权威与事实源
 
@@ -24,8 +24,8 @@
 | 负责人 | 当前独占文件 / 状态 |
 | --- | --- |
 | 主控 | 本合同、开发清单及必要共享权威、原验收入口。负责集成提交和候选打包、根因判断与修复调度；当前桌面运行操作已移交C，不同时点击、重启或提交制作。无未绑定产品源码写权。 |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | 当前仅§3.2桌面退出绑定；此前UI与Agent补丁已集成，不继续从旧范围施工。 |
-| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 当前仅§3.2任务授权与执行/退出绑定；main.py唯一写者。此前诊断和恢复补丁不重做，不手动修改验收库或释放许可。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | 当前仅§3.2回合结果编码修复；此前源码已集成冻结。 |
+| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 当前仅§3.2资源预算与准入只读核查，无产品源码写权；不手动修改验收库或释放许可。 |
 | C `01a14301-b182-7a92-a973-66fe11baf450` | 2026-10-20按用户要求改为独立真实验收线程，使用较轻量模型；此前Web修复已集成，源码写权收回。独占当前Mac候选的GUI操作、实播、正常退出/重启及受控中断恢复；只写验收目录中 `desktop-c-20261020-*` 定向证据。接手当前正在执行的目标，不重建账号、不重复提交、不并行启动媒体任务。不修改代码、数据库业务记录、资源门限或模型设置，不补人工制作步骤；首个失败保留回执与复现步骤并反馈主控，由主控判断与派修。 |
 | G “G · 代码治理与增量质量审查” `01a15854-9259-7231-977f-32bec26fd119` | 只读现有生产代码、相关测试/配置和明确候选diff；结论保留在线程中，无产品源码、测试、共享文档或设计产物写权。先交付当前质量基线，此后由主控随候选提交触发增量审查，不自行轮询或扩大为实现。 |
 | “建立桌面端设计语言” `01a1582b-200c-7220-8187-5925f6082fc5` | 用户单独授权继续；当前独立产物目录 `designs/yaohe-desktop-language-20261020/` 由该线程维护，主控不写入或顺手提交。按用户最新要求逐项学习对比上传包全部590项；上一版样板已被否决，不能作为采用基线。正式规范/产品接入由主控审核后另行绑定，不能由本表推导新代码写权。 |
@@ -45,38 +45,18 @@
 
 具体顺序与每步出口唯一见[开发清单§1.1.1](0.11-development-plan.md#111-固定推进批次)，本表只定义责任。每次交付报告实际变更、复用/退役内容、已验证证据、首个失败和未验证项；不报测试数量代替进度。
 
-### 3.2 本地授权与退出整改的当前绑定
+### 3.2 当前最小修复绑定
 
-本节替代A/B此前的本批写入范围；未列文件不得由旧绑定推导写权。基线为权威提交`9cd321cc`，实现按实时Git与本节核对。
+基线 `main@53eb81dc`，实际以Git核对。此前本地授权、退出、Pi有限业务桥、原目标接续、核查报告修复均已集成，旧写入绑定全部退役；本节是A/B唯一当前范围。
 
-- B独占：新增 `apps/api/app/creation/task_authorization.py`；现有 `apps/api/app/creation/contracts.py`、`apps/api/app/member_permits.py`、`apps/api/app/production.py`、`apps/api/app/database_migrations.py`、`apps/api/app/creation_execution.py`、`apps/api/app/creation/execution_control.py`、`apps/api/app/device_scheduler.py`、`apps/api/app/device_runtime.py`、`apps/api/app/granted_subprocess.py`、`apps/api/app/main.py`。实现审查项1/2及4的后端：任务范围授权持久化/本地核验/异步续期、unknown停止重载循环、停止派发/执行器通知/回收/中断保存。业务留在所属用例/仓储，main只装配；原RPC复用，不新增云端授权服务。自动目标接续须覆盖已批准范围，若原登录令牌消费者需要新增文件，先给主控确切差额，不宣布局部制作许可等于整体完成。
-- A独占：`apps/desktop/runtime/service-supervisor.js`、`apps/desktop/main.js`，以及确需验证退出协议时局部调整既有 `apps/desktop/scripts/lifecycle-smoke.js`。实现审查项4壳端，不修改Web导航/UI或后端源码，不独立定义另一套退出事实。
-- B新增独占 `apps/api/app/creation/montage_stage_use_case.py`：故事板选材阶段即消费原任务已核实的素材范围，禁止先越界选材再仅在渲染前拒绝；不修改无关剪辑策略或另建素材发现入口。
-- B新增独占 `apps/api/app/task_audio.py` 中TaskMediaJobs的身份/停止分支及 `apps/api/app/creation/cover_use_case.py` 的对应分支：同一任务授权与退出暂停语义覆盖已有局部媒体和封面执行，不保留同步云端否决或把Quit记为用户取消的旧消费者；不改音频算法、封面生成策略或顺手拆文件。
-- B新增独占 `apps/api/app/material_ingestion.py`、`apps/api/app/automation_runtime.py` 的stop入口及直接收尾调用：消费退出共同剩余预算，退役无界join和阶段重新计时，不改扫描、分析或定时业务策略。
-- B独占 `apps/api/app/assistant_pi.py` 的停止和业务回调透传。`apps/api/app/assistant/turn_control.py` 中B的共同退出截止适配已冻结，现移交A独占：将宿主在途业务回调纳入同一回合的取消、共同截止和释放确认；回调未结束不能释放回合或报告安全退出，不改Pi模型/工具能力。
-- B新增独占 `apps/api/app/creation/quality_inspection_use_case.py`：质检监督消费同一任务授权，退役同步云端否决；连同已批准审查项3，核验移出写事务，恢复时保留已产生的worker结果，不因暂时无法续期而丢失。审查项5只在既有main装配/渲染直接调用处处理：成片先持久化，质检独立安排，不把质检启动失败反写为渲染失败；不引入新质检框架。
-- B新增独占 `apps/api/app/media_script_tools.py`、`apps/api/app/media/picture_preview.py` 的原任务身份核验消费者：把TaskMediaJobs进入的已有媒体脚本/图片预览接到同一任务授权，不更改工具算法或扩大内容范围；完成后冻结本批，不先扩展Pi桥。
-- B新增独占 `apps/api/app/creation/quality_execution.py` 的Quit/授权暂停与原回执保存分支，区分正常退出和用户取消；`apps/api/tests/conftest.py` 仅退役清理阶段对已删除`_stop_execution_worker`的导入，调用现有停止入口，不新增测试基础设施。此两处为候选已定位差额，定点修完后只复核相关失败，不重跑无关检查。
-- A桌面退出修复已冻结集成；下一批独占 `apps/api/app/assistant/turn.py`、`apps/api/app/assistant/runtime_context.py`、`apps/api/app/assistant/process_runner.py`、`apps/api/app/assistant/preflight.py`、`apps/api/agent_runtime/host.mjs`、`apps/api/agent_runtime/session.mjs`、`apps/api/agent_tools/diary_tools.ts`、`apps/api/agent_tools/diary/runtime.ts`、`apps/api/agent_tools/diary/transport.ts`。仅为原目标后台接续接通既有双向管道的有限业务调用与受限前置事实读取；主控消息固定接口，宿主业务用例由B负责，`assistant_pi.py`仍仅B写。后台管道模式不继承登录凭据、不回退HTTP；正常交互入口本批不迁移，不因新传输抹掉Pi原生工具能力。
-- A确需持久验证时可在既有 `apps/api/tests/test_assistant_phase_deadlines.py` 和 `apps/api/agent_tools/tests/consumer-closure.test.mjs` 中补本批实际差额：慢业务不阻塞取消/输出、后台传输不回退、前置事实投影；不新增套件、不复制全工具矩阵。
-- G已指出的A桥阻断优先定点修复：回调生命周期接上述TurnControl，前置事实失败传回现有安全结构化错误，不统一丢成泛化失败。仅解冻涉及的桥文件及其必要定向检查，其他已通过部分不重复验证；B在实际业务提交前消费取消、截止、授权和版本边界。
-- A桥候选冻结后独占 `apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py` 及确需补差额的既有 `apps/api/tests/test_assistant_goal_continuation.py`：仅修复G已确认的最旧候选饥饿和慢回合阻塞结果回填，复用原认领/幂等/持久目标，有界选择和有限在途回合，不新建任务表或队列。main中的驱动装配仍由B处理；A提交所需生命周期接口，不交叉写main。此项不解冻已交G审查的桥文件。
-- B本批授权拒绝隔离经G复审后，继续独占上述main、assistant_pi、task_authorization、production、execution_control，并新增 `apps/api/app/assistant/task_business.py`、`apps/api/app/creation/script_draft_use_case.py`：接已固定17项原目标业务操作与受限事实，必要文案编排由原路由抽为同一用例，禁止复制算法、调用路由或构造内部HTTP Request。任务采用时固定已授权上下文，写入事务内核验撤权/到期/取消/输入版本；后台失败保留结构化回执。main接A持久接续服务的start/tick/pause/stop及共同退出截止，退役原每次新建与同步慢回合调用。其他生产文件差额须给实际消费者后再绑定，不自动扩大为全部编辑器或全工具迁移。
-- 实际完成链补4项已有观察能力：`read_task_observations`、`observe_task_output`、`read_task_observation_request`、`read_task_media_job`，保留原request_id和版本，不新增观察算法。A仅在既有transport补有限映射；B接同一TaskMediaJobs/OutputObservationUseCase和原请求仓储，必要观察编排从main抽到 `apps/api/app/creation/output_observation_use_case.py` 共同复用。未知制作回执按可信原输入定位原作业，不能用任务最新作业替代；文案保存未知不得盲重存。
-- 上述观察提交的事务接线由B在既有 `apps/api/app/task_audio.py` 的submit入口透传同一write_guard到原仓储事务；仅补实际提交前的授权/取消/版本核验，不改媒体算法或另建请求存储。
-- G对业务接线候选的增量审查由B统一定点收口：修复前置读取参数透传、观察原请求优先对账及未知提交回执、后台追加输入消费、暂停共同预算。为追加输入的同事务消费和范围继承，`apps/api/app/assistant/input_delivery.py`、`apps/api/app/assistant/process_runner.py`、`apps/api/app/conversation_repository.py` 本批移交B独占，A保持冻结；只扩展既有安全点/仓储入口，不新增队列或通用回执层。宿主在同一可信消费事务核对原授权、更新目标修订并封存未扩大的范围，桥只接受宿主返回的绑定；旧在途工具仍持有旧绑定。新增私人资源或越界输入保留明确待授权状态，不由后台扩大任务授权。必要验证复用当前B已绑定的测试入口，按上述实际失败选取，不展开全工具矩阵。
-- 上述候选复审发现“已消费追加输入后退出”仍使原目标失效，B继续收口；确需调整时独占 `apps/api/app/assistant/inputs.py`、`apps/api/app/assistant_goal_continuation.py` 的中断结算与恢复分支，A保持冻结。只保留已持久采用、原任务授权仍有效的输入，先对账原业务，不普遍放行interrupted输入或复活撤销目标；一并修复观察拒绝回执重放丢失原状态的问题。
-- 退出接口由A/B复用现有本机API传输接线：仅主进程持有的本次启动控制凭据，绑定一次退出请求与共同截止；不依赖用户JWT、不暴露给Renderer、不写日志。复用原30秒作为整个API收尾总预算，各阶段消费剩余时间；后端停止派发、通知在途执行、确认登记进程回收和中断/检查点持久化后，才返回同请求的`ready_to_exit`，否则返回`unconfirmed`及有限未完成项。A随后关闭服务；超期升级终止记录实际信号和未确认释放，不无条件标记安全停止。具体线协议由主控消息固定，两端不能各自猜测。
-- 已有定向检查按实际风险选择，不预设新增测试文件。B已申请并独占现有 `apps/api/tests/test_creation_execution.py`、`apps/api/tests/test_creation_permit_transport.py`，只覆盖本次授权范围/续期/撤权/恢复及退出控制共同截止的真实差额，不叠加无关矩阵。两线程不运行当前用户数据或真实模型、不提交/推送；G按冻结diff审查，主控集成。3/5已随实际质检消费者绑定，仍在1/2/4后收尾；C保持停止。
+- A独占 `apps/api/app/assistant/task_business.py`：仅在 `finish` 持久化完整回合结果前复用已有JSON编码，修复真实 `datetime is not JSON serializable`。不改仓储通用序列化、业务作业状态、授权、调度或原目标认领。必要验证先找已有直接消费者，给一个含日期的实际回执最小验证；如需改测试文件，先报确切路径，不新增套件。
+- B第一步独占 `apps/api/app/device_scheduler.py`、`apps/api/app/creation_execution.py`、`apps/api/app/creation/execution_control.py`、`apps/api/app/main.py`：按架构§3.12区分静态输入拒绝和动态压力等待，复用原请求/作业与TaskEvent持久回执、输入摘要和超限事实；同输入不反复准入，原Goal能读到可行动原因，main只装配。不能把正常等待改成业务失败、丢失原job或无条件重提交。先冻结此差额供G审查。
+- B第二步仅先给代码级接线方案：复用现有逐段worker、NarrationSegment/Artifact及Job检查点，使每段资源准入与保存/恢复单位一致，父阶段共同300秒/3MiB边界不重置；适用标定单位须显式，不能把现行374总量直接换成max。预计新增文件 `creation/narration_stage_use_case.py`、`production.py`，此两文件尚无写权，主控审核方案后补绑定。首次实验与生产档分开；不运行模型/桌面或修改业务数据，不调保护门限。
+- G对冻结差额做定点审核，不重复全量测试。C当前候选已停止，须收到主控明确的新候选和验收范围后运行。主控集成、打包并保持同一原任务/作业对账，不能用人工补步骤代替自动制作。
 
 ## 4. 本轮接受条件
 
-当前接续入口已集成 `d601a494`，C在原对话普通“继续”中实证接回原中英任务，无重复创建；`683d687a`核查字段补丁的真实维护验证仍因补丁 `issues:string` 最终拒绝。现有诊断只能证明类型和完整返回，不能从37字符长度推断字符串内容。停止同类模型格式修复策略；不追加调用或扩大预算试探。
-
-A当前仅独占 `apps/api/app/topics.py` 及必要的既有 `apps/api/tests/test_creation_task_script_grounding.py`，按[架构核查边界](../docs/system-architecture.md)将已知 `issues` / `reference_ids` 字符串改为单层严格、无损 JSON 数组解码，并退役这两类错误的模型补丁分支和只保护该分支的过时测试/诊断参数。不能递归、猜值、清空问题或放宽后续完整核查；原生数组与有效业务内容不变，其他生成消费者保持原契约。不新增兼容框架、配置或测试文件，按实际差额复用最小验证。此修改减少模型调用，不能先宣称已解决真实字符串内容或已成片。A须重读本段与架构对应段后施工；G仅审该差额及旧分支退役，主控集成，C收到明确候选后运行；B及其他已集成文件保持冻结。
-
-`abb35de5`真实验证已明确拒绝 `issues` 的非法JSON字符串，未产生草稿或媒体；不能推断其为空数组。A在上述两文件内继续最小生产报告契约修正：按架构有/无问题分支生成schema与规则并对应严格校验，消除必须输出不适用空容器的要求；既有有限单层解码不再扩宽，无新模型/接口/预算/重试，不改thinking参数。先更新现有相关夹具和最小反例后冻结交G，其他文件与运行仍保持原负责人。实际连接已确认官方MiniMax域名，本次不扩展代理或供应商迁移。 为同步该生产报告契约的现有直接共享消费者，A另独占 `apps/api/tests/test_creation_task_topic_provider.py` 的 `_script_review` 夹具，去掉已过期的空issues字段，选一个既有消费者验证；不改其他断言或扩测。
+核查报告现行契约唯一见[架构核查边界](../docs/system-architecture.md)；旧模型格式补丁已退役，不从历史失败重新启用。实际结果与每次维护运行的局限保留在既有验收入口，不在本合同复制历史证据。
 
 1. A/B交付实际缺口的最小修复与必要证据，已解决问题不重复施工；C给出可执行的真实桌面验收入口和仍缺消费者。
 2. G审核候选的职责/写入/恢复边界，主控处置具体意见后集成；只读审查和设计研究不阻断无关修复。
