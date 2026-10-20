@@ -54,12 +54,14 @@
 - B新增独占 `apps/api/app/creation/montage_stage_use_case.py`：故事板选材阶段即消费原任务已核实的素材范围，禁止先越界选材再仅在渲染前拒绝；不修改无关剪辑策略或另建素材发现入口。
 - B新增独占 `apps/api/app/task_audio.py` 中TaskMediaJobs的身份/停止分支及 `apps/api/app/creation/cover_use_case.py` 的对应分支：同一任务授权与退出暂停语义覆盖已有局部媒体和封面执行，不保留同步云端否决或把Quit记为用户取消的旧消费者；不改音频算法、封面生成策略或顺手拆文件。
 - B新增独占 `apps/api/app/material_ingestion.py`、`apps/api/app/automation_runtime.py` 的stop入口及直接收尾调用：消费退出共同剩余预算，退役无界join和阶段重新计时，不改扫描、分析或定时业务策略。
-- B新增独占 `apps/api/app/assistant_pi.py`、`apps/api/app/assistant/turn_control.py` 的停止适配：把同一退出截止传到已登记Pi进程组回收，先通知所有在途回合再有界等待，不为每个回合重新分配完整预算，不改Pi模型/工具能力。
+- B独占 `apps/api/app/assistant_pi.py` 的停止和业务回调透传。`apps/api/app/assistant/turn_control.py` 中B的共同退出截止适配已冻结，现移交A独占：将宿主在途业务回调纳入同一回合的取消、共同截止和释放确认；回调未结束不能释放回合或报告安全退出，不改Pi模型/工具能力。
 - B新增独占 `apps/api/app/creation/quality_inspection_use_case.py`：质检监督消费同一任务授权，退役同步云端否决；连同已批准审查项3，核验移出写事务，恢复时保留已产生的worker结果，不因暂时无法续期而丢失。审查项5只在既有main装配/渲染直接调用处处理：成片先持久化，质检独立安排，不把质检启动失败反写为渲染失败；不引入新质检框架。
 - B新增独占 `apps/api/app/media_script_tools.py`、`apps/api/app/media/picture_preview.py` 的原任务身份核验消费者：把TaskMediaJobs进入的已有媒体脚本/图片预览接到同一任务授权，不更改工具算法或扩大内容范围；完成后冻结本批，不先扩展Pi桥。
 - B新增独占 `apps/api/app/creation/quality_execution.py` 的Quit/授权暂停与原回执保存分支，区分正常退出和用户取消；`apps/api/tests/conftest.py` 仅退役清理阶段对已删除`_stop_execution_worker`的导入，调用现有停止入口，不新增测试基础设施。此两处为候选已定位差额，定点修完后只复核相关失败，不重跑无关检查。
 - A桌面退出修复已冻结集成；下一批独占 `apps/api/app/assistant/turn.py`、`apps/api/app/assistant/runtime_context.py`、`apps/api/app/assistant/process_runner.py`、`apps/api/app/assistant/preflight.py`、`apps/api/agent_runtime/host.mjs`、`apps/api/agent_runtime/session.mjs`、`apps/api/agent_tools/diary_tools.ts`、`apps/api/agent_tools/diary/runtime.ts`、`apps/api/agent_tools/diary/transport.ts`。仅为原目标后台接续接通既有双向管道的有限业务调用与受限前置事实读取；主控消息固定接口，宿主业务用例由B负责，`assistant_pi.py`仍仅B写。后台管道模式不继承登录凭据、不回退HTTP；正常交互入口本批不迁移，不因新传输抹掉Pi原生工具能力。
 - A确需持久验证时可在既有 `apps/api/tests/test_assistant_phase_deadlines.py` 和 `apps/api/agent_tools/tests/consumer-closure.test.mjs` 中补本批实际差额：慢业务不阻塞取消/输出、后台传输不回退、前置事实投影；不新增套件、不复制全工具矩阵。
+- G已指出的A桥阻断优先定点修复：回调生命周期接上述TurnControl，前置事实失败传回现有安全结构化错误，不统一丢成泛化失败。仅解冻涉及的桥文件及其必要定向检查，其他已通过部分不重复验证；B在实际业务提交前消费取消、截止、授权和版本边界。
+- A桥候选冻结后独占 `apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py` 及确需补差额的既有 `apps/api/tests/test_assistant_goal_continuation.py`：仅修复G已确认的最旧候选饥饿和慢回合阻塞结果回填，复用原认领/幂等/持久目标，有界选择和有限在途回合，不新建任务表或队列。main中的驱动装配仍由B处理；A提交所需生命周期接口，不交叉写main。此项不解冻已交G审查的桥文件。
 - 退出接口由A/B复用现有本机API传输接线：仅主进程持有的本次启动控制凭据，绑定一次退出请求与共同截止；不依赖用户JWT、不暴露给Renderer、不写日志。复用原30秒作为整个API收尾总预算，各阶段消费剩余时间；后端停止派发、通知在途执行、确认登记进程回收和中断/检查点持久化后，才返回同请求的`ready_to_exit`，否则返回`unconfirmed`及有限未完成项。A随后关闭服务；超期升级终止记录实际信号和未确认释放，不无条件标记安全停止。具体线协议由主控消息固定，两端不能各自猜测。
 - 已有定向检查按实际风险选择，不预设新增测试文件。B已申请并独占现有 `apps/api/tests/test_creation_execution.py`、`apps/api/tests/test_creation_permit_transport.py`，只覆盖本次授权范围/续期/撤权/恢复及退出控制共同截止的真实差额，不叠加无关矩阵。两线程不运行当前用户数据或真实模型、不提交/推送；G按冻结diff审查，主控集成。3/5已随实际质检消费者绑定，仍在1/2/4后收尾；C保持停止。
 
