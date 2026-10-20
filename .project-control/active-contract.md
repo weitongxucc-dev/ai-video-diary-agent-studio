@@ -62,6 +62,7 @@
 - A确需持久验证时可在既有 `apps/api/tests/test_assistant_phase_deadlines.py` 和 `apps/api/agent_tools/tests/consumer-closure.test.mjs` 中补本批实际差额：慢业务不阻塞取消/输出、后台传输不回退、前置事实投影；不新增套件、不复制全工具矩阵。
 - G已指出的A桥阻断优先定点修复：回调生命周期接上述TurnControl，前置事实失败传回现有安全结构化错误，不统一丢成泛化失败。仅解冻涉及的桥文件及其必要定向检查，其他已通过部分不重复验证；B在实际业务提交前消费取消、截止、授权和版本边界。
 - A桥候选冻结后独占 `apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py` 及确需补差额的既有 `apps/api/tests/test_assistant_goal_continuation.py`：仅修复G已确认的最旧候选饥饿和慢回合阻塞结果回填，复用原认领/幂等/持久目标，有界选择和有限在途回合，不新建任务表或队列。main中的驱动装配仍由B处理；A提交所需生命周期接口，不交叉写main。此项不解冻已交G审查的桥文件。
+- B本批授权拒绝隔离经G复审后，继续独占上述main、assistant_pi、task_authorization、production、execution_control，并新增 `apps/api/app/assistant/task_business.py`、`apps/api/app/creation/script_draft_use_case.py`：接已固定17项原目标业务操作与受限事实，必要文案编排由原路由抽为同一用例，禁止复制算法、调用路由或构造内部HTTP Request。任务采用时固定已授权上下文，写入事务内核验撤权/到期/取消/输入版本；后台失败保留结构化回执。main接A持久接续服务的start/tick/pause/stop及共同退出截止，退役原每次新建与同步慢回合调用。其他生产文件差额须给实际消费者后再绑定，不自动扩大为全部编辑器或全工具迁移。
 - 退出接口由A/B复用现有本机API传输接线：仅主进程持有的本次启动控制凭据，绑定一次退出请求与共同截止；不依赖用户JWT、不暴露给Renderer、不写日志。复用原30秒作为整个API收尾总预算，各阶段消费剩余时间；后端停止派发、通知在途执行、确认登记进程回收和中断/检查点持久化后，才返回同请求的`ready_to_exit`，否则返回`unconfirmed`及有限未完成项。A随后关闭服务；超期升级终止记录实际信号和未确认释放，不无条件标记安全停止。具体线协议由主控消息固定，两端不能各自猜测。
 - 已有定向检查按实际风险选择，不预设新增测试文件。B已申请并独占现有 `apps/api/tests/test_creation_execution.py`、`apps/api/tests/test_creation_permit_transport.py`，只覆盖本次授权范围/续期/撤权/恢复及退出控制共同截止的真实差额，不叠加无关矩阵。两线程不运行当前用户数据或真实模型、不提交/推送；G按冻结diff审查，主控集成。3/5已随实际质检消费者绑定，仍在1/2/4后收尾；C保持停止。
 
