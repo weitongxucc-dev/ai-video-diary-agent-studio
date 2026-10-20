@@ -824,3 +824,257 @@ def test_host_pending_proposal_gate_can_stop_a_goal_still_waiting_for_preview_re
     goal = repo.get_task_goal(turn["id"])
     assert goal["status"] == "waiting_adoption" and observed["event_id"] in goal["handled_event_ids"]
     assert goal["completed_source_slots"][0]["job_id"] == "png:one"
+
+
+def _adopted_groups_for_resume(tmp_path, *, groups=1):
+    from app.production import CreationPlan,CreationTask,ProductionRepository
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    production=ProductionRepository(tmp_path/'resume.sqlite3',tmp_path/'library')
+    authorizations=TaskAuthorizationUseCase(production,lambda _: 'ready')
+    conversations=ConversationRepository(production.database_path,task_goal_input_authorized=authorizations.adopted_goal_input_valid)
+    chat=conversations.create('workspace','member','home','home')
+    def human(message,context=None):
+        current=conversations.get(chat['id'],'workspace','member')
+        current=conversations.save_draft(chat['id'],'workspace','member',message,current['draft_version'])
+        turn,_=conversations.create_turn_idempotent(chat['id'],'workspace','member',message,str(uuid4()),
+            current['draft_version'],request_context=context or {'kind':'home'})
+        return conversations.get_turn(turn['id'])
+    continuation=GoalContinuationService(conversations,verify_current_goal=lambda *_:None,run_goal_turn=lambda *_:None)
+    adopted=[]
+    for group in range(groups):
+        turn=human('自主制作中英文各一条介绍')
+        source={'kind':'conversation_input','turn_id':turn['id'],'conversation_id':chat['id'],'member_id':'member',
+            'message_digest':hashlib.sha256(turn['user_message'].encode()).hexdigest()}
+        intent={'kind':'goal_delegation','source':source}
+        saved=production.create_creation_request('workspace',request_key=turn['id'],input_fingerprint=source['message_digest'],
+            goal=turn['user_message'],target_count=2,output_relation='variants',requirements={'creation_intent':intent},
+            material_scope={'kind':'workspace_library'},clarification_questions=[],verified_owner_user_id='member')
+        entries=[]
+        for language in ('zh-CN','en'):
+            identity=f'{group}-{language}'
+            plan=CreationPlan('plan-'+identity,'workspace',saved['goal'],language,1,language,'9:16',30,
+                [],[],None,[],0,0,'metadata fixture',[],[],[],'fingerprint-'+identity)
+            task=CreationTask('task-'+identity,'workspace',plan.id,plan.name,'knowledge_explanation')
+            entries.append((plan,task))
+        saved=production.save_creation_request_window('workspace',saved['id'],expected_revision=saved['revision'],
+            input_fingerprint='window-'+str(group),entries=entries,verified_owner_user_id='member')
+        window=saved['current_window']
+        saved=production.confirm_creation_request_window('workspace',saved['id'],window['id'],expected_revision=saved['revision'],
+            input_fingerprint=window['input_fingerprint'],verified_owner_user_id='member',adoption_kind='delegated_system')
+        for item in saved['current_window']['entries']:
+            item['task']['timeline_sequence']=0  # No timeline exists in this metadata-only case.
+        conversations.finish_turn(turn['id'],'completed','已采用原任务组')
+        roots=continuation.register_creation_request(turn['id'],'workspace','member',{**saved,'intent':intent})
+        assert len(roots)==2
+        for root_id in roots:
+            goal=conversations.get_task_goal(root_id)
+            authorizations.bind_business_context(production.get_creation_task('workspace',goal['task_id']),
+                CreationExecutionActor('workspace','member'),goal,memory={'revision':1})
+        adopted.append((saved,roots))
+    return SimpleNamespace(production=production,conversations=conversations,authorizations=authorizations,
+        service=continuation,human=human,adopted=adopted,chat=chat)
+
+
+@pytest.mark.parametrize('additional_input',[False,True])
+def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_path,monkeypatch,additional_input):
+    from app import main
+    case=_adopted_groups_for_resume(tmp_path)
+    saved,roots=case.adopted[0]
+    original=[case.conversations.get_task_goal(root) for root in roots]
+    expires={goal['task_id']:case.production.get_task_authorization('workspace',goal['task_id']).expires_at for goal in original}
+    turn=case.human('继续刚才已经采用的中英文两条')
+    input_id=None
+    if additional_input:
+        input_id=str(uuid4())
+        chat=case.conversations.get(case.chat['id'],'workspace','member')
+        chat=case.conversations.save_draft(chat['id'],'workspace','member','继续原来的两条，先查原请求',chat['draft_version'])
+        case.conversations.enqueue_input(chat['id'],'workspace','member',target_turn_id=turn['id'],client_request_id=input_id,
+            message=chat['draft_text'],mode='steer',expected_draft_version=chat['draft_version'],expected_reference_version=0,
+            request_context={'kind':'home'})
+        case.conversations.transition_input(chat['id'],'workspace','member',input_id,'consumed')
+    assert all(case.conversations.get_task_goal(root)['status']=='invalidated' for root in roots)
+    monkeypatch.setattr(main,'conversation_repo',case.conversations)
+    monkeypatch.setattr(main,'_goal_service',lambda:case.service)
+    monkeypatch.setattr(main,'_task_authorizations_for_goal',lambda:case.authorizations)
+    monkeypatch.setattr(main,'_assistant_conversation_for_request',lambda *_:('workspace','member',case.chat))
+    monkeypatch.setattr(main,'_wake_assistant_continuations',lambda:None)
+    request=SimpleNamespace(headers={'x-assistant-input-id':input_id} if input_id else {})
+    response=main.resume_assistant_creation_request(request,turn['id'],None)
+    assert response['status']=='resumed' and response['request_id']==saved['id']
+    assert {item['task_id'] for item in response['tasks']}=={goal['task_id'] for goal in original}
+    current=[case.conversations.get_task_goal(root) for root in roots]
+    assert all(goal['revision']==1 and goal['creation_resume']['source']['turn_id']==turn['id'] for goal in current)
+    assert all(goal['creation_adoption']==before['creation_adoption'] for goal,before in zip(current,original))
+    duplicate=main.resume_assistant_creation_request(request,turn['id'],saved['id'])
+    assert duplicate['status']=='already_running'
+    assert all(case.conversations.get_task_goal(root)['revision']==1 for root in roots)
+    assert case.conversations.get_turn(turn['id'])['user_message']=='继续刚才已经采用的中英文两条'
+    with pytest.raises(ValueError):
+        case.conversations.task_turn_source(turn['id'],'workspace','member',original[0]['task_id'])
+    case.conversations.finish_turn(turn['id'],'failed' if additional_input else 'completed','已安排核对原任务',
+        result={'reason':'api_shutdown'} if additional_input else None)
+    claims=[]
+    for candidate in case.conversations.goal_event_candidates():
+        claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
+        if claim:
+            claims.append(claim)
+            case.conversations.finish_turn(claim['turn_id'],'completed','已读取当前任务')
+    assert {claim['goal']['task_id'] for claim in claims}=={goal['task_id'] for goal in original}
+    assert all(case.production.get_task_authorization('workspace',task).expires_at==expiry for task,expiry in expires.items())
+    assert len(case.production.list_creation_tasks('workspace',viewer_user_id='member'))==2
+
+
+def test_home_resume_selection_and_original_authorization_are_required(tmp_path):
+    from dataclasses import replace
+    from datetime import datetime,timezone
+    case=_adopted_groups_for_resume(tmp_path,groups=2)
+    turn=case.human('继续原来采用的任务组')
+    response=case.service.resume_creation_request('workspace','member',turn['id'],None,None,case.authorizations)
+    assert response['status']=='needs_selection' and len(response['candidates'])==2
+    absent=case.service.resume_creation_request('workspace','member',turn['id'],None,'another-conversation-request',case.authorizations)
+    assert absent['status']=='blocked' and absent['request_id'] is None
+    with pytest.raises(ValueError):
+        case.service.resume_creation_request('workspace','another-member',turn['id'],None,case.adopted[0][0]['id'],case.authorizations)
+    with pytest.raises(ValueError):
+        case.service.resume_creation_request('workspace','member',turn['id'],'stale-input',case.adopted[0][0]['id'],case.authorizations)
+    saved,roots=case.adopted[0]
+    for root in roots:
+        goal=case.conversations.get_task_goal(root)
+        authority=case.production.get_task_authorization('workspace',goal['task_id'])
+        case.production.save_task_authorization(replace(authority,revision=authority.revision+1,
+            revoked_at=datetime.now(timezone.utc)),expected_revision=authority.revision)
+    denied=case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
+    assert denied['status']=='blocked' and all(item['status']=='blocked' for item in denied['tasks'])
+    assert all(case.conversations.get_task_goal(root)['revision']==0 for root in roots)
+    case.conversations.finish_turn(turn['id'],'completed','未恢复被撤权的任务组')
+    new_source=case.human('继续并使用刚选中的资料',{'kind':'home',
+        'knowledge_reference':{'knowledge_item_id':'new-private-source','version':'v1'}})
+    other,other_roots=case.adopted[1]
+    outside=case.service.resume_creation_request('workspace','member',new_source['id'],None,other['id'],case.authorizations)
+    assert outside['status']=='blocked' and all('范围外' in item['reason'] for item in outside['tasks'])
+    assert all(case.conversations.get_task_goal(root)['revision']==0 for root in other_roots)
+
+
+def test_home_resume_rolls_back_all_roots_when_scope_inheritance_fails(tmp_path,monkeypatch):
+    case=_adopted_groups_for_resume(tmp_path)
+    saved,roots=case.adopted[0];turn=case.human('继续原任务')
+    inherit=case.authorizations.inherit_business_context;calls=[]
+    def fail_second(*args,**kwargs):
+        calls.append(True)
+        inherit(*args,**kwargs)
+        if len(calls)==2:
+            raise PermissionError('scope no longer authorized')
+    monkeypatch.setattr(case.authorizations,'inherit_business_context',fail_second)
+    with pytest.raises(PermissionError):
+        case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
+    assert all(case.conversations.get_task_goal(root)['revision']==0 for root in roots)
+    assert not any(event['type']=='creation_request_resumed' for event in case.conversations.get_turn(turn['id'])['events'])
+    for root in roots:
+        goal=case.conversations.get_task_goal(root)
+        with pytest.raises(KeyError):
+            case.production.get_task_event('workspace',case.authorizations.business_context_id({**goal,'revision':1}))
+
+
+def test_home_resume_reconciles_unknown_original_request_before_any_new_business(tmp_path):
+    from app.creation_execution import CreationExecutionActor
+    case=_adopted_groups_for_resume(tmp_path)
+    saved,roots=case.adopted[0];root=roots[0]
+    goal=case.conversations.get_task_goal(root);task=case.production.get_creation_task('workspace',goal['task_id'])
+    request_id=str(uuid4())
+    case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
+    candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
+    claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
+    case.conversations.append_event(claim['turn_id'],{'type':'tool_end','failure':{'submission_effect':'unknown',
+        'request_id':request_id,'query_tool':'read_task_observation_request'}})
+    case.conversations.finish_turn(claim['turn_id'],'failed',result={'reason':'goal_runner_interrupted'})
+    case.conversations.settle_goal_round(claim)
+    turn=case.human('继续原任务，先核对原结果')
+    assert case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)['status']=='resumed'
+    current=case.conversations.get_task_goal(root)
+    def read_request(task,actor,identity,phase):
+        event_id,event=GoalResultProjection(case.production,case.conversations).request_claim(task,'member',identity,phase)
+        original=case.production.read_edit_request_result(task,event_id)
+        return {'status':'unknown' if original is None else 'recorded','result':original}
+    def forbidden(*args,**kwargs): raise AssertionError('must not submit or select new work before reconciliation')
+    outcome=case.service.verify_resume_business(current,task,CreationExecutionActor('workspace','member'),
+        SimpleNamespace(execution_sources=forbidden),GoalResultProjection(case.production,case.conversations),
+        read_request=read_request,read_media=forbidden)
+    assert outcome=={'status':'waiting_unknown','reason':'read_original_request_result'}
+
+
+def test_home_resume_explicit_stop_does_not_change_goals_events_or_authority(tmp_path):
+    case=_adopted_groups_for_resume(tmp_path)
+    saved,roots=case.adopted[0]
+    turn=case.human('不要继续，先停下')
+    before=[case.conversations.get_turn(root) for root in roots]
+    before_turn=case.conversations.get_turn(turn['id'])
+    authorities=[case.production.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]
+    with pytest.raises(ValueError,match='停止'):
+        case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
+    assert [case.conversations.get_turn(root) for root in roots]==before
+    assert case.conversations.get_turn(turn['id'])==before_turn
+    assert [case.production.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]==authorities
+    case.conversations.finish_turn(turn['id'],'completed','已保留停止要求')
+    continued=case.human('继续刚才暂停的任务')
+    resumed=case.service.resume_creation_request('workspace','member',continued['id'],None,saved['id'],case.authorizations)
+    assert resumed['status']=='resumed'
+    assert all(case.conversations.get_task_goal(root)['revision']==1 for root in roots)
+
+
+@pytest.mark.parametrize('recorded_state',['queued','running','missing_job','rejected'])
+def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,recorded_state):
+    from app.creation.contracts import JobRun,TaskEvent
+    from app.creation_execution import CreationExecutionActor
+    from app.task_audio import TASK_MEDIA_KIND
+    case=_adopted_groups_for_resume(tmp_path)
+    saved,roots=case.adopted[0];root=roots[0]
+    goal=case.conversations.get_task_goal(root);task=case.production.get_creation_task('workspace',goal['task_id'])
+    actor=CreationExecutionActor('workspace','member');owner=GoalResultProjection(case.production,case.conversations)
+    request_id=str(uuid4())
+    event_id,_=case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
+    candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
+    claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
+    case.conversations.append_event(claim['turn_id'],{'type':'tool_end','failure':{'submission_effect':'unknown',
+        'request_id':request_id,'query_tool':'read_task_observation_request'}})
+    case.conversations.finish_turn(claim['turn_id'],'failed',result={'reason':'goal_runner_interrupted'})
+    case.conversations.settle_goal_round(claim)
+    receipt={};code=202;job=None
+    if recorded_state in {'queued','running'}:
+        job=case.production.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
+            'original-request-job','a'*64))
+        case.production.append_task_event(TaskEvent('event_'+job.id+'_start','workspace',task.id,job.id,
+            'task_media_submitted',{**actor.identity_payload(),'arguments':{'_typed_source':{
+                'assistant_turn_id':claim['turn_id'],'request_id':request_id,'conversation_id':case.chat['id']}}}))
+        receipt={'job_id':job.id,'status':'queued','input_digest':job.input_digest,'result_kind':'observation'}
+        if recorded_state=='running':
+            case.production.claim_job_run('workspace',job.id)
+    elif recorded_state=='rejected':
+        code=409;receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
+    case.production.save_edit_request_result(task,event_id,status_code=code,response=receipt)
+    assert not (case.conversations.get_turn(claim['turn_id'])['result'].get('response') or {}).get('media_job')
+    turn=case.human('继续原任务，先核对原回执')
+    assert case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)['status']=='resumed'
+    reads=[]
+    def read_request(task,actor,identity,phase):
+        key,event=owner.request_claim(task,'member',identity,phase)
+        recorded=case.production.read_edit_request_result(task,key)
+        return {'status':'recorded','result_status_code':recorded['status_code'],'result':recorded['response']}
+    def read_media(task,actor,job_id):
+        reads.append(job_id)
+        current=case.production.get_job_run('workspace',job_id)
+        source=case.production.get_task_event('workspace','event_'+job_id+'_start')
+        owner.require_media_task(task.id,current)
+        assert CreationExecutionActor.from_event('workspace',source.payload)==actor
+        return {'job_id':current.id,'status':current.status}
+    def forbidden(*args,**kwargs): raise AssertionError('original request must settle before any other work')
+    outcome=case.service.verify_resume_business(case.conversations.get_task_goal(root),task,actor,
+        SimpleNamespace(execution_sources=forbidden),owner,read_request=read_request,read_media=read_media)
+    if job:
+        assert outcome['status']=='waiting_result' and outcome['original_job']['status']==recorded_state
+        assert reads==[job.id] and len(case.production.list_job_runs('workspace',task.id))==1
+    elif recorded_state=='missing_job':
+        assert outcome['status']=='waiting_unknown' and outcome['reason']=='original_request_job_not_located' and reads==[]
+    else:
+        assert outcome['status']=='waiting_unknown' and outcome['reason']=='原观察输入被拒绝' and reads==[]
+        assert outcome['original_request']['result']==receipt

@@ -74,6 +74,8 @@
 
 当前实际断点：`0cecec89`候选已通过普通UI一次目标创建中英任务并进入文案；核查报告的issues类型错误及有限补丁invalid_patch阻断保存，尚未进入TTS。A独占 `apps/api/app/topics.py` 及确需更新的既有 `apps/api/tests/test_creation_task_script_grounding.py`，仅补本次协议补丁的安全诊断：明确失败分支、固定类型/计数、修复响应的结束原因/工具数/参数长度/用量及实际模型标识。不得记录正文、原始字符串、资料ID、密钥或响应栈；不改变核查标准、请求次数、预算或截止，不把字符串转为空数组。旧实现范围保持冻结。G只审该差额，主控集成后C安排一次有明确诊断目的的普通UI接续；若再出现同类失败即取首个具体原因停止，不循环试探。无固定选中引用的本地索引错误已有证据表明与任务资料集合不同，本批不据此扩展来源或工具框架。
 
+`9b505db4`的一次普通接续先暴露工作区到既有任务的正式入口缺失，未重现核查错误。当前按该实证定点补齐：B独占既有 `apps/api/app/main.py`、`apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py`、`apps/api/app/creation/task_authorization.py`，以及必要的既有 `apps/api/tests/test_assistant_goal_continuation.py`，实现同成员/同对话已采用任务组的接续用例与幂等事务；A仅独占 `apps/api/app/assistant/catalogue.py`、`apps/api/agent_tools/diary/creation-plans.ts` 和必要的既有 `apps/api/agent_tools/tests/consumer-closure.test.mjs` 暴露该动作，前批诊断文件保持冻结。新真人轮次保留home身份，由宿主沿持久采用回执定位任务，保留原采用来源与原作业、更新当前指令来源/修订并继承未扩大的有效授权，不重建任务、不重置授权期限、不开放任意任务工具；歧义明确返回候选范围，不能按名称或最近列表猜测。新动作复用现有目标服务认领与原回执对账，未知写入不能改身份重交，完整结果以C普通UI运行证明。主控固定接口后派工，G只审此差额，不重做之前已通过检查。
+
 1. A/B交付实际缺口的最小修复与必要证据，已解决问题不重复施工；C给出可执行的真实桌面验收入口和仍缺消费者。
 2. G审核候选的职责/写入/恢复边界，主控处置具体意见后集成；只读审查和设计研究不阻断无关修复。
 3. 尽早从真实Mac应用一次目标自动完成中英各30秒，再进行连续精修、人工交替、撤销/重做、文件实播及退出/中断恢复；原生执行按既有计划接入，不用模型回复或手工步骤代替结果。

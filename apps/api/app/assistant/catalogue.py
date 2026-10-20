@@ -6,7 +6,7 @@ SCRIPT_TOOL_READS = ("read_media_script_tool_capabilities", "list_media_script_t
 ASSISTANT_BUSINESS_TOOLS = {
     "home": (
         "read_workspace_context", "read_video_templates", "read_voice_profiles", "find_knowledge", "find_materials",
-        "preview_creation_plan", "read_creation_request", "revise_creation_request", "prepare_creation_window",
+        "preview_creation_plan", "read_creation_request", "resume_creation_request", "revise_creation_request", "prepare_creation_window",
         "read_material_library_status", "search_material_library",
     ),
     "profile_reference": ("read_selected_profile",),
@@ -39,6 +39,7 @@ ASSISTANT_BUSINESS_TOOLS = {
 _PI_TOOL_LABELS = {
     "read_voice_profiles": "读取声音",
     "read_creation_request": "读取制作目标",
+    "resume_creation_request": "继续原视频任务",
     "revise_creation_request": "修订制作要求",
     "regenerate_storyboard": "重新生成故事板",
     "read_storyboard_regeneration": "查询原故事板重算",

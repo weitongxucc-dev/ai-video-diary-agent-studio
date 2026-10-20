@@ -54,6 +54,56 @@ test('copied extension dynamically imports its nested modules and performs authe
   assert.deepEqual(calls, [{path: '/api/assistant/memory', method: 'GET', token: 'synthetic-member'}]);
 });
 
+test('workspace resume uses the original input after empty lookup and host selection without recreating tasks', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+import assert from 'node:assert/strict';
+const {registerCreationPlans}=await import(process.argv[1]);
+const {createBusinessRequest,BusinessResultUnknown}=await import(process.argv[2]);
+const source={turnId:'turn:current',inputId:'input:current'};
+const calls=[],tools=new Map();
+const candidates=[{request_id:'request:original',title:'原中英文视频组'}];
+const readActionSource=()=>source;
+const request=createBusinessRequest({apiBase:'http://synthetic.invalid',taskId:undefined,selectedTaskVersion:null,
+ verifyTaskVersion(){},readCredentials:()=>({localMemberToken:'synthetic-member'}),readActionSource,getSignal:()=>undefined,
+ fetchRequest:async(url,init)=>{
+  const parsed=new URL(url);calls.push({url:parsed,init});
+  assert.equal(init.headers.get('X-Assistant-Input-ID'),'input:current');
+  assert.equal(init.headers.get('X-Local-Member-Token'),'synthetic-member');
+  assert.equal(parsed.searchParams.get('assistant_turn_id'),'turn:current');
+  if(calls.length===1){assert.equal(parsed.pathname,'/api/assistant/creation-request');return new Response('null');}
+  assert.equal(parsed.pathname,'/api/assistant/creation-request/resume');
+  assert.equal(init.method,'POST');assert.equal(init.body,undefined);
+  if(calls.length===2){
+   assert.deepEqual([...parsed.searchParams.keys()],['assistant_turn_id']);
+   return Response.json({status:'needs_selection',request_id:null,tasks:[],candidates});
+  }
+  assert.equal(parsed.searchParams.get('creation_request_id'),'request:original');
+  if(calls.length===3)return Response.json({status:'resumed',request_id:'request:original',tasks:[{task_id:'existing-cn',status:'resumed'},{task_id:'existing-en',status:'resumed'}]});
+  throw new Error('synthetic response lost');
+ }});
+registerCreationPlans({registerTool:tool=>tools.set(tool.name,tool)},
+ {request,readActionSource,hasPreview:()=>false,markPreview:()=>{throw new Error('resume cannot create a preview')}});
+const resume=tools.get('resume_creation_request');
+assert.deepEqual(Object.keys(resume.parameters.properties),['creation_request_id']);
+assert.equal(resume.parameters.additionalProperties,false);
+assert.equal((await tools.get('read_creation_request').execute()).details.lookup_status,'not_found');
+const selection=await resume.execute('select',{});
+assert.equal(selection.details.kind,'creation_request_resume');
+assert.deepEqual(selection.details.receipt.candidates,candidates);
+const accepted=await resume.execute('continue',{creation_request_id:'request:original'});
+assert.deepEqual(accepted.details.receipt.tasks.map(item=>item.task_id),['existing-cn','existing-en']);
+assert.equal(accepted.details.preview,undefined);
+await assert.rejects(()=>resume.execute('unknown',{creation_request_id:'request:original'}),
+ error=>error instanceof BusinessResultUnknown&&error.businessFailure.submission_effect==='unknown');
+assert.equal(calls.length,4,'no hidden lookup, creation or automatic retry');
+console.log('workspace resume: PASS');`,
+    pathToFileURL(join(tree.root, 'Resources', 'agent-tools', 'diary', 'creation-plans.ts')).href,
+    pathToFileURL(join(tree.root, 'Resources', 'agent-tools', 'diary', 'transport.ts')).href],
+    {cwd: tree.root, env: tree.environment, timeout: 10000});
+  assert.match(stdout, /workspace resume: PASS/);
+});
+
 test('installed Pi loader registers the copied extension without a model session', {skip: !process.env.PI_TEST_LOADER_MODULE}, async t => {
   const tree = await resourceTree(t);
   const {stdout} = await execute(process.execPath, ['--input-type=module', '-e',

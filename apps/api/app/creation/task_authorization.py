@@ -276,7 +276,7 @@ class TaskAuthorizationUseCase:
         if self.repository.task_source_revisions(ws,[item['id'] for item in previous['knowledge']],
                 [item['id'] for item in previous['sources']],connection=connection)!=previous['source_revisions']:
             raise TaskAuthorizationDenied('原任务固定资料已变化；需要重新授权')
-        payload={**previous,'goal_revision':goal['revision'],'source_input_id':goal['source_input_id'],
+        payload={**previous,'goal_revision':goal['revision'],'source_input_id':goal.get('source_input_id'),
             'selected_references':context['target_snapshot'].get('selected_references',[])}
         self.repository.append_task_event(TaskEvent(self.business_context_id(goal),ws,task_id,None,
             'task_business_scope',payload),connection=connection)

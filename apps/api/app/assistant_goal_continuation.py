@@ -138,10 +138,140 @@ class GoalContinuationService:
             {"request_id": saved["id"], "window_id": window["id"],
              "input_fingerprint": window["input_fingerprint"], "source": source}, tasks)
 
+    def verify_resume_business(self, goal, task, actor, business, owner, *, read_request, read_media):
+        """Reconcile fixed original receipts before another task turn may act."""
+        facts={}
+        resumed=goal['creation_resume']
+        previous=self.repo.get_turn(resumed['previous_turn_id'])
+        bound=self.repo.get_task_goal(resumed['previous_turn_id'])
+        if previous is None or bound is None or bound['original_turn_id']!=goal['original_turn_id']:
+            return {'status':'waiting_unknown','reason':'original_resume_source_not_verified'}
+        result=previous.get('result') or {};response=result.get('response') or {}
+        facts['previous_business_failure']=result.get('business_failure')
+        failures=[item['failure'] for item in previous['events'] if item.get('type')=='tool_end'
+            and isinstance(item.get('failure'),dict) and item['failure'].get('submission_effect')=='unknown']
+        if (result.get('business_failure') or {}).get('submission_effect')=='unknown':
+            failures.append(result['business_failure'])
+        request=response.get('edit_request')
+        if request and request.get('request_id'):
+            failures.append({'request_id':request['request_id'],'phase':request.get('phase')})
+        checked=set()
+        for failure in failures:
+            if failure.get('request_id'):
+                phase=failure.get('phase') or ('observation' if failure.get('query_tool')=='read_task_observation_request' else None)
+                if phase not in {'apply','preview','script','observation'}:
+                    return {'status':'waiting_unknown','reason':'original_request_phase_not_verified'}
+                key=(failure['request_id'],phase)
+                if key in checked:
+                    continue
+                checked.add(key)
+                try:
+                    actual=read_request(task,actor,*key)
+                except (KeyError,ValueError):
+                    return {'status':'waiting_unknown','reason':'original_request_receipt_missing'}
+                if actual['status']=='unknown':
+                    return {'status':'waiting_unknown','reason':'read_original_request_result'}
+                code=actual.get('result_status_code');receipt=actual.get('result')
+                if code is None or not isinstance(receipt,dict):
+                    return {'status':'waiting_unknown','reason':'original_request_receipt_not_verified'}
+                if not 200<=code<300:
+                    detail=receipt.get('detail',receipt)
+                    reason=(detail.get('reason') or detail.get('message')) if isinstance(detail,dict) else detail
+                    return {'status':'waiting_unknown','reason':reason if isinstance(reason,str) else 'original_request_rejected',
+                        'original_request':actual}
+                if code==202:
+                    job_id=receipt.get('job_id')
+                    if not job_id:
+                        return {'status':'waiting_unknown','reason':'original_request_job_not_located','original_request':actual}
+                    try:
+                        original_job=read_media(task,actor,job_id)
+                    except (KeyError,ValueError,PermissionError):
+                        return {'status':'waiting_unknown','reason':'original_request_job_not_verified','original_request':actual}
+                    decision=owner.media_verification(original_job)
+                    if decision is not None:
+                        return {**decision,'original_request':actual,'original_job':original_job}
+                    facts.setdefault('original_job_results',[]).append(original_job)
+                facts.setdefault('original_requests',[]).append(actual)
+            elif failure.get('job_id'):
+                try:
+                    actual=(business.read_execution(goal,actor,job_id=failure['job_id']) if failure.get('query_tool')=='read_creation_execution'
+                        else read_media(task,actor,failure['job_id']))
+                except (KeyError,ValueError,PermissionError):
+                    return {'status':'waiting_unknown','reason':'original_job_receipt_not_verified'}
+                decision=(owner.execution_verification(actual) if failure.get('query_tool')=='read_creation_execution' else owner.media_verification(actual))
+                if decision is not None:
+                    return decision
+                facts.setdefault('original_job_results',[]).append(actual)
+            else:
+                return {'status':'waiting_unknown','reason':'original_write_effect_not_verified'}
+        located=business.execution_sources(goal)
+        if located:
+            try:
+                facts['execution_status']=business.read_execution(goal,actor,job_id=located[-1].job_id)
+            except (KeyError,ValueError,PermissionError):
+                return owner.unavailable_fact('execution')
+            decision=owner.execution_verification(facts['execution_status'])
+            if decision is not None:
+                return decision
+        if response.get('media_job',{}).get('job_id'):
+            try:
+                actual=read_media(task,actor,response['media_job']['job_id'])
+            except (KeyError,ValueError,PermissionError):
+                return owner.unavailable_fact('media')
+            decision=owner.media_verification(actual)
+            if decision is not None:
+                return decision
+            facts['media_job']=actual
+        return {'status':'ready','facts':facts}
+
     def observe_business_result(self, source_turn_id: str, event: dict) -> bool:
         goal = self.repo.get_task_goal(source_turn_id)
         return bool(goal and event.get("type") == "business_result" and event.get("event_id")
                     and event.get("task_id") == goal["task_id"])
+
+    def resume_creation_request(self, workspace_id, member_id, turn_id, input_id, request_id, authorizations):
+        """A current home instruction may resume only its actual adopted window."""
+        def validate_instruction(message):
+            import re
+            from app.creation.intent_use_case import CreationIntentUseCase
+            CreationIntentUseCase.reject_discussion_only_input(message)
+            if re.search(r"(?:不要|别|先别|先不|暂不|不再|不能)\s*(?:再\s*)?(?:继续|接着|接续|恢复)|\b(?:do not|don't)\s+(?:continue|resume)\b|(?:^|[，。！？；,;.!?\n])\s*(?:(?:请|现在|先|立即|马上)\s*)*(?:停下|停止|暂停)(?=$|[，。！？；\s]|一下|当前|这个|本次|任务|制作|执行|运行)|(?:^|[,;.!?\n])\s*(?:please\s+)?(?:stop|pause)(?=$|[\s,;.!?])",message,re.I):
+                raise ValueError('当前真人要求停止或不继续，未恢复原任务组')
+            if not re.search(r'继续|接着|接续|恢复|做完|完成原|\b(?:resume|continue|finish)\b',message,re.I):
+                raise ValueError('当前真人输入没有明确要求继续原任务组')
+        def validate(conn, goal, human_context):
+            if not authorizations.adopted_goal_input_valid(goal,connection=conn):
+                return {'status':'blocked','reason':'原任务授权已到期、撤销或资源范围发生变化，需要重新核实授权'}
+            reference=human_context.get('selected_reference')
+            selected=reference['items'] if reference and reference['kind']=='selection' else [reference] if reference else []
+            if (any(item not in goal['target_snapshot'].get('selected_references',[]) for item in selected)
+                    or any(human_context.get(key) is not None and human_context[key]!=goal['request_context'].get(key)
+                        for key in ('profile_reference','knowledge_reference','selection'))):
+                return {'status':'blocked','reason':'当前输入带入原任务范围外的资料或版本，未扩大后台授权'}
+            production=authorizations.repository
+            task=production.get_creation_task(workspace_id,goal['task_id'],connection=conn)
+            plan=json.loads(conn.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?',
+                (workspace_id,task.plan_id)).fetchone()[0])
+            adoption=plan.get('adoption') or {};original=goal['creation_adoption']
+            if (adoption.get('plan_id')!=task.plan_id or adoption.get('request_id')!=original['request_id'] or adoption.get('window_id')!=original['window_id']
+                    or adoption.get('kind')!='delegated_system' or adoption.get('member_id')!=member_id
+                    or adoption.get('authorization_source')!=original['source']
+                    or adoption.get('window_input_fingerprint')!=original.get('input_fingerprint')):
+                return {'status':'blocked','reason':'原任务组采用出处不一致，没有恢复其他目标'}
+            version=production.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn) if task.current_timeline_version_id else None
+            snapshot={**goal['target_snapshot'],'timeline_version_id':task.current_timeline_version_id,
+                'timeline_sequence':version.sequence if version else 0}
+            checkpoint=goal.get('completed_output_checkpoint') or {}
+            if (checkpoint.get('status')=='completed' and checkpoint.get('timeline_version_id')==task.current_timeline_version_id
+                    and task.output_ready):
+                return {'status':'completed'}
+            if goal['round_count']>=self.max_rounds:
+                return {'status':'blocked','reason':'该原目标已到有限接续回合上限，未自动增加运行预算'}
+            return {'status':'ready','context':{**goal['request_context'],'stage':task.stage,'target_snapshot':snapshot},
+                'reason':task.stage_reason if task.stage_status=='failed' else None}
+        return self.repo.resume_creation_request(workspace_id,member_id,turn_id,input_id,request_id,
+            validate_instruction=validate_instruction,validate=validate,
+            seal=lambda conn,old,goal,context:authorizations.inherit_business_context(old,goal,context,connection=conn))
 
     def invalidate(self, turn_id: str, reason: str, *, expected_goal: dict | None = None) -> bool:
         return self.repo.invalidate_task_goal(turn_id, reason, expected_goal=expected_goal)

@@ -35,7 +35,7 @@ from weakref import WeakSet
 if TYPE_CHECKING:
     from app.device_runtime import DeviceRuntime
 
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -6074,6 +6074,26 @@ def _creation_request_input(request: Request, turn_id: str):
     if request.headers.get("x-assistant-input-id") != (active["input_id"] if active else None):
         raise HTTPException(status_code=409, detail="制作目标不属于当前已消费输入，没有沿旧输入保存或采用。")
     return turn, active["message"] if active else turn["user_message"], active
+
+
+@app.post('/api/assistant/creation-request/resume')
+def resume_assistant_creation_request(request: Request, assistant_turn_id: UUID,
+                                      creation_request_id: str | None = Query(default=None,max_length=128)):
+    turn,_message,active=_creation_request_input(request,str(assistant_turn_id))
+    workspace_id,member_id,_conversation=_assistant_conversation_for_request(request,turn['conversation_id'])
+    try:
+        result=_goal_service().resume_creation_request(workspace_id,member_id,turn['id'],
+            active['input_id'] if active else None,creation_request_id,_task_authorizations_for_goal())
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+    for item in result['tasks']:
+        if item.get('reason'):
+            item['reason']=_assistant_stream_safe_text(item['reason'],workspace_id)
+    if result['status']=='resumed':
+        _wake_assistant_continuations()
+    return result
 
 
 @app.post("/api/creation-requests", response_model=CreationRequestResponse, status_code=201)
@@ -14204,6 +14224,17 @@ def _verify_current_goal(goal, event):
         return {**pending, "completed_source_slots": completed_sources}
     facts = {"business_event": event, "task": {"id": task.id, "stage": task.stage, "output_ready": task.output_ready},
         "completed_source_slots": completed_sources}
+    if event.get('phase')=='creation_resume':
+        def read_media(*args):
+            try:
+                return _goal_media_metadata(*args)
+            except HTTPException as exc:
+                raise ValueError(str(exc.detail)) from exc
+        reconciled=_goal_service().verify_resume_business(goal,task,actor,business,owner,
+            read_request=_goal_request_metadata,read_media=read_media)
+        if reconciled['status']!='ready':
+            return reconciled
+        facts.update(reconciled['facts'])
     no_side_effect = False
     removed_refs = owner.removed_references(goal)
     if event.get("phase") == "request":
@@ -14429,6 +14460,8 @@ def _goal_service():
 
 
 def _register_adopted_creation_goals(request, turn_id, creation_request):
+    if any(event.get('type')=='creation_request_resumed' for event in conversation_repo.get_turn(turn_id)['events']):
+        _wake_assistant_continuations()
     if creation_request is None:
         return
     workspace_id = current_workspace_id(request)

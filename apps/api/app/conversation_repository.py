@@ -648,7 +648,27 @@ class ConversationRepository:
             "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (root["conversation_id"],)).fetchone()
         adoption = root["goal"].get("creation_adoption")
         origin_id = adoption["turn_id"] if adoption else root["id"]
-        if latest is None or latest["id"] != origin_id:
+        resume=root['goal'].get('creation_resume')
+        if resume:
+            source=resume['source']
+            current=conn.execute("SELECT t.*,r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                "WHERE t.id=? AND t.conversation_id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (source['turn_id'],root['conversation_id'],root['goal']['workspace_id'],root['goal']['member_id'])).fetchone()
+            if (current is None or current['status']=='stopped' or latest is None or latest['id']!=source['turn_id']
+                    or source['member_id']!=root['goal']['member_id'] or source['conversation_id']!=root['conversation_id']):
+                return False
+            current_events=json.loads(current['events_json']);consumed=latest_consumed_input(current_events)
+            actual_context=consumed['request_context'] if consumed else json.loads(current['request_context_json'])
+            instruction=consumed['message'] if consumed else current['user_message']
+            if (actual_context.get('kind')!='home' or (consumed and consumed['status']=='interrupted')
+                    or (consumed['input_id'] if consumed else None)!=source['input_id']
+                    or hashlib.sha256(instruction.encode()).hexdigest()!=source['message_digest']
+                    or not any(item.get('type')=='creation_request_resumed' and item['source']==source
+                        and item['request_id']==resume['request_id'] and item['window_id']==resume['window_id']
+                        and {'root_id':root['id'],'revision':resume['adopted_revision']} in item['goals'] for item in current_events)):
+                return False
+        elif latest is None or latest["id"] != origin_id:
             return False
         if adoption:
             origin = conn.execute("SELECT events_json,status FROM assistant_conversation_turns WHERE id=?",
@@ -658,7 +678,9 @@ class ConversationRepository:
                     or (consumed["input_id"] if consumed else None) != adoption["source"].get("input_id")):
                 return False
         goal=root["goal"]
-        if goal.get("source_input_id"):
+        prior_resumed_input=(resume is not None and resume['prior_business_input']=={
+            'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')})
+        if goal.get("source_input_id") and not prior_resumed_input:
             owner=conn.execute("SELECT t.events_json FROM assistant_conversation_turns t "
                 "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
                 "WHERE t.id=? AND t.conversation_id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
@@ -786,6 +808,104 @@ class ConversationRepository:
                     self._write_goal(conn, root, {**root["goal"], "status": "invalidated",
                         "waiting_reason": "unrelated_timeline_change", "unfinished_steps": []})
         return True
+
+    def resume_creation_request(self, workspace_id, member_id, turn_id, input_id, request_id, *,
+                                validate_instruction, validate, seal):
+        """The adopted roots and the new human origin commit in one owner writer."""
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row=conn.execute("SELECT t.*,r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                "JOIN assistant_conversations c ON c.id=t.conversation_id "
+                "WHERE t.id=? AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed' "
+                "AND c.workspace_id=r.workspace_id AND c.member_id=r.member_id",(turn_id,workspace_id,member_id)).fetchone()
+            if row is None or row['status']!='running' or not row['user_message']:
+                raise ValueError('继续任务组必须来自当前真人首页回合')
+            events=json.loads(row['events_json']);latest=latest_consumed_input(events)
+            current=active_input(events)
+            context=current['request_context'] if current else json.loads(row['request_context_json'])
+            if (context.get('kind')!='home' or (latest and latest['status']=='interrupted')
+                    or (current['input_id'] if current else None)!=input_id):
+                raise ValueError('当前输入或home身份已变化，没有沿旧输入恢复任务')
+            latest_turn=conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
+                "AND user_message!='' ORDER BY sequence DESC LIMIT 1",(row['conversation_id'],)).fetchone()
+            if latest_turn['id']!=turn_id:
+                raise ValueError('当前真人要求已变化，没有恢复旧请求')
+            message=current['message'] if current else row['user_message']
+            validate_instruction(message)
+            source={'kind':'conversation_input','turn_id':turn_id,'conversation_id':row['conversation_id'],
+                'member_id':member_id,'input_id':input_id,'message_digest':hashlib.sha256(message.encode()).hexdigest()}
+            query="""SELECT r.id,r.goal,w.id AS window_id,w.input_fingerprint,COUNT(t.id) AS task_count
+                FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts a ON a.turn_id=t.id
+                JOIN creation_requests r ON r.id=json_extract(t.result_json,'$.goal_continuation.creation_adoption.request_id')
+                JOIN creation_request_windows w ON w.id=json_extract(t.result_json,'$.goal_continuation.creation_adoption.window_id')
+                AND w.request_id=r.id AND w.status='confirmed' AND r.current_window_id=w.id
+                WHERE t.conversation_id=? AND a.workspace_id=? AND a.member_id=?
+                AND r.workspace_id=a.workspace_id AND r.owner_user_id=a.member_id """
+            parameters=[row['conversation_id'],workspace_id,member_id]
+            if request_id is not None:
+                query+=' AND r.id=?';parameters.append(request_id)
+            groups=conn.execute(query+' GROUP BY r.id,w.id ORDER BY r.id LIMIT 21',parameters).fetchall()
+            if not groups:
+                return {'status':'blocked','request_id':None,'tasks':[],'reason':'本对话没有可核实的已采用任务组'}
+            if len(groups)!=1:
+                return {'status':'needs_selection','request_id':None,'tasks':[],
+                    'candidates':[{'request_id':item['id'],'title':item['goal'][:80],'task_count':item['task_count']} for item in groups[:20]],
+                    'reason':'同一对话存在多个已采用任务组，请明确选择；没有按最近或名称猜测'}
+            group=groups[0];request_id=group['id']
+            root_rows=conn.execute("SELECT t.id FROM assistant_conversation_turns t WHERE t.conversation_id=? "
+                "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.request_id')=? "
+                "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.window_id')=? ORDER BY t.id LIMIT 9",
+                (row['conversation_id'],request_id,group['window_id'])).fetchall()
+            roots=[self._goal_root(conn,item['id']) for item in root_rows]
+            task_ids={item['task_id'] for item in conn.execute('SELECT task_id FROM creation_request_items WHERE window_id=?',(group['window_id'],))}
+            if not 1<=len(roots)<=8 or {root['goal']['task_id'] for root in roots}!=task_ids:
+                return {'status':'blocked','request_id':request_id,'tasks':[],'reason':'已采用窗口与持久目标集合不完整，未重建任务'}
+            outcomes=[];proofs=[];changed=False
+            for root in roots:
+                goal=root['goal'];task_id=goal['task_id']
+                if goal['creation_adoption'].get('input_fingerprint')!=group['input_fingerprint']:
+                    outcomes.append({'task_id':task_id,'status':'blocked','reason':'原窗口采用摘要已变化'})
+                    continue
+                checked=validate(conn,goal,context)
+                if checked['status']!='ready':
+                    outcomes.append({'task_id':task_id,**{key:checked[key] for key in ('status','reason') if key in checked}})
+                    continue
+                previous=goal.get('creation_resume')
+                if previous and previous['source']==source:
+                    outcomes.append({'task_id':task_id,'status':'already_running'})
+                    continue
+                task_context=checked['context'];revision=goal.get('revision',0)+1
+                resumed={**goal,'revision':revision,'status':'waiting_result','waiting_reason':'reconcile_original_business_before_resume',
+                    'original_instruction':goal['original_instruction']+'\n\n当前真人继续要求：\n'+message,
+                    'request_context':task_context,'target_snapshot':task_context['target_snapshot'],
+                    'creation_resume':{'request_id':request_id,'window_id':group['window_id'],'source':source,
+                        'adopted_revision':revision,'previous_turn_id':goal['current_turn_id'],
+                        'prior_business_input':{'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')}},
+                    'unfinished_steps':['read_original_request_result','complete_original_instruction'],
+                    'next_checkpoint':'read_original_request_result'}
+                self._write_goal(conn,root,resumed)
+                seal(conn,goal,resumed,task_context)
+                event_id='creation-resumed:'+hashlib.sha256(json.dumps([root['id'],source,request_id,group['window_id']],sort_keys=True).encode()).hexdigest()
+                root_events=json.loads(root['events_json'])
+                root_events.append({'type':'business_result','event_id':event_id,'phase':'creation_resume','status':'confirmed',
+                    'task_id':task_id,'request_id':request_id,'window_id':group['window_id'],
+                    'base_version_id':resumed['target_snapshot']['timeline_version_id'],
+                    'result_version_id':resumed['target_snapshot']['timeline_version_id'],
+                    **({'input_id':goal['source_input_id']} if goal.get('source_input_id') else {})})
+                conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                    (json.dumps(root_events,ensure_ascii=False),_now(),root['id']))
+                proofs.append({'root_id':root['id'],'revision':revision})
+                outcomes.append({'task_id':task_id,'status':'resumed',**({'reason':checked['reason']} if checked.get('reason') else {})})
+                changed=True
+            if proofs:
+                events.append({'type':'creation_request_resumed','request_id':request_id,'window_id':group['window_id'],
+                    'source':source,'goals':proofs})
+                conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                    (json.dumps(events,ensure_ascii=False),_now(),turn_id))
+            status=('resumed' if changed else 'completed' if all(item['status']=='completed' for item in outcomes)
+                else 'already_running' if any(item['status']=='already_running' for item in outcomes) else 'blocked')
+            return {'status':status,'request_id':request_id,'tasks':outcomes}
 
     def register_task_goal(self, turn_id: str, *, running_execution: bool = False) -> dict | None:
         """Attach execution checkpoints to a real user's existing task turn.
@@ -1162,14 +1282,15 @@ class ConversationRepository:
                     or event not in json.loads(event_source["events_json"])):
                 raise ValueError("接续只能消费已经核实并持久化的业务事件")
             turn_id = str(uuid5(NAMESPACE_URL, f"yaohe-goal:{root_id}:{goal['revision']}:{event['event_id']}" if goal.get("source_input_id") else f"yaohe-goal:{root_id}:{event['event_id']}"))
-            context = {**root["context"], **(selection_context or {}),
+            bound_context=goal['request_context'] if goal.get('creation_resume') else root['context']
+            context = {**bound_context, **(selection_context or {}),
                        "expected_timeline_version_id": task_version["timeline_version_id"],
                        "expected_timeline_sequence": task_version["timeline_sequence"],
                        "source_kind": "business_event", "original_turn_id": root_id,
                        "source_turn_id": candidate["source_turn_id"], "business_event_id": event["event_id"],
                        "goal_revision":goal.get("revision",0), "goal_instruction":goal["original_instruction"],
                        **({"source_input_id":goal["source_input_id"],"source_input_turn_id":goal["source_input_turn_id"]} if goal.get("source_input_id") else {}),
-                       "target_snapshot": {**root["context"].get("target_snapshot", {}), **task_version}}
+                       "target_snapshot": {**bound_context.get("target_snapshot", {}), **task_version}}
             sequence = conn.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM assistant_conversation_turns WHERE conversation_id=?",
                                     (root["conversation_id"],)).fetchone()[0]
             now = _now()
@@ -1452,6 +1573,18 @@ class ConversationRepository:
         """Only a current, atomically sealed and still authorized goal survives."""
         latest=latest_consumed_input(events)
         root=self._goal_root(conn,turn_id)
+        if latest and latest['status']=='consumed' and self.task_goal_input_authorized is not None:
+            for receipt in events:
+                if (receipt.get('type')!='creation_request_resumed' or receipt['source']['turn_id']!=turn_id
+                        or receipt['source']['input_id']!=latest['input_id']):
+                    continue
+                for adopted in receipt['goals']:
+                    bound=self._goal_root(conn,adopted['root_id'])
+                    if (bound and bound['goal'].get('creation_resume',{}).get('source')==receipt['source']
+                            and bound['goal']['status'] not in GOAL_TERMINAL_STATUSES
+                            and self._goal_origin_current(conn,bound)
+                            and self.task_goal_input_authorized(bound['goal'],connection=conn)):
+                        return latest['input_id']
         if (root is None or latest is None or latest['status']!='consumed'
                 or root['goal']['status']!='running' or root['goal']['current_turn_id']!=turn_id
                 or root['goal'].get('source_input_turn_id')!=turn_id

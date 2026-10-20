@@ -130,6 +130,22 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
       return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },
   });
+  pi.registerTool({name: "resume_creation_request", label: "继续原视频任务",
+    description: "先前目标已采用且当前用户明确要求继续时，接续同成员同对话的原任务组。creation_request_id可不传，由宿主沿持久采用回执唯一定位，不按最近任务或名称猜测。read_creation_request的not_found只表示本轮未查到，不证明历史没有采用，也不是调用本工具的前置条件。needs_selection时只按宿主candidates澄清，再带选定request_id调用；blocked按具体原因处理。不能用preview_creation_plan重建原任务，工作区不能直接调用任务保存文案或制作工具；新目标仍走原新建流程。提交结果未知时仅沿原turn/input/request核对，不换ID或自动重试。",
+    parameters: {type: "object", properties: {creation_request_id: {type: "string", minLength: 1, maxLength: 128}}, additionalProperties: false},
+    execute: async (_id: string, params: {creation_request_id?: string} = {}) => {
+      const turn = readActionSource().turnId;
+      if (!turn) throw new RequestNotSubmitted("继续原任务缺少宿主绑定的当前轮次，请求未提交。");
+      const query = new URLSearchParams({assistant_turn_id: turn});
+      if (params.creation_request_id !== undefined) query.set('creation_request_id', params.creation_request_id);
+      const receipt = await request(`/api/assistant/creation-request/resume?${query}`, {method: "POST"});
+      if (!['resumed', 'already_running', 'completed', 'needs_selection', 'blocked'].includes(receipt?.status)
+          || !Array.isArray(receipt.tasks)) throw new Error("原任务接续回执不可读，先核对本轮原请求，不重复提交。");
+      const details = {kind: 'creation_request_resume', receipt,
+        meaning: '这是原任务组的接续回执，不是新方案或成片。resumed/already_running只表示接续已登记或正在执行；实际作品结果仍须回读。needs_selection仅沿返回候选澄清，blocked不表示已经继续。'};
+      return {content: [{type: 'text', text: JSON.stringify(details)}], details};
+    },
+  });
   pi.registerTool({name: "revise_creation_request", label: "修订制作要求",
     description: "先读取当前制作目标，比较其revision后修订共同要求或多条关系/素材范围。只更新明确传入字段，保留原委托身份；会作废尚未采用的窗口，随后用prepare_creation_window保存实际逐条要求。已有采用任务不能改写，不自动创建或生成。",
     parameters: {type:"object", properties:{expected_revision:{type:"integer", minimum:1},
