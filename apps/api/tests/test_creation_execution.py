@@ -1782,7 +1782,7 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]
 
 
-@pytest.mark.parametrize("after_wait", ["recover", "revoked", "cancelled", "unknown", "unreleased", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel"])
+@pytest.mark.parametrize("after_wait", ["recover", "io_gap", "revoked", "cancelled", "unknown", "unreleased", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel"])
 def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
     """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
     from datetime import timedelta
@@ -1826,9 +1826,10 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
     resources = SimpleNamespace(admit=lambda request: HostResourceDecision(
         request.resources.get("kind") == "creation_narration", dict(request.resources), {}),
         continue_unit=lambda grant: True, released=lambda grant: True)
-    failure = HostResourceRefusal(HostResourceDecision(None if after_wait == "unknown" else False,
-        {}, {} if after_wait == "unknown" else {"disk_io_bytes_per_second": {"actual": 200, "maximum": 100, "passed": False}},
-        "disk_io_before_unavailable" if after_wait == "unknown" else None))
+    unknown_reason = {"unknown":"disk_io_before_unavailable", "io_gap":"io_observation_gap"}.get(after_wait)
+    failure = HostResourceRefusal(HostResourceDecision(None if unknown_reason else False,
+        {}, {} if unknown_reason else {"disk_io_bytes_per_second": {"actual": 200, "maximum": 100, "passed": False}},
+        unknown_reason))
     if after_wait == "model_error":
         failure.command_diagnostics = {"before_termination_returncode": -6, "stderr": b"synthetic model abort"}
     attempts = []
@@ -1925,6 +1926,11 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             assert row["state"] == "blocked" and row["wait_reason"] == "resource_pressure"
             assert row["first_ready_at_utc"] == first_ready
             retry_at = datetime.fromisoformat(row["retry_not_before_utc"])
+            assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
+        if after_wait == "io_gap":
+            event = repo.get_task_event("local", f"event_{job.id}_pressure_{grants[-1].generation}")
+            assert event.payload["decision"]["reason"] == "io_observation_gap"
+            assert repo.get_creation_task("local", task_id).stage_reason == "resource_pressure"
         assert runtime.run_once() is False  # Cannot cold-start every polling tick.
         if after_wait == "revoked":
             members.remove_member(member.member_id)
@@ -1932,9 +1938,9 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             execution.cancel("local", task_id, member_id=member.member_id)
             runtime.scheduler.cancel(request_id, actor)
         monkeypatch.setattr(runtime.scheduler, "_now", lambda: retry_at + timedelta(seconds=1))
-        assert runtime.run_once() is (after_wait in {"recover", "checkpoint_pressure"})
-        assert attempts == ([1, 2] if after_wait == "recover" else [1])
-        if after_wait in {"recover", "checkpoint_pressure"}:
+        assert runtime.run_once() is (after_wait in {"recover", "io_gap", "checkpoint_pressure"})
+        assert attempts == ([1, 2] if after_wait in {"recover", "io_gap"} else [1])
+        if after_wait in {"recover", "io_gap", "checkpoint_pressure"}:
             assert repo.get_job_run("local", job.id).status == "queued"
             assert repo.get_creation_task("local", task_id).narration_cache_key == "pressure_cache"
             assert all(event.payload.get("stage") != "render" for event in repo.list_task_events("local", task_id))

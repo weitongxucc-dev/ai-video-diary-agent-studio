@@ -287,6 +287,7 @@ def test_invalid_candidate_quotes_still_stop_with_bounded_resolution_diagnostic(
     ('still_string', 'script_review_invalid', 'issue_shape', 3),
     ('extra_field', 'script_review_invalid', 'issue_shape', 3),
     ('cross_section', 'script_review_invalid', 'issue_quote', 3),
+    ('repair_http', 'script_review_invalid', 'issue_shape', 3),
     ('known_issue', 'script_fact_unsupported', 'unsupported_fact', 3),
     ('missing_usage', 'script_review_invalid', 'issue_shape', 2),
     ('zero_usage', 'script_review_invalid', 'issue_shape', 2),
@@ -294,7 +295,7 @@ def test_invalid_candidate_quotes_still_stop_with_bounded_resolution_diagnostic(
     ('exhausted_time', 'script_review_invalid', 'issue_shape', 2),
 ])
 def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
-    monkeypatch, case, expected_code, expected_reason, request_count,
+    monkeypatch, caplog, case, expected_code, expected_reason, request_count,
 ):
     document = draft()
     document['script']['sections'] *= 2
@@ -359,6 +360,8 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
             patch['patches'][1]['index'] = patch['patches'][0]['index']
         elif case == 'extra_index':
             patch['patches'][1]['index'] = 3
+        elif case == 'repair_http':
+            return httpx.Response(503, text='private-provider-response')
         envelope = _review_tool_response(patch).json()
         envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
         return httpx.Response(200, json=envelope)
@@ -375,6 +378,14 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
         if case == 'known_issue':
             assert len(failure.value.review_issues) == 1
             assert failure.value.review_issues[0]['review_explanation'] == '保留原有有效问题'
+        elif case == 'repair_http':
+            records = [record.getMessage() for record in caplog.records if record.name == 'app.topics']
+            assert len(records) == 1
+            diagnostic = json.loads(records[0].removeprefix('creation_script_review_invalid '))
+            assert diagnostic['protocol_repair'] == {'status': 'request_failed',
+                'initial_completion_tokens': 100, 'requested_max_tokens': 8092,
+                'error_category': 'http_failed', 'http_status': 503}
+            assert 'private-' not in records[0] and FACT not in records[0]
     assert len(calls) == request_count
 
 
@@ -681,7 +692,7 @@ def test_generated_topic_still_requires_its_actual_metadata():
 
 
 @pytest.mark.parametrize('failure', ['unsupported', 'goal', 'review', 'transport', 'http'])
-def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_state, monkeypatch, failure):
+def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_state, monkeypatch, caplog, failure):
     repository = api_state.repository
     old_run = ScriptGenerationRun(id='old-run', workspace_id='local', task_id='task', plan_id='plan', topic_id='topic',
         status='running', route_snapshot={}, prompt_schema_version='old-fixture', input_references=api_state.refs)
@@ -719,6 +730,15 @@ def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_sta
     response = api_state.client.post('/api/creation-tasks/task/scripts/generate', json={})
     assert response.status_code == (422 if failure in {'unsupported', 'goal'} else 502), response.text
     assert response.json()['detail']['error'] == expected_code
+    if failure in {'transport', 'http'}:
+        records = [record.getMessage() for record in caplog.records
+            if record.name == 'app.topics' and record.getMessage().startswith('creation_script_review_request_failed ')]
+        assert len(records) == 1
+        assert json.loads(records[0].removeprefix('creation_script_review_request_failed ')) == {
+            'error_category': expected_code, 'http_status': 503 if failure == 'http' else None}
+        assert 'isolated' not in records[0] and FACT not in records[0]
+        assert ('HTTP 503' if failure == 'http' else '未取得完整HTTP响应') in response.json()['detail']['reason']
+        assert '额度' not in response.json()['detail']['repair_action']
     assert len(calls) == 2
     assert len(repository.list_creation_task_scripts('local', 'task')) == 1
     with repository._connect() as conn:

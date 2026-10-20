@@ -813,6 +813,7 @@ class HostResourceRefusal(RecoveryBlocked):
     def recoverable_pressure(self) -> bool:
         if self.decision.verdict is None and self.decision.reason in {
             "memory_measurement_unavailable", "memory_observation_stale", "memory_observation_gap", "memory_commit_measurement_unavailable",
+            "io_observation_gap",
         }:
             return True
         if self.decision.verdict is not False or self.decision.reason not in {
@@ -880,6 +881,7 @@ class HostResourceProbe:
         self._admission_io = deque()
         self._running_io = deque()
         self._running_io_key = None
+        self._running_io_unavailable: str | None = None
         self._running_cpu_key = None
         self._running_cpu = None
         self._io_lock = threading.RLock()
@@ -930,22 +932,31 @@ class HostResourceProbe:
             try:
                 before = psutil.disk_io_counters(perdisk=True)
                 if not before:
-                    self._admission_io.clear()
-                    return None, "disk_io_before_unavailable"
+                    return self._io_observation_failed("disk_io_before_unavailable")
                 start = time.monotonic()
                 time.sleep(self.budget.sample_seconds)
                 after = psutil.disk_io_counters(perdisk=True)
                 end = time.monotonic()
                 if not after:
-                    self._admission_io.clear()
-                    return None, "disk_io_after_unavailable"
+                    return self._io_observation_failed("disk_io_after_unavailable")
                 if end <= start:
-                    self._admission_io.clear()
-                    return None, "sample_interval_nonpositive"
-                return self._io_evidence(before, after, start, end, self._admission_io)
+                    return self._io_observation_failed("sample_interval_nonpositive")
+                evidence, unavailable = self._io_evidence(before, after, start, end, self._admission_io)
+                if unavailable:
+                    return self._io_observation_failed(unavailable)
+                if self._running_io_key is not None and self._running_io_unavailable is None:
+                    _, self._running_io_unavailable = self._io_evidence(before, after, start, end, self._running_io)
+                return evidence, None
             except (OSError, psutil.Error, ValueError):
-                self._admission_io.clear()
-                return None, "disk_io_measurement_unavailable"
+                return self._io_observation_failed("disk_io_measurement_unavailable")
+
+    def _io_observation_failed(self, reason):
+        self._admission_io.clear()
+        if self._running_io_key is not None:
+            self._running_io.clear()
+            # Later healthy samples cannot hide a failure from the active grant.
+            self._running_io_unavailable = self._running_io_unavailable or reason
+        return None, reason
 
     def stop_observing(self, timeout_seconds: float) -> bool:
         if timeout_seconds < 0:
@@ -1506,7 +1517,13 @@ class HostResourceProbe:
                 if key != self._running_io_key:
                     self._running_io.clear()
                     self._running_io_key = key
-                decision = self._sample(resources, running_io=True, cpu_grant=grant)
+                    self._running_io_unavailable = None
+                if self._running_io_unavailable is not None:
+                    decision = HostResourceDecision(None, resources, {}, self._running_io_unavailable)
+                else:
+                    decision = self._sample(resources, running_io=True, cpu_grant=grant)
+                    if decision.reason == "io_observation_gap":
+                        self._running_io_unavailable = decision.reason
         elif resources is not None and resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             decision = self._sample(resources, running_render=True, cpu_grant=grant)
         else:

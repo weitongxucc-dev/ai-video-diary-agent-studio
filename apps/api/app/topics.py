@@ -923,6 +923,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         """Review one frozen draft, allowing one issues-field protocol repair."""
         deadline = monotonic() + self._timeout
         import hashlib
+        import logging
 
         reverse_aliases = {reference: alias for alias, reference in aliases.items()}
         candidate_pieces, source_pieces = {}, {}
@@ -1117,12 +1118,17 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         try:
             response = asyncio.run(post_review(payload))
         except (TimeoutError, httpx.RequestError):
-            raise self._failure(code="transport_failed", reason="文案核查时文字服务连接失败。",
+            logging.getLogger(__name__).warning("creation_script_review_request_failed %s", json.dumps(
+                {"error_category": "transport_failed", "http_status": None}, sort_keys=True, separators=(",", ":")))
+            raise self._failure(code="transport_failed", reason="文案核查请求传输未完成，未取得完整HTTP响应。",
                 impact="本次文案尚未核查完成，未保存新草稿。",
-                repair_action="检查文字服务连接后重新生成，并人工核对文案。", retryable=True) from None
+                repair_action="保留原稿，先查询原请求及当前任务，再核对文字服务连接；原因未确定前不要重复提交。", retryable=True) from None
         if response.is_error:
-            raise self._failure(code="http_failed", reason="文字服务未完成本次文案核查。",
-                impact="未保存未经核查的新草稿。", repair_action="检查文字服务状态和可用额度后重新生成。",
+            logging.getLogger(__name__).warning("creation_script_review_request_failed %s", json.dumps(
+                {"error_category": "http_failed", "http_status": response.status_code}, sort_keys=True, separators=(",", ":")))
+            raise self._failure(code="http_failed", reason=f"文案核查服务返回HTTP {response.status_code}，本次核查未完成。",
+                impact="未保存未经核查的新草稿。",
+                repair_action="保留原稿，先查询原请求及当前任务，再根据HTTP状态核对文字服务配置；原因未确定前不要重复提交。",
                 retryable=response.status_code >= 500)
         # Rejection diagnostics contain only fixed enums and bounded counts.
         # No request/response text, credentials, arbitrary keys or source IDs.
@@ -1239,9 +1245,13 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repaired_response = asyncio.run(post_review(repair_payload))
             except (TimeoutError, httpx.RequestError):
                 repair["status"] = "request_failed"
+                repair["error_category"] = "transport_failed"
+                repair["http_status"] = None
                 raise self._review_failure("issue_shape", diagnostics) from None
             if repaired_response.is_error:
                 repair["status"] = "request_failed"
+                repair["error_category"] = "http_failed"
+                repair["http_status"] = repaired_response.status_code
                 raise self._review_failure("issue_shape", diagnostics)
             try:
                 patch = _generation_report_document(repaired_response, "repair_script_review_issues",

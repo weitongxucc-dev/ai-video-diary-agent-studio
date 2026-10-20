@@ -1330,13 +1330,16 @@ def test_base_and_live_io_reads_share_ordered_lock(tmp_path, monkeypatch, narrat
     assert list(probe._admission_io) == sorted(probe._admission_io, key=lambda item: item[0])
 
 
-def test_base_observer_never_seeds_or_switches_running_io_history(tmp_path, monkeypatch, narration_cpu_boundary):
+@pytest.mark.parametrize("failure", ["gap", "unavailable"])
+def test_base_observer_maintains_bound_running_io_and_preserves_real_faults(tmp_path, monkeypatch, narration_cpu_boundary, failure):
     from dataclasses import replace
     import app.host_resource_probes as probes
     clock = [0.]
     monkeypatch.setattr(probes, "time", SimpleNamespace(monotonic=lambda: clock[0],
         sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)))
-    monkeypatch.setattr(psutil, "disk_io_counters", lambda **_: {"disk0": SimpleNamespace(read_bytes=int(clock[0] * 10), write_bytes=0)})
+    def healthy(**_):
+        return {"disk0": SimpleNamespace(read_bytes=int(clock[0] * 10), write_bytes=0)}
+    monkeypatch.setattr(psutil, "disk_io_counters", healthy)
     monkeypatch.setattr(psutil, "disk_partitions", lambda **_: [])
     monkeypatch.setattr(psutil, "disk_usage", lambda _: SimpleNamespace(free=10**9))
     budget = NarrationBudget(80, 1, 100, 15, 100, 1, 120, 100, 10, .1, 100, 100, narration_cpu_boundary)
@@ -1354,13 +1357,32 @@ def test_base_observer_never_seeds_or_switches_running_io_history(tmp_path, monk
     assert probe.continue_unit(grant)
     assert len(probe._running_io) == 2
     previous = list(probe._running_io)
+    # Business preparation can exceed three seconds while the existing observer
+    # keeps measuring; it must not become a fictitious IO observation gap.
+    for _ in range(5):
+        clock[0] += 1
+        probe._observe_base()
+    assert probe._running_io[-1][0] > previous[-1][0] + probe.io_window_seconds
+    assert probe.continue_unit(grant)
     clock[0] += 1
-    probe._observe_base()
-    assert list(probe._running_io) == previous
-    clock[0] += 1
-    assert probe.continue_unit(replace(grant, generation=2))
+    next_grant = replace(grant, generation=2)
+    assert probe.continue_unit(next_grant)
     assert len(probe._running_io) == 2 and probe._running_io[0][0] > previous[-1][0]
     assert probe._running_io_key == (grant.request_id, 2)
+    if failure == "gap":
+        clock[0] += probe.io_window_seconds + 1
+    else:
+        monkeypatch.setattr(psutil, "disk_io_counters", lambda **_: None)
+    probe._observe_base()
+    monkeypatch.setattr(psutil, "disk_io_counters", healthy)
+    clock[0] += 1
+    probe._observe_base()  # A later healthy observation cannot erase the failure.
+    with pytest.raises(HostResourceRefusal) as refused:
+        probe.continue_unit(next_grant)
+    assert refused.value.decision.reason == ("io_observation_gap" if failure == "gap" else "disk_io_before_unavailable")
+    assert refused.value.recoverable_pressure is (failure == "gap")
+    assert probe.continue_unit(replace(grant, generation=3))
+    assert len(probe._running_io) == 2 and probe._running_io_key == (grant.request_id, 3)
 
 
 def test_presenter_probe_keeps_dedicated_caps_unknown_and_measured_floor(tmp_path, monkeypatch):
