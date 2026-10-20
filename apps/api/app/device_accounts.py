@@ -9,13 +9,42 @@ checks auth.uid(), the device proof, and its own object permissions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from uuid import UUID
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
+import hashlib
+import json
+import logging
+import time
 
 import httpx
 
 from app.auth import AuthPrincipal
 from app.config import Settings
+
+logger = logging.getLogger(__name__)
+
+
+class _UnavailableIdentity(str):
+    """The existing unknown verdict with this call's diagnostic correlation."""
+    def __new__(cls, verification_id):
+        value = super().__new__(cls, "unknown")
+        value.verification_id = verification_id
+        return value
+
+
+def report_creation_identity_unknown(identity, *, source, reason, started_monotonic=None,
+                                     http_status=None, exception_type=None) -> str:
+    """One failed identity call, without credentials, request body or raw errors."""
+    verification_id = uuid4().hex
+    logger.warning("Creation identity verification unavailable: %s", json.dumps({
+        "verification_id": verification_id,
+        "identity_fingerprint": hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest(),
+        "source": source, "verdict": "unknown", "reason": reason,
+        "observed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "duration_seconds": time.monotonic() - started_monotonic if started_monotonic is not None else None,
+        "http_status": http_status, "exception_type": exception_type,
+    }))
+    return _UnavailableIdentity(verification_id)
 
 
 class DeviceAccountError(RuntimeError):
@@ -103,6 +132,12 @@ class DeviceAccountService:
             UUID(workspace_id)
         except (ValueError, TypeError, AttributeError):
             return "unauthorized"
+        started = time.monotonic()
+        http_status = None
+        def unavailable(reason, exc=None):
+            return report_creation_identity_unknown((device_id, user_id, workspace_id),
+                source="device_creation_permit", reason=reason, started_monotonic=started,
+                http_status=http_status, exception_type=type(exc).__name__ if exc is not None else None)
         try:
             post = self._creation_permit_client.post if self._creation_permit_client is not None else httpx.post
             response = post(
@@ -112,13 +147,14 @@ class DeviceAccountService:
                       "target_user_id": user_id, "target_workspace_id": workspace_id},
                 timeout=5.0,
             )
-            if response.status_code != 200:
-                return "unknown"
+            http_status = response.status_code
+            if http_status != 200:
+                return unavailable("http_status_not_ok")
             result = response.json()
-        except (httpx.HTTPError, ValueError):
-            return "unknown"
+        except (httpx.HTTPError, ValueError) as exc:
+            return unavailable("transport_error" if isinstance(exc, httpx.HTTPError) else "response_json_invalid", exc)
         if type(result) is not bool:
-            return "unknown"
+            return unavailable("response_type_invalid")
         return "ready" if result else "unauthorized"
 
     def _call(self, principal: AuthPrincipal, name: str, parameters: dict[str, object]) -> object:

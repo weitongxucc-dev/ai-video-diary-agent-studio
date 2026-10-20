@@ -80,7 +80,7 @@ from app.auth import (
     SupabaseAuthContext,
     UnauthorizedError,
 )
-from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
+from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential, report_creation_identity_unknown
 from app.auth import WORKSPACE_SELECTION_HEADER
 from app.companion.identity import CompanionIdentity, require_account_principal, require_companion_identity
 from app.companion.routes import build_companion_router, companion_http_error
@@ -13790,11 +13790,13 @@ def _verify_creation_identity(actor: CreationExecutionActor) -> str:
     if actor.device_id is not None:
         client = app.state.creation_permit_client
         if client is None:
-            return "unknown"
+            return report_creation_identity_unknown((actor.device_id, actor.user_id, actor.workspace_id),
+                source="creation_identity", reason="transport_unavailable")
         try:
             service = DeviceAccountService(settings, trusted_device_credential(), creation_permit_client=client)
-        except (DeviceAccountError, HTTPException):
-            return "unknown"
+        except (DeviceAccountError, HTTPException) as exc:
+            return report_creation_identity_unknown((actor.device_id, actor.user_id, actor.workspace_id),
+                source="creation_identity", reason="device_credential_unavailable", exception_type=type(exc).__name__)
         return service.creation_permit(actor.device_id, actor.user_id, actor.workspace_id)
     if auth_context.enabled or actor.workspace_id != LEGACY_WORKSPACE_ID:
         return "unauthorized"

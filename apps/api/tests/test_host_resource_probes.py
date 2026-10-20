@@ -313,7 +313,21 @@ def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,r
         _check_scene_runtime(process,child,limits,observation)
         assert observation["last_attempt"]["sample_complete"] is False
         assert observation["last_attempt"]["reason"] == "process_disappeared_during_enumeration"
-        assert observation["latest"] == before
+        assert observation["latest"]["rss_bytes"] == before["rss_bytes"]
+        assert observation["latest"]["threads"] == before["threads"]
+        assert observation["latest"]["is_lower_bound"] is True
+        assert observation["latest"]["sample_complete"] is False
+        assert observation["observed_peak_rss"]["rss_bytes"] == rss
+        def missing_threads():
+            raise psutil.NoSuchProcess(101)
+        disappearing=SimpleNamespace(pid=101,memory_info=lambda:SimpleNamespace(rss=256),num_threads=missing_threads)
+        monkeypatch.setattr(psutil,'process_iter',lambda:[current,disappearing])
+        monkeypatch.setattr(os,'getpgid',lambda _:100)
+        _check_scene_runtime(process,child,limits,observation)
+        assert observation["latest"]["rss_bytes"] == 768
+        assert observation["latest"]["threads"] == 1
+        assert observation["latest"]["rss_members"] == 2 and observation["latest"]["thread_members"] == 1
+        assert observation["latest"]["sample_complete"] is False
 
 
 def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
@@ -1172,7 +1186,7 @@ def test_successful_command_records_only_closed_qwen_diagnostics(tmp_path, monke
     assert all(secret not in record.getMessage() for secret in ("PRIVATE_REFERENCE", "PRIVATE_TEXT", "PRIVATE_TOKEN"))
 
 
-def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_fields():
+def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_fields(caplog):
     decision = HostResourceDecision(False, {"text": "PRIVATE_TEXT"}, {
         "cpu_percent": {"actual": 95, "maximum": 91, "passed": False, "raw": "PRIVATE_BODY"},
         "disk_free_bytes:/PRIVATE_PATH": {"actual": 50, "minimum": 100, "passed": False},
@@ -1194,6 +1208,27 @@ def test_resource_diagnostic_projection_excludes_text_paths_and_unapproved_field
     assert payload["checks"]["cpu_percent"] == {"actual": 95, "maximum": 91, "passed": False}
     assert payload["checks"]["disk_free_bytes"] == [{"actual": 50, "minimum": 100, "passed": False}]
     assert "PRIVATE" not in json.dumps(payload)
+    from app.device_accounts import report_creation_identity_unknown
+    from app.device_scheduler import DeviceScheduler, Grant
+    from app.granted_subprocess import _record_command_diagnostics
+    verdict = report_creation_identity_unknown(("PRIVATE_DEVICE", "PRIVATE_USER", "PRIVATE_WORKSPACE"),
+        source="device_creation_permit", reason="transport_error", exception_type="ReadTimeout")
+    assert isinstance(verdict, str) and verdict == "unknown"
+    grant = Grant("correlation-request", "workspace", "creation_job", "job", "narration:input",
+        "a" * 64, 1, 65, "PRIVATE_TOKEN", Path("/unused.sqlite"))
+    with pytest.raises(PermissionError) as refused:
+        DeviceScheduler._require_current(verdict, grant)
+    _record_command_diagnostics(grant, None, {"stdout":b"", "stderr":b"",
+        "stdout_truncated":False, "stderr_truncated":False, "exec_ack":False,
+        "group_released":True, "before_termination_returncode":None, "returncode":None}, failure=refused.value)
+    records = {record.msg:json.loads(record.args[0]) for record in caplog.records if record.msg in {
+        "Creation identity verification unavailable: %s", "Device owner current check refused: %s", "Granted command diagnostic: %s"}}
+    identity = records["Creation identity verification unavailable: %s"]
+    owner = records["Device owner current check refused: %s"]
+    command = records["Granted command diagnostic: %s"]
+    assert identity["verification_id"] == owner["verification_id"] == command["business_failure"]["verification_id"]
+    assert (owner["request_id"],owner["attempt_number"],owner["permit_generation"]) == (command["request_id"],command["attempt_number"],command["permit_generation"]) == (grant.request_id,1,65)
+    assert "PRIVATE" not in json.dumps(records)
 
 
 @pytest.mark.parametrize("scenario", ["short_peak", "sustained", "unknown", "counter_regressed", "observation_gap"])

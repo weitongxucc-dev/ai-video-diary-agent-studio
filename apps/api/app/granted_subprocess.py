@@ -55,6 +55,12 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
         payload["decision"] = failure.decision.diagnostic_payload()
     if isinstance(failure, GrantedCommandResourceLimit):
         payload["process_resource_sample"] = failure.resource_sample
+    business = getattr(failure, "business_failure", None)
+    if isinstance(business, dict) and business.get("source") == "owner_current" and business.get("verdict") in {"unknown", "unauthorized", "dependency"}:
+        payload["business_failure"] = {"source": business["source"], "verdict": business["verdict"]}
+        verification_id = business.get("verification_id")
+        if isinstance(verification_id, str) and re.fullmatch(r"[0-9a-f]{32}", verification_id):
+            payload["business_failure"]["verification_id"] = verification_id
     if diagnostic.get("output_file_sample") is not None:
         payload["output_file_sample"] = diagnostic["output_file_sample"]
     if diagnostic.get("process_cpu_observation") is not None:
@@ -131,8 +137,15 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                          limits: SceneRuntimeLimits, resource_observation=None) -> dict | None:
     resource_sample = None
     sampled_members = 0
+    observed_rss = observed_threads = rss_members = thread_members = 0
     enumeration_complete = True
     incomplete_reason = "no_complete_group_sample"
+    def resource_snapshot(complete):
+        return {"rss_bytes": observed_rss if rss_members else None,
+            "threads": observed_threads if thread_members else None,
+            "sample_complete": complete, "is_lower_bound": not complete,
+            "rss_members": rss_members, "thread_members": thread_members,
+            "observed_monotonic": time.monotonic(), "observed_at_utc": datetime.now(timezone.utc).isoformat()}
     try:
         if process.poll() is None and f"{psutil.Process(process.pid).create_time():.6f}" != child.start_token:
             raise GrantedCommandResourceUnavailable("Child identity changed during sampling")
@@ -157,8 +170,14 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
         cpu_available = True
         for current in processes:
             try:
-                rss += current.memory_info().rss
-                threads += current.num_threads()
+                member_rss = current.memory_info().rss
+                rss += member_rss
+                observed_rss += member_rss
+                rss_members += 1
+                member_threads = current.num_threads()
+                threads += member_threads
+                observed_threads += member_threads
+                thread_members += 1
                 sampled_members += 1
                 if limits.collect_cpu:
                     try:
@@ -178,9 +197,9 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                         process.wait(timeout=.01)
                     except subprocess.TimeoutExpired:
                         raise GrantedCommandResourceUnavailable("Scene child disappeared during sampling") from exc
-        if resource_observation is not None and enumeration_complete and processes and sampled_members == len(processes):
-            resource_sample = {"rss_bytes": rss, "threads": threads, "sample_complete": True,
-                "observed_monotonic": time.monotonic(), "observed_at_utc": datetime.now(timezone.utc).isoformat()}
+        if resource_observation is not None and (rss_members or thread_members):
+            complete = enumeration_complete and sampled_members == len(processes)
+            resource_sample = resource_snapshot(complete)
         if rss > limits.max_process_rss_bytes or threads > limits.max_process_threads:
             raise GrantedCommandResourceLimit(rss=rss, threads=threads, limits=limits)
         if limits.memory_monitor is None:
@@ -207,18 +226,25 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
         raise GrantedCommandResourceUnavailable("Scene process resource sample unavailable") from exc
     finally:
         if resource_observation is not None:
+            if resource_sample is None and (rss_members or thread_members):
+                resource_sample = resource_snapshot(False)
             if resource_sample is None:
                 resource_observation["last_attempt"] = {"state": "unknown", "sample_complete": False, "reason": incomplete_reason,
                     "observed_monotonic": time.monotonic(), "observed_at_utc": datetime.now(timezone.utc).isoformat()}
             else:
-                resource_observation["last_attempt"] = {"state": "ready", "sample_complete": True,
+                complete = resource_sample["sample_complete"]
+                resource_observation["last_attempt"] = {"state": "ready" if complete else "unknown", "sample_complete": complete,
                     "observed_monotonic": resource_sample["observed_monotonic"],
                     "observed_at_utc": resource_sample["observed_at_utc"]}
+                if not complete:
+                    resource_observation["last_attempt"]["reason"] = incomplete_reason
                 resource_observation["latest"] = resource_sample
                 for metric, peak in (("rss_bytes", "observed_peak_rss"), ("threads", "observed_peak_threads")):
                     previous = resource_observation.get(peak)
-                    if previous is None or resource_sample[metric] > previous[metric]:
-                        resource_observation[peak] = {metric: resource_sample[metric], "sample_complete": True,
+                    if resource_sample[metric] is not None and (previous is None or resource_sample[metric] > previous[metric]):
+                        resource_observation[peak] = {metric: resource_sample[metric], "sample_complete": complete,
+                            "is_lower_bound": not complete,
+                            "observed_members": resource_sample["rss_members" if metric == "rss_bytes" else "thread_members"],
                             "observed_monotonic": resource_sample["observed_monotonic"],
                             "observed_at_utc": resource_sample["observed_at_utc"]}
 

@@ -1052,14 +1052,21 @@ class DeviceScheduler:
     @staticmethod
     def _require_current(verdict: Verdict, grant: Grant) -> None:
         if verdict != "ready":
+            correlation = {}
+            verification_id = getattr(verdict, "verification_id", None)
+            if isinstance(verification_id, str) and re.fullmatch(r"[0-9a-f]{32}", verification_id):
+                correlation["verification_id"] = verification_id
             logger.warning("Device owner current check refused: %s", json.dumps({
                 "request_id": grant.request_id, "attempt_number": grant.attempt_number,
                 "permit_generation": grant.generation,
                 "verdict": verdict if verdict in ("stale", "unauthorized", "dependency", "unknown") else "unknown",
+                **correlation,
             }))
             if verdict == "stale":
                 raise StaleGrantInput("输入版本已过期")
-            raise PermissionError("输入版本或共享授权已失效")
+            error = PermissionError("当前成员或设备许可暂不可核实" if verdict == "unknown" else "输入版本或共享授权已失效")
+            error.business_failure = {"source": "owner_current", "verdict": verdict, **correlation}
+            raise error
 
     def _observe_grant(self, grant: Grant):
         with self._connect() as conn:
