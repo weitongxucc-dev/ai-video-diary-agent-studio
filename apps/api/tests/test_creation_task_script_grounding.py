@@ -278,244 +278,120 @@ def test_invalid_candidate_quotes_still_stop_with_bounded_resolution_diagnostic(
     assert 'private-' not in text and FACT not in text and len(text) < 1200
 
 
-@pytest.mark.parametrize('case,expected_code,expected_reason,request_count', [
-    ('success', None, None, 3),
-    ('multi_success', None, None, 3),
-    ('missing_index', 'script_review_invalid', 'issue_shape', 3),
-    ('duplicate_index', 'script_review_invalid', 'issue_shape', 3),
-    ('extra_index', 'script_review_invalid', 'issue_shape', 3),
-    ('still_string', 'script_review_invalid', 'issue_shape', 3),
-    ('extra_field', 'script_review_invalid', 'issue_shape', 3),
-    ('cross_section', 'script_review_invalid', 'issue_quote', 3),
-    ('repair_http', 'script_review_invalid', 'issue_shape', 3),
-    ('known_issue', 'script_fact_unsupported', 'unsupported_fact', 3),
-    ('missing_usage', 'script_review_invalid', 'issue_shape', 2),
-    ('zero_usage', 'script_review_invalid', 'issue_shape', 2),
-    ('exhausted_tokens', 'script_review_invalid', 'issue_shape', 2),
-    ('exhausted_time', 'script_review_invalid', 'issue_shape', 2),
-])
-def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
-    monkeypatch, caplog, case, expected_code, expected_reason, request_count,
-):
-    document = draft()
-    document['script']['sections'] *= 2
-    calls, frozen = [], {}
-    clock = [0.0]
-    monkeypatch.setattr('app.topics.monotonic', lambda: clock[0])
-
-    def respond(request):
-        body = json.loads(request.content)
-        calls.append(body)
-        if len(calls) == 1:
-            return _response(document)
-        if len(calls) == 2:
-            data = json.loads(body['messages'][1]['content'])
-            review = bound_review(reviewed(document), data)
-            if case == 'known_issue':
-                review['sections'][0]['issues'] = [{'kind': 'unsupported_fact',
-                    'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
-                    'reference_ids': ['evidence_1'], 'missing_or_conflicting': '保留原有有效问题'}]
-            review['sections'][1]['issues'] = 'private-malformed-array'
-            if case in {'multi_success', 'missing_index', 'duplicate_index', 'extra_index'}:
-                review['sections'][0]['issues'] = 'private-second-malformed-array'
-            frozen.update(data=copy.deepcopy(data), report=copy.deepcopy(review), payload=copy.deepcopy(body))
-            envelope = _review_tool_response(review).json()
-            if case != 'missing_usage':
-                envelope['usage'] = {'completion_tokens': 0 if case == 'zero_usage'
-                    else 8192 if case == 'exhausted_tokens' else 100}
-            clock[0] = 121.0 if case == 'exhausted_time' else 30.0
-            return httpx.Response(200, json=envelope)
-        assert body['max_tokens'] == 8192 - 100
-        assert request.extensions['timeout']['read'] == 90.0
-        assert json.loads(body['messages'][1]['content']) == frozen['data']
-        targets = [(position, section) for position, section in enumerate(frozen['report']['sections'])
-            if isinstance(section['issues'], str)]
-        assert json.loads(body['messages'][2]['content']) == {
-            'field_errors': [{'field_path': f'sections[{position}].issues',
-                'section_index': section['index'], 'expected_type': 'array'} for position, section in targets],
-            'report': frozen['report']}
-        function = body['tools'][0]['function']
-        assert function['name'] == 'repair_script_review_issues'
-        assert 'submit_script_review' not in body['messages'][0]['content']
-        schema = function['parameters']
-        assert schema['required'] == ['patches'] and schema['additionalProperties'] is False
-        patches = schema['properties']['patches']
-        assert patches['minItems'] == patches['maxItems'] == len(targets)
-        for branch, (_, section) in zip(patches['items']['anyOf'], targets, strict=True):
-            assert branch['properties']['index']['enum'] == [section['index']]
-            assert branch['properties']['issues'] == frozen['payload']['tools'][0]['function']['parameters']\
-                ['properties']['sections']['items']['anyOf'][section['index'] - 1]['properties']['issues']
-        patch = {'patches': [{'index': section['index'], 'issues': []} for _, section in targets]}
-        if case == 'still_string':
-            patch['patches'][0]['issues'] = '[]'
-        elif case == 'extra_field':
-            patch['patches'][0]['supports'] = []
-        elif case == 'cross_section':
-            patch['patches'][0]['issues'] = [{'kind': 'unsupported_fact',
-                'candidate_quote_id': frozen['data']['script']['sections'][0]['content'][0]['quote_id'],
-                'reference_ids': ['evidence_1'], 'missing_or_conflicting': '不允许跨段引用'}]
-        elif case == 'missing_index':
-            patch['patches'].pop()
-        elif case == 'duplicate_index':
-            patch['patches'][1]['index'] = patch['patches'][0]['index']
-        elif case == 'extra_index':
-            patch['patches'][1]['index'] = 3
-        elif case == 'repair_http':
-            return httpx.Response(503, text='private-provider-response')
-        envelope = _review_tool_response(patch).json()
-        envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
-        envelope['choices'][0]['message'].update(content='private-repair-content', reasoning_content='private-repair-reasoning')
-        envelope['model'] = 'private-provider-model'
-        envelope['usage'] = {'prompt_tokens': 1200, 'completion_tokens': 47, 'total_tokens': 1247,
-            'completion_tokens_details': {'reasoning_tokens': 11}}
-        frozen['repair_arguments_length'] = len(envelope['choices'][0]['message']['tool_calls'][0]['function']['arguments'])
-        return httpx.Response(200, json=envelope)
-
-    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
-        api_key='private-credential-sentinel', transport=httpx.MockTransport(respond))
-    if expected_code is None:
-        assert generator.generate(inputs()).sections[1].content == FACT
-    else:
-        with pytest.raises(CreationTaskScriptGenerationError) as failure:
-            generator.generate(inputs())
-        assert failure.value.code == expected_code and failure.value.reason_code == expected_reason
-        assert failure.value.retryable is False
-        if case == 'known_issue':
-            assert len(failure.value.review_issues) == 1
-            assert failure.value.review_issues[0]['review_explanation'] == '保留原有有效问题'
-        elif case == 'repair_http':
-            records = [record.getMessage() for record in caplog.records if record.name == 'app.topics']
-            assert len(records) == 1
-            diagnostic = json.loads(records[0].removeprefix('creation_script_review_invalid '))
-            repair = diagnostic['protocol_repair']
-            assert {key: repair[key] for key in ('status', 'initial_completion_tokens', 'requested_max_tokens', 'error_category', 'http_status')} == {'status': 'request_failed',
-                'initial_completion_tokens': 100, 'requested_max_tokens': 8092,
-                'error_category': 'http_failed', 'http_status': 503}
-            assert repair['response'] == {'model_id': 'MiniMax-M3'}
-            assert 'private-' not in records[0] and FACT not in records[0]
-        elif case in {'missing_index', 'duplicate_index', 'extra_index', 'still_string', 'extra_field'}:
-            records = [record.getMessage() for record in caplog.records if record.name == 'app.topics']
-            assert len(records) == 1
-            diagnostic = json.loads(records[0].removeprefix('creation_script_review_invalid '))
-            repair = diagnostic['protocol_repair']
-            assert repair['status'] == 'invalid_patch'
-            assert repair['patch_failure_reason'] == {'missing_index': 'patches_count',
-                'duplicate_index': 'index_duplicate', 'extra_index': 'index_target',
-                'still_string': 'issues_type', 'extra_field': 'item_fields'}[case]
-            assert repair['patches_type'] == 'array'
-            assert repair['patch_count'] == (2 if case in {'duplicate_index', 'extra_index'} else 1)
-            assert repair['patch_item_position'] == (None if case == 'missing_index'
-                else 2 if case in {'duplicate_index', 'extra_index'} else 1)
-            if case != 'missing_index':
-                assert repair['patch_item_type'] == 'object' and repair['index_type'] == 'number'
-                assert repair['index_matches_target'] is (case != 'extra_index')
-                assert repair['issues_type'] == ('string' if case == 'still_string' else 'array')
-                assert repair['issue_count'] == (None if case == 'still_string' else 0)
-            response = repair['response']
-            assert response['model_id'] == 'MiniMax-M3' and response['finish_reason'] == 'tool_calls'
-            assert response['tool_call_count'] == 1 and response['tool_name_matches'] is True
-            assert response['tool_arguments_length'] == frozen['repair_arguments_length']
-            assert response['usage'] == {'prompt_tokens': 1200, 'completion_tokens': 47,
-                'total_tokens': 1247, 'reasoning_tokens': 11}
-            assert diagnostic['usage']['completion_tokens'] == repair['initial_completion_tokens'] == 100
-            assert repair['requested_max_tokens'] == 8092
-            for secret in ('private-', FACT, SOURCE, 'knowledge:fixture:v1', 'https://models.invalid', 'Authorization'):
-                assert secret not in caplog.text
-    assert len(calls) == request_count
-
-
-@pytest.mark.parametrize('patch_mode', ['reference_only', 'mixed', 'semantic_overwrite', 'bad_alias'])
-def test_reference_ids_field_patch_preserves_frozen_issues_and_strict_review(monkeypatch, caplog, patch_mode):
+@pytest.mark.parametrize('encoded', [False, True])
+def test_array_fields_decode_once_without_losing_findings(encoded):
     document = draft()
     document['script']['sections'] *= 3
-    source = replace(inputs(), sources=(*inputs().sources,
-        CreationTaskTopicSource(reference_id='private-second-source', kind='knowledge', title='另一资料', text='另一份固定资料。')))
-    clock = [0.0]
-    monkeypatch.setattr('app.topics.monotonic', lambda: clock[0])
-    calls, frozen = [], {}
+    calls = []
 
     def respond(request):
         body = json.loads(request.content)
         calls.append(body)
         if len(calls) == 1:
             return _response(document)
-        if len(calls) == 2:
-            data = json.loads(body['messages'][1]['content'])
-            report = bound_review(reviewed(document), data)
-            report['sections'][0]['issues'] = [{'kind': 'unsupported_fact',
-                'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
-                'reference_ids': ['evidence_1'], 'missing_or_conflicting': '资料未支持此承诺'}]
-            report['sections'][2]['issues'] = [{'kind': 'goal_conflict',
-                'candidate_quote_id': data['script']['sections'][2]['visual_prompt'][0]['quote_id'],
-                'reference_ids': 'private-not-an-array', 'missing_or_conflicting': '画面要求与原交付约束冲突'}]
-            if patch_mode == 'mixed':
-                report['sections'][1]['issues'] = 'private-second-array-error'
-            frozen.update(data=copy.deepcopy(data), report=copy.deepcopy(report), schema=body['tools'][0]['function']['parameters'])
-            envelope = _review_tool_response(report).json()
-            envelope['usage'] = {'completion_tokens': 946}
-            clock[0] = 30
-            return httpx.Response(200, json=envelope)
-        assert len(calls) == 3 and body['max_tokens'] == 8192 - 946
-        assert request.extensions['timeout']['read'] == 90
-        assert json.loads(body['messages'][1]['content']) == frozen['data']
-        repair_data = json.loads(body['messages'][2]['content'])
-        assert repair_data['report'] == frozen['report']
-        expected = [{'field_path': 'sections[2].issues[0].reference_ids', 'section_index': 3,
-            'issue_index': 1, 'expected_type': 'array'}]
-        if patch_mode == 'mixed':
-            expected.insert(0, {'field_path': 'sections[1].issues', 'section_index': 2, 'expected_type': 'array'})
-        assert repair_data['field_errors'] == expected
-        function = body['tools'][0]['function']
-        assert function['name'] == 'repair_script_review_issues'
-        schema = function['parameters']
-        assert schema['required'] == (['patches', 'reference_patches'] if patch_mode == 'mixed' else ['reference_patches'])
-        ref_schema = schema['properties']['reference_patches']['items']['anyOf'][0]
-        assert ref_schema['additionalProperties'] is False
-        assert ref_schema['required'] == ['index', 'issue_index', 'reference_ids']
-        assert ref_schema['properties']['index']['enum'] == [3]
-        assert ref_schema['properties']['issue_index']['enum'] == [1]
-        assert ref_schema['properties']['reference_ids'] == frozen['schema']['properties']['sections']['items']['anyOf'][2]\
-            ['properties']['issues']['items']['anyOf'][1]['properties']['reference_ids']
-        patch = {'reference_patches': [{'index': 3, 'issue_index': 1, 'reference_ids': []}]}
-        if patch_mode == 'mixed':
-            patch['patches'] = [{'index': 2, 'issues': []}]
-        if patch_mode == 'semantic_overwrite':
-            patch['reference_patches'][0]['kind'] = 'unsupported_fact'
-        elif patch_mode == 'bad_alias':
-            patch['reference_patches'][0]['reference_ids'] = ['private-unknown-alias']
-        envelope = _review_tool_response(patch).json()
-        envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
-        envelope['usage'] = {'completion_tokens': 81}
-        return httpx.Response(200, json=envelope)
+        assert len(calls) == 2
+        data = json.loads(body['messages'][1]['content'])
+        report = bound_review(reviewed(document), data)
+        report['sections'][0]['issues'] = [{'kind': 'unsupported_fact',
+            'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
+            'reference_ids': ['evidence_1'], 'missing_or_conflicting': '资料未支持此承诺'}]
+        report['sections'][2]['issues'] = [{'kind': 'goal_conflict',
+            'candidate_quote_id': data['script']['sections'][2]['visual_prompt'][0]['quote_id'],
+            'reference_ids': [], 'missing_or_conflicting': '画面要求与原交付约束冲突'}]
+        if encoded:
+            for section in report['sections']:
+                for issue in section['issues']:
+                    issue['reference_ids'] = json.dumps(issue['reference_ids'])
+                section['issues'] = json.dumps(section['issues'], ensure_ascii=False)
+        return _review_tool_response(report)
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
+        transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(inputs())
+    assert len(calls) == 2 and failure.value.code == 'script_fact_unsupported'
+    findings = failure.value.review_issues
+    assert len(findings) == 2
+    assert findings[0]['error'] == 'script_fact_unsupported' and findings[0]['review_explanation'] == '资料未支持此承诺'
+    assert findings[1]['error'] == 'script_goal_conflict' and findings[1]['section_index'] == 3
+    assert findings[1]['candidate_field'] == 'visual_prompt'
+    assert findings[1]['review_explanation'] == '画面要求与原交付约束冲突'
+
+
+@pytest.mark.parametrize('field,value,subtype,decoded_type', [
+    ('issues', 'private-natural-language', 'invalid_json', None),
+    ('issues', '[] private-trailing-text', 'invalid_json', None),
+    ('issues', json.dumps('[]'), 'not_array', 'string'),
+    ('reference_ids', 'null', 'not_array', 'null'),
+    ('reference_ids', '{}', 'not_array', 'object'),
+    ('issues', '[{"kind":"goal_conflict","kind":"unsupported_fact"}]', 'duplicate_key', None),
+    ('reference_ids', '[NaN]', 'non_standard_number', None),
+    ('issues', '```json\n[]\n```', 'invalid_json', None),
+])
+def test_array_fields_reject_non_lossless_or_invalid_representation(caplog, field, value, subtype, decoded_type):
+    document = draft()
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        assert len(calls) == 2
+        report = bound_review(rejected(document, kind='unsupported_fact', field='content', quote=FACT,
+            detail='资料未支持此承诺'), json.loads(body['messages'][1]['content']))
+        if field == 'issues':
+            report['sections'][0]['issues'] = value
+        else:
+            report['sections'][0]['issues'][0]['reference_ids'] = value
+        return _review_tool_response(report)
 
     generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
         api_key='private-credential', transport=httpx.MockTransport(respond))
     with pytest.raises(CreationTaskScriptGenerationError) as failure:
-        generator.generate(source)
-    assert len(calls) == 3 and failure.value.retryable is False
-    if patch_mode in {'reference_only', 'mixed'}:
-        assert failure.value.code == 'script_fact_unsupported'
-        findings = failure.value.review_issues
-        assert len(findings) == 2
-        assert findings[0]['error'] == 'script_fact_unsupported' and findings[0]['review_explanation'] == '资料未支持此承诺'
-        assert findings[1]['error'] == 'script_goal_conflict' and findings[1]['section_index'] == 3
-        assert findings[1]['candidate_field'] == 'visual_prompt'
-        assert findings[1]['review_explanation'] == '画面要求与原交付约束冲突'
-    else:
-        assert failure.value.code == 'script_review_invalid' and failure.value.reason_code == 'issue_reference'
-        diagnostic = json.loads(next(record.getMessage() for record in caplog.records
-            if record.getMessage().startswith('creation_script_review_invalid ')).removeprefix('creation_script_review_invalid '))
-        if patch_mode == 'semantic_overwrite':
-            assert diagnostic['protocol_repair']['patch_failure_reason'] == 'reference_item_fields'
+        generator.generate(inputs())
+    assert len(calls) == 2 and failure.value.code == 'script_review_invalid' and not failure.value.retryable
+    assert failure.value.reason_code == ('issue_shape' if field == 'issues' else 'issue_reference')
+    message = next(record.getMessage() for record in caplog.records
+        if record.getMessage().startswith('creation_script_review_invalid '))
+    diagnostic = json.loads(message.removeprefix('creation_script_review_invalid '))
+    assert diagnostic['array_decode_mismatch'] == {'field': field, 'subtype': subtype,
+        'returned_type': 'string', 'decoded_type': decoded_type, 'issue_index': None if field == 'issues' else 1}
+    for secret in ('private-', FACT, SOURCE, 'knowledge:fixture:v1', 'https://models.invalid', 'Authorization'):
+        assert secret not in caplog.text
+
+
+@pytest.mark.parametrize('field,value,reason', [
+    ('issues', '[{"kind":"unsupported_fact"}]', 'issue_shape'),
+    ('reference_ids', '["private-unknown-reference"]', 'issue_reference'),
+])
+def test_decoded_arrays_still_require_original_structure_and_references(field, value, reason):
+    document = draft()
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        assert len(calls) == 2
+        report = bound_review(rejected(document, kind='unsupported_fact', field='content', quote=FACT,
+            detail='资料未支持此承诺'), json.loads(body['messages'][1]['content']))
+        if field == 'issues':
+            report['sections'][0]['issues'] = value
         else:
-            assert diagnostic['protocol_repair']['status'] == 'applied_pending_validation'
-            assert diagnostic['issue_reference_mismatch']['subtype'] == 'unknown_alias'
-        for secret in ('private-', FACT, SOURCE, 'evidence_1', 'Authorization', 'https://models.invalid'):
-            assert secret not in caplog.text
+            report['sections'][0]['issues'][0]['reference_ids'] = value
+        return _review_tool_response(report)
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
+        transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(inputs())
+    assert len(calls) == 2 and failure.value.code == 'script_review_invalid'
+    assert failure.value.reason_code == reason
 
 
-@pytest.mark.parametrize('phase', ['initial', 'repair'])
-def test_review_deadline_cancels_inflight_request_including_field_repair(phase):
+def test_review_deadline_cancels_inflight_request():
     import asyncio
     from app.topics import CreationTaskGeneratedScript, CreationTaskGeneratedScriptSection
 
@@ -527,26 +403,19 @@ def test_review_deadline_cancels_inflight_request_including_field_repair(phase):
     calls, cancelled = [], []
 
     async def respond(request):
-        body = json.loads(request.content)
-        calls.append(body)
-        if phase == 'initial' or len(calls) == 2:
-            try:
-                await asyncio.sleep(1)
-            except asyncio.CancelledError:
-                cancelled.append(True)
-                raise
-        review = bound_review(reviewed(document), json.loads(body['messages'][1]['content']))
-        review['sections'][0]['issues'] = 'private-malformed-array'
-        envelope = _review_tool_response(review).json()
-        envelope['usage'] = {'completion_tokens': 100}
-        return httpx.Response(200, json=envelope)
+        calls.append(json.loads(request.content))
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
 
     generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
         timeout=0.03, transport=httpx.MockTransport(respond))
     with pytest.raises(CreationTaskScriptGenerationError) as failure:
         generator.check_draft(inputs(), candidate)
-    assert failure.value.code == ('transport_failed' if phase == 'initial' else 'script_review_invalid')
-    assert len(calls) == (1 if phase == 'initial' else 2) and cancelled == [True]
+    assert failure.value.code == 'transport_failed'
+    assert len(calls) == 1 and cancelled == [True]
 
 
 @pytest.mark.parametrize('returned,type_name,actual_count,reason', [
