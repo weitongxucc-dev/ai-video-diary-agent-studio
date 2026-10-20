@@ -612,7 +612,9 @@ describe("HomeCommandComposer", () => {
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
     view.rerender(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={{ ...task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: true }} />);
     fireEvent.click(screen.getByRole("button", { name: "撤销修改" }));
-    await waitFor(() => expect(mocks.undoEdit).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(mocks.undoEdit).toHaveBeenCalledWith("task-1", {
+      expected_timeline_version_id: "v2", expected_timeline_sequence: 2,
+    }));
     expect(onTaskUpdated).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
     view.rerender(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={{ ...task, current_timeline_version_id: "v3", timeline_sequence: 3, can_undo: false }} />);

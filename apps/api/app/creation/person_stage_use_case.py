@@ -256,8 +256,11 @@ class PersonStageUseCase:
         generated = self.apply_segment_edit(workspace_id, task, proposal, grant_context=context)
 
         def commit(connection):
+            # complete_unit owns grant observation and the final local authority
+            # check; its write transaction must not repeat network/resource probes.
+            context.check_execution_limits()
             current = self.repository.get_creation_task(workspace_id, task_id)
-            return self.apply_segment_edit(workspace_id, current, proposal, grant_context=context, generated_render=generated, connection=connection)
+            return self.apply_segment_edit(workspace_id, current, proposal, generated_render=generated, connection=connection)
         return commit
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:

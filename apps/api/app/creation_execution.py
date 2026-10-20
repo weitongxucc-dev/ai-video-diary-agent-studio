@@ -91,12 +91,15 @@ class CreationStageGrantContext:
     # Replaced views of this grant share one audio allowance; video wall time is separate.
     _audio_active_seconds: list[float] = field(default_factory=lambda: [0.0], repr=False, compare=False)
 
-    def check(self) -> None:
+    def check_execution_limits(self) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise GrantedCommandCancelled("制作阶段已取消")
         if time.monotonic() >= self.deadline_monotonic:
             raise GrantedCommandTimeout("制作阶段总时限已到")
+
+    def check(self) -> None:
+        self.check_execution_limits()
         self.scheduler.assert_grant(self.grant)
 
     def run(self, command, *, env=None, output_paths=(), output_bytes=None):

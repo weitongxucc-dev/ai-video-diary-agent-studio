@@ -1236,7 +1236,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setNotice(null);
     invalidateEditPreview();
     try {
-      await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(task.id);
+      await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(task.id, {
+        expected_timeline_version_id: task.current_timeline_version_id,
+        expected_timeline_sequence: task.timeline_sequence,
+      });
       setClipDrafts({});
       setSelectedCueId(null);
       setSelectedNarrationSegmentId(null);

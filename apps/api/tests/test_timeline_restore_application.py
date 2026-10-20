@@ -96,6 +96,22 @@ def restore(state, monkeypatch, *, redo=False):
     return prepared, state.application.apply_restore(prepared, TimelineOutputQualification(prepared, valid))
 
 
+def test_empty_restore_body_requires_task_write_access(tmp_path, monkeypatch):
+    state = restore_http_state(tmp_path, monkeypatch)
+    crop_save(state, .3)
+    state.repo.set_creation_task_visibility('ws', state.task.id, 'shared')
+    _reader, reader_token = state.members.join(state.members.create_invite_code(), 'reader')
+    for action in ('undo', 'redo'):
+        url = f'/api/creation-tasks/{state.task.id}/timeline/{action}'
+        before = editorial_rows(state.repo)
+        for token, status in ((reader_token, 403), ('invalid-token', 401)):
+            denied = state.client.post(url, json={}, headers={'X-Local-Member-Token': token})
+            assert denied.status_code == status, denied.text
+            assert editorial_rows(state.repo) == before
+        restored = state.client.post(url, json={})
+        assert restored.status_code == 200, restored.text
+
+
 def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tmp_path, monkeypatch):
     state = restore_http_state(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match='同一仓储负责人'):

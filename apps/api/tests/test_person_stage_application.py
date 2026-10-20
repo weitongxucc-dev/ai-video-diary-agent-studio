@@ -5,7 +5,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
+from threading import Event
 import time
 from types import SimpleNamespace
 
@@ -16,16 +18,24 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.artifact_store import ArtifactStore
 from app.avatar_lipsync import SubprocessAvatarAndLipSyncProvider
-from app.creation_execution import revision_digest
+from app.creation_execution import CreationStageGrantContext, revision_digest
+from app.creation.contracts import EditIntent, EditProposal
+from app.creation.editing.person_preview_use_case import PersonPreviewUseCase
+from app.creation.person_stage_use_case import PersonStageUseCase, PersonStageRejected
+from app.device_scheduler import DeviceScheduler
+from app.granted_subprocess import GrantedCommandCancelled
 from app.device_runtime import build_device_runtime
 from app.host_resource_probes import HostBudget,HostProcessProbe,HostResourceProbe,PresenterBudget,MontageBudget,CpuRenderBudget
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess,creation_job_registration
 from app.montage import CreationTaskMontagePlan,MontageClip,NarrationCue,creation_task_montage_plan_to_payload
-from app.production import CreationPlanPersonReference,CreationPlanVoiceReference,NarrationArtifactRecord,NarrationSegment
+from app.production import CreationPlanPersonReference,CreationPlanVoiceReference,NarrationArtifactRecord,NarrationSegment,PersonRender
 from app.video_jobs import VideoJobRunner
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles,synthetic_wav_bytes,write_synthetic_video
+from test_device_scheduler import Owners, Resources, Processes, _intent
+from test_metadata_edit_use_case import editorial_rows
+from test_timeline_restore_application import restore_state
 
 
 SYNTHETIC_PERSON_WORKER='''import json,shutil,sys
@@ -41,6 +51,77 @@ def _file_fact(path):
     path=Path(path);stat=path.stat()
     return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'size':stat.st_size,
         'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns,'inode':stat.st_ino}
+
+
+@pytest.mark.parametrize('change', ['none', 'timeline', 'cancel', 'revoked'])
+def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, monkeypatch, change):
+    state = restore_state(tmp_path)
+    provider = SimpleNamespace(model_id='declared-person-input')
+    preview = PersonPreviewUseCase(state.repo, state.case, provider, provider)
+    case = PersonStageUseCase(state.repo, state.case, preview, None, None)
+    # Substitute the generated-render boundary; exercise real editing and SQLite,
+    # without running or claiming media/model qualification.
+    render = PersonRender('declared-render', 'ws', state.task.id,
+        'person', 'v1', 'fixture-voice', 'fixture-v1', 'fixed-segment', 'person:person:v1',
+        provider.model_id, 'natural', 'neutral', hashlib.sha256(b'declared-person').hexdigest(), 'ready',
+        output_path=str(state.source), duration_seconds=4, alignment_evidence='declared input fixture')
+    state.case.picture_renderer = SimpleNamespace(person_path=lambda current: Path(current.output_path))
+    monkeypatch.setattr(case, 'generate_record', lambda *args, **kwargs: render)
+    payload = dict(clip_id='clip', cue_id='cue', narration_segment_id='fixed-segment',
+        person_profile_id='person', person_version='v1', expected_asset_id='asset',
+        expected_segment_id='segment', expected_person_render_id=None, motion='natural',
+        expression='neutral', base_version_id=state.base.id,
+        expected_audio_reference=state.segments[0].audio_reference,
+        source_start_seconds=0, source_end_seconds=4)
+    intent = state.repo.create_edit_intent(EditIntent('person-intent', 'ws', state.task.id,
+        '换人物', 'montage', [], None, 'person', {}, {}, 1, 'interpreted'))
+    proposal = state.repo.create_edit_proposal(EditProposal('person-proposal', 'ws', state.task.id,
+        intent.id, '换人物', ['clip:clip'], {'operation_type':'ChangePersonSegment', 'payload':payload},
+        [], {}, []))
+
+    class IdentityOwners(Owners):
+        def check_current(self, request, conn):
+            # This independent writer models a slow remote boundary's requirement
+            # that ordinary editing can still write while permission is observed.
+            with sqlite3.connect(state.repo.database_path, timeout=0) as writer:
+                writer.execute('BEGIN IMMEDIATE')
+            return 'unauthorized' if self.revoked else 'ready'
+
+        def check_local(self, request, conn, observed):
+            assert conn.in_transaction
+            return 'unauthorized' if self.revoked else 'ready'
+
+    owners = IdentityOwners()
+    scheduler = DeviceScheduler(state.repo.database_path, tmp_path/'checkpoint.lock',
+        owners=owners, resources=Resources(), processes=Processes())
+    scheduler.submit(_intent('person-edit', workspace='ws'), 'member-a')
+    grant = scheduler.pick_and_grant()
+    cancellation = Event()
+    context = CreationStageGrantContext(scheduler, grant, time.monotonic()+30, 1024, 1, cancellation)
+    commit = case.prepare_edit('ws', state.task.id, context, proposal.id)
+    context.check()
+    if change == 'timeline':
+        state.case.save(state.task, main.metadata_edit_command(state.task, state.identity, 'ChangeCrop',
+            {'base_version_id':state.base.id, 'clip_id':'clip', 'fit_mode':'fit', 'crop_x':.3, 'crop_y':.7}))
+    elif change == 'cancel':
+        cancellation.set()
+    elif change == 'revoked':
+        owners.revoked = True
+    before = editorial_rows(state.repo)
+    complete = lambda: scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
+        checkpoint_write=lambda conn, current: commit(conn).id)
+    if change == 'none':
+        complete()
+        current = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+        assert current['clips'][0]['person_render_id'] == render.id
+        assert state.repo.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    else:
+        expected = {'timeline':PersonStageRejected, 'cancel':GrantedCommandCancelled, 'revoked':PermissionError}[change]
+        with pytest.raises(expected):
+            complete()
+        assert editorial_rows(state.repo) == before
+        scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
+            checkpoint_write=lambda conn, current: None, cancelled=True)
 
 
 @pytest.fixture

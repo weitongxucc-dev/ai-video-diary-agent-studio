@@ -10317,13 +10317,12 @@ def redo_creation_task_timeline(task_id: str, request: Request, _payload: Creati
 
 def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: bool, control: CreationTaskTimelineUndoRequest | None = None) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
+    task, _member_id = _exact_edit_access(task_id, request, write=True)
     if control is not None and control.assistant_turn_id is not None:
         _assistant_edit_control_instruction(task, request, control, "redo" if redo else "undo")
     elif control is not None and control.model_fields_set & {"expected_timeline_version_id", "expected_timeline_sequence"}:
         if not {"expected_timeline_version_id", "expected_timeline_sequence"} <= control.model_fields_set or control.expected_timeline_sequence is None:
             raise HTTPException(status_code=422, detail="历史恢复需要同时提交期望版本与序号")
-        task, _member_id = _exact_edit_access(task_id, request, write=True)
         version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (control.expected_timeline_version_id, control.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise HTTPException(status_code=409, detail="历史恢复所依据的时间线已变化，请重新读取当前版本")

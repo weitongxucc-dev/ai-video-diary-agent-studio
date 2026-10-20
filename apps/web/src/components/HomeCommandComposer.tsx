@@ -310,7 +310,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     setPending("undo");
     setError(null);
     try {
-      await undoCreationTaskTimeline(task.id);
+      await undoCreationTaskTimeline(task.id, {
+        expected_timeline_version_id: task.current_timeline_version_id,
+        expected_timeline_sequence: task.timeline_sequence,
+      });
       if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id) return;
       setTaskAwaitingRead(latestTaskFacts.current);
       onTaskUpdated?.();

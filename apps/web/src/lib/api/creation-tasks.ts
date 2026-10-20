@@ -187,8 +187,12 @@ export function previewCompoundSelection(taskId: string, proposalId: string, sel
 export function confirmCreationTaskEdit(taskId: string, proposalId: string): Promise<CreationTaskEditResult> {
     return creationPlanRequest<CreationTaskEditResult>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/confirm`, { method: "POST", body: JSON.stringify({}) });
 }
-export function undoCreationTaskTimeline(taskId: string): Promise<CreationTaskEditConfirmResponse> {
-    return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/undo`, { method: "POST", body: JSON.stringify({}) });
+type TimelineRestoreInput = {
+    expected_timeline_version_id: string | null;
+    expected_timeline_sequence: number;
+};
+export function undoCreationTaskTimeline(taskId: string, input: TimelineRestoreInput): Promise<CreationTaskEditConfirmResponse> {
+    return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/undo`, { method: "POST", body: JSON.stringify(input) });
 }
 export function initializeCreationTaskTimeline(taskId: string): Promise<{
     version_id: string;
@@ -197,6 +201,6 @@ export function initializeCreationTaskTimeline(taskId: string): Promise<{
         version_id: string;
     }>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/initialize`, { method: "POST", body: JSON.stringify({}) });
 }
-export function redoCreationTaskTimeline(taskId: string): Promise<CreationTaskEditConfirmResponse> {
-    return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/redo`, { method: "POST", body: JSON.stringify({}) });
+export function redoCreationTaskTimeline(taskId: string, input: TimelineRestoreInput): Promise<CreationTaskEditConfirmResponse> {
+    return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/redo`, { method: "POST", body: JSON.stringify(input) });
 }

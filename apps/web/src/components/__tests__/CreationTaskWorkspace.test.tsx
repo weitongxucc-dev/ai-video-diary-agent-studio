@@ -2954,7 +2954,9 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "撤销" }));
-    await waitFor(() => expect(mocks.undoTimeline).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(mocks.undoTimeline).toHaveBeenCalledWith("task-1", {
+      expected_timeline_version_id: "timeline-version-4", expected_timeline_sequence: 4,
+    }));
     await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
     await waitFor(() => expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled());
     expect(screen.queryByText("不直接采用 exact 响应")).not.toBeInTheDocument();
@@ -3614,7 +3616,9 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByText("中文轨已就绪")).not.toBeInTheDocument();
     fireEvent.click(getWorkspaceViewControl(/^字幕与封面：/));
     fireEvent.click(screen.getByRole("button",{name:"重做"}));
-    await waitFor(()=>expect(mocks.redoTimeline).toHaveBeenCalledWith("task-1"));
+    await waitFor(()=>expect(mocks.redoTimeline).toHaveBeenCalledWith("task-1", {
+      expected_timeline_version_id: "timeline-version-6", expected_timeline_sequence: 6,
+    }));
   });
 
   it("counts a valid English-only subtitle track in the review checklist",()=>{
