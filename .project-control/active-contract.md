@@ -22,7 +22,7 @@
 | 负责人 | 当前独占文件 / 状态 |
 | --- | --- |
 | 主控 | 本合同、开发清单及必要共享权威、原验收入口。负责集成提交和候选打包、根因判断与修复调度；当前桌面运行操作已移交C，不同时点击、重启或提交制作。无未绑定产品源码写权。 |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | 本批恢复：`apps/api/app/topics.py`、`apps/api/agent_tools/diary/script-tools.ts`；现有 `apps/api/tests/test_creation_task_script_grounding.py` 仅在真实覆盖缺口下局部修改。核实当前文案核查失败，修复报告契约/回执接线的实际缺口，不放松事实约束；不得写main.py。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | 本批恢复：`apps/api/app/topics.py`、`apps/api/agent_tools/diary/script-tools.ts`；现有 `apps/api/tests/test_creation_task_script_grounding.py` 仅在真实覆盖缺口下局部修改。当前167421d4实证为报告issues字段返回字符串；按架构§3错误回执规则，在原总时限/总输出预算内实现至多一次定向字段协议修复并完整重验，保留其他字段与已有有效问题。只处理已证实类型缺陷，不扩成通用修复框架，不放松事实约束，不重启或提交当前业务任务；不得写main.py。 |
 | B `01a14301-7591-74f1-b240-d3643b78ecfe` | 本批恢复：`apps/api/app/main.py`、`apps/api/app/creation/editing/timeline_restore_use_case.py`、`apps/api/app/creation/editing/metadata_use_case.py`、`apps/api/app/device_scheduler.py`、`apps/api/app/creation/person_stage_use_case.py`、`apps/api/app/creation_execution.py`；现有 `apps/api/tests/test_timeline_restore_application.py`、`apps/api/tests/test_metadata_edit_use_case.py`、`apps/api/tests/test_person_stage_application.py`、`apps/api/tests/test_creation_execution.py` 仅按实际风险选最近入口局部修改，不固定叠加。先核撤销写权限；长事务具体修复人物编辑检查点回调内完整网络许可核验，保留调度器事务内本地最终比较与原子提交。已修复调度不重做；main.py唯一写者，不做无关整理。 |
 | C `01a14301-b182-7a92-a973-66fe11baf450` | 2026-10-20按用户要求改为独立真实验收线程，使用较轻量模型；此前Web修复已集成，源码写权收回。独占当前Mac候选的GUI操作、实播、正常退出/重启及受控中断恢复；只写验收目录中 `desktop-c-20261020-*` 定向证据。接手当前正在执行的目标，不重建账号、不重复提交、不并行启动媒体任务。不修改代码、数据库业务记录、资源门限或模型设置，不补人工制作步骤；首个失败保留回执与复现步骤并反馈主控，由主控判断与派修。 |
 | G “G · 代码治理与增量质量审查” `01a15854-9259-7231-977f-32bec26fd119` | 只读现有生产代码、相关测试/配置和明确候选diff；结论保留在线程中，无产品源码、测试、共享文档或设计产物写权。先交付当前质量基线，此后由主控随候选提交触发增量审查，不自行轮询或扩大为实现。 |
