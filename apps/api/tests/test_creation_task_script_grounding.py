@@ -424,6 +424,96 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
     assert len(calls) == request_count
 
 
+@pytest.mark.parametrize('patch_mode', ['reference_only', 'mixed', 'semantic_overwrite', 'bad_alias'])
+def test_reference_ids_field_patch_preserves_frozen_issues_and_strict_review(monkeypatch, caplog, patch_mode):
+    document = draft()
+    document['script']['sections'] *= 3
+    source = replace(inputs(), sources=(*inputs().sources,
+        CreationTaskTopicSource(reference_id='private-second-source', kind='knowledge', title='另一资料', text='另一份固定资料。')))
+    clock = [0.0]
+    monkeypatch.setattr('app.topics.monotonic', lambda: clock[0])
+    calls, frozen = [], {}
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        if len(calls) == 2:
+            data = json.loads(body['messages'][1]['content'])
+            report = bound_review(reviewed(document), data)
+            report['sections'][0]['issues'] = [{'kind': 'unsupported_fact',
+                'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
+                'reference_ids': ['evidence_1'], 'missing_or_conflicting': '资料未支持此承诺'}]
+            report['sections'][2]['issues'] = [{'kind': 'goal_conflict',
+                'candidate_quote_id': data['script']['sections'][2]['visual_prompt'][0]['quote_id'],
+                'reference_ids': 'private-not-an-array', 'missing_or_conflicting': '画面要求与原交付约束冲突'}]
+            if patch_mode == 'mixed':
+                report['sections'][1]['issues'] = 'private-second-array-error'
+            frozen.update(data=copy.deepcopy(data), report=copy.deepcopy(report), schema=body['tools'][0]['function']['parameters'])
+            envelope = _review_tool_response(report).json()
+            envelope['usage'] = {'completion_tokens': 946}
+            clock[0] = 30
+            return httpx.Response(200, json=envelope)
+        assert len(calls) == 3 and body['max_tokens'] == 8192 - 946
+        assert request.extensions['timeout']['read'] == 90
+        assert json.loads(body['messages'][1]['content']) == frozen['data']
+        repair_data = json.loads(body['messages'][2]['content'])
+        assert repair_data['report'] == frozen['report']
+        expected = [{'field_path': 'sections[2].issues[0].reference_ids', 'section_index': 3,
+            'issue_index': 1, 'expected_type': 'array'}]
+        if patch_mode == 'mixed':
+            expected.insert(0, {'field_path': 'sections[1].issues', 'section_index': 2, 'expected_type': 'array'})
+        assert repair_data['field_errors'] == expected
+        function = body['tools'][0]['function']
+        assert function['name'] == 'repair_script_review_issues'
+        schema = function['parameters']
+        assert schema['required'] == (['patches', 'reference_patches'] if patch_mode == 'mixed' else ['reference_patches'])
+        ref_schema = schema['properties']['reference_patches']['items']['anyOf'][0]
+        assert ref_schema['additionalProperties'] is False
+        assert ref_schema['required'] == ['index', 'issue_index', 'reference_ids']
+        assert ref_schema['properties']['index']['enum'] == [3]
+        assert ref_schema['properties']['issue_index']['enum'] == [1]
+        assert ref_schema['properties']['reference_ids'] == frozen['schema']['properties']['sections']['items']['anyOf'][2]\
+            ['properties']['issues']['items']['anyOf'][1]['properties']['reference_ids']
+        patch = {'reference_patches': [{'index': 3, 'issue_index': 1, 'reference_ids': []}]}
+        if patch_mode == 'mixed':
+            patch['patches'] = [{'index': 2, 'issues': []}]
+        if patch_mode == 'semantic_overwrite':
+            patch['reference_patches'][0]['kind'] = 'unsupported_fact'
+        elif patch_mode == 'bad_alias':
+            patch['reference_patches'][0]['reference_ids'] = ['private-unknown-alias']
+        envelope = _review_tool_response(patch).json()
+        envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
+        envelope['usage'] = {'completion_tokens': 81}
+        return httpx.Response(200, json=envelope)
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
+        api_key='private-credential', transport=httpx.MockTransport(respond))
+    with pytest.raises(CreationTaskScriptGenerationError) as failure:
+        generator.generate(source)
+    assert len(calls) == 3 and failure.value.retryable is False
+    if patch_mode in {'reference_only', 'mixed'}:
+        assert failure.value.code == 'script_fact_unsupported'
+        findings = failure.value.review_issues
+        assert len(findings) == 2
+        assert findings[0]['error'] == 'script_fact_unsupported' and findings[0]['review_explanation'] == '资料未支持此承诺'
+        assert findings[1]['error'] == 'script_goal_conflict' and findings[1]['section_index'] == 3
+        assert findings[1]['candidate_field'] == 'visual_prompt'
+        assert findings[1]['review_explanation'] == '画面要求与原交付约束冲突'
+    else:
+        assert failure.value.code == 'script_review_invalid' and failure.value.reason_code == 'issue_reference'
+        diagnostic = json.loads(next(record.getMessage() for record in caplog.records
+            if record.getMessage().startswith('creation_script_review_invalid ')).removeprefix('creation_script_review_invalid '))
+        if patch_mode == 'semantic_overwrite':
+            assert diagnostic['protocol_repair']['patch_failure_reason'] == 'reference_item_fields'
+        else:
+            assert diagnostic['protocol_repair']['status'] == 'applied_pending_validation'
+            assert diagnostic['issue_reference_mismatch']['subtype'] == 'unknown_alias'
+        for secret in ('private-', FACT, SOURCE, 'evidence_1', 'Authorization', 'https://models.invalid'):
+            assert secret not in caplog.text
+
+
 @pytest.mark.parametrize('phase', ['initial', 'repair'])
 def test_review_deadline_cancels_inflight_request_including_field_repair(phase):
     import asyncio

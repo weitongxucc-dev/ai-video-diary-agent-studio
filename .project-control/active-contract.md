@@ -76,6 +76,8 @@
 
 `9b505db4`的一次普通接续先暴露工作区到既有任务的正式入口缺失，未重现核查错误。当前按该实证定点补齐：B独占既有 `apps/api/app/main.py`、`apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py`、`apps/api/app/creation/task_authorization.py`，以及必要的既有 `apps/api/tests/test_assistant_goal_continuation.py`，实现同成员/同对话已采用任务组的接续用例与幂等事务；A仅独占 `apps/api/app/assistant/catalogue.py`、`apps/api/agent_tools/diary/creation-plans.ts` 和必要的既有 `apps/api/agent_tools/tests/consumer-closure.test.mjs` 暴露该动作，前批诊断文件保持冻结。新真人轮次保留home身份，由宿主沿持久采用回执定位任务，保留原采用来源与原作业、更新当前指令来源/修订并继承未扩大的有效授权，不重建任务、不重置授权期限、不开放任意任务工具；歧义明确返回候选范围，不能按名称或最近列表猜测。新动作复用现有目标服务认领与原回执对账，未知写入不能改身份重交，完整结果以C普通UI运行证明。主控固定接口后派工，G只审此差额，不重做之前已通过检查。
 
+`d601a494`候选已在原对话普通继续中接回原中英任务，没有重建；英文自动回合最终因核查报告 `issue_reference/not_array` 拒绝保存，未进入TTS。A当前独占 `apps/api/app/topics.py` 与必要的既有 `apps/api/tests/test_creation_task_script_grounding.py`，沿本次实际格式错误修复核查协议：复用已有单次有限补丁及共同剩余输出/时间预算，定点修正错误类型，不由程序猜引用、清空问题或绕过完整核查；保持其他有效核查内容、事实和要求约束，保留失败的安全诊断。先核对现有生产请求schema与校验差异，再选择最小修改，不引入新核查框架或反复整稿重试。B已集成接续文件保持冻结，C已正常退出；G仅审此次协议差额，主控审核集成后安排一次真实继续。
+
 1. A/B交付实际缺口的最小修复与必要证据，已解决问题不重复施工；C给出可执行的真实桌面验收入口和仍缺消费者。
 2. G审核候选的职责/写入/恢复边界，主控处置具体意见后集成；只读审查和设计研究不阻断无关修复。
 3. 尽早从真实Mac应用一次目标自动完成中英各30秒，再进行连续精修、人工交替、撤销/重做、文件实播及退出/中断恢复；原生执行按既有计划接入，不用模型回复或手工步骤代替结果。
