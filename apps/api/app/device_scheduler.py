@@ -1289,6 +1289,24 @@ class DeviceScheduler:
             conn.commit()
         self._finish_host_release(data)
 
+    def record_owner_stop(self, grant: Grant, *, owner_database_path: str | Path,
+                          owner_write: FailureWrite) -> None:
+        """Fence a stopped owner's receipt without asserting or changing release."""
+        if Path(owner_database_path).expanduser().resolve() != self.database_path:
+            raise ValueError("停止回执与设备许可必须在同一 Production SQLite 库")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?",
+                               (grant.request_id,)).fetchone()
+            if (row is not None and row["last_grant_generation"] == grant.generation
+                    and (row["workspace_id"], row["owner_type"], row["owner_id"], row["unit_key"], row["input_digest"], row["attempt_number"])
+                    == (grant.workspace_id, grant.owner_type, grant.owner_id, grant.unit_key, grant.input_digest, grant.attempt_number)
+                    and row["state"] not in {"granted", "yield_requested"}):
+                return  # SQLite already committed an outcome before host-ledger finalization failed.
+            self._assert_grant(conn, grant)
+            owner_write(conn, grant)
+            conn.commit()
+
     def fail_unit(self, grant: Grant, *, reason: str, failure_write: FailureWrite) -> None:
         """Commit an owner failure and terminal scheduler state in one transaction."""
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reason):

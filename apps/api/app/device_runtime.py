@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Protocol
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol
 from urllib.parse import quote
 
 from app.device_scheduler import (
@@ -76,6 +76,7 @@ class UnitExecutor(Protocol):
 class OwnerRegistration:
     owner: BusinessOwner
     executor: UnitExecutor
+    on_stopped: Callable[[Grant, DeviceScheduler, Exception], None] | None = None
 
 
 class OwnerRouter(OwnerVerifier):
@@ -175,6 +176,7 @@ class DeviceRuntime:
                 return False
             if self._thread is not None and self._thread.is_alive() and threading.current_thread() is not self._thread:
                 raise RuntimeUnavailable("后台调度驱动已经运行")
+            grant = None
             try:
                 grant = self.scheduler.pick_and_grant()
                 if grant is None:
@@ -201,6 +203,10 @@ class DeviceRuntime:
                 with self._lifecycle_lock:
                     self._last_error = exc
                     self._stop.set()
+                if grant is not None:
+                    registration = self.registrations.get(grant.owner_type)
+                    if registration is not None and registration.on_stopped is not None:
+                        registration.on_stopped(grant, self.scheduler, exc)
                 raise
 
     def _run(self) -> None:

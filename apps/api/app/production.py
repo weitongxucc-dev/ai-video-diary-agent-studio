@@ -5273,6 +5273,53 @@ class ProductionRepository:
             row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)).fetchone()
             return self._job_run_from_row(row)
 
+    def interrupt_creation_execution(
+        self, event: TaskEvent, *, impact: str, repair_action: str,
+        task_is_current: Callable[[sqlite3.Connection], bool],
+        expected_free_permit_generation: int | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """Save one owner's interrupted job, current stage and receipt together."""
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.interrupt_creation_execution(event, impact=impact,
+                    repair_action=repair_action, task_is_current=task_is_current,
+                    expected_free_permit_generation=expected_free_permit_generation,
+                    connection=conn)
+            return
+        if expected_free_permit_generation is not None:
+            permit = connection.execute("SELECT state,generation FROM device_permit WHERE id=1").fetchone()
+            if permit is None or (permit["state"], permit["generation"]) != ("free", expected_free_permit_generation):
+                raise ValueError("设备许可在制作恢复前已变化，原作业保持待核查")
+        row = connection.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?",
+                                 (event.workspace_id, event.job_id)).fetchone()
+        if row is None or row["task_id"] != event.task_id:
+            raise ValueError("中断回执不属于当前制作作业")
+        if row["status"] not in {"queued", "running", "interrupted"}:
+            return  # A stopped dispatcher cannot overwrite a committed terminal result.
+        reason = event.payload["reason"]
+        now = event.created_at.isoformat()
+        connection.execute(
+            "UPDATE job_runs SET status='interrupted',failure_reason=?,impact=?,repair_action=?,"
+            "finished_at=?,updated_at=? WHERE workspace_id=? AND id=?",
+            (reason, impact, repair_action, now, now, event.workspace_id, event.job_id))
+        stage = event.payload["stage"]
+        task_stage = "narration" if stage == "narration" else "montage"
+        if (row["kind"] == "creation_task_execution"
+                and stage in {"narration", "person_render", "montage_plan", "render"}
+                and task_is_current(connection)):
+            task_row = connection.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
+                                          (event.workspace_id, event.task_id)).fetchone()
+            payload = json.loads(task_row["payload"])
+            if payload["stage"] == task_stage and payload["stage_status"] == "running":
+                payload.update(stage_status="not_started", stage_reason=reason,
+                    stage_impact=impact, stage_repair_action=repair_action, stage_retryable=True,
+                    recovery_point=task_stage, updated_at=now)
+                connection.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+                    (json.dumps(payload, ensure_ascii=False), now, event.workspace_id, event.task_id))
+        self.append_task_event(event, connection=connection)
+
     def interrupt_running_job_runs(self, workspace_id: str | None = None) -> int:
         now = utc_now().isoformat()
         with self._connect() as conn:

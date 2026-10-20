@@ -634,6 +634,42 @@ def test_fencing_checkpoint_atomicity_and_different_database_rejection(tmp_path)
     _complete(scheduler, new)
 
 
+@pytest.mark.parametrize("failure", ["owner_write", "ledger_finish"])
+def test_defer_owner_transaction_and_post_commit_ledger_recovery(tmp_path, monkeypatch, failure):
+    scheduler = _scheduler(tmp_path)
+    scheduler.submit(_intent("defer-owner"), "member-a")
+    grant = scheduler.pick_and_grant()
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.execute("CREATE TABLE owner_receipt(value TEXT)")
+    def write(conn, current):
+        conn.execute("INSERT INTO owner_receipt VALUES ('interrupted')")
+        if failure == "owner_write":
+            raise OSError("receipt failed")
+    if failure == "ledger_finish":
+        def fail_finish(data):
+            raise OSError("ledger finish failed")
+        monkeypatch.setattr(scheduler, "_finish_host_release", fail_finish)
+    with pytest.raises(OSError):
+        scheduler.defer_unit(grant, reason="resource_pressure",
+            retry_not_before_utc=scheduler._now() + timedelta(seconds=30),
+            owner_database_path=scheduler.database_path, owner_write=write)
+    with sqlite3.connect(scheduler.database_path) as conn:
+        assert conn.execute("SELECT count(*) FROM owner_receipt").fetchone()[0] == (failure == "ledger_finish")
+        assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == ("free" if failure == "ledger_finish" else "held")
+        assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()[0] == ("blocked" if failure == "ledger_finish" else "granted")
+    if failure == "ledger_finish":
+        scheduler.record_owner_stop(grant, owner_database_path=scheduler.database_path,
+            owner_write=lambda conn, current: pytest.fail("committed owner outcome must remain unchanged"))
+    scheduler.close()
+    replacement = _scheduler(tmp_path)
+    assert replacement.reconcile_released() == grant.generation
+    with sqlite3.connect(replacement.database_path) as conn:
+        assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
+        assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()[0] == ("blocked" if failure == "ledger_finish" else "waiting")
+        assert conn.execute("SELECT count(*) FROM owner_receipt").fetchone()[0] == (failure == "ledger_finish")
+    replacement.close()
+
+
 def test_live_or_unknown_child_blocks_recovery(tmp_path):
     processes = Processes()
     scheduler = _scheduler(tmp_path, processes=processes)

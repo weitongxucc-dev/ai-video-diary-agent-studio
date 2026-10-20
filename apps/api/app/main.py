@@ -14119,6 +14119,9 @@ def _build_device_components(*, repository: ProductionRepository):
     }
     from app.automation_runtime import restrict_automation_registration
     registrations["creation_job"] = restrict_automation_registration(registrations["creation_job"])
+    creation_registration = registrations["creation_job"]
+    registrations["creation_job"] = replace(creation_registration,
+        on_stopped=creation_registration.executor.record_stopped)
     from app.profile_preview_execution import profile_preview_registration
     registrations["media_preview"] = profile_preview_registration(repository,
         voice_service=voice_preview_service, avatar_service=avatar_preview_service,

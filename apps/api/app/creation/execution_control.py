@@ -8,6 +8,7 @@ import logging
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
     revision_digest, submit_creation_stage, montage_waiting_for_confirmation)
 from app.creation.render_stage_use_case import RenderRejected
+from app.creation.contracts import TaskEvent
 from app.device_scheduler import SubmissionIntent, SchedulePolicy
 from app.production import CreationPlan, CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
@@ -258,6 +259,7 @@ class CreationExecutionControl:
                     len(pending),
                 )
             return
+        generation = runtime.scheduler.reconcile_released()
         media = runtime.registrations["creation_job"].owner.task_media
         if media is not None:
             pending_media = self.repository.list_pending_task_media_jobs(TASK_MEDIA_KIND)
@@ -298,6 +300,22 @@ class CreationExecutionControl:
             except (ValueError, KeyError, TypeError, AttributeError):
                 logger.warning("制作作业 %s 缺少可复核的持久身份，保留待处理", job.id)
                 continue
+            if job.status == "interrupted":
+                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+                request = self.repository.creation_execution_wait_row(
+                    job.workspace_id, original.member_id, job.id, job.input_digest)
+                stage = request["unit_key"].split(":", 1)[0] if request is not None else task.stage
+                self.repository.interrupt_creation_execution(TaskEvent(
+                    id=f"event_{job.id}_recovery_{job.attempt}", workspace_id=job.workspace_id,
+                    task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
+                    payload={"stage": stage, "status": "interrupted",
+                             "reason": job.failure_reason or "process_interrupted", "permit_retained": False},
+                    created_at=job.updated_at),
+                    impact=job.impact or "本次执行中断，上游有效产物保留。",
+                    repair_action="旧执行者已确认释放；继续前将重新核验身份、输入和资源。",
+                    task_is_current=lambda conn: runtime.registrations["creation_job"].owner.owns_task_stage(
+                        conn, job.workspace_id, job.id, stage),
+                    expected_free_permit_generation=generation)
             if self.verify_identity(original) != "ready":
                 logger.warning("制作作业 %s 的成员许可失效或未知，保留待处理", job.id)
                 continue

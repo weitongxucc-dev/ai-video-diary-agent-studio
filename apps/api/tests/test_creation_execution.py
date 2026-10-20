@@ -1421,6 +1421,11 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     execution = _execution(repo)
     scheduler, members, seeded_owner = _permit_scheduler(repo, tmp_path)
+    task = repo.get_creation_task("local", task_id)
+    task.owner_user_id = seeded_owner.member_id
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(asdict(task), default=str), "local", task_id))
     owner = CreationJobOwnerVerifier(repo)
     wake_calls = []
     monkeypatch.setattr(main_module, "production_repo", repo)
@@ -1429,7 +1434,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)}, last_error=None,
-        wake=lambda: wake_calls.append(True),
+        running=True, wake=lambda: wake_calls.append(True),
     ))
     monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
         submit=lambda *_args: pytest.fail("scheduled request must not enter legacy worker"),
@@ -1583,6 +1588,62 @@ def test_concurrent_duplicate_start_returns_one_job(tmp_path):
     assert len(execution.jobs("workspace_a", task_id)) == 1
 
 
+@pytest.mark.parametrize("scenario", ["single", "changed_input", "newer_execution", "newer_input_and_execution"])
+def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path, scenario):
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.contracts import JobRun, TaskEvent
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    scheduler, _members, member = _permit_scheduler(repo, tmp_path)
+    execution = _execution(repo)
+    actor = CreationExecutionActor("local", member.member_id)
+    job = execution.start("local", task_id, script_id, digest, actor=actor)
+    request_id = submit_creation_stage(execution, scheduler, job, actor)
+    repo.claim_job_run("local", job.id)
+    repo.start_creation_task_narration("local", task_id)
+    # The old startup recovery only changed JobRun, leaving this stage running.
+    repo.interrupt_running_job_runs()
+    assert repo.get_creation_task("local", task_id).stage_status == "running"
+    if scenario in {"changed_input", "newer_input_and_execution"}:
+        script = repo.get_creation_task_script("local", script_id)
+        script = replace(script, sections=[replace(script.sections[0], content="较新采用的文案")])
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?",
+                (json.dumps(asdict(script), default=str), script.id))
+    if scenario in {"newer_execution", "newer_input_and_execution"}:
+        newer_digest = revision_digest(repo.get_creation_task_script("local", script_id),
+            repo.get_creation_plan("local", repo.get_creation_task("local", task_id).plan_id))
+        newer = repo.create_job_run(JobRun("newer-execution", "local", task_id,
+            "creation_task_execution", "newer-execution-input", newer_digest))
+        repo.append_task_event(TaskEvent(f"event_{newer.id}_start", "local", task_id, newer.id,
+            "creation_execution_started", {"script_id":script_id,
+                "plan_id":repo.get_creation_task("local", task_id).plan_id,
+                "input_digest":newer_digest, "member_id":member.member_id}))
+        repo.claim_job_run("local", newer.id)
+        if repo.get_creation_task("local", task_id).stage_status != "running":
+            repo.start_creation_task_narration("local", task_id)
+    current_task = asdict(repo.get_creation_task("local", task_id))
+    control = CreationExecutionControl(repo, execution, None, lambda original: "ready")
+    runtime = SimpleNamespace(scheduler=scheduler,
+        registrations={"creation_job": SimpleNamespace(owner=scheduler.owners)}, wake=lambda: None)
+    control.recover(runtime)
+    recovered = repo.get_creation_task("local", task_id)
+    if scenario == "single":
+        assert recovered.stage_status == "not_started" and recovered.stage_reason == "process_interrupted"
+    else:
+        assert asdict(recovered) == current_task
+    assert repo.get_job_run("local", job.id).status == "interrupted"
+    with repo._connect() as conn:
+        assert conn.execute("SELECT id FROM device_work_requests WHERE owner_id=?", (job.id,)).fetchall()[0][0] == request_id
+        assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_id=?", (job.id,)).fetchone()[0] == 1
+    control.recover(runtime)  # Same receipt and request, no duplicate recovery write.
+    if scenario == "single":
+        # The real stage gate now permits re-entry; no voice model is called.
+        assert repo.start_creation_task_narration("local", task_id).stage_status == "running"
+    else:
+        assert asdict(repo.get_creation_task("local", task_id)) == current_task
+    scheduler.close()
+
+
 def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
@@ -1596,13 +1657,15 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     )
     runtime_starts = []
     monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "quality_check_repo", main_module.QualityCheckRepository(repo.database_path))
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
     monkeypatch.setattr(main_module, "creation_execution", execution)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "execution_worker", worker)
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
-        last_error=None, wake=lambda: None, start=lambda: runtime_starts.append("start"),
+        last_error=None, running=False, wake=lambda: None, start=lambda: runtime_starts.append("start"),
         stop=lambda **_kwargs: True,
     ))
     with TestClient(main_module.app) as client:
@@ -1782,7 +1845,7 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]
 
 
-@pytest.mark.parametrize("after_wait", ["recover", "io_gap", "revoked", "cancelled", "unknown", "unreleased", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel"])
+@pytest.mark.parametrize("after_wait", ["recover", "io_gap", "revoked", "cancelled", "unknown", "unreleased", "write_failure", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel"])
 def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
     """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
     from datetime import timedelta
@@ -1869,25 +1932,45 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         narration_stage=SimpleNamespace(generate=lambda workspace, current_task, *, grant_context:
             action(workspace, current_task, grant_context)))
     runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path / "device.lock",
-        device_access=access, registrations={"creation_job": OwnerRegistration(owner, executor)},
+        device_access=access, registrations={"creation_job": OwnerRegistration(owner, executor, executor.record_stopped)},
         resources=resources, processes=HostProcessProbe(), poll_interval_seconds=0.01)
     execution = _execution(repo)
     job = execution.start("local", task_id, script_id, digest, actor=actor)
     request_id = submit_creation_stage(execution, runtime.scheduler, job, actor)
     with repo._connect() as conn:
         first_ready = conn.execute("SELECT first_ready_at_utc FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0]
+    rolled_back = []
+    if after_wait == "write_failure":
+        original_append = repo.append_task_event
+        def fail_pressure_receipt(event, **kwargs):
+            if event.id.startswith(f"event_{job.id}_pressure_"):
+                raise OSError("fixture receipt storage failure")
+            with repo._connect() as conn:
+                rolled_back.append((conn.execute("SELECT state FROM device_permit").fetchone()[0],
+                    conn.execute("SELECT status FROM job_runs WHERE id=?", (job.id,)).fetchone()[0],
+                    repo.get_creation_task("local", task_id).stage_status))
+            return original_append(event, **kwargs)
+        monkeypatch.setattr(repo, "append_task_event", fail_pressure_receipt)
     try:
-        if after_wait in {"unknown", "unreleased"}:
-            with pytest.raises(RecoveryBlocked):
+        if after_wait in {"unknown", "unreleased", "write_failure"}:
+            with pytest.raises(OSError if after_wait == "write_failure" else RecoveryBlocked):
                 runtime.run_once()
-            assert repo.get_job_run("local", job.id).status == "running"
+            assert runtime.last_error is not None
+            assert repo.get_job_run("local", job.id).status == "interrupted"
+            assert repo.get_creation_task("local", task_id).stage_status == "not_started"
+            stopped = repo.get_task_event("local", f"event_{job.id}_stopped_{grants[-1].generation}")
+            assert stopped.payload["permit_retained"] is True
+            if after_wait == "write_failure":
+                assert rolled_back == [("held", "running", "running")]
+                with pytest.raises(KeyError):
+                    repo.get_task_event("local", f"event_{job.id}_pressure_{grants[-1].generation}")
             with repo._connect() as conn:
                 assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
+                assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "granted"
             monkeypatch.setattr(runtime.scheduler.processes, "children_released", lambda children: True)
             grant = grants[-1]
-            runtime.scheduler.fail_unit(grant, reason="fixture_cleanup",
-                failure_write=lambda conn, current: executor._checkpoint(
-                    conn, current, status="failed", reason="fixture_cleanup", stage="narration"))
+            runtime.scheduler.complete_unit(grant, checkpoint_database_path=repo.database_path,
+                checkpoint_write=lambda conn, current: None, cancelled=True)
             return
         assert runtime.run_once() is True and runtime.last_error is None
         if after_wait in {"ordinary_error", "user_cancel"}:

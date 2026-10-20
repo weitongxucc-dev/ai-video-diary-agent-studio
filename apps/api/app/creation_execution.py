@@ -818,6 +818,18 @@ class CreationJobOwnerVerifier:
             return "dependency"
         return "ready" if request.unit_key == key and request.resources == resources else "stale"
 
+    def owns_task_stage(self, conn, workspace_id, job_id, stage):
+        """Local final ownership check; never observes identity, resources or media."""
+        try:
+            job, task, event, script, plan = self._facts(conn, workspace_id, job_id)
+        except KeyError:
+            return False  # Retired inputs cannot own the task's current projection.
+        latest = conn.execute(
+            "SELECT id FROM job_runs WHERE workspace_id=? AND task_id=? AND kind=? "
+            "ORDER BY created_at DESC,id DESC LIMIT 1", (workspace_id, task.id, KIND)).fetchone()
+        return (latest is not None and latest["id"] == job.id
+                and self._check_facts(job, task, event, script, plan, stage, event.get("member_id")) == "ready")
+
     def capture_local(self, request, conn):
         if request.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.capture_local(request, conn)
@@ -1063,19 +1075,46 @@ class CreationJobUnitExecutor:
         if event is not None:
             event.set()
 
+    def _write_interrupted(self, conn, grant, *, scheduler, stage, reason, decision=None, permit_retained=False):
+        job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+        owner = scheduler.owners
+        if hasattr(owner, "registrations"):
+            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+        receipt = "stopped" if permit_retained else "pressure" if reason == "resource_pressure" else "permission"
+        payload = {"stage": stage, "status": "interrupted", "reason": reason,
+                   "request_id": grant.request_id, "permit_generation": grant.generation,
+                   "permit_retained": permit_retained}
+        if decision is not None:
+            payload["decision"] = asdict(decision)
+        self.repository.interrupt_creation_execution(TaskEvent(
+            id=f"event_{job.id}_{receipt}_{grant.generation}", workspace_id=job.workspace_id,
+            task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage", payload=payload),
+            impact="本次执行未完成，上游有效产物和已采用版本保留。",
+            repair_action=("当前许可保留待核查；确认旧执行者和子进程已释放后再恢复。" if permit_retained
+                           else "等待条件恢复；继续前将重新核验身份、输入和资源。"),
+            task_is_current=lambda current: owner.owns_task_stage(current, job.workspace_id, job.id, stage),
+            connection=conn)
+
+    def record_stopped(self, grant, scheduler, exc):
+        reason = str(exc) if isinstance(exc, RecoveryBlocked) else f"制作执行已停止（{type(exc).__name__}），须核查本次许可。"
+        scheduler.record_owner_stop(grant, owner_database_path=self.repository.database_path,
+            owner_write=lambda conn, current: self._write_interrupted(conn, current,
+                scheduler=scheduler, stage=current.unit_key.split(":", 1)[0], reason=reason,
+                decision=exc.decision if isinstance(exc, HostResourceRefusal) else None, permit_retained=True))
+
     def _defer_permission_loss(self, grant: Grant, scheduler: DeviceScheduler) -> bool:
         owner = scheduler.owners
         if hasattr(owner, "registrations"):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
         if owner.verify_identity is None:
             return False  # Existing diagnostic owners retain their explicit recovery contract.
-        with self.repository._connect() as conn:
-            conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
-                         (grant.workspace_id, grant.owner_id))
         # Defer proves group/resource release even when the owner is revoked or
         # temporarily unknown. Eligibility rechecks its precise current verdict.
         scheduler.defer_unit(grant, reason="transient_failure",
-                             retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=1))
+            retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=1),
+            owner_database_path=self.repository.database_path,
+            owner_write=lambda conn, current: self._write_interrupted(conn, current,
+                scheduler=scheduler, stage=current.unit_key.split(":", 1)[0], reason="transient_failure"))
         return True
 
     def _checkpoint(self, conn: sqlite3.Connection, grant: Grant, *, status: str,
@@ -1229,15 +1268,11 @@ class CreationJobUnitExecutor:
             elif self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled' or cancellation.is_set():
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='cancelled', stage=stage), cancelled=True)
             else:
-                scheduler.defer_unit(grant, reason='resource_pressure', retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
-                with self.repository._connect() as conn:
-                    conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
-                    task_row = conn.execute('SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?', (job.workspace_id, job.task_id)).fetchone()
-                    payload = json.loads(task_row['payload'])
-                    if payload['stage'] == stage and payload['stage_status'] == 'running':
-                        payload.update(stage_status='not_started', stage_reason='resource_pressure', recovery_point=stage)
-                        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?', (json.dumps(payload, ensure_ascii=False), job.workspace_id, job.task_id))
-                    conn.execute('INSERT INTO task_events (id,workspace_id,task_id,job_id,event_type,payload_json,created_at) VALUES (?,?,?,?,?,?,?)', (f'event_{job.id}_pressure_{grant.generation}', job.workspace_id, job.task_id, job.id, 'creation_execution_stage', json.dumps({'stage': stage, 'status': 'interrupted', 'reason': 'resource_pressure', 'decision': asdict(exc.decision)}, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
+                scheduler.defer_unit(grant, reason='resource_pressure',
+                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30),
+                    owner_database_path=self.repository.database_path,
+                    owner_write=lambda conn, current: self._write_interrupted(conn, current,
+                        scheduler=scheduler, stage=stage, reason="resource_pressure", decision=exc.decision))
         except RecoveryBlocked:
             raise
         except GrantedCommandCancelled:
@@ -1517,15 +1552,10 @@ class CreationJobUnitExecutor:
                     # This existing gate proves process/resource release before
                     # freeing the permit. Keep the published version untouched.
                     scheduler.defer_unit(grant, reason="resource_pressure",
-                        retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
-                    with self.repository._connect() as conn:
-                        conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'",
-                                     (job.workspace_id, job.id))
-                        self.repository.append_task_event(TaskEvent(
-                            id=f"event_{job.id}_pressure_{grant.generation}", workspace_id=job.workspace_id,
-                            task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
-                            payload={"stage": "render", "status": "interrupted", "reason": "resource_pressure",
-                                     "decision": asdict(exc.decision)}), connection=conn)
+                        retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30),
+                        owner_database_path=self.repository.database_path,
+                        owner_write=lambda conn, current: self._write_interrupted(conn, current,
+                            scheduler=scheduler, stage="render", reason="resource_pressure", decision=exc.decision))
                     return
             except RecoveryBlocked:
                 raise
