@@ -1,14 +1,18 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { randomBytes, randomUUID } = require('crypto');
+const { performance } = require('perf_hooks');
 
 function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment, webEnvironment, spawnApi, forkWeb, recordLifecycle, attachChildOutput, onFailure }) {
   let apiProcess = null;
   let nextProcess = null;
+  let nextInstance = null;
   let apiPort = 0;
   let nextPort = 0;
   let apiStopping = false;
-  let nextStopping = false;
+  let apiControlToken = null;
+  let stopPromise = null;
   const serviceStates = {
     api: { label: '本地 API 服务', state: 'not-started', error: null },
     web: { label: '本地 Web 服务', state: 'not-started', error: null },
@@ -88,7 +92,10 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
     apiPort = await getFreePort();
     console.log(`[main] Starting API server on port ${apiPort}...`);
 
-    const env = apiEnvironment(apiPort);
+    apiControlToken = randomBytes(32).toString('hex');
+    stopPromise = null;
+    apiStopping = false;
+    const env = { ...apiEnvironment(apiPort), YAOHE_DESKTOP_CONTROL_TOKEN: apiControlToken };
 
     apiProcess = spawnApi(binary, [], {
       env,
@@ -229,28 +236,36 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
     nextPort = webPort;
     console.log(`[main] Starting Next.js server on port ${nextPort}...`);
 
-    const env = webEnvironment(nextPort, apiPort);
+    const env = { ...webEnvironment(nextPort, apiPort) };
+    delete env.YAOHE_DESKTOP_CONTROL_TOKEN;
 
     nextProcess = forkWeb(serverJs, [], {
       env,
       stdio: 'pipe',
       serviceName: 'Yaohe Web',
     });
+    const child = nextProcess;
+    const instance = { child, exited: false, code: null, failed: false, stopRequested: false, stopSent: false, expected: false };
+    nextInstance = instance;
 
-    nextProcess.on('error', (err) => {
+    child.on('error', (err) => {
+      instance.failed = true;
       console.error(`[main] Web utility process failed: ${err.type}`);
-      nextProcess = null;
+      if (nextProcess === child) nextProcess = null;
       reportServiceFailure('web', new Error(`后台网页服务异常（${err.type}）`));
     });
 
-    attachChildOutput('web', nextProcess.stdout, 'next', (message) => console.log(message));
-    attachChildOutput('web', nextProcess.stderr, 'next:err', (message) => console.error(message));
+    attachChildOutput('web', child.stdout, 'next', (message) => console.log(message));
+    attachChildOutput('web', child.stderr, 'next:err', (message) => console.error(message));
 
-    nextProcess.on('exit', (code) => {
+    child.on('exit', (code) => {
+      instance.exited = true;
+      instance.code = code;
+      instance.expected = instance.stopRequested;
       console.log(`[main] Web utility process exited (code=${code})`);
-      recordLifecycle('service-exit', { service: 'web', code, signal: null, expected: nextStopping });
-      nextProcess = null;
-      if (!nextStopping) {
+      recordLifecycle('service-exit', { service: 'web', code, signal: null, expected: instance.expected });
+      if (nextProcess === child) nextProcess = null;
+      if (!instance.expected) {
         reportServiceFailure('web', new Error(`进程已退出（code=${code}）`));
       }
     });
@@ -260,37 +275,109 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
     return nextPort;
   }
 
-  async function stopService(name, child, setStopping, utility = false) {
-    if (!child) return;
-    const isRunning = () => utility ? child.pid !== undefined : child.exitCode === null;
+  async function waitUntil(promise, deadline) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise.then(value => ({ completed: performance.now() < deadline, value })),
+        new Promise(resolve => { timer = setTimeout(() => resolve({ completed: false }), Math.max(0, deadline - performance.now())); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+
+  async function requestApiShutdown(child, exitRequestId, deadlineAtUtc, deadline) {
+    if (!child) return { confirmed: isDev || serviceStates.api.state === 'not-started', reason: 'not-owned' };
+    apiStopping = true;
+    const body = JSON.stringify({ exit_request_id: exitRequestId, deadline_at_utc: deadlineAtUtc });
+    let request;
+    const response = new Promise(resolve => {
+      request = http.request({ hostname: '127.0.0.1', port: apiPort, path: '/internal/desktop-shutdown', method: 'POST',
+        headers: { 'X-Yaohe-Desktop-Control': apiControlToken, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
+        res.on('error', () => resolve({ confirmed: false, reason: 'transport-failed' }));
+        if (res.statusCode !== 200) {
+          res.resume();
+          resolve({ confirmed: false, reason: 'http-failed', httpStatus: res.statusCode });
+          return;
+        }
+        const chunks = [];
+        let size = 0;
+        res.on('data', chunk => {
+          size += chunk.length;
+          if (size > 4096) {
+            resolve({ confirmed: false, reason: 'invalid-receipt' });
+            request.destroy();
+          } else chunks.push(chunk);
+        });
+        res.on('end', () => {
+          let value;
+          try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+          catch (_) { resolve({ confirmed: false, reason: 'invalid-receipt' }); return; }
+          const checks = ['dispatch_stopped', 'executors_notified', 'processes_released', 'checkpoints_saved'];
+          if (!value || value.exit_request_id !== exitRequestId || !['ready_to_exit', 'unconfirmed'].includes(value.status)
+              || !value.checks || Object.keys(value.checks).length !== checks.length || checks.some(key => typeof value.checks[key] !== 'boolean')
+              || !Array.isArray(value.pending) || value.pending.some(item => typeof item !== 'string')) {
+            resolve({ confirmed: false, reason: 'invalid-receipt' });
+            return;
+          }
+          const confirmed = value.status === 'ready_to_exit' && checks.every(key => value.checks[key]) && value.pending.length === 0;
+          resolve({ confirmed, reason: confirmed ? 'ready_to_exit' : 'unconfirmed',
+            pendingChecks: checks.filter(key => !value.checks[key]), pendingCount: value.pending.length });
+        });
+      });
+      request.on('error', () => resolve({ confirmed: false, reason: 'transport-failed' }));
+      request.end(body);
+    });
+    const outcome = await waitUntil(response, deadline);
+    request.destroy();
+    return outcome.completed ? outcome.value : { confirmed: false, reason: 'deadline-exhausted' };
+  }
+
+  async function stopService(name, child, setStopping, deadline, utilityExit = null) {
+    if (!child) return { exited: true, forced: false, normal: true, owned: false };
+    const utility = utilityExit !== null;
+    const pid = child.pid;
+    let observedExit = utility ? utilityExit.exited : false;
+    let code = utility ? utilityExit.code : child.exitCode ?? null;
+    let signal = child.signalCode ?? null;
+    const isRunning = () => !observedExit && (utility ? child.pid !== undefined : child.exitCode === null && child.signalCode === null);
     if (!isRunning()) {
-      setServiceState(name, 'stopped');
-      return;
+      const normal = !utility && performance.now() < deadline && code === 0;
+      return { exited: utility ? observedExit : true, forced: false, normal, owned: true, code, signal };
     }
     setStopping(true);
     console.log(`[main] Stopping ${serviceStates[name].label} (pid=${child.pid})...`);
 
-    const exited = new Promise((resolve) => child.once('exit', resolve));
-    if (utility) child.kill();
-    else signalService(child, 'SIGTERM');
-    let timeoutId;
-    await Promise.race([
-      exited,
-      new Promise((resolve) => { timeoutId = setTimeout(resolve, 5000); }),
-    ]);
-    clearTimeout(timeoutId);
-    if (isRunning()) {
-      if (utility) process.kill(child.pid, 'SIGKILL');
-      else signalService(child, 'SIGKILL');
+    const exited = new Promise(resolve => child.once('exit', (exitCode, exitSignal) => {
+      observedExit = true; code = exitCode; signal = exitSignal ?? null; resolve();
+    }));
+    let forced = false;
+    try {
+      const sent = utility ? child.kill() : child.kill('SIGTERM');
+      if (utility) utilityExit.stopSent = sent === true;
+      recordLifecycle('service-stop-signal', { service: name, pid, signal: utility ? 'utility-kill' : 'SIGTERM', sent });
+    } catch (error) {
+      recordLifecycle('service-stop-signal-failed', { service: name, pid, errorCode: error.code || 'unknown' });
     }
-    let killTimeoutId;
-    await Promise.race([
-      exited,
-      new Promise((resolve) => { killTimeoutId = setTimeout(resolve, 1000); }),
-    ]);
-    clearTimeout(killTimeoutId);
-    setServiceState(name, 'stopped');
-    setStopping(false);
+    const exitWait = await waitUntil(exited, deadline);
+    if (isRunning()) {
+      forced = true;
+      try {
+        const sent = utility ? process.kill(pid, 'SIGKILL') : signalService(child, 'SIGKILL');
+        recordLifecycle('service-stop-escalated', { service: name, pid, signal: 'SIGKILL', sent });
+      } catch (error) {
+        recordLifecycle('service-stop-signal-failed', { service: name, pid, signal: 'SIGKILL', errorCode: error.code || 'unknown' });
+      }
+      // This is only the existing bounded kill-observation window, not more API cleanup time.
+      await waitUntil(exited, performance.now() + 1000);
+    }
+    // Electron normalizes a successful utility kill's expected POSIX termination to code 0.
+    const expectedExit = utility ? utilityExit.expected && utilityExit.stopSent && !utilityExit.failed && code === 0
+      : code === 0 || signal === 'SIGTERM';
+    const normal = observedExit && exitWait.completed && !forced && expectedExit;
+    const result = { exited: observedExit, forced, normal, timedOut: !exitWait.completed, owned: true, code, signal };
+    recordLifecycle('service-stop-result', { service: name, pid, ...result });
+    if (observedExit) setStopping(false);
+    return result;
   }
 
   function signalService(child, signal) {
@@ -312,11 +399,41 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
     }
   }
 
-  async function stopAllServices() {
-    await Promise.all([
-      stopService('web', nextProcess, (value) => { nextStopping = value; }, true),
-      stopService('api', apiProcess, (value) => { apiStopping = value; }),
-    ]);
+  function stopAllServices({ stopCompanion } = {}) {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      const deadline = performance.now() + 30_000;
+      const exitRequestId = randomUUID();
+      const deadlineAtUtc = new Date(Date.now() + 30_000).toISOString();
+      const api = apiProcess;
+      const web = nextInstance;
+      recordLifecycle('desktop-shutdown-requested', { exitRequestId, deadlineAtUtc });
+      // Start API notification before waiting on any gateway configuration already in flight.
+      const controlRequest = requestApiShutdown(api, exitRequestId, deadlineAtUtc, deadline);
+      const companionStop = stopCompanion ? waitUntil(Promise.resolve().then(stopCompanion).then(() => true, () => false), deadline)
+        : Promise.resolve({ completed: true, value: true });
+      const control = await controlRequest;
+      recordLifecycle('desktop-shutdown-receipt', { exitRequestId, ...control });
+      const [apiExit, webExit, companionExit] = await Promise.all([
+        stopService('api', api, value => { apiStopping = value; }, deadline),
+        stopService('web', web ? web.child : null, value => { web.stopRequested = value; }, deadline, web),
+        companionStop,
+      ]);
+      const clean = control.confirmed && apiExit.normal && webExit.normal
+        && companionExit.completed && companionExit.value;
+      if (apiExit.owned) {
+        if (control.confirmed && apiExit.normal) setServiceState('api', 'stopped');
+        else setServiceState('api', 'failed', Object.assign(new Error('任务保存暂停、进程释放或正常退出未全部确认。'), { code: 'API_SHUTDOWN_UNCONFIRMED' }));
+      }
+      if (webExit.owned) {
+        if (webExit.normal) setServiceState('web', 'stopped');
+        else setServiceState('web', 'failed', Object.assign(new Error('Web服务退出未确认。'), { code: 'SERVICE_STOP_UNCONFIRMED' }));
+      }
+      recordLifecycle('desktop-shutdown-result', { exitRequestId, clean: Boolean(clean),
+        apiExited: apiExit.exited, webExited: webExit.exited, companionStopped: Boolean(companionExit.completed && companionExit.value) });
+      return { clean: Boolean(clean), api: apiExit, web: webExit };
+    })();
+    return stopPromise;
   }
 
 

@@ -25,6 +25,20 @@ const serverFixture = `
 const http = require('node:http');
 const port = Number(process.env.FIXTURE_PORT || process.env.PORT || process.env.API_PORT);
 const server = http.createServer((request, response) => {
+  if (request.url === '/internal/desktop-shutdown' && request.method === 'POST') {
+    if (!process.env.YAOHE_DESKTOP_CONTROL_TOKEN || request.headers['x-yaohe-desktop-control'] !== process.env.YAOHE_DESKTOP_CONTROL_TOKEN) {
+      response.writeHead(403); response.end(); return;
+    }
+    let body = '';
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      const input = JSON.parse(body);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ exit_request_id: input.exit_request_id, status: 'ready_to_exit',
+        checks: { dispatch_stopped: true, executors_notified: true, processes_released: true, checkpoints_saved: true }, pending: [] }));
+    });
+    return;
+  }
   if (request.url === '/api/creation-tasks/task_fixture/covers/cover_fixture/image') {
     response.writeHead(200, { 'content-type': 'image/png' });
     response.end('fixture-png');
@@ -238,7 +252,7 @@ function createElectronMock(logsPath, packaged = false, windowLoadMode = 'no-nav
   };
 }
 
-async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', localWebPort, autoStart = true, singleInstanceLock, lifecycleStreamFactory }) {
+async function loadMain({ resourcesPath, development, packaged = false, windowLoadMode = 'no-navigation-events', userDataPath = '', localWebPort, autoStart = true, singleInstanceLock, lifecycleStreamFactory, serviceSupervisorFactory }) {
   const mainPath = fs.realpathSync(path.join(resourcesPath, 'app', 'main.js'));
   const originalLoad = Module._load;
   const originalResourcesPath = process.resourcesPath;
@@ -284,6 +298,7 @@ async function loadMain({ resourcesPath, development, packaged = false, windowLo
   Module._load = function load(request, parent, isMain) {
     if (request === 'electron') return mock.electron;
     if (request === 'electron-updater') return mock.updater;
+    if (request === './runtime/service-supervisor' && parent.filename === mainPath && serviceSupervisorFactory) return { createServiceSupervisor: serviceSupervisorFactory };
     if (request === 'fs' && parent.filename === path.join(path.dirname(mainPath), 'runtime', 'lifecycle-log.js') && lifecycleStreamFactory) return { ...fs, createWriteStream: lifecycleStreamFactory };
     if (request === 'child_process' && parent.filename === mainPath) {
       const childProcess = originalLoad.call(this, request, parent, isMain);
@@ -1094,7 +1109,193 @@ async function assertLocalWebPort() {
   console.log(`desktop local-web-port: PASS (${checks} checks; no real 3000 binding)`);
 }
 
+async function assertDesktopShutdownProtocol({ webOnly = false } = {}) {
+  const { mock } = require('node:test');
+  const supervisorPath = path.join(RUNTIME_SOURCE, 'service-supervisor.js');
+  const tokens = new Set();
+  const webModes = ['web-ready', 'web-exit-during-wait', 'web-exit-zero-before-quit', 'web-stop-error', 'web-unknown', 'web-fatal', 'web-kill-failed'];
+  const modes = webOnly ? webModes : ['ready', 'unconfirmed', 'mismatched', 'false-checks', 'rejected', 'late-receipt', 'timeout', 'never-exits', 'exit-error', ...webModes];
+  for (const mode of modes) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yaohe-stop-protocol-'));
+    writeFixture(path.join(root, 'api-server'), 'fixture', true);
+    fs.mkdirSync(path.join(root, 'web'));
+    writeFixture(path.join(root, 'web', 'server.js'), 'fixture');
+    const previousLoad = Module._load;
+    const previousCache = require.cache[supervisorPath];
+    const previousKill = process.kill;
+    let clock = 0, apiEnv, webEnv, webKills = 0;
+    const events = [], signals = [], requests = [];
+    const api = Object.assign(new EventEmitter(), { pid: 500001, exitCode: null, signalCode: null, stdout: new EventEmitter(), stderr: new EventEmitter() });
+    const web = Object.assign(new EventEmitter(), { pid: 500002, stdout: new EventEmitter(), stderr: new EventEmitter() });
+    const finishApi = (code, signal = null) => { api.exitCode = code; api.signalCode = signal; api.emit('exit', code, signal); };
+    const finishWeb = code => { web.pid = undefined; web.emit('exit', code); };
+    api.kill = signal => {
+      signals.push({ service: 'api', signal, at: clock });
+      if (!['timeout', 'never-exits'].includes(mode)) finishApi(mode === 'exit-error' ? 1 : 0);
+      return true;
+    };
+    web.kill = () => {
+      webKills++;
+      if (mode === 'web-fatal') web.emit('error', Object.assign(new Error('fixture fatal error'), { type: 'FatalError' }));
+      finishWeb(mode === 'web-stop-error' ? 1 : 0);
+      return mode !== 'web-kill-failed';
+    };
+    const httpFixture = {
+      get(_url, callback) {
+        const request = Object.assign(new EventEmitter(), { destroy() {}, setTimeout() {} });
+        queueMicrotask(() => callback({ statusCode: 200, resume() {} }));
+        return request;
+      },
+      request(options, callback) {
+        const request = new EventEmitter();
+        request.destroy = () => {};
+        request.end = body => {
+          const input = JSON.parse(body);
+          requests.push(input);
+          assert.equal(options.hostname, '127.0.0.1');
+          assert.equal(options.path, '/internal/desktop-shutdown');
+          assert.equal(options.method, 'POST');
+          assert.equal(options.headers['X-Yaohe-Desktop-Control'], apiEnv.YAOHE_DESKTOP_CONTROL_TOKEN);
+          assert.equal(options.headers.Authorization, undefined);
+          assert.deepEqual(Object.keys(input).sort(), ['deadline_at_utc', 'exit_request_id']);
+          assert.match(input.exit_request_id, /^[0-9a-f-]{36}$/);
+          assert.ok(Math.abs(Date.parse(input.deadline_at_utc) - Date.now() - 30_000) < 1000);
+          if (['timeout', 'never-exits'].includes(mode)) return;
+          const reply = () => {
+            if (mode === 'late-receipt') clock = 30_001;
+            const response = Object.assign(new EventEmitter(), { statusCode: mode === 'rejected' ? 401 : 200, resume() {} });
+            callback(response);
+            if (mode === 'rejected') { response.emit('error', new Error('private-response-details')); return; }
+            response.emit('data', Buffer.from(JSON.stringify({
+              exit_request_id: mode === 'mismatched' ? 'other-request' : input.exit_request_id,
+              status: mode === 'unconfirmed' ? 'unconfirmed' : 'ready_to_exit',
+              checks: { dispatch_stopped: true, executors_notified: true, processes_released: mode !== 'false-checks', checkpoints_saved: true }, pending: [],
+            })));
+            response.emit('end');
+          };
+          if (mode === 'ready' || mode === 'web-exit-during-wait') setTimeout(reply, 6000);
+          else queueMicrotask(reply);
+        };
+        return request;
+      },
+    };
+    Module._load = function(request, parent, isMain) {
+      if (parent?.filename === supervisorPath && request === 'http') return httpFixture;
+      if (parent?.filename === supervisorPath && request === 'perf_hooks') return { performance: { now: () => clock } };
+      return previousLoad.call(this, request, parent, isMain);
+    };
+    delete require.cache[supervisorPath];
+    process.kill = (pid, signal) => {
+      assert.equal(pid, -api.pid, 'only this API fixture group may be signalled');
+      assert.equal(signal, 'SIGKILL');
+      signals.push({ service: 'api', signal, at: clock });
+      if (mode !== 'never-exits') finishApi(null, signal);
+      return true;
+    };
+    try {
+      const { createServiceSupervisor } = require(supervisorPath);
+      Module._load = previousLoad;
+      const services = createServiceSupervisor({ isDev: false, webPort: 0, resourcesPath: root,
+        apiEnvironment: () => ({}), webEnvironment: () => ({ YAOHE_DESKTOP_CONTROL_TOKEN: 'fixture-inherited-token' }),
+        spawnApi: (_file, _args, options) => { apiEnv = options.env; return api; },
+        forkWeb: (_file, _args, options) => { webEnv = options.env; return web; },
+        recordLifecycle: (event, fields) => events.push({ event, ...fields }), attachChildOutput() {}, onFailure() {},
+      });
+      await services.startApiServer();
+      await services.startNextServer();
+      assert.match(apiEnv.YAOHE_DESKTOP_CONTROL_TOKEN, /^[0-9a-f]{64}$/);
+      assert.equal(webEnv.YAOHE_DESKTOP_CONTROL_TOKEN, undefined);
+      tokens.add(apiEnv.YAOHE_DESKTOP_CONTROL_TOKEN);
+      mock.timers.enable({ apis: ['setTimeout'] });
+      const pump = () => new Promise(resolve => setImmediate(resolve));
+      const advance = async milliseconds => { clock += milliseconds; mock.timers.tick(milliseconds); await pump(); };
+      if (mode === 'web-exit-zero-before-quit') finishWeb(0);
+      if (mode === 'web-unknown') web.pid = undefined;
+      const stopping = services.stopAllServices({ stopCompanion: () => mode === 'ready'
+        ? new Promise(resolve => setTimeout(resolve, 6500))
+        : ['timeout', 'never-exits'].includes(mode) ? new Promise(() => {}) : Promise.resolve() });
+      assert.equal(services.stopAllServices(), stopping, 'repeated Quit must keep the same request and deadline');
+      await pump();
+      assert.equal(requests.length, 1, 'the API stop request is not blocked by gateway cleanup');
+      if (mode === 'ready') {
+        await advance(5000);
+        assert.equal(signals.length, 0, 'the old five-second kill must not interrupt backend cleanup');
+        await advance(1000);
+        assert.equal(signals[0].signal, 'SIGTERM');
+        await advance(500);
+      } else if (mode === 'web-exit-during-wait') {
+        await advance(1000);
+        finishWeb(7);
+        assert.equal(services.getServiceStatus().web.pid, null);
+        await advance(5000);
+      } else if (['timeout', 'never-exits'].includes(mode)) {
+        await advance(30_000);
+        await advance(0);
+        if (mode === 'never-exits') await advance(1000);
+      }
+      const result = await stopping;
+      const clean = mode === 'ready' || mode === 'web-ready';
+      assert.equal(result.clean, clean);
+      assert.equal(result.api.exited, mode !== 'never-exits');
+      assert.equal(result.api.forced, ['timeout', 'never-exits'].includes(mode));
+      const apiConfirmed = mode === 'ready' || webModes.includes(mode);
+      assert.equal(services.getServiceStatus().api.state, apiConfirmed ? 'stopped' : 'failed');
+      if (!apiConfirmed) assert.equal(events.some(event => event.event === 'service-state' && event.service === 'api' && event.state === 'stopped'), false);
+      if (webModes.includes(mode)) {
+        assert.equal(result.web.owned, true, 'the same Web instance remains owned after its active pointer is cleared');
+        assert.equal(result.web.exited, mode !== 'web-unknown', 'missing PID alone does not confirm exit');
+        assert.equal(result.web.normal, clean);
+        assert.equal(result.web.code, mode === 'web-unknown' ? null : mode === 'web-exit-during-wait' ? 7 : mode === 'web-stop-error' ? 1 : 0);
+        assert.equal(result.web.signal, null, 'utility exit codes do not invent a Node signalCode');
+        assert.equal(webKills, ['web-exit-during-wait', 'web-exit-zero-before-quit', 'web-unknown'].includes(mode) ? 0 : 1);
+        assert.equal(services.getServiceStatus().web.state, clean ? 'stopped' : 'failed');
+        if (!clean) assert.equal(events.some(event => event.event === 'service-state' && event.service === 'web' && event.state === 'stopped'), false);
+      }
+      if (mode === 'rejected') assert.equal(events.find(event => event.event === 'desktop-shutdown-receipt').httpStatus, 401);
+      if (['timeout', 'never-exits'].includes(mode)) assert.equal(signals.find(item => item.signal === 'SIGKILL').at, 30_000);
+      assert.equal(JSON.stringify(events).includes(apiEnv.YAOHE_DESKTOP_CONTROL_TOKEN), false, 'control credentials never enter lifecycle logs');
+      assert.equal(JSON.stringify(services.getServiceStatus()).includes(apiEnv.YAOHE_DESKTOP_CONTROL_TOKEN), false);
+    } finally {
+      mock.timers.reset();
+      Module._load = previousLoad;
+      process.kill = previousKill;
+      if (previousCache) require.cache[supervisorPath] = previousCache;
+      else delete require.cache[supervisorPath];
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+  assert.equal(tokens.size, modes.length, 'each API launch has a fresh private credential');
+  if (webOnly) {
+    console.log('desktop shutdown Web exits: PASS (expected stop; nonzero exit; exit during API wait; missing exit; fatal error; failed kill)');
+    return;
+  }
+  for (const clean of [true, false]) {
+    const resources = createResources();
+    let release, calls = 0, runtime;
+    const stopping = new Promise(resolve => { release = () => resolve({ clean }); });
+    try {
+      runtime = await loadMain({ resourcesPath: resources, development: false, autoStart: false,
+        serviceSupervisorFactory: () => ({ getApiEndpoint: () => ({ port: 0, state: 'not-started' }),
+          getServiceStatus: () => ({ api: { state: 'not-started' }, web: { state: 'not-started' } }),
+          stopAllServices({ stopCompanion }) { calls++; void stopCompanion(); return stopping; },
+        }) });
+      runtime.app.quit(); runtime.app.quit();
+      assert.equal(calls, 1);
+      assert.notEqual(runtime.app.exited, true, 'a second Quit must not bypass cleanup');
+      release();
+      await waitFor(() => runtime.app.exited, 'shutdown outcome followed by log close');
+      assert.equal(runtime.app.exitCode, clean ? 0 : 1);
+    } finally {
+      release();
+      if (runtime) runtime.restore();
+      fs.rmSync(resources, { recursive: true, force: true });
+    }
+  }
+  console.log('desktop shutdown protocol: PASS (private control; shared deadline; receipt checks; escalation; repeated Quit)');
+}
+
 async function main() {
+  await assertDesktopShutdownProtocol();
   await assertAsyncLifecycleLogGate();
   await assertSingleInstanceLockCheckpoints();
   await assertIsolatedUserData();
@@ -1115,7 +1316,9 @@ async function main() {
   console.log('desktop lifecycle smoke: PASS');
 }
 
-const runner = process.argv.includes('--async-lifecycle-log') ? assertAsyncLifecycleLogGate
+const runner = process.argv.includes('--shutdown-web-exit') ? () => assertDesktopShutdownProtocol({ webOnly: true })
+  : process.argv.includes('--shutdown-protocol') ? assertDesktopShutdownProtocol
+  : process.argv.includes('--async-lifecycle-log') ? assertAsyncLifecycleLogGate
   : process.argv.includes('--single-instance-checkpoints') ? assertSingleInstanceLockCheckpoints
   : process.argv.includes('--closed-pipe-probe') ? closedPipeProbe
   : process.argv.includes('--save-boundary') ? assertNativeRenderedVideoSaveBoundary

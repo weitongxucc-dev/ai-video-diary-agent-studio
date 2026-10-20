@@ -101,9 +101,8 @@ const companion = createCompanionGateway({
     return { supabase_url: env.SUPABASE_URL, publishable_key: env.SUPABASE_PUBLISHABLE_KEY };
   },
 });
-async function stopAllServices() {
-  await companion.stop();
-  await services.stopAllServices();
+function stopAllServices() {
+  return services.stopAllServices({ stopCompanion: () => companion.stop() });
 }
 const getWindow = () => mainWindow;
 const files = createNativeFiles({ dialog, shell, getWindow });
@@ -247,10 +246,16 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
-  if (quitInProgress) return;
   event.preventDefault();
+  if (quitInProgress) return;
   quitInProgress = true;
-  void stopAllServices().finally(() => exitAfterLifecycleLog());
+  void stopAllServices().then(
+    result => exitAfterLifecycleLog(result.clean ? 0 : 1),
+    error => {
+      recordLifecycle('desktop-shutdown-failed', { errorCode: error.code || 'unknown' });
+      return exitAfterLifecycleLog(1);
+    },
+  );
 });
 
 // The first completed file write gates the original lock and all services.
