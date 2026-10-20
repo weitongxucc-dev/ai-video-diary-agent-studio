@@ -280,6 +280,10 @@ def test_invalid_candidate_quotes_still_stop_with_bounded_resolution_diagnostic(
 
 @pytest.mark.parametrize('case,expected_code,expected_reason,request_count', [
     ('success', None, None, 3),
+    ('multi_success', None, None, 3),
+    ('missing_index', 'script_review_invalid', 'issue_shape', 3),
+    ('duplicate_index', 'script_review_invalid', 'issue_shape', 3),
+    ('extra_index', 'script_review_invalid', 'issue_shape', 3),
     ('still_string', 'script_review_invalid', 'issue_shape', 3),
     ('extra_field', 'script_review_invalid', 'issue_shape', 3),
     ('cross_section', 'script_review_invalid', 'issue_quote', 3),
@@ -311,6 +315,8 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
                     'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
                     'reference_ids': ['evidence_1'], 'missing_or_conflicting': '保留原有有效问题'}]
             review['sections'][1]['issues'] = 'private-malformed-array'
+            if case in {'multi_success', 'missing_index', 'duplicate_index', 'extra_index'}:
+                review['sections'][0]['issues'] = 'private-second-malformed-array'
             frozen.update(data=copy.deepcopy(data), report=copy.deepcopy(review), payload=copy.deepcopy(body))
             envelope = _review_tool_response(review).json()
             if case != 'missing_usage':
@@ -321,25 +327,38 @@ def test_string_issues_field_has_one_budgeted_patch_and_keeps_other_findings(
         assert body['max_tokens'] == 8192 - 100
         assert request.extensions['timeout']['read'] == 90.0
         assert json.loads(body['messages'][1]['content']) == frozen['data']
+        targets = [(position, section) for position, section in enumerate(frozen['report']['sections'])
+            if isinstance(section['issues'], str)]
         assert json.loads(body['messages'][2]['content']) == {
-            'field_path': 'sections[1].issues', 'section_index': 2, 'expected_type': 'array',
+            'field_errors': [{'field_path': f'sections[{position}].issues',
+                'section_index': section['index'], 'expected_type': 'array'} for position, section in targets],
             'report': frozen['report']}
         function = body['tools'][0]['function']
         assert function['name'] == 'repair_script_review_issues'
         assert 'submit_script_review' not in body['messages'][0]['content']
         schema = function['parameters']
-        assert schema['required'] == ['issues'] and schema['additionalProperties'] is False
-        assert schema['properties'] == {'issues': frozen['payload']['tools'][0]['function']['parameters']
-            ['properties']['sections']['items']['anyOf'][1]['properties']['issues']}
-        patch = {'issues': []}
+        assert schema['required'] == ['patches'] and schema['additionalProperties'] is False
+        patches = schema['properties']['patches']
+        assert patches['minItems'] == patches['maxItems'] == len(targets)
+        for branch, (_, section) in zip(patches['items']['anyOf'], targets, strict=True):
+            assert branch['properties']['index']['enum'] == [section['index']]
+            assert branch['properties']['issues'] == frozen['payload']['tools'][0]['function']['parameters']\
+                ['properties']['sections']['items']['anyOf'][section['index'] - 1]['properties']['issues']
+        patch = {'patches': [{'index': section['index'], 'issues': []} for _, section in targets]}
         if case == 'still_string':
-            patch['issues'] = '[]'
+            patch['patches'][0]['issues'] = '[]'
         elif case == 'extra_field':
-            patch['supports'] = []
+            patch['patches'][0]['supports'] = []
         elif case == 'cross_section':
-            patch['issues'] = [{'kind': 'unsupported_fact',
+            patch['patches'][0]['issues'] = [{'kind': 'unsupported_fact',
                 'candidate_quote_id': frozen['data']['script']['sections'][0]['content'][0]['quote_id'],
                 'reference_ids': ['evidence_1'], 'missing_or_conflicting': '不允许跨段引用'}]
+        elif case == 'missing_index':
+            patch['patches'].pop()
+        elif case == 'duplicate_index':
+            patch['patches'][1]['index'] = patch['patches'][0]['index']
+        elif case == 'extra_index':
+            patch['patches'][1]['index'] = 3
         envelope = _review_tool_response(patch).json()
         envelope['choices'][0]['message']['tool_calls'][0]['function']['name'] = function['name']
         return httpx.Response(200, json=envelope)
