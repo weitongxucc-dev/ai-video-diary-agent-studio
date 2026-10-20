@@ -100,7 +100,7 @@ def _script_review(script: dict, source_pieces: list[dict]) -> dict:
     """The controlled model selects IDs from the supplied original fragments."""
     return {"sections": [{"index": section["index"],
         "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
-                      "source_quote_id": source_pieces[0]["quote_id"]}], "issues": []}
+                      "source_quote_id": source_pieces[0]["quote_id"]}]}
         for section in script["sections"]]}
 
 

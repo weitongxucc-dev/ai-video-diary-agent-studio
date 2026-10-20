@@ -47,7 +47,7 @@ def draft(content=FACT, visual='展示素材用途设置界面'):
 
 def reviewed(document):
     return {'sections': [{'index': index,
-        'supports': [{'candidate_quote_id': '@content:0', 'source_quote_id': '@evidence_1:0'}], 'issues': []}
+        'supports': [{'candidate_quote_id': '@content:0', 'source_quote_id': '@evidence_1:0'}]}
         for index, _ in enumerate(document['script']['sections'], start=1)]}
 
 
@@ -56,9 +56,9 @@ def rejected(document, *, kind, field, quote, detail):
     result = reviewed(document)
     review = result['sections'][0]
     if kind == 'unsupported_fact':
-        review['supports'] = []
+        del review['supports']
     review['issues'] = [{'kind': kind, 'candidate_quote_id': '@' + field + ':0',
-        'reference_ids': ['evidence_1'] if kind == 'unsupported_fact' else [],
+        **({'reference_ids': ['evidence_1']} if kind == 'unsupported_fact' else {}),
         'missing_or_conflicting': detail}]
     return result
 
@@ -137,10 +137,13 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     assert tool['type'] == 'function' and tool['function']['name'] == 'submit_script_review'
     schema = tool['function']['parameters']
     assert schema['required'] == ['sections'] and schema['additionalProperties'] is False
-    branch = schema['properties']['sections']['items']['anyOf'][0]
+    supported, branch = schema['properties']['sections']['items']['anyOf']
+    assert supported['required'] == ['index', 'supports']
+    assert set(supported['properties']) == {'index', 'supports'} and supported['additionalProperties'] is False
     properties = branch['properties']
     assert set(properties) == {'index', 'supports', 'issues'}
-    assert branch['required'] == ['index', 'supports', 'issues']
+    assert branch['required'] == ['index', 'issues'] and branch['additionalProperties'] is False
+    assert properties['supports']['minItems'] == properties['issues']['minItems'] == 1
     assert set(properties['supports']['items']['properties']) == {'candidate_quote_id', 'source_quote_id'}
     candidate_ids = [piece['quote_id'] for piece in second['script']['title']]
     candidate_ids += [piece['quote_id'] for section in second['script']['sections']
@@ -156,7 +159,9 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     assert issue_properties['reference_ids']['minItems'] == 1
     goal_properties = properties['issues']['items']['anyOf'][1]['properties']
     assert goal_properties['kind']['enum'] == ['goal_conflict']
-    assert goal_properties['reference_ids']['minItems'] == 0
+    assert goal_properties['reference_ids']['minItems'] == 1
+    assert 'reference_ids' not in properties['issues']['items']['anyOf'][1]['required']
+    assert 'reference_ids' in properties['issues']['items']['anyOf'][0]['required']
     assert not any(keyword in json.dumps(schema) for keyword in ('"oneOf"', '"if"', '"then"', '"$ref"'))
     assert 'response_format' not in calls[0][1] and calls[0][1]['tool_choice'] == 'required'
     assert calls[0][1]['tools'][0]['function']['name'] == 'submit_script_draft'
@@ -175,7 +180,8 @@ def test_two_section_review_schema_pins_actual_count_and_keeps_template_count_se
     sections_schema = payload['tools'][0]['function']['parameters']['properties']['sections']
     assert sections_schema['minItems'] == sections_schema['maxItems'] == 2
     assert [branch['properties']['index'] for branch in sections_schema['items']['anyOf']] == [
-        {'type': 'integer', 'enum': [1]}, {'type': 'integer', 'enum': [2]}]
+        {'type': 'integer', 'enum': [1]}, {'type': 'integer', 'enum': [1]},
+        {'type': 'integer', 'enum': [2]}, {'type': 'integer', 'enum': [2]}]
     assert actual_input['review_section_count'] == len(actual_input['script']['sections']) == 2
     assert actual_input['requirements']['section_count'] == template_count
     assert '必须恰好返回2项' in payload['messages'][0]['content']
@@ -215,9 +221,9 @@ def test_each_schema_branch_pairs_only_current_section_candidates_and_declared_e
     data = json.loads(payload['messages'][1]['content'])
     schema = payload['tools'][0]['function']['parameters']['properties']['sections']
     assert schema['minItems'] == schema['maxItems'] == 2
-    assert len(schema['items']['anyOf']) == 2
+    assert len(schema['items']['anyOf']) == 4
     global_title_ids = [piece['quote_id'] for piece in data['script']['title']]
-    for section, branch in zip(data['script']['sections'], schema['items']['anyOf']):
+    for section, branch in zip(data['script']['sections'], schema['items']['anyOf'][1::2]):
         props = branch['properties']
         assert props['index'] == {'type': 'integer', 'enum': [section['index']]}
         local_ids = global_title_ids + [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
@@ -230,7 +236,8 @@ def test_each_schema_branch_pairs_only_current_section_candidates_and_declared_e
             assert issue['kind']['enum'] == [kind]
             assert issue['candidate_quote_id']['enum'] == local_ids
             assert issue['reference_ids']['items']['enum'] == section['evidence_reference_ids']
-            assert issue['reference_ids']['minItems'] == (1 if kind == 'unsupported_fact' else 0)
+            assert issue['reference_ids']['minItems'] == 1
+            assert ('reference_ids' in issue_branch['required']) is (kind == 'unsupported_fact')
             assert issue['reference_ids']['uniqueItems'] is True
     assert payload['max_tokens'] == 8192
 
@@ -297,12 +304,14 @@ def test_array_fields_decode_once_without_losing_findings(encoded):
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': '资料未支持此承诺'}]
         report['sections'][2]['issues'] = [{'kind': 'goal_conflict',
             'candidate_quote_id': data['script']['sections'][2]['visual_prompt'][0]['quote_id'],
-            'reference_ids': [], 'missing_or_conflicting': '画面要求与原交付约束冲突'}]
+            'missing_or_conflicting': '画面要求与原交付约束冲突'}]
         if encoded:
             for section in report['sections']:
-                for issue in section['issues']:
-                    issue['reference_ids'] = json.dumps(issue['reference_ids'])
-                section['issues'] = json.dumps(section['issues'], ensure_ascii=False)
+                for issue in section.get('issues', []):
+                    if 'reference_ids' in issue:
+                        issue['reference_ids'] = json.dumps(issue['reference_ids'])
+                if 'issues' in section:
+                    section['issues'] = json.dumps(section['issues'], ensure_ascii=False)
         return _review_tool_response(report)
 
     generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'MiniMax-M3',
@@ -494,7 +503,8 @@ def test_goal_conflicts_are_separate_from_valid_source_support(quote, field, det
 
 
 @pytest.mark.parametrize('malformed', ['missing-section', 'duplicate-index', 'wrong-alias', 'fake-quote',
-                                     'fake-source-quote', 'bare-pass', 'wrong-field-type', 'truncated'])
+                                     'fake-source-quote', 'bare-pass', 'wrong-field-type', 'truncated',
+                                     'empty-issues', 'encoded-empty-issues', 'empty-goal-refs', 'goal-without-support'])
 def test_review_must_cover_every_section_with_exact_support(malformed):
     document = draft()
     review = reviewed(document)
@@ -513,6 +523,14 @@ def test_review_must_cover_every_section_with_exact_support(malformed):
         review['sections'][0]['supports'] = []
     elif malformed == 'wrong-field-type':
         review['sections'][0]['supports'][0]['candidate_quote_id'] = []
+    elif malformed in {'empty-issues', 'encoded-empty-issues'}:
+        review['sections'][0]['issues'] = [] if malformed == 'empty-issues' else '[]'
+    elif malformed in {'empty-goal-refs', 'goal-without-support'}:
+        review = rejected(document, kind='goal_conflict', field='content', quote=FACT, detail='与当前要求冲突。')
+        if malformed == 'empty-goal-refs':
+            review['sections'][0]['issues'][0]['reference_ids'] = []
+        else:
+            del review['sections'][0]['supports']
     elif malformed == 'truncated':
         review = httpx.Response(200, json={'choices': [{'finish_reason': 'length',
             'message': {'content': json.dumps(review)}}]})
@@ -521,6 +539,19 @@ def test_review_must_cover_every_section_with_exact_support(malformed):
         provider(document, review, calls).generate(inputs())
     assert failure.value.code == 'script_review_invalid'
     assert len(calls) == 2 and not failure.value.retryable
+    if malformed == 'goal-without-support':
+        # Check the actual generation contract as well as consumer rejection:
+        # goal-only reports need support, while mixed findings may omit it.
+        schema = calls[1][1]['tools'][0]['function']['parameters']
+        problem = schema['properties']['sections']['items']['anyOf'][1]
+        support_branch, unsupported_branch = problem['anyOf']
+        assert support_branch == {'required': ['supports']}
+        assert problem['properties']['supports']['minItems'] == 1
+        assert unsupported_branch == {'properties': {'issues': {'contains': {
+            'type': 'object', 'required': ['kind'],
+            'properties': {'kind': {'enum': ['unsupported_fact']}}}}}}
+        assert [branch['properties']['kind']['enum'] for branch in
+            problem['properties']['issues']['items']['anyOf']] == [['unsupported_fact'], ['goal_conflict']]
 
 
 @pytest.mark.parametrize('invalid', ['language', 'references', 'duration', 'sections'])
@@ -903,7 +934,7 @@ def test_compact_five_section_review_closes_with_one_issue_per_failure_without_r
     document = draft(FACT + '每天自动备份。')
     document['script']['sections'] = [copy.deepcopy(document['script']['sections'][0]) for _ in range(5)]
     review = {'sections': [{'index': index,
-        'supports': [], 'issues': [{'kind': 'unsupported_fact', 'candidate_quote_id': '@content:0',
+        'issues': [{'kind': 'unsupported_fact', 'candidate_quote_id': '@content:0',
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': '导览资料没有自动备份说明。'}]}
         for index in range(1, 6)]}
     calls = []
@@ -920,7 +951,7 @@ def test_compact_review_keeps_both_failure_kinds_when_both_judgements_fail():
     document = draft(FACT + '每天自动备份。', '人物出镜口播')
     review = rejected(document, kind='unsupported_fact', field='content', quote='每天自动备份',
         detail='导览资料没有自动备份说明。')
-    review['sections'][0]['issues'].append({'kind': 'goal_conflict', 'candidate_quote_id': '@visual_prompt:0', 'reference_ids': [], 'missing_or_conflicting': '方案要求人物不出镜。'})
+    review['sections'][0]['issues'].append({'kind': 'goal_conflict', 'candidate_quote_id': '@visual_prompt:0', 'missing_or_conflicting': '方案要求人物不出镜。'})
     calls = []
     with pytest.raises(CreationTaskScriptGenerationError) as error:
         provider(document, review, calls).generate(inputs())
@@ -1022,7 +1053,7 @@ def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(
         issue = {'kind': 'unsupported_fact', 'candidate_quote_id': '@content:0',
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-issue-detail'}
         review['sections'] = [{'index': index,
-            'supports': [], 'issues': [copy.deepcopy(issue) for _ in range(3)]} for index in range(1, 6)]
+            'issues': [copy.deepcopy(issue) for _ in range(3)]} for index in range(1, 6)]
     content = 'private-content-report-sentinel'
     message = {'content': content, 'reasoning_content': reasoning_secret,
                'refusal': 'private-refusal-sentinel', 'tool_calls': [{'id': source_id, 'type': 'function', 'function': {
@@ -1122,8 +1153,7 @@ def test_fragment_payload_losslessly_covers_unicode_fields_and_sources_without_f
         payload = json.loads(request.content)
         data = json.loads(payload['messages'][1]['content'])
         seen.append(data)
-        return _review_tool_response(_script_review(data['script'], data['sources'][0]['text']))
-    from test_creation_task_topic_provider import _script_review
+        return _review_tool_response(bound_review(reviewed(data), data))
     generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
         transport=httpx.MockTransport(respond))
     generator.check_draft(request_input, candidate)
@@ -1462,7 +1492,7 @@ def test_issue_reference_rejection_reports_safe_subtype_without_fixing_model_ref
             return _response(document)
         data = json.loads(body['messages'][1]['content'])
         schema = body['tools'][0]['function']['parameters']
-        reference_schema = schema['properties']['sections']['items']['anyOf'][0]['properties']['issues']['items']['anyOf'][0]['properties']['reference_ids']
+        reference_schema = schema['properties']['sections']['items']['anyOf'][1]['properties']['issues']['items']['anyOf'][0]['properties']['reference_ids']
         assert reference_schema['items']['enum'] == ['evidence_1']
         assert reference_schema['minItems'] == 1
         assert reference_schema['uniqueItems'] is True
@@ -1507,7 +1537,7 @@ def test_issue_reference_rejection_reports_safe_subtype_without_fixing_model_ref
 
 @pytest.mark.parametrize('kind,refs,expected_code', [
     ('unsupported_fact', ['evidence_1'], 'script_fact_unsupported'),
-    ('goal_conflict', [], 'script_goal_conflict'),
+    ('goal_conflict', ['evidence_1'], 'script_goal_conflict'),
 ])
 def test_valid_issue_references_still_reject_unfounded_content_or_goal_conflict(kind, refs, expected_code):
     document = draft()
@@ -1547,7 +1577,7 @@ def test_content_rejection_locator_is_derived_from_the_verified_candidate_fragme
         fragments = data['script']['title'] if target_section == 0 else data['script']['sections'][0][field]
         assert ''.join(piece['text'] for piece in fragments) == text
         assert 0 < len(fragments[fragment_index]['text']) <= 200
-        return _review_tool_response({'sections': [{'index': 1, 'supports': [], 'issues': [{
+        return _review_tool_response({'sections': [{'index': 1, 'issues': [{
             'kind': 'unsupported_fact', 'candidate_quote_id': fragments[fragment_index]['quote_id'],
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-model-explanation'}]}]})
 
@@ -1572,7 +1602,7 @@ def test_complete_review_returns_every_verified_finding_without_changing_first_i
     review['sections'][0]['issues'] = [
         {'kind': 'unsupported_fact', 'candidate_quote_id': '@script_title:0', 'reference_ids': ['evidence_1'],
             'missing_or_conflicting': '总标题承诺没有资料依据。'},
-        {'kind': 'goal_conflict', 'candidate_quote_id': '@content:0', 'reference_ids': [],
+        {'kind': 'goal_conflict', 'candidate_quote_id': '@content:0',
             'missing_or_conflicting': '旁白与本轮要求冲突。'},
     ]
     review['sections'][1]['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': '@visual_prompt:0',
