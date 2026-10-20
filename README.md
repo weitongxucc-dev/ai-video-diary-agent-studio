@@ -67,6 +67,8 @@ Git、文档、截图或日志；`.env*` 默认忽略，只跟踪 `.env.example`
 
 ## 验证
 
+以下为可选命令入口，不是每次修改需要顺序执行的清单；按[最小验证矩阵](docs/development-workflow.md#7-最小验证矩阵)选择本次风险对应的检查，优先定位到相关测试。
+
 ```bash
 corepack pnpm run test:web-contract
 corepack pnpm run test:design-system
