@@ -10,7 +10,8 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from contextlib import nullcontext
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -20,10 +21,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.canvas import canvas_size
 from app.graphic_overlays import validate_overlays
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
-from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity
+from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity, audio_resource_refusal
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
-from app.production import (CreationPlan, CreationTask, CreationTaskScript)
+from app.production import (CreationPlan, CreationTask, CreationTaskScript, NarrationSegment)
 from app.creation.contracts import (JobRun, TaskEvent)
 from app.repository import reset_workspace_context, set_workspace_context
 from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
@@ -92,6 +93,7 @@ class CreationStageGrantContext:
     resource_purpose: str | None = None
     # Replaced views of this grant share one audio allowance; video wall time is separate.
     _audio_active_seconds: list[float] = field(default_factory=lambda: [0.0], repr=False, compare=False)
+    narration_output_usage: list[int | None] | None = field(default=None, repr=False, compare=False)
 
     def check_execution_limits(self) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
@@ -114,20 +116,37 @@ class CreationStageGrantContext:
         job = owner.repository.get_job_run(self.grant.workspace_id,self.grant.owner_id)
         if job.task_id != task_id or actor.workspace_id != self.grant.workspace_id:
             return "unauthorized"
-        operation = "render" if self.grant.unit_key.startswith("render:") else "task_media"
+        operation = ("render" if self.grant.unit_key.startswith("render:") else
+                     "narration" if self.grant.unit_key.startswith("narration:") else "task_media")
         return authorizations.verdict(actor,task_id,operation,check_scope=False)
 
     def run(self, command, *, env=None, output_paths=(), output_bytes=None):
-        from app.granted_subprocess import run_granted_command
+        from app.granted_subprocess import run_granted_command, GrantedCommandOutputLimit
         self.check()
-        return run_granted_command(
-            self.scheduler, self.grant, command,
-            timeout_seconds=self.deadline_monotonic - time.monotonic(),
-            max_stdout_bytes=65536, max_stderr_bytes=65536, cancel_event=self.cancel_event,
-            env=env, output_paths=output_paths,
-            max_output_file_bytes=self.max_output_bytes if output_bytes is None else output_bytes,
-            resource_purpose=self.resource_purpose,
-        )
+        limit = self.max_output_bytes if output_bytes is None else output_bytes
+        if self.narration_output_usage is not None:
+            if self.narration_output_usage[0] is None:
+                raise RecoveryBlocked('配音临时产物消耗不可读取，不能按零继续')
+            limit = min(limit, self.max_output_bytes - self.narration_output_usage[0])
+            if limit <= 0:
+                raise GrantedCommandOutputLimit('配音父阶段剩余输出额度已耗尽')
+        try:
+            return run_granted_command(
+                self.scheduler, self.grant, command,
+                timeout_seconds=self.deadline_monotonic - time.monotonic(),
+                max_stdout_bytes=65536, max_stderr_bytes=65536, cancel_event=self.cancel_event,
+                env=env, output_paths=output_paths, max_output_file_bytes=limit,
+                resource_purpose=self.resource_purpose)
+        finally:
+            if self.narration_output_usage is not None and self.narration_output_usage[0] is not None:
+                for path in output_paths:
+                    try:
+                        self.narration_output_usage[0] += Path(path).stat().st_size
+                    except FileNotFoundError:
+                        continue  # The worker's bounded temporary/final rename may remove either path.
+                    except OSError:
+                        self.narration_output_usage[0] = None
+                        break
 
 
 @dataclass(frozen=True)
@@ -545,7 +564,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     return f"render:{digest}", resources
 
 
-def creation_stage_facts(repository, task, script, plan, stage, narration_budget, montage_budget):
+def creation_stage_facts(repository, task, script, plan, stage, narration_budget, montage_budget, *, connection=None):
     """Derive measured inputs; stage caps never borrow the FFmpeg render budget."""
     if stage == "narration":
         if narration_budget is None:
@@ -572,7 +591,7 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
             raise ValueError("故事板预算尚未标定，请配置 DEVICE_MONTAGE_* 标定值")
         if not task.narration_cache_key:
             raise ValueError("故事板缺少当前配音")
-        narration = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key)
+        narration = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=connection)
         if narration is None or narration.script_id != script.id:
             raise ValueError("故事板配音版本失效")
         assets = repository.list_assets(task.workspace_id)
@@ -607,6 +626,7 @@ class CreationJobOwnerVerifier:
     def __init__(self, repository, *, cpu_render_limits: CpuRenderLimits | None = None,
                  verify_identity: Callable[[CreationExecutionActor], str] | None = None,
                  narration_budget: NarrationBudget | None = None,
+                 narration_audio_budget=None,
                  montage_budget: MontageBudget | None = None,
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
@@ -616,6 +636,7 @@ class CreationJobOwnerVerifier:
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
         self.narration_budget = narration_budget
+        self.narration_audio_budget = narration_audio_budget
         self.montage_budget = montage_budget
         self.presenter_budget = presenter_budget
         self.presenter_cpu_render_limits = presenter_cpu_render_limits
@@ -662,7 +683,9 @@ class CreationJobOwnerVerifier:
         if self._check_facts(job,task,start,script,plan,stage,request.member_id)!='ready':
             raise PermissionError('原作业的固定输入已变化，未写入新的准入拒绝')
         fields={'text_chars','section_count','reference_bytes','duration_seconds','max_output_bytes','threads',
-            'timeout_seconds','input_bytes','asset_count','clip_count','overlay_count','width_px','height_px'}
+            'timeout_seconds','input_bytes','asset_count','clip_count','overlay_count','width_px','height_px',
+            'input_count','source_duration_limit_seconds','output_duration_limit_seconds','source_sample_rate_limit',
+            'source_channels_limit','output_sample_rate_limit','output_channels_limit'}
         failed=[]
         for name,check in decision.checks.items():
             if name not in fields or check.get('passed') is not False:
@@ -718,11 +741,11 @@ class CreationJobOwnerVerifier:
             resolve_presenter_output=self.resolve_presenter_output,
             actor=actor, graphic_source_facts=self.graphic_source_facts, audio_mix_facts=self.audio_mix_facts)
 
-    def stage_facts(self, task, script, plan, stage):
+    def stage_facts(self, task, script, plan, stage, *, connection=None):
         if stage == "person_render":
             return presenter_stage_facts(self.repository, task, script, plan, self.presenter_budget, self.presenter_models)
         key, resources = creation_stage_facts(self.repository, task, script, plan, stage,
-                                             self.narration_budget, self.montage_budget)
+                                             self.narration_budget, self.montage_budget, connection=connection)
         if stage == "montage_plan" and plan.presenter_share_target:
             inputs = presenter_inputs(self.repository, task, script, plan, self.presenter_models)
             renders = [current_presenter_render(self.repository, task, segment, request,
@@ -736,6 +759,134 @@ class CreationJobOwnerVerifier:
                                  [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]])
             key = "montage_plan:" + hashlib.sha256(json.dumps([key, manifest], sort_keys=True, default=str).encode()).hexdigest()
         return key, resources
+
+    def narration_unit_facts(self, conn, job, task, script, plan, *, request=None):
+        from app.creation.narration_stage_use_case import NarrationStageUseCase
+        from app.narration import _pronunciation_dictionary, _pronunciation_version
+        budget = self.narration_budget
+        if budget is None or budget.input_scope != 'single_call_experiment_v1':
+            raise ValueError('配音单次输入尚无明确执行范围；原总量374不能默认作为生产单段标定')
+        if self.narration_audio_budget is None:
+            raise ValueError('逐段配音缺少独立CPU音频合并预算，尚未调用声音模型')
+        usage = self.repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)
+        unresolved = usage['unsettled']
+        if unresolved and (request is None or request.state not in {'granted', 'yield_requested'} or len(unresolved) != 1
+                or unresolved[0]['usage_id'] != f'{request.id}:{request.last_grant_generation}'):
+            raise RecoveryBlocked('原配音请求的时间或产物消耗未知，须先核对原单元')
+        limits = usage['budget'] or {'parent_timeout_seconds': min(300.0, budget.max_timeout_seconds),
+            'parent_max_output_bytes': min(3 * 1024 * 1024, budget.max_output_bytes)}
+        if (usage['used_seconds'] >= limits['parent_timeout_seconds']
+                or usage['used_output_bytes'] >= limits['parent_max_output_bytes']):
+            raise ValueError('原配音阶段累计300秒或3MiB额度已耗尽，不能重置')
+        inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
+            task_id=task.id, voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
+        pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
+            workspace_id=task.workspace_id, person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
+        reference_input = self.repository.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
+        reference = Path(reference_input.source_path)
+        stat = reference.stat()
+        manifest = {'script': asdict(script), 'voice': asdict(inputs.voice), 'pronunciation_version': pronunciation,
+            'reference_input': asdict(reference_input),
+            'reference': [str(reference), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]}
+        segments = self.repository.list_narration_segments(task.workspace_id, task.id, script.id, connection=conn)
+        by_section = {item.source_section_id: item for item in segments}
+        section_ids = {item.id for item in script.sections}
+        if len(by_section) != len(segments) or not set(by_section).issubset(section_ids):
+            raise ValueError('现有配音片段集不属于当前唯一文案段落')
+        ready_inputs = []
+        language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
+        missing = None
+        for ordinal, section in enumerate(script.sections, 1):
+            segment = by_section.get(section.id)
+            if segment is None or segment.status != 'ready':
+                if missing is None:
+                    missing = ordinal, section
+                continue
+            record = self.repository.get_narration_artifact(task.workspace_id,
+                (segment.audio_reference or '').removeprefix('narration://artifact/'), connection=conn)
+            if (segment.id != NarrationStageUseCase.segment_id(task.id, script.id, section.id)
+                    or segment.text != section.content or segment.language != language
+                    or (segment.voice_profile_id, segment.voice_version) != (inputs.voice.id, inputs.voice.version)
+                    or segment.pronunciation_version != pronunciation or record is None
+                    or (record.task_id, record.script_id, record.voice_profile_id, record.pronunciation_version)
+                        != (task.id, script.id, inputs.voice.id, pronunciation)
+                    or record.duration_seconds != segment.duration_seconds or record.sample_rate != segment.sample_rate):
+                raise ValueError('已保存配音片段的文字、声音或发音版本不匹配，须先核对原产物')
+            path = Path(record.audio_path)
+            source_stat = path.stat()
+            if source_stat.st_size <= 0:
+                raise ValueError('已保存配音片段为空')
+            ready_inputs.append({'reference': segment.audio_reference, 'size_bytes': source_stat.st_size,
+                'duration_seconds': record.duration_seconds, 'sample_rate': record.sample_rate, 'channels': 1, 'uses': 1})
+        common = {'input_contract': 'narration_units_v1', 'script_id': script.id,
+            'pronunciation_version': pronunciation,
+            'voice_profile_id': inputs.voice.id, 'voice_version': inputs.voice.version,
+            'model_id': plan.selected_voice.model_id, 'language': language,
+            'parent_timeout_seconds': limits['parent_timeout_seconds'],
+            'parent_max_output_bytes': limits['parent_max_output_bytes']}
+        if missing is not None:
+            ordinal, section = missing
+            resources = {**common, 'kind': 'creation_narration', 'execution_mode': 'isolated_qwen3_tts',
+                'narration_phase': 'segment', 'section_id': section.id, 'ordinal': ordinal,
+                'segment_id': NarrationStageUseCase.segment_id(task.id, script.id, section.id),
+                'input_scope': budget.input_scope, 'budget_basis': 'controlled_experiment_unverified_legacy_cap',
+                'text_chars': len(section.content) + len(inputs.voice.reference_text), 'section_count': 1,
+                'reference_bytes': stat.st_size, 'duration_seconds': plan.duration_target_seconds,
+                'max_output_bytes': limits['parent_max_output_bytes'], 'threads': budget.max_threads,
+                'timeout_seconds': limits['parent_timeout_seconds']}
+            prefix = f'narration:segment:v1:{section.id}:'
+        else:
+            audio = self.narration_audio_budget
+            if audio is None or not ready_inputs:
+                raise ValueError('配音合并缺少全部ready片段或独立CPU音频预算')
+            resources = {**common, 'kind': 'task_audio', 'execution_mode': 'cpu_ffmpeg', 'narration_phase': 'merge',
+                'input_policy': 'probe_then_bounded_decode', 'inputs': ready_inputs,
+                'input_count': len(ready_inputs), 'input_bytes': sum(item['size_bytes'] for item in ready_inputs),
+                'source_duration_limit_seconds': audio.max_source_duration_seconds,
+                'output_duration_limit_seconds': plan.duration_target_seconds,
+                'source_sample_rate_limit': audio.max_sample_rate, 'source_channels_limit': audio.max_channels,
+                'output_sample_rate_limit': max(item['sample_rate'] for item in ready_inputs), 'output_channels_limit': 1,
+                'max_output_bytes': min(audio.max_output_bytes, limits['parent_max_output_bytes']),
+                'threads': audio.max_threads, 'timeout_seconds': min(audio.max_timeout_seconds, limits['parent_timeout_seconds'])}
+            if audio_resource_refusal(resources, audio) is not None:
+                raise ValueError('配音合并超出独立CPU音频预算')
+            manifest['segments'] = [asdict(item) for item in segments]
+            prefix = 'narration:merge:v1:'
+        digest = hashlib.sha256(json.dumps([manifest, resources], sort_keys=True, default=str).encode()).hexdigest()
+        return prefix + digest, resources
+
+    def migrate_narration_request(self, conn, old, actor, *, write_guard=None):
+        job, task, event, script, plan = self._facts(conn, old.workspace_id, old.owner_id)
+        if write_guard is not None:
+            write_guard(conn)
+        original = CreationExecutionActor.from_event(job.workspace_id, event)
+        if original != actor or self.authorization_verdict(task, original, 'narration', connection=conn) != 'ready':
+            raise PermissionError('原配音身份或任务授权不可核实')
+        legacy_key, legacy_resources = creation_stage_facts(self.repository, task, script, plan, 'narration',
+            self.narration_budget, self.montage_budget)
+        if (old.unit_key != legacy_key or old.resources != legacy_resources
+                or old.input_digest != job.input_digest
+                or self._check_facts(replace(job, status='queued'), task, event, script, plan, 'narration', old.member_id) != 'ready'
+                or task.narration_cache_key is not None
+                or self.repository.list_narration_segments(task.workspace_id, task.id, script.id, connection=conn)):
+            raise RecoveryBlocked('原配音输入、产物或未执行事实不匹配，不能自动转换')
+        self.repository.requeue_ungranted_narration_job(job.workspace_id, job.id, old.id, connection=conn)
+        job, task, event, script, plan = self._facts(conn, old.workspace_id, old.owner_id)
+        key, resources = self.narration_unit_facts(conn, job, task, script, plan)
+        if resources['text_chars'] > self.narration_budget.max_text_chars:
+            raise ValueError('单次正文与参考仍超出受控实验上限，不能转换后执行')
+        intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, key, old.policy)
+        return intent, self.verify_submission(intent, actor, connection=conn)
+
+    def resume_narration_request(self, conn, request, actor, *, write_guard=None):
+        if write_guard is not None:
+            write_guard(conn)
+        job, task, event, script, plan = self._facts(conn, request.workspace_id, request.owner_id)
+        if CreationExecutionActor.from_event(job.workspace_id, event) != actor:
+            raise PermissionError('不能继续其他成员的原配音作业')
+        self.repository.resume_creation_narration_job(job.workspace_id, job.id, connection=conn)
+        intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, request.unit_key, request.policy)
+        return self.verify_submission(intent, actor, connection=conn)
 
     def edit_facts(self, job, task, event, plan):
         proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
@@ -788,7 +939,7 @@ class CreationJobOwnerVerifier:
         plan = self.repository._creation_plan_from_payload(plan_payload)
         return job, task, event, script, plan
 
-    def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork:
+    def verify_submission(self, intent: SubmissionIntent, actor: object, *, connection=None) -> VerifiedWork:
         if intent.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.verify_submission(intent, actor)
         if intent.unit_key.startswith("task_media:") and self.task_media is not None:
@@ -796,7 +947,7 @@ class CreationJobOwnerVerifier:
         if (not isinstance(actor, CreationExecutionActor) or not actor.member_id
                 or actor.workspace_id != intent.workspace_id or intent.owner_type != DEVICE_OWNER_TYPE):
             raise PermissionError("制作执行身份未知或工作区不匹配")
-        with self.repository._connect() as conn:
+        with nullcontext(connection) if connection is not None else self.repository._connect() as conn:
             job, task, event, script, plan = self._facts(conn, intent.workspace_id, intent.owner_id)
             stage = intent.unit_key.split(":", 1)[0]
             verdict = self._check_facts(job, task, event, script, plan, stage, actor.member_id)
@@ -806,7 +957,7 @@ class CreationJobOwnerVerifier:
                 raise PermissionError("制作作业持久身份无法复核") from None
             if actor != original:
                 raise PermissionError("制作作业原身份不匹配")
-            if verdict == "ready" and self.task_authorizations is not None:
+            if verdict == "ready" and self.task_authorizations is not None and connection is None:
                 self.task_authorizations.ensure(task, original)
                 if stage == "person_edit":
                     proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
@@ -828,12 +979,17 @@ class CreationJobOwnerVerifier:
                 key, resources = self.render_facts(conn, task, plan, actor=original)
                 if intent.unit_key != key:
                     raise PermissionError("故事板或源文件已变化，请重新安排成片")
+            elif verdict == 'ready' and stage == 'narration' and intent.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
+                key, resources = self.narration_unit_facts(conn, job, task, script, plan)
+                if key != intent.unit_key:
+                    raise PermissionError('配音下一单元或输入版本已变化')
             elif verdict == "ready" and (
                 (stage == "narration" and self.narration_budget is not None)
                 or (stage == "montage_plan" and self.montage_budget is not None)
                 or stage == "person_render"
             ):
-                key, resources = self.stage_facts(task, script, plan, stage)
+                key, resources = (self.stage_facts(task, script, plan, stage, connection=conn)
+                    if connection is not None else self.stage_facts(task, script, plan, stage))
                 if key != intent.unit_key:
                     raise PermissionError("制作阶段输入已变化，请重新安排")
             else:
@@ -928,11 +1084,13 @@ class CreationJobOwnerVerifier:
                 key, resources = self.edit_facts(job, task, event, plan)
             elif stage == "render":
                 key, resources = self.render_facts(conn, task, plan, request=request, actor=original)
+            elif stage == 'narration' and request.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
+                key, resources = self.narration_unit_facts(conn, job, task, script, plan, request=request)
             else:
                 key, resources = self.stage_facts(task, script, plan, stage)
         except PermissionError:
             return "unauthorized"
-        except (KeyError, StopIteration, OSError, ValueError):
+        except (KeyError, StopIteration, OSError, ValueError, RecoveryBlocked):
             return "dependency"
         return "ready" if request.unit_key == key and request.resources == resources else "stale"
 
@@ -1092,6 +1250,9 @@ def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceSched
     """Queue exactly the next persisted stage; repeated submissions reuse one request."""
     if job.status not in {"queued", "interrupted"}:
         return None
+    migrated = migrate_creation_narration_request(execution.repository, scheduler, job, actor)
+    if migrated is not None:
+        return migrated.id
     try:
         intent = next_creation_intent(execution.repository, scheduler, job)
     except (ValueError, PermissionError) as exc:
@@ -1146,14 +1307,60 @@ def montage_waiting_for_confirmation(repository, task):
             and plan.get("status") == "waiting_for_user")
 
 
-def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
-    task = repository.get_creation_task(job.workspace_id, job.task_id)
+def migrate_creation_narration_request(repository, scheduler, job, actor, *, write_guard=None):
+    owner = scheduler.owners
+    if hasattr(owner, 'registrations'):
+        owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+    if owner.narration_budget is None or owner.narration_budget.input_scope != 'single_call_experiment_v1':
+        return None
+    with repository._connect() as conn:
+        rows = conn.execute("SELECT id,unit_key,state,wait_reason FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+            "AND owner_id=? AND input_digest=? ORDER BY created_at,id", (job.workspace_id, job.id, job.input_digest)).fetchall()
+    legacy = [row for row in rows if row['unit_key'].startswith('narration:') and row['unit_key'].count(':') == 1]
+    if not legacy:
+        return None
+    if len(legacy) != 1:
+        raise RecoveryBlocked('原作业有多个旧配音请求，须先按请求核对')
+    with repository._connect() as conn:
+        current, task, event, _script, _plan = owner._facts(conn, job.workspace_id, job.id)
+        if (CreationExecutionActor.from_event(job.workspace_id, event) != actor
+                or owner.authorization_verdict(task, actor, 'narration', connection=conn) != 'ready'):
+            raise PermissionError('原配音请求的成员或任务授权不匹配')
+        if legacy[0]['state'] == 'cancelled' and (legacy[0]['wait_reason'] or '').startswith('replaced_by:'):
+            replacement = conn.execute('SELECT state FROM device_work_requests WHERE id=?',
+                (legacy[0]['wait_reason'].split(':', 1)[1],)).fetchone()
+            if replacement is not None and replacement['state'] not in {'waiting', 'blocked'}:
+                return None  # The original unit has advanced; normal continuation selects the current stage.
+    return scheduler.replace_ungranted_creation_narration(legacy[0]['id'],
+        replacement_write=lambda conn, old: owner.migrate_narration_request(conn, old, actor, write_guard=write_guard))
+
+
+def resume_original_narration(repository, scheduler, job, actor, *, write_guard=None):
+    usage = repository.creation_narration_usage(job.workspace_id, job.id)
+    if usage['budget'] is None or job.status not in {'failed', 'cancelled'}:
+        return False
+    if usage['unsettled']:
+        raise RecoveryBlocked('原配音单元消耗未知，继续前须核对原请求，不能创建新作业重置')
+    with repository._connect() as conn:
+        rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+            "AND owner_id=? AND state IN ('failed','cancelled') AND (unit_key LIKE 'narration:segment:v1:%' "
+            "OR unit_key LIKE 'narration:merge:v1:%') ORDER BY updated_at DESC LIMIT 2", (job.workspace_id, job.id)).fetchall()
+    if len(rows) != 1:
+        raise RecoveryBlocked('原配音没有唯一可继续单元；保留累计预算，先核对原作业')
+    owner = scheduler.owners
+    if hasattr(owner, 'registrations'):
+        owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+    scheduler.resume_creation_narration(rows[0]['id'],
+        resume_write=lambda conn, request: owner.resume_narration_request(conn, request, actor, write_guard=write_guard))
+    return True
+
+
+def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *, connection=None):
     owner = scheduler.owners
     if hasattr(owner, "registrations"):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-    plan = repository.get_creation_plan(job.workspace_id, task.plan_id)
-    script = repository.get_creation_task_script(job.workspace_id, task.confirmed_script_id)
-    event = repository.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
+    with nullcontext(connection) if connection is not None else repository._connect() as conn:
+        job, task, event, script, plan = owner._facts(conn, job.workspace_id, job.id)
     regenerate = event.get("operation") == "regenerate_storyboard"
     if plan.presenter_share_target and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None):
         raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
@@ -1162,7 +1369,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
         if not request_current(repository, task, event):
             raise ValueError("故事板原请求的时间线、文案或配音已变化")
         stage = "montage_plan"
-    elif not upstream_stage_valid(repository, task, "narration"):
+    elif not (task.narration_cache_key and repository.get_narration_artifact(
+            task.workspace_id, task.narration_cache_key, connection=connection)):
         stage = "narration"
     elif plan.presenter_share_target and not owner.person_valid(task):
         stage = "person_render"
@@ -1177,8 +1385,12 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun):
         actor = CreationExecutionActor.from_event(job.workspace_id, event.payload) if event.payload.get("member_id") else None
         with repository._connect() as conn:
             stage, _resources = owner.render_facts(conn, task, plan, actor=actor)
+    elif stage == 'narration':
+        with nullcontext(connection) if connection is not None else repository._connect() as conn:
+            stage, _resources = owner.narration_unit_facts(conn, job, task, script, plan)
     elif stage == "person_render" or getattr(owner, stage.removesuffix("_plan") + "_budget", None) is not None:
-        stage, _resources = owner.stage_facts(task, script, plan, stage)
+        stage, _resources = (owner.stage_facts(task, script, plan, stage, connection=connection)
+            if connection is not None else owner.stage_facts(task, script, plan, stage))
     if regenerate and stage != event["stage_key"]:
         raise ValueError("故事板原请求的来源已变化")
     return SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id,
@@ -1354,6 +1566,134 @@ class CreationJobUnitExecutor:
         )
         return event_id
 
+    def _execute_narration_unit(self, grant, scheduler):
+        from app.granted_subprocess import GrantedCommandCancelled
+        if self.narration_stage is None:
+            raise PermissionError('配音缺少单段执行用例')
+        with self.repository._connect() as conn:
+            row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
+            permit = conn.execute('SELECT granted_at_utc FROM device_permit WHERE id=1 AND request_id=?', (grant.request_id,)).fetchone()
+        if row is None or permit is None or not permit['granted_at_utc']:
+            raise PermissionError('配音单元缺少原请求设备许可')
+        resources = json.loads(row['resources_json'])
+        if (resources.get('input_contract') != 'narration_units_v1'
+                or resources.get('narration_phase') not in {'segment', 'merge'}):
+            raise PermissionError('原整阶段配音契约须先转换为逐段执行')
+        scheduler.assert_grant(grant)
+        owner = scheduler.owners
+        if hasattr(owner, 'registrations'):
+            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+        with self.repository._connect() as conn:
+            job, task, event, script, plan = owner._facts(conn, grant.workspace_id, grant.owner_id)
+        pending = [NarrationSegment(id=self.narration_stage.segment_id(task.id, script.id, section.id),
+            workspace_id=task.workspace_id, task_id=task.id, script_id=script.id, source_section_id=section.id,
+            text=section.content, audio_reference=None, duration_seconds=None, sample_rate=None,
+            model_id=resources['model_id'], voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'],
+            language=resources['language'], pronunciation_version=resources['pronunciation_version'], status='pending')
+            for section in script.sections]
+        job, remaining_seconds, remaining_bytes = self.repository.start_creation_narration_unit(grant, resources, pending)
+        already_elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
+        cancellation = threading.Event()
+        started = time.monotonic() - already_elapsed
+        context = CreationStageGrantContext(scheduler, grant,
+            started + min(remaining_seconds, resources['timeout_seconds']),
+            min(remaining_bytes, resources['max_output_bytes']), resources['threads'], cancellation,
+            started_monotonic=started, narration_output_usage=[0])
+        self.register_cancellation(grant.request_id, cancellation)
+        event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start')
+        actor = CreationExecutionActor.from_event(job.workspace_id, event.payload)
+        result_bytes = 0
+        output_file = None
+        previous_output = self.repository.previous_creation_narration_output(grant)
+
+        def settle(conn, current):
+            measured = context.narration_output_usage[0]
+            if measured is None:
+                raise RecoveryBlocked('本次配音输出消耗未知，保留原开始记录等待核对')
+            return self.repository.settle_creation_narration_unit(current,
+                elapsed_seconds=max(0, time.monotonic() - started),
+                output_bytes=max(measured, 0 if output_file is not None and output_file == previous_output else result_bytes),
+                output_file=output_file, connection=conn)
+
+        def continue_unit(conn, current):
+            usage = self.repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)
+            limits = usage['budget']
+            if (resources['narration_phase'] == 'segment'
+                    and (usage['used_seconds'] >= limits['parent_timeout_seconds']
+                         or usage['used_output_bytes'] >= limits['parent_max_output_bytes'])):
+                self.repository.exhaust_creation_narration_budget(current, job.task_id, connection=conn)
+                return None
+            intent = next_creation_intent(self.repository, scheduler, job, connection=conn)
+            return (intent, owner.verify_submission(intent, actor, connection=conn)) if intent is not None else None
+
+        try:
+            context.check()
+            if resources['narration_phase'] == 'segment':
+                artifact, segment, result_bytes = self.narration_stage.prepare_segment(job.workspace_id, job.task_id,
+                    script_id=resources['script_id'], section_id=resources['section_id'], grant_context=context)
+            else:
+                artifact, result_bytes = self.narration_stage.prepare_merge(job.workspace_id, job.task_id,
+                    script_id=resources['script_id'], grant_context=context)
+                segment = None
+            try:
+                output_stat = Path(artifact.audio_path).stat()
+            except OSError as exc:
+                context.narration_output_usage[0] = None
+                raise RecoveryBlocked('配音最终产物的消耗状态不可读取') from exc
+            output_file = {'cache_key': artifact.cache_key, 'size_bytes': output_stat.st_size,
+                'mtime_ns': output_stat.st_mtime_ns, 'ctime_ns': output_stat.st_ctime_ns,
+                'path_identity': hashlib.sha256(str(Path(artifact.audio_path).resolve()).encode()).hexdigest()}
+            context.check()
+
+            def commit(conn, current):
+                if self._application_quit.is_set():
+                    raise GrantedCommandCancelled('应用退出，先结算原配音单元消耗')
+                settle(conn, current)
+                if segment is None:
+                    segments = self.repository.list_narration_segments(job.workspace_id, job.task_id,
+                        resources['script_id'], connection=conn)
+                    self.repository.complete_creation_task_narration(artifact, segments, connection=conn)
+                    return self._checkpoint(conn, current, status='queued', output=artifact.cache_key, stage='narration')
+                return self.repository.checkpoint_creation_narration_segment(current, artifact, segment, resources['ordinal'], connection=conn)
+
+            scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                checkpoint_write=commit, next_unit_write=continue_unit)
+        except Exception as exc:
+            if isinstance(exc, HostResourceRefusal):
+                self.last_resource_refusal = exc
+            if isinstance(exc, RecoveryBlocked) and not (
+                    isinstance(exc, HostResourceRefusal) and exc.recoverable_pressure):
+                raise
+            cancelled = self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled'
+            quitting = self._application_quit.is_set() and not cancelled
+            pressure = isinstance(exc, HostResourceRefusal) and exc.recoverable_pressure
+            diagnostic = getattr(exc, 'command_diagnostics', None)
+            if pressure and diagnostic and diagnostic.get('before_termination_returncode') not in {None, 0}:
+                pressure = False
+            if quitting or pressure or isinstance(exc, PermissionError):
+                reason = 'application_quit' if quitting else 'resource_pressure' if pressure else 'task_authorization_unavailable'
+                def interrupted(conn, current):
+                    settle(conn, current)
+                    self._write_interrupted(conn, current, scheduler=scheduler, stage='narration', reason=reason,
+                        decision=exc.decision if isinstance(exc, HostResourceRefusal) else None)
+                scheduler.defer_unit(grant, reason='resource_pressure' if pressure else 'worker_interrupted',
+                    retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30 if pressure else 1 if quitting else 60),
+                    owner_database_path=self.repository.database_path, owner_write=interrupted)
+            elif cancelled or isinstance(exc, GrantedCommandCancelled):
+                def stopped(conn, current):
+                    settle(conn, current)
+                    return self._checkpoint(conn, current, status='cancelled', stage='narration', reason='user_cancelled')
+                scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
+                    checkpoint_write=stopped, cancelled=True)
+            else:
+                def failed(conn, current):
+                    settle(conn, current)
+                    return self._checkpoint(conn, current, status='failed', stage='narration', reason=str(exc))
+                scheduler.fail_unit(grant, reason='creation_narration_failed', failure_write=failed)
+        finally:
+            with self._cancellation_lock:
+                self._cancellations.pop(grant.request_id, None)
+
     def _execute_upstream(self, grant, scheduler, stage):
         from app.granted_subprocess import GrantedCommandCancelled
         if stage == 'person_render' and self.person_stage is None or (stage != 'person_render' and (stage == 'narration' and self.narration_stage is None or (stage != 'narration' and (stage != 'montage_plan' or self.montage_stage is None)))):
@@ -1405,7 +1745,7 @@ class CreationJobUnitExecutor:
                 if stage == 'person_render':
                     self.person_stage.generate_stage(job.workspace_id, job.task_id, context)
                 elif stage == 'narration':
-                    self.narration_stage.generate(job.workspace_id, job.task_id, grant_context=context)
+                    raise PermissionError('整阶段配音执行已退役，须使用单段或合并许可')
                 else:
                     self.montage_stage.generate(job.workspace_id, job.task_id, grant_context=context)
             context.check()
@@ -1633,6 +1973,8 @@ class CreationJobUnitExecutor:
                 raise
 
     def _execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
+        if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
+            return self._execute_narration_unit(grant, scheduler)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.execute(grant, scheduler, self)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("task_media:") and self.task_media is not None:
@@ -1836,7 +2178,6 @@ class CreationExecution:
         self,
         repository,
         *,
-        run_narration: Callable[[str, str], object],
         run_montage_plan: Callable[[str, str], object],
         run_render: Callable[[str, str], object],
         render_is_valid: Callable[[str, str], bool],
@@ -1844,7 +2185,6 @@ class CreationExecution:
         self.repository = repository
         self.runtime = TaskRuntime(repository)
         self.actions = {
-            "narration": run_narration,
             "montage_plan": run_montage_plan,
             "render": run_render,
         }
@@ -1927,6 +2267,8 @@ class CreationExecution:
             return latest
         if latest.status == "interrupted":
             return latest
+        if self.repository.creation_narration_usage(workspace_id, latest.id)['budget'] is not None:
+            raise ValueError('原配音已有累计消耗，须继续原作业单元，不能创建新作业重置额度')
         script_id = str(event.payload["script_id"])
         task = self.repository.get_creation_task(workspace_id, task_id)
         self.validate_input(workspace_id, task, script_id, latest.input_digest)
@@ -2012,6 +2354,9 @@ class CreationExecution:
             if self._stage_has_matching_output(job, task, stage):
                 self._stage_event(context, stage, "reused", output=self._output_identity(workspace_id, task, stage))
             else:
+                if stage == 'narration':
+                    raise JobFailure('配音必须通过原作业的逐段设备队列执行',
+                        '旧整阶段回调已退役，未调用声音模型。', '使用开始或继续制作入口。')
                 self._stage_event(context, stage, "running")
                 try:
                     self.actions[stage](workspace_id, task_id)

@@ -8420,15 +8420,6 @@ def generate_creation_task_narration(
     raise HTTPException(status_code=409, detail="请确认文案和制作要求后使用开始/继续制作，配音必须进入设备队列")
 
 
-def _generate_creation_task_narration_for_workspace(workspace_id: str,task_id: str,*,grant_context=None):
-    try:
-        task,record=_narration_stage_use_case().generate(workspace_id,task_id,grant_context=grant_context)
-    except NarrationStageRejected as exc:
-        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-    return _creation_task_narration_response(task,record)
-
-
-
 @app.get("/api/creation-tasks/{task_id}/narration/audio")
 def get_creation_task_narration_audio(task_id: str, request: Request) -> FileResponse:
     workspace_id = current_workspace_id(request)
@@ -13484,7 +13475,6 @@ def _creation_execution_control():
 def _new_creation_execution(repository: ProductionRepository) -> CreationExecution:
     return CreationExecution(
         repository,
-        run_narration=_generate_creation_task_narration_for_workspace,
         run_montage_plan=_create_creation_task_montage_plan_for_workspace,
         run_render=_render_creation_task_montage_for_workspace,
         render_is_valid=_creation_render_is_valid,
@@ -13894,7 +13884,7 @@ def _build_device_components(*, repository: ProductionRepository):
             render_is_valid=_creation_stage_valid_with_grant,
             cpu_render_budget=cpu_render_budget,
             verify_identity=_verify_creation_identity,
-            narration_budget=narration_budget, montage_budget=montage_budget,
+            narration_budget=narration_budget, narration_audio_budget=audio_budget, montage_budget=montage_budget,
             presenter_budget=presenter_budget, presenter_cpu_render_budget=presenter_cpu_render_budget,
             presenter_models=_presenter_model_ids(), resolve_presenter_output=_person_render_media_path,
         ),

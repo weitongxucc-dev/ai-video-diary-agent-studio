@@ -211,9 +211,15 @@ class NarrationBudget:
     additional_memory_bytes: int
     additional_disk_bytes: int
     running_cpu_policy: RuntimeCpuPolicy | None = None
+    # Legacy aggregate caps are not evidence for a single model invocation.
+    input_scope: str = "legacy_stage"
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
+            if name == "input_scope":
+                if value not in {"legacy_stage", "single_call_experiment_v1"}:
+                    raise ValueError("配音输入范围须为原阶段或明确的单次受控实验")
+                continue
             if name == "running_cpu_policy":
                 if value is not None and not isinstance(value, RuntimeCpuPolicy):
                     raise ValueError("配音运行CPU策略必须为显式RuntimeCpuPolicy")
@@ -796,6 +802,7 @@ class HostResourceRefusal(RecoveryBlocked):
             "memory_recovery_stabilizing": "内存压力恢复正在等待已标定的稳定窗口",
             "granted_resources_unreadable": "当前许可的阶段资源记录不可读取",
             "declared_resources_exceed_budget": "阶段输入超出已标定的设备预算",
+            "narration_single_call_scope_unavailable": "配音单次受控实验的输入范围尚未明确",
         }
         details = []
         for metric, check in decision.checks.items():
@@ -845,18 +852,20 @@ class HostResourceRefusal(RecoveryBlocked):
 
 
 
-def audio_resource_refusal(resources, audio):
-    """Reuse one calibrated CPU-audio declaration check in previews and render."""
-    if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
-        return (None, "audio_budget_or_execution_mode_unavailable")
-    fields = {"input_count": "max_input_count", "input_bytes": "max_input_bytes",
+AUDIO_RESOURCE_LIMITS = {"input_count": "max_input_count", "input_bytes": "max_input_bytes",
               "source_duration_limit_seconds": "max_source_duration_seconds",
               "output_duration_limit_seconds": "max_output_duration_seconds",
               "source_sample_rate_limit": "max_sample_rate", "source_channels_limit": "max_channels",
               "output_sample_rate_limit": "max_sample_rate", "output_channels_limit": "max_channels",
               "max_output_bytes": "max_output_bytes", "threads": "max_threads",
               "timeout_seconds": "max_timeout_seconds"}
-    for name, limit in fields.items():
+
+
+def audio_resource_refusal(resources, audio):
+    """Reuse one calibrated CPU-audio declaration check in previews and render."""
+    if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
+        return (None, "audio_budget_or_execution_mode_unavailable")
+    for name, limit in AUDIO_RESOURCE_LIMITS.items():
         value = resources.get(name)
         numeric = name.endswith("seconds")
         if (type(value) not in ({int, float} if numeric else {int})
@@ -1279,6 +1288,10 @@ class HostResourceProbe:
                 return decision(None, "audio_budget_or_execution_mode_unavailable")
             refusal = audio_resource_refusal(resources, audio)
             if refusal is not None:
+                if refusal == (False, 'declared_resources_exceed_budget'):
+                    checks.update({name: {'actual': resources[name], 'maximum': getattr(audio, cap),
+                        'passed': resources[name] <= getattr(audio, cap)} for name, cap in AUDIO_RESOURCE_LIMITS.items()
+                        if type(resources.get(name)) in {int, float}})
                 return decision(*refusal)
             checks["audio_budget"] = {"limits": asdict(audio)}
             required_memory = self.budget.min_available_memory_bytes + audio.additional_memory_bytes
@@ -1288,6 +1301,12 @@ class HostResourceProbe:
                      self.budget.narration if kind == "creation_narration" else self.budget.montage)
             if stage is None:
                 return decision(None, "stage_budget_unavailable")
+            if kind == "creation_narration" and resources.get("input_scope") is not None:
+                if (stage.input_scope != "single_call_experiment_v1"
+                        or resources.get("input_scope") != stage.input_scope
+                        or resources.get("budget_basis") != "controlled_experiment_unverified_legacy_cap"
+                        or resources.get("section_count") != 1):
+                    return decision(None, "narration_single_call_scope_unavailable")
             bounds = ({"text_chars": stage.max_text_chars, "section_count": stage.max_section_count,
                        "reference_bytes": stage.max_reference_bytes, "duration_seconds": stage.max_duration_seconds,
                        "max_output_bytes": stage.max_output_bytes, "threads": stage.max_threads,

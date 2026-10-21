@@ -493,6 +493,87 @@ class DeviceScheduler:
             conn.commit()
         return self._request(new_row)
 
+    def replace_ungranted_creation_narration(self, old_request_id, *, replacement_write):
+        """Keep one original Job and wait age across the verified narration contract change."""
+        now = _stamp(self._now())
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            old_row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (old_request_id,)).fetchone()
+            if old_row is None:
+                raise KeyError(old_request_id)
+            old = self._request(old_row)
+            if old.owner_type != 'creation_job' or not re.fullmatch(r'narration:[0-9a-f]{64}', old.unit_key):
+                raise ValueError('仅支持原整阶段配音请求的执行契约转换')
+            if old.state == 'cancelled' and old.wait_reason and old.wait_reason.startswith('replaced_by:'):
+                row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (old.wait_reason.split(':', 1)[1],)).fetchone()
+                if row is None or (row['workspace_id'], row['owner_id'], row['input_digest']) != (old.workspace_id, old.owner_id, old.input_digest):
+                    raise RecoveryBlocked('原配音请求的替代指针不可核实')
+                return self._request(row)
+            static_refused = old.state == 'failed' and old_row['last_failure_reason'] == 'declared_resources_exceed_budget'
+            if (old.state not in {'waiting', 'blocked'} and not static_refused
+                    or old.last_grant_generation is not None or old.attempt_number != 1
+                    or old_row['checkpoint_ref'] is not None):
+                raise RecoveryBlocked('原配音已有授予或结果未知，须先按原请求核对')
+            if conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+                    "AND owner_id=? AND (last_grant_generation IS NOT NULL OR checkpoint_ref IS NOT NULL)",
+                    (old.workspace_id, old.owner_id)).fetchone():
+                raise RecoveryBlocked('原作业有执行结果或授予记录，不能按未执行转换')
+            intent, trusted = replacement_write(conn, old)
+            actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key)
+            if (actual != (intent.workspace_id, intent.owner_type, intent.owner_id, intent.input_digest, intent.unit_key)
+                    or actual[:4] != (old.workspace_id, old.owner_type, old.owner_id, old.input_digest)
+                    or not trusted.unit_key.startswith('narration:segment:v1:')
+                    or trusted.member_id != old.member_id or trusted.work_class != old.work_class
+                    or trusted.source_refs != old.source_refs or intent.policy != old.policy):
+                raise PermissionError('配音转换不能改变原身份、输入、归属或等待策略')
+            existing = conn.execute('SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type=? '
+                'AND owner_id=? AND input_digest=? AND unit_key=?', actual).fetchone()
+            if existing is not None:
+                raise RecoveryBlocked('原配音已有未关联的逐段请求，须先核对而非创建第二请求')
+            new_id = uuid.uuid4().hex
+            conn.execute("INSERT INTO device_work_requests (id,workspace_id,member_id,owner_type,owner_id,input_digest,unit_key,"
+                "source_refs_json,work_class,policy,not_before_utc,window_json,first_ready_at_utc,eligible_since_utc,"
+                "eligible_wait_seconds,state,resources_json,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'waiting',?,?,?)",
+                (new_id, *actual[:1], trusted.member_id, trusted.owner_type, trusted.owner_id, trusted.input_digest,
+                 trusted.unit_key, old_row['source_refs_json'], trusted.work_class, old_row['policy'], old_row['not_before_utc'],
+                 old_row['window_json'], old_row['first_ready_at_utc'], old_row['eligible_since_utc'],
+                 old_row['eligible_wait_seconds'], json.dumps(trusted.resources, sort_keys=True), now, now))
+            self._record_event(conn, old_row, 'deferred', f'superseded_by:{new_id}:narration_single_call_v1', None, now)
+            conn.execute("UPDATE device_work_requests SET state='cancelled',wait_reason=?,updated_at=? WHERE id=?",
+                (f'replaced_by:{new_id}', now, old.id))
+            row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (new_id,)).fetchone()
+            self._record_event(conn, row, 'deferred', f'replaces:{old.id}:narration_single_call_v1', None, now)
+        return self._request(row)
+
+    def resume_creation_narration(self, request_id, *, resume_write):
+        """Explicit continuation keeps the released unit and original parent allowance."""
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (request_id,)).fetchone()
+            if row is None:
+                raise KeyError(request_id)
+            request = self._request(row)
+            if (request.owner_type != 'creation_job' or request.state not in {'failed', 'cancelled'}
+                    or not request.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:'))):
+                raise ValueError('只能显式继续原已结束的配音单元')
+            permit = conn.execute('SELECT request_id FROM device_permit WHERE id=1').fetchone()
+            if permit is None or permit['request_id'] == request_id or conn.execute(
+                    "SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' AND owner_id=? "
+                    "AND state IN ('waiting','blocked','granted','yield_requested')", (request.workspace_id, request.owner_id)).fetchone():
+                raise RecoveryBlocked('原配音仍有许可或活动请求，先核对原执行')
+            trusted = resume_write(conn, request)
+            if ((trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key,
+                 trusted.member_id, trusted.work_class, trusted.source_refs, trusted.resources)
+                    != (request.workspace_id, request.owner_type, request.owner_id, request.input_digest, request.unit_key,
+                        request.member_id, request.work_class, request.source_refs, request.resources)):
+                raise PermissionError('继续配音不能替换原单元输入或身份')
+            now = _stamp(self._now())
+            self._record_event(conn, row, 'retried', 'explicit_narration_continue', trusted.member_id, now)
+            conn.execute("UPDATE device_work_requests SET state='waiting',wait_reason=NULL,last_failure_reason=NULL,"
+                "checkpoint_ref=NULL,retry_not_before_utc=NULL,attempt_number=attempt_number+1,updated_at=? WHERE id=?", (now, request_id))
+        return self._get(request_id)
+
     def wake_existing(self, intent: SubmissionIntent, actor: object) -> dict[str, object]:
         """Authorized manual analysis may wake an existing material unit only.
 
@@ -1226,6 +1307,7 @@ class DeviceScheduler:
         checkpoint_database_path: str | Path,
         checkpoint_write: CheckpointWrite,
         next_intent: SubmissionIntent | None = None,
+        next_unit_write: Callable[[sqlite3.Connection, Grant], tuple[SubmissionIntent, VerifiedWork] | None] | None = None,
         actor: object | None = None,
         cancelled: bool = False,
     ) -> str | None:
@@ -1237,6 +1319,8 @@ class DeviceScheduler:
         """
         if Path(checkpoint_database_path).expanduser().resolve() != self.database_path:
             raise ValueError("业务检查点与设备许可必须在同一 Production SQLite 库")
+        if next_intent is not None and next_unit_write is not None:
+            raise ValueError("下一单元只能由一个事务入口提供")
         continuation = self.owners.verify_submission(next_intent, actor) if next_intent else None
         if continuation is not None:
             self._assert_material_stage_key(continuation)
@@ -1250,6 +1334,12 @@ class DeviceScheduler:
             request_row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
             if request_row is None:
                 raise KeyError(grant.request_id)
+            checkpoint_ref = checkpoint_write(conn, grant)
+            if next_unit_write is not None and not cancelled:
+                prepared_next = next_unit_write(conn, grant)
+                if prepared_next is not None:
+                    next_intent, continuation = prepared_next
+                    self._assert_material_stage_key(continuation)
             if next_intent is not None:
                 expected = (request_row["workspace_id"], request_row["owner_type"], request_row["owner_id"], request_row["input_digest"])
                 actual = (continuation.workspace_id, continuation.owner_type, continuation.owner_id, continuation.input_digest)
@@ -1258,7 +1348,11 @@ class DeviceScheduler:
                         or continuation.member_id != request_row["member_id"]
                         or continuation.source_refs != old_refs):
                     raise PermissionError("下一单元的执行对象或成员归属已变化")
-            checkpoint_ref = checkpoint_write(conn, grant)
+                if (continuation.unit_key != next_intent.unit_key
+                        or continuation.work_class != request_row['work_class']
+                        or (next_intent.workspace_id, next_intent.owner_type, next_intent.owner_id, next_intent.input_digest)
+                        != actual):
+                    raise PermissionError('下一单元的请求与可信契约不一致')
             conn.execute("UPDATE device_work_requests SET state=?, checkpoint_ref=?, wait_reason=NULL, updated_at=? WHERE id=?", ("cancelled" if cancelled else "done", checkpoint_ref, _stamp(now), grant.request_id))
             if continuation is not None and not cancelled:
                 conn.execute(

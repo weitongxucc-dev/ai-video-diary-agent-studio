@@ -122,7 +122,6 @@ def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
     actions = actions or {}
     return CreationExecution(
         repo,
-        run_narration=actions.get("narration", lambda _w, _t: None),
         run_montage_plan=actions.get("montage_plan", lambda _w, _t: None),
         run_render=actions.get("render", lambda _w, _t: None),
         render_is_valid=render_ready,
@@ -2690,3 +2689,297 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
     assert not [event for event in repo.list_task_events('local',task_id)
         if event.payload.get('failure_kind')=='input_budget_exceeded']
 from app.voice_clone import Qwen3TTSSubprocessProvider
+
+
+def _narration_units_case(tmp_path):
+    from app.creation.narration_stage_use_case import NarrationStageUseCase
+    from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
+    from app.narration import NarrationArtifact
+    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local')
+    actor = CreationExecutionActor('local', 'original-member')
+    register_synthetic_profiles(repo, workspace_id='local', member_id=actor.member_id,
+        person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh', model_id='test',
+        person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1')
+    with repo._connect() as conn:
+        for table in ('creation_tasks', 'creation_plans'):
+            row = conn.execute(f'SELECT id,payload FROM {table} WHERE workspace_id=?', ('local',)).fetchone()
+            owned = json.loads(row['payload']); owned['owner_user_id'] = actor.member_id
+            conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
+        row = conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script_id,)).fetchone()
+        payload = json.loads(row['payload'])
+        payload['sections'] = [{**payload['sections'][0], 'id': f'section_{ordinal}', 'content': '原文' * 130}
+            for ordinal in (1, 2)]
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (json.dumps(payload), script_id))
+    task = repo.get_creation_task('local', task_id)
+    script = repo.get_creation_task_script('local', script_id)
+    plan = repo.get_creation_plan('local', task.plan_id)
+    execution = _execution(repo)
+    job = execution.start('local', task_id, script_id, revision_digest(script, plan), actor=actor)
+    budget = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
+        input_scope='single_call_experiment_v1')
+    audio = CpuAudioBudget(10, 1_000_000, 30, 30, 48000, 2, 3*1024*1024, 1, 30, 1024, 16, .1, 2048, 1024)
+    montage = MontageBudget(10, 20, 1_000_000, 1_000_000, 30, 1_000_000)
+    owner = CreationJobOwnerVerifier(repo, narration_budget=budget, narration_audio_budget=audio,
+        montage_budget=montage, verify_identity=lambda current: 'ready' if current == actor else 'unauthorized')
+    releases = {'ready': True}
+    resources = SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}, None),
+        continue_unit=lambda _: True, released=lambda _: releases['ready'])
+    scheduler = DeviceScheduler(repo.database_path, tmp_path/'units.lock', owners=owner, resources=resources, processes=HostProcessProbe())
+    generated = []
+    class Generator:
+        def generate_for_creation_task(self, **kwargs):
+            context = kwargs['grant_context']; context.check()
+            generated.append((context.grant.request_id, kwargs['segment_id'], context.max_output_bytes,
+                context.deadline_monotonic-context.started_monotonic))
+            key = hashlib.sha256(kwargs['segment_id'].encode()).hexdigest()
+            path = tmp_path/f'{key}.wav'
+            if not path.exists():
+                path.write_bytes(synthetic_wav_bytes(seconds=1))
+                time.sleep(.002)
+            from app.narration import _pronunciation_dictionary, _pronunciation_version
+            pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=kwargs['pronunciation_entries'],
+                workspace_id='local', person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=task_id))
+            return NarrationArtifact(task_id=task_id, script_id=script_id, audio_path=str(path), duration_seconds=1,
+                sample_rate=24000, model_id='test', voice_profile_id='voice_1', cache_key=key, language='zh',
+                pronunciation_version=pronunciation)
+        def combine_creation_task_segments(self, **kwargs):
+            context = kwargs['grant_context']; context.check()
+            assert scheduler._get(context.grant.request_id).resources['kind'] == 'task_audio'
+            path = tmp_path/'combined.wav'; path.write_bytes(synthetic_wav_bytes(seconds=2))
+            first = kwargs['segments'][0]
+            return replace(first, audio_path=str(path), cache_key='combined', duration_seconds=2)
+    stage = NarrationStageUseCase(repo, Generator(), None, budget)
+    executor = CreationJobUnitExecutor(repo, render_action=lambda *_: None, render_is_valid=lambda *_: False, narration_stage=stage)
+    return SimpleNamespace(repo=repo, task_id=task_id, script_id=script_id, job=job, actor=actor, owner=owner,
+        execution=execution, scheduler=scheduler, executor=executor, resources=resources, stage=stage,
+        generated=generated, releases=releases)
+
+
+def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_path):
+    case = _narration_units_case(tmp_path)
+    first = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    request = case.scheduler._get(first)
+    assert request.resources['section_count'] == 1 and request.resources['text_chars'] < 374
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    segments = case.repo.list_narration_segments('local', case.task_id, case.script_id)
+    assert [item.status for item in segments] == ['ready', 'pending']
+    assert case.repo.get_creation_task('local', case.task_id).narration_cache_key is None
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    assert usage['used_seconds'] > 0 and usage['used_output_bytes'] > 0 and not usage['unsettled']
+    assert case.scheduler._get(first).state == 'done'
+    # A fresh coordinator and executor consume persisted usage and only the next section.
+    case.scheduler = DeviceScheduler(case.repo.database_path, tmp_path/'units.lock', owners=case.owner,
+        resources=case.resources, processes=HostProcessProbe())
+    case.executor = CreationJobUnitExecutor(case.repo, render_action=lambda *_: None,
+        render_is_valid=lambda *_: False, narration_stage=case.stage)
+    second = case.scheduler.pick_and_grant()
+    assert second.unit_key.startswith('narration:segment:v1:section_2:')
+    case.executor.execute(second, case.scheduler)
+    assert case.generated[1][2] == 3*1024*1024 - usage['used_output_bytes']
+    assert case.generated[1][3] < 300 - usage['used_seconds'] + .01
+    merge = case.scheduler.pick_and_grant()
+    assert merge.unit_key.startswith('narration:merge:v1:')
+    assert case.scheduler._get(merge.request_id).resources['kind'] == 'task_audio'
+    case.executor.execute(merge, case.scheduler)
+    current = case.repo.get_creation_task('local', case.task_id)
+    assert current.stage == 'montage' and current.narration_cache_key == 'combined'
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    final = case.repo.creation_narration_usage('local', case.job.id)
+    assert not final['unsettled'] and final['used_seconds'] > usage['used_seconds']
+    assert final['used_output_bytes'] == sum(Path(item.audio_path).stat().st_size for item in [
+        case.repo.get_narration_artifact('local', 'combined'), *[
+            case.repo.get_narration_artifact('local', s.audio_reference.removeprefix('narration://artifact/'))
+            for s in case.repo.list_narration_segments('local', case.task_id, case.script_id)]])
+    with case.repo._connect() as conn:
+        queued = conn.execute("SELECT unit_key FROM device_work_requests WHERE state='waiting'").fetchall()
+    assert len(queued) == 1 and queued[0]['unit_key'].startswith('montage_plan:')
+
+
+def test_narration_unit_rollback_and_explicit_resume_preserve_consumed_allowance(tmp_path, monkeypatch):
+    from app.creation.execution_control import CreationExecutionControl
+    case = _narration_units_case(tmp_path)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    original_commit = case.repo.commit_creation_narration_segment
+    def refused(*args, **kwargs):
+        original_commit(*args, **kwargs)
+        raise RuntimeError('injected segment commit failure')
+    monkeypatch.setattr(case.repo, 'commit_creation_narration_segment', refused)
+    case.executor.execute(grant, case.scheduler)
+    assert case.scheduler._get(grant.request_id).state == 'failed'
+    assert all(s.status == 'pending' for s in case.repo.list_narration_segments('local', case.task_id, case.script_id))
+    consumed = case.repo.creation_narration_usage('local', case.job.id)
+    assert consumed['used_output_bytes'] > 0 and not consumed['unsettled']
+    monkeypatch.setattr(case.repo, 'commit_creation_narration_segment', original_commit)
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job': SimpleNamespace(owner=case.owner)}, wake=lambda: None)
+    control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    retried = case.scheduler.pick_and_grant()
+    assert retried.request_id == grant.request_id and retried.attempt_number == 2
+    case.executor.execute(retried, case.scheduler)
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    assert case.generated[-1][2] == 3*1024*1024-consumed['used_output_bytes']
+    after = case.repo.creation_narration_usage('local', case.job.id)
+    assert after['used_output_bytes'] == consumed['used_output_bytes']  # Retry reused the already charged file.
+    assert after['used_seconds'] > consumed['used_seconds']
+
+
+def test_narration_legacy_static_refusal_migrates_idempotently_without_new_job(tmp_path):
+    from app.creation_execution import creation_stage_facts, migrate_creation_narration_request
+    from app.device_scheduler import SubmissionIntent, SchedulePolicy
+    from app.host_resource_probes import HostResourceDecision
+    case = _narration_units_case(tmp_path)
+    task = case.repo.get_creation_task('local', case.task_id)
+    script = case.repo.get_creation_task_script('local', case.script_id)
+    plan = case.repo.get_creation_plan('local', task.plan_id)
+    key, resources = creation_stage_facts(case.repo, task, script, plan, 'narration', case.owner.narration_budget, None)
+    request = case.scheduler.submit(SubmissionIntent('local', 'creation_job', case.job.id, case.job.input_digest, key, SchedulePolicy()), case.actor)
+    decision = HostResourceDecision(False, resources, {'text_chars': {'actual': resources['text_chars'], 'maximum': 374, 'passed': False}},
+        'declared_resources_exceed_budget')
+    with case.scheduler._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert case.owner.record_admission(conn, request, decision, datetime.now(timezone.utc)) == 'input_rejected'
+        conn.execute("UPDATE device_work_requests SET state='failed',last_failure_reason='declared_resources_exceed_budget' WHERE id=?", (request.id,))
+    replacement = migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor)
+    repeated = migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor)
+    assert replacement.id == repeated.id and replacement.first_ready_at_utc == request.first_ready_at_utc
+    assert case.scheduler._get(request.id).wait_reason == f'replaced_by:{replacement.id}'
+    assert case.repo.get_job_run('local', case.job.id).status == 'queued'
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    assert any(e.payload.get('failure_kind') == 'input_budget_exceeded' for e in case.repo.list_task_events('local', case.task_id))
+
+
+def test_narration_quit_settles_then_cached_resume_does_not_charge_output_twice(tmp_path, monkeypatch):
+    from datetime import timedelta
+    case = _narration_units_case(tmp_path)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    original = case.stage.prepare_segment
+    def quit_after_prepare(*args, **kwargs):
+        result = original(*args, **kwargs)
+        case.executor.request_stop()
+        return result
+    monkeypatch.setattr(case.stage, 'prepare_segment', quit_after_prepare)
+    grant = case.scheduler.pick_and_grant()
+    case.executor.execute(grant, case.scheduler)
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    assert usage['consumption_known'] and usage['used_output_bytes'] > 0 and usage['used_seconds'] > 0
+    assert case.scheduler._get(grant.request_id).state == 'blocked'
+    assert case.repo.get_job_run('local', case.job.id).status == 'interrupted'
+    monkeypatch.setattr(case.stage, 'prepare_segment', original)
+    case.scheduler = DeviceScheduler(case.repo.database_path, tmp_path/'units.lock', owners=case.owner,
+        resources=case.resources, processes=HostProcessProbe(), clock=lambda: datetime.now(timezone.utc)+timedelta(seconds=2))
+    case.executor = CreationJobUnitExecutor(case.repo, render_action=lambda *_: None,
+        render_is_valid=lambda *_: False, narration_stage=case.stage)
+    next_grant = case.scheduler.pick_and_grant()
+    assert next_grant.request_id == grant.request_id
+    case.executor.execute(next_grant, case.scheduler)
+    after = case.repo.creation_narration_usage('local', case.job.id)
+    assert after['used_output_bytes'] == usage['used_output_bytes']
+    assert after['used_seconds'] > usage['used_seconds'] and after['consumption_known']
+    assert case.repo.list_narration_segments('local', case.task_id, case.script_id)[0].status == 'ready'
+
+
+def test_narration_unknown_usage_blocks_redispatch_without_reset(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from app.device_scheduler import RecoveryBlocked
+    from app.creation_execution import next_creation_intent
+    case = _narration_units_case(tmp_path)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    def unknown(*args, **kwargs):
+        kwargs['grant_context'].narration_output_usage[0] = None
+        raise RecoveryBlocked('simulated unknown output accounting')
+    monkeypatch.setattr(case.stage, 'prepare_segment', unknown)
+    with pytest.raises(RecoveryBlocked, match='unknown output'):
+        case.executor.execute(grant, case.scheduler)
+    # This port proves release only; it does not invent a usage settlement.
+    case.scheduler.defer_unit(grant, reason='worker_interrupted', retry_not_before_utc=datetime.now(timezone.utc)+timedelta(seconds=1),
+        owner_database_path=case.repo.database_path, owner_write=lambda conn, current: case.executor._write_interrupted(
+            conn, current, scheduler=case.scheduler, stage='narration', reason='process_interrupted'))
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    assert not usage['consumption_known'] and len(usage['unsettled']) == 1
+    with pytest.raises(RecoveryBlocked, match='消耗未知'):
+        next_creation_intent(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id))
+    case.scheduler.clock = lambda: datetime.now(timezone.utc)+timedelta(seconds=2)
+    assert case.scheduler.pick_and_grant() is None
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+
+
+def test_narration_explicit_scope_parser_preserves_numeric_caps(tmp_path):
+    from app.member_permits import creation_stage_budgets_from_env
+    from app.creation_execution import next_creation_intent
+    case = _narration_units_case(tmp_path)
+    expected = case.owner.narration_budget
+    env = {'DEVICE_NARRATION_'+key.upper(): str(value) for key, value in vars(expected).items()
+        if key not in {'running_cpu_policy', 'input_scope'}}
+    parsed, montage = creation_stage_budgets_from_env(env)
+    assert parsed.input_scope == 'legacy_stage' and parsed.max_text_chars == 374 and montage is None
+    case.owner.narration_budget = parsed
+    with pytest.raises(ValueError, match='明确执行范围'):
+        next_creation_intent(case.repo, case.scheduler, case.job)
+    env['DEVICE_NARRATION_INPUT_SCOPE'] = 'single_call_experiment_v1'
+    parsed, _ = creation_stage_budgets_from_env(env)
+    assert parsed == expected and parsed.max_timeout_seconds == 300 and parsed.max_output_bytes == 3*1024*1024
+
+
+def test_narration_exhausted_parent_keeps_ready_segment_and_cannot_reset(tmp_path):
+    from app.creation.execution_control import CreationExecutionControl, ExecutionControlRejected
+    case = _narration_units_case(tmp_path)
+    one_output = len(synthetic_wav_bytes(seconds=1))
+    case.owner.narration_budget = replace(case.owner.narration_budget, max_output_bytes=one_output)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    case.executor.execute(grant, case.scheduler)
+    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert [s.status for s in case.repo.list_narration_segments('local', case.task_id, case.script_id)] == ['ready', 'pending']
+    assert case.repo.get_creation_task('local', case.task_id).narration_cache_key is None
+    assert case.repo.creation_narration_usage('local', case.job.id)['used_output_bytes'] == one_output
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job': SimpleNamespace(owner=case.owner)}, wake=lambda: None)
+    with pytest.raises(ExecutionControlRejected, match='不能|核对'):
+        control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    assert len(case.execution.jobs('local', case.task_id)) == 1 and case.scheduler.pick_and_grant() is None
+
+
+@pytest.mark.parametrize('unknown', [None, 'release', 'output'])
+def test_narration_real_memory_pressure_settles_known_usage_and_retains_unknown(tmp_path, monkeypatch, unknown):
+    from datetime import timedelta
+    from app.device_runtime import DeviceRuntime, OwnerRegistration
+    from app.device_scheduler import RecoveryBlocked
+    from app.granted_subprocess import GrantedCommandMemoryPressure
+    from app.host_memory import MemoryDecision, MemorySample
+    case = _narration_units_case(tmp_path)
+    request_id = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    sample = MemorySample('darwin', time.monotonic(), datetime.now(timezone.utc).isoformat(), 'critical', 16, None, {})
+    failure = GrantedCommandMemoryPressure(MemoryDecision(False, 'memory_pressure_critical', sample, 32, None, 0))
+    original_prepare = case.stage.prepare_segment
+    partial = tmp_path/'pressure-partial.wav'
+    def pressure(*args, **kwargs):
+        partial.write_bytes(synthetic_wav_bytes(seconds=1))
+        kwargs['grant_context'].narration_output_usage[0] = None if unknown == 'output' else partial.stat().st_size
+        # These ports report known output and release separately; the exception class is production's real type.
+        case.releases['ready'] = unknown != 'release'
+        raise failure
+    monkeypatch.setattr(case.stage, 'prepare_segment', pressure)
+    runtime = DeviceRuntime(case.scheduler, {'creation_job': OwnerRegistration(case.owner, case.executor)}, poll_interval_seconds=.1)
+    if unknown is not None:
+        with pytest.raises(RecoveryBlocked):
+            runtime.run_once()
+        usage = case.repo.creation_narration_usage('local', case.job.id)
+        assert not usage['consumption_known'] and len(usage['unsettled']) == 1
+        assert runtime.last_error is not None
+        assert case.scheduler._get(request_id).state == 'granted'
+    else:
+        assert runtime.run_once() is True and runtime.last_error is None
+        usage = case.repo.creation_narration_usage('local', case.job.id)
+        assert usage['consumption_known'] and not usage['unsettled']
+        assert usage['used_output_bytes'] == partial.stat().st_size and usage['used_seconds'] > 0
+        assert case.repo.get_job_run('local', case.job.id).status == 'interrupted'
+        assert case.scheduler._get(request_id).state == 'blocked'
+        assert case.scheduler._get(request_id).wait_reason == 'resource_pressure'
+        monkeypatch.setattr(case.stage, 'prepare_segment', original_prepare)
+        case.scheduler.clock = lambda: datetime.now(timezone.utc)+timedelta(seconds=31)
+        assert runtime.run_once() is True and runtime.last_error is None
+        assert case.scheduler._get(request_id).state == 'done'
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    case.scheduler.close()

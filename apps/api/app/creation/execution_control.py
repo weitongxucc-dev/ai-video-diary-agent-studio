@@ -8,11 +8,12 @@ import threading
 import time
 
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
-    CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation)
+    CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
+    migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
 from app.creation.contracts import TaskEvent
 from app.creation.task_authorization import TaskAuthorizationDenied
-from app.device_scheduler import SubmissionIntent, SchedulePolicy
+from app.device_scheduler import SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.production import CreationPlan, CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
 from app.task_audio import TASK_MEDIA_KIND
@@ -222,6 +223,7 @@ class CreationExecutionControl:
             "waiting_reason": waiting_reason,
             "status_updated_at": status_updated_at,
             "input_rejection":creation_input_rejection(task_events,job.id) if job else None,
+            "narration_usage": self.repository.creation_narration_usage(workspace_id, job.id) if job else None,
             "video_ready": self.render_valid(
                 workspace_id, task_id, verify_media=verify_media),
             "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
@@ -250,13 +252,21 @@ class CreationExecutionControl:
 
     def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
-            job = self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
-                admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection))
+            latest = self.execution.latest(workspace_id, task_id)
+            migrated = (migrate_creation_narration_request(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
+                if latest is not None else None)
+            resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
+                if latest is not None and migrated is None else False)
+            job = (self.repository.get_job_run(workspace_id, latest.id) if migrated is not None or resumed else
+                self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
+                    admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection)))
             if execution_source is not None:
                 self.repository.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
         except CreationInputRejected as exc:
             raise ExecutionControlRejected(status_code=409,detail=exc.detail) from exc
+        except RecoveryBlocked as exc:
+            raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
         except PermissionError as exc:
             raise ExecutionControlRejected(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
@@ -416,7 +426,7 @@ class CreationExecutionControl:
                 continue
             try:
                 submit_creation_stage(self.execution, runtime.scheduler, job, original)
-            except (PermissionError, ValueError) as exc:
+            except (PermissionError, ValueError, RecoveryBlocked) as exc:
                 logger.warning("制作作业 %s 的当前许可或输入未就绪，保留待处理：%s", job.id, exc)
         runtime.wake()
 
