@@ -2,9 +2,9 @@
 
 ## 1. 当前目标与授权
 
-2026-10-21用户批准执行本轮文档治理：收敛产品理想状态、第一阶段共同约定及完整交付顺序。当前仅授权主控更新文档、检查、提交并推送GitHub文档基线，不启动新代码开发、模型训练、媒体制作或候选打包。本次补充限定为Pi能力缺口、证据与结果连接及补齐依赖顺序，原位更新架构§3.15.3与计划§1.1.1b；授权人物口播/原声精剪继续沿产品§9.1和计划§4.2，不重复建场景或总计划，不改变左侧名称、分区或UI设计规范。旧合同“直接实施、不等待START”及原写权暂停；A/B/C/G保持HOLD，已有diff、产物和证据保留。唯一主控为本聊天 `01a1429d-9efe-7491-bcb6-d85f090c1138`，实时Git优先于历史基线。
+2026-10-21用户明确恢复实施：按已更新计划优先打通Pi通用操作、产物登记和真实作品闭环。主控负责派工、审核、集成与必要真实验证，不在每步结束后重新请示。基于10bc6f1f及当前保留diff推进，先复用现有能力修实际断点，不大重构、不扩大测试。唯一主控为本聊天 `01a1429d-9efe-7491-bcb6-d85f090c1138`；旧文档冻结解除范围仅限下表，本合同不授权用户数据删除、模型训练或无关平台开发。
 
-完整目标及阶段顺序见[开发计划§1.1.1](0.11-development-plan.md#111-固定推进批次)。阶段1同时接通Pi自主操作和可靠作品链；任务归属、档案、目标/单元/预算分离从第一步成立。多任务界面、长期经验、规模与平台扩展后续交付，不减少最终范围。恢复实施前主控按已批准目标明确绑定独占文件；本文的候选职责不自动恢复写权。
+完整顺序见[计划§1.1.1](0.11-development-plan.md#111-固定推进批次)，本批出口按§1.1.1a与§1.1.1b。原生执行必须与同一任务的登记、预览、采用、修改及恢复同时接通；必要证据和版本修复不后置。原中英各30秒目标保留，先形成可审候选再串行跑真实链；手机/Windows继续后置。独立设计研究原授权不变，左侧名称分区与正式设计规范不变。
 
 ## 2. 第一阶段共同约定
 
@@ -19,23 +19,24 @@
 
 ## 3. 唯一写入表
 
-本表保留现有改动归属，防止文档治理期间覆盖或重做；A/B旧路径只用于保管与影响核对，当前不得新增源码或测试。原生工具运行桥等新范围尚未分配写权，实施时由主控按实际消费者绑定，不从旧合同继承。主控本轮也无产品代码写权。
+本表恢复A/B限定实现写权并保护已有diff。一个文件同一时间仅一个负责人；跨边界先提交接口需求，由主控调整归属，不互改。两人先固定通用执行与登记的最小调用契约，再并行实现；主控不与A/B同写产品文件。
 
-| 原负责人 | 保留diff及后续候选职责（当前无产品写权） |
+| 负责人 | 本批独占范围与交付 |
 | --- | --- |
-| 主控 | 本轮仅修改本合同、开发计划、产品/领域/架构/设计、必要文档入口；检查并提交文档基线。不得改产品代码、运行模型/媒体或打包。 |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | Pi与用户界面纵向负责人。`apps/api/agent_tools/diary/`、`apps/api/app/assistant/`、`apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py`；前端 `apps/web/src/components/creation-task/`、`CreationTaskWorkspace.tsx`及其module.css、`AssistantConversationPanel.tsx`、`useAssistantConversation.ts`、`AssistantConversationProvider.tsx`、`apps/web/src/lib/api/{assistant,creation-tasks,task-media}.ts`、`apps/web/src/lib/types/{assistant,creation-tasks,task-edits}.ts`、`apps/web/src/lib/creation-task-status.ts`；仅相应现有assistant/typed工具及对应组件测试。补持久等待/理解分类/后台业务调用、实际上下文与语义复核、右侧段预览/修改状态/回执/采用关系。不得写B后端文件。 |
-| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 共同编辑与执行用例负责人。`apps/api/app/creation/`、`production.py`、`schemas.py`、`creation_execution.py`、`narration.py`、`main.py`（仅必要组装/HTTP适配）、`device_scheduler.py`；仅对应既有creation_execution/narration/edit用例测试。复用原段、Job、Artifact、版本与依赖，补最小局部文案修订/配音字幕镜头接续、有声段产物、版本发布和中断/预算恢复。对A提供明确类型化入参/回执，main不承载业务。不得写A路径或更改保护门限、验收数据。 |
-| C `01a14301-b182-7a92-a973-66fe11baf450` | 保持HOLD，无产品代码或本轮验收执行权。后续独立真实验收：独占主控交付候选的GUI操作、媒体播放、正常Quit/重启和指定安全点中断；只写既有验收目录下 `desktop-c-20261020-*` 定向证据。先准备同一任务的接受步骤和现有入口定位，不启动旧候选负载；收到新候选后串行执行，不人工补文案/镜头/内部ID或改库凑通过。 |
-| G `01a15854-9259-7231-977f-32bec26fd119` | 保持HOLD；后续只读定点审明确diff：规则/语义边界、用量证据、职责和事务、采用版本与未知回执；不重复审全仓，不写源码/测试/共享文档、不运行重活。 |
+| 主控 | 共享文档、契约裁定、diff审核、集成提交与运行候选。需要主控直接修源码时先从原负责人取得明确交接。C取得运行窗口后主控不并行操纵同一应用或启动媒体。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | Pi与用户界面纵向负责人，新增独占 `apps/api/agent_runtime/`、`apps/api/agent_tools/controlled_codemode.ts`；原生工具适配、宿主可信上下文、取消与实际产物回读由A接通。`apps/api/agent_tools/diary/`、`apps/api/app/assistant/`、`apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py`；前端 `apps/web/src/components/creation-task/`、`CreationTaskWorkspace.tsx`及其module.css、`AssistantConversationPanel.tsx`、`useAssistantConversation.ts`、`AssistantConversationProvider.tsx`、`apps/web/src/lib/api/{assistant,creation-tasks,task-media}.ts`、`apps/web/src/lib/types/{assistant,creation-tasks,task-edits}.ts`、`apps/web/src/lib/creation-task-status.ts`；仅相应现有assistant/typed工具及对应组件测试。补持久等待/理解分类/后台业务调用、实际上下文与语义复核、右侧段预览/修改状态/回执/采用关系。不得写B后端文件。 |
+| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 共同编辑与执行用例负责人，新增独占 `apps/api/app/artifact_store.py`、`media_script.py`、`media_script_jobs.py`、`granted_subprocess.py`、`bootstrap.py`，按需在creation目录内补原生执行/产物登记用例。复用现有Job/TaskEvent/Artifact及受许可进程，提供A调用的业务契约，不限为PNG专用入口。`apps/api/app/creation/`、`production.py`、`schemas.py`、`creation_execution.py`、`narration.py`、`main.py`（仅必要组装/HTTP适配）、`device_scheduler.py`；仅对应既有creation_execution/narration/edit用例测试。复用原段、Job、Artifact、版本与依赖，补最小局部文案修订/配音字幕镜头接续、有声段产物、版本发布和中断/预算恢复。对A提供明确类型化入参/回执，main不承载业务。不得写A路径或更改保护门限、验收数据。 |
+| C `01a14301-b182-7a92-a973-66fe11baf450` | 恢复轻量只读准备权，无产品代码写权；主控交付明确候选与独占运行窗口后执行真实验收：独占主控交付候选的GUI操作、媒体播放、正常Quit/重启和指定安全点中断；只写既有验收目录下 `desktop-c-20261020-*` 定向证据。先准备同一任务的接受步骤和现有入口定位，不启动旧候选负载；收到新候选后串行执行，不人工补文案/镜头/内部ID或改库凑通过。 |
+| G `01a15854-9259-7231-977f-32bec26fd119` | 恢复只读定点审查：先复核保留B改动的三个既有阻断与本批运行/登记接口边界，随后审明确diff；规则/语义边界、用量证据、职责和事务、采用版本与未知回执；不重复审全仓，不写源码/测试/共享文档、不运行重活。 |
 | 设计语言 `01a1582b-200c-7220-8187-5925f6082fc5` | 用户独立授权范围保持，独占 `designs/yaohe-desktop-language-20261020/`；完整590项研究不缩成抽样，未采用候选不进入DESIGN或产品。本批不写该目录。 |
 
 新增文件 `apps/api/app/creation/segment_production_use_case.py` 与 `task_budget_use_case.py` 属B既有待审diff，不因文件存在认定已集成。设计研究保持用户独立授权范围，涉及新交互规则须按新DESIGN核对；不因本轮文档变更授权生产UI改版。
 
 ## 4. 交付与运行
 
-本轮先替换矛盾规则，删除过期执行次序，检查相对链接、锚点及残留引用；不新增第二套总计划或状态台账。文档基线完成后通知受影响线程重读并确认，仍保持HOLD，不派新开发。未来实施复用已有SDK、仓储、编辑历史、Artifact与DeviceScheduler；前端必须明确实现负责人，不能以C验收代替接线。验证依[AGENTS第4–6节](../AGENTS.md#4-避免无效-token-与无效工作)按风险选择，不固定叠加、不预设新增测试文件。
+A/B先回报现有可复用代码、具体接口与待修断点，重读并确认本合同后直接实施，无需再次START。G仅定点审；C先核实本机真实入口/账号/素材/模型及原任务，不启动旧候选媒体或重复审源码。原生运行与登记的入参必须绑定可信原任务、对话、输入、授权、工作目录和版本；注册、预览、采用分别回执。共享契约有冲突时只暂停相关写入并交主控裁定，不盲目重做。
 
+A/B完成最小相关检查后给出diff与结果；主控审核并记录可复现源码候选后交C串行真实验证。C遇软件错误立即给原请求/版本/具体回执，A/B修后仅复验受影响部分；不人工补业务步骤，不靠测试数、脚本文件或旧视频宣告完成。通用自主链与相近需求、首段到整片、局部修改/撤销/恢复按计划验收，资源保护不放宽。验证依[AGENTS第4–6节](../AGENTS.md#4-避免无效-token-与无效工作)选择，不固定叠加、不预设新增测试文件。
 原本机验收入口为 `/Volumes/Dujiangyan-VM/AI视频日记/acceptance/phone-loop-20261018/电脑端核心验收.md`；只按当前需要定向读取证据。MiniMax仅用于mobiletest01验收，既有素材及来源许可不扩张；用户指定模板目录见计划。Mac优先，手机与Windows按依赖后置，不以缺后续平台阻断当前桌面闭环。
 
-保护 `.gitignore`、现有产品源码/测试diff及未跟踪设计目录，不纳入文档提交；不删除用户数据、安装、原始素材或历史证据。文档更新、派工或局部测试通过均不代表产品完成。
+保护 `.gitignore`及未跟踪设计目录，不纳入产品提交；A/B保留diff只在按职责审核后集成，不覆盖或丢弃；不删除用户数据、安装、原始素材或历史证据。文档更新、派工或局部测试通过均不代表产品完成。
