@@ -217,3 +217,35 @@ def test_nice_invalid_value_never_reaches_native_setter(monkeypatch, nice):
     monkeypatch.setattr(ctypes, "CDLL", lambda *args, **kwargs: pytest.fail("Invalid priority reached libc"))
     with pytest.raises(OSError):
         server._set_nice_cpu_policy(nice)
+
+
+@pytest.mark.parametrize('target,retained', [
+    ('quality', True), ('pcm', True), ('quality_extra', False), ('external', False),
+])
+def test_frozen_fixed_workers_keep_only_host_context_at_second_exec(tmp_path, monkeypatch, target, retained):
+    server = load_server()
+    executable = str(tmp_path/'api-server')
+    request = str(tmp_path/'sealed-request.json')
+    argv = [executable, '--quality-worker', request, '1048576']
+    if target == 'pcm':
+        argv = [executable, '--pcm-assembly-worker', '--manifest', request]
+    elif target == 'quality_extra':
+        argv.append('unexpected')
+    elif target == 'external':
+        argv[0] = str(tmp_path/'another-executable')
+    monkeypatch.setattr(server, 'sys', SimpleNamespace(frozen=True, executable=executable))
+    host = {'_PYI_ARCHIVE_FILE': executable, '_PYI_APPLICATION_HOME_DIR': str(tmp_path/'host-runtime'),
+            '_PYI_PARENT_PROCESS_LEVEL': '1'}
+    for key, value in {**host, '_PYI_UNRELATED': 'must-not-leak', 'PYINSTALLER_RESET_ENVIRONMENT': '1'}.items():
+        monkeypatch.setenv(key, value)
+    observed = []
+    def executed(binary, arguments):
+        assert binary == argv[0] and arguments == argv
+        observed.append({key: value for key, value in os.environ.items()
+            if key.startswith(('_PYI_', 'PYINSTALLER_'))})
+    monkeypatch.setattr(server.os, 'execvp', executed)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'G')
+    os.close(write_fd)
+    server._exec_granted_command([str(read_fd), *argv])
+    assert observed == ([host] if retained else [{}])

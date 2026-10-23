@@ -30,6 +30,17 @@ def _fixed_pcm_command(arguments: list[str]) -> bool:
     return len(arguments) == len(prefix) + 1 and arguments[:len(prefix)] == prefix
 
 
+def _fixed_quality_command(arguments: list[str]) -> bool:
+    prefix = [sys.executable]
+    if not getattr(sys, 'frozen', False):
+        prefix.append(str(Path(__file__).resolve()))
+    prefix.append('--quality-worker')
+    if len(arguments) != len(prefix) + 2 or arguments[:len(prefix)] != prefix:
+        return False
+    request, limit = arguments[-2:]
+    return bool(request) and limit.isascii() and limit.isdecimal() and bool(limit.lstrip('0'))
+
+
 _ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
 
 
@@ -151,12 +162,13 @@ def _exec_granted_command(arguments: list[str], *, cpu_mode: str | None = None, 
         print(f"GRANT_CPU_POLICY mode={cpu_mode} state=verified {marker} errno=0",
               file=sys.stderr, flush=True)
     try:
-        # Only the fixed host worker needs the bootloader context. A target
-        # executable receives its requested environment without these internals.
-        fixed_pcm = getattr(sys, 'frozen', False) and _fixed_pcm_command(arguments[1:])
+        # Fixed host workers reuse the registered process as their group leader.
+        # Other executables receive no bootloader internals.
+        fixed_worker = getattr(sys, 'frozen', False) and (
+            _fixed_pcm_command(arguments[1:]) or _fixed_quality_command(arguments[1:]))
         for key in tuple(os.environ):
             if key.startswith(('_PYI_','PYINSTALLER_')):
-                if fixed_pcm and key in {'_PYI_ARCHIVE_FILE','_PYI_APPLICATION_HOME_DIR','_PYI_PARENT_PROCESS_LEVEL'}:
+                if fixed_worker and key in {'_PYI_ARCHIVE_FILE','_PYI_APPLICATION_HOME_DIR','_PYI_PARENT_PROCESS_LEVEL'}:
                     continue
                 os.environ.pop(key)
         os.execvp(arguments[1], arguments[1:])
