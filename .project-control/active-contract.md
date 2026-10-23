@@ -48,6 +48,7 @@ B已明确交接并停止写入 `apps/api/app/creation/section_timeline.py`，�
 - **G**：先完成保留授权差额复审，再只读审本批文档/实际diff及真实消费者；关注完整变化集、失败回滚、跨场景复用、实际依赖、原请求结果和旧旁路退出，不扩全仓审查或运行负载。
 - **真实接续上下文差额**：A在原独占 `assistant/runtime_context.py`、`model_context.py`、`turn.py`、事件投影及 `agent_runtime/` 内修复已核模型能力元数据丢失、当前事实双装和历史能力目录重复，并接原回合压缩事件的有限诊断；只补直接相关既有测试。保持原会话、人类要求、请求/作业身份、SDK压缩和既定阶段超时，不写真实session内容或新增摘要状态库。B此时仅只读定位旧未授予作业的物理文件身份差额，取得主控明确范围前不修改该恢复边界。C停止新操作并正常Quit后交回运行窗口，主控集成新固定候选后再交C；其他所有权保持。
 - **压缩事件消费者窄交接**：B明确确认 `main.py` 无未提交改动并停止写入后，本次该文件独占交A，仅接原前台emit与后台on_event的有限 `context_compaction` 持久分支；不增路由、共享schema或UI，不更改B业务用例。此条优先于上表B的main所有权，交还须明确确认。
+- **配音固定来源与未执行恢复**：B独占 `creation/narration_pcm.py`、`creation/execution_control.py`、`creation_execution.py`、`production.py`、`device_scheduler.py` 和既有 `tests/test_creation_execution.py` 的本次差额；新增窄授权 `profiles/voice_sampling.py` 仅精确采样来源证据只读接口。沿原Job不可变TaskEvent封存version=1输入证据，不增表或全局来源版本库，不改MaterialAsset/ProfileReference/HTTP schema或main。首次真正创建Job、或原未执行Job发生真实新选声时，由宿主在事务外核验完整源SHA及资格，在同一提交内绑定来源事件、原actor/goal/input/voice版本与范围；基线标明既有采样回执或本次采用，重放和恢复不得为无锚旧Job补造历史证据。有锚未授予Job的恢复可核验相同字节后沿原调度替换请求，保留Job/预算/等待/审计；无锚、变字节、撤权、已授予或未知执行拒绝。A主控不写这些文件，其他render/avatar及已开始PCM物理防护不在本次放松范围。
 - **C**：仅只读准备。固定候选及主控明确交付独占窗口后，沿同作品制作→第一次局部修改→第二次无关用户修改→指定撤销第一次→正常Quit/重启读回串行运行。原中英各30秒及自主执行接受点保持，不人工补脚本/镜头/内部ID或改库。
 
 本次共享语义更新期间A/B保留diff、停止新增写入并完成定向根因核查；主控完成文档检查后发精确重绑定。A/B先回REBASE_ACK说明可复用实现、差额、文件及最小验证，只有明确收到该批差额实施任务才恢复写入；不从前段历史条款自行启动。共享契约先由B给出具体入参/返回/查询身份，A确认实际消费者后主控解除对应实现依赖；独立部分按授权继续。主控独占共享文档与集成，设计研究和保护目录不变。
