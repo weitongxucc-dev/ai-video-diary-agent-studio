@@ -68,7 +68,7 @@ def _turn(monkeypatch, tmp_path, *, returncode=0, stdout="", stderr="", key=KEY)
 
     def fake_run(cmd, **_kwargs):
         assert cmd[-1] == "--version"
-        return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+        return sdk_completed(cmd, 0, stdout=("1.4.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
 
     def fake_stream(cmd, *, on_event, **_kwargs):
         projector = _PiStreamProjector()
@@ -134,7 +134,7 @@ def test_unreachable_address_is_not_blamed_on_the_key(monkeypatch, tmp_path):
 def test_bridge_deadline_is_not_a_provider_timeout_or_evidence_of_unchanged_task(monkeypatch, tmp_path):
     def fake_run(cmd, **_kwargs):
         assert cmd[-1] == "--version"
-        return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+        return sdk_completed(cmd, 0, stdout=("1.4.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
 
     def fake_stream(cmd, *, timeout_seconds, **_kwargs):
         assert timeout_seconds == 180
@@ -169,7 +169,7 @@ def test_bridge_deadline_keeps_first_business_rejection(monkeypatch, tmp_path, w
 
     def fake_run(cmd, **_kwargs):
         assert cmd[-1] == "--version"
-        return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+        return sdk_completed(cmd, 0, stdout=("1.4.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
 
     def fake_stream(cmd, *, on_event, timeout_seconds, **_kwargs):
         assert timeout_seconds == 180
@@ -203,7 +203,7 @@ def test_slow_business_tool_is_not_a_model_service_timeout(monkeypatch, tmp_path
 
     def fake_run(cmd, **_kwargs):
         assert cmd[-1] == "--version"
-        return sdk_completed(cmd, 0, stdout=("1.3.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
+        return sdk_completed(cmd, 0, stdout=("1.4.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n"), stderr="")
 
     def fake_stream(cmd, *, on_event, timeout_seconds, **_kwargs):
         assert timeout_seconds == 180
@@ -366,11 +366,11 @@ def test_node_requirement_uses_the_same_path_as_the_launcher(monkeypatch, tmp_pa
         return str(tmp_path / "node")
     monkeypatch.setattr("app.assistant_pi.shutil.which", which)
     monkeypatch.setattr("app.assistant_pi.subprocess.run", lambda cmd, **kwargs:
-                        sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else version), stderr=""))
+                        sdk_completed(cmd, 0, stdout=("1.4.0" if Path(cmd[0]).name == "pi" else version), stderr=""))
     checks = {c["id"]: c for c in pi_runtime_checks()}
     assert seen["path"].split(__import__("os").pathsep)[0] == str(pi.parent)
     assert (checks["pi_node"]["status"] == "ready") == ready
-    assert checks["pi"]["version"] == ("1.3.0" if ready else None)
+    assert checks["pi"]["version"] == ("1.4.0" if ready else None)
 
 
 def test_node_missing_blocks_before_provider_and_does_not_change_saved_key(monkeypatch, tmp_path):

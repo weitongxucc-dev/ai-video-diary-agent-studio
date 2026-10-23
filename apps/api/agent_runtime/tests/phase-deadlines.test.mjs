@@ -109,7 +109,7 @@ test("parallel and nested scopes retain the actual outer SDK call; HTTP budget s
   } finally {captured.restore();AbortSignal.timeout=timeout;}
 });
 
-test("actual Pi 1.3 emits model/tool turn boundaries and compaction_start/end", async () => {
+test("actual Pi 1.4 emits model/tool turn boundaries and compaction_start/end", async () => {
   const options = await fixture();
   const captured = captureRequests();
   let current;
@@ -153,6 +153,23 @@ test("actual Pi 1.3 emits model/tool turn boundaries and compaction_start/end", 
     const compaction = events.filter(event=>["compaction_start","compaction_end"].includes(event.type));
     assert.deepEqual(compaction.map(event=>event.type),["compaction_start","compaction_end"]);
     assert.equal(compaction[0].reason,"manual"); assert.equal(compaction[1].aborted,false);
+    const savedSession = current.session.sessionManager.getSessionFile();
+    current.session.dispose();
+    current = await openCreationSession({...options,tools:["review_fixture"],customTools:tools});
+    assert.equal(current.session.sessionManager.getSessionFile(),savedSession);
+    assert.ok(current.session.getActiveToolNames().includes("review_fixture"));
+    assert.ok(current.session.messages.length > 0);
+    let resumedCalls = 0;
+    current.session.agent.streamFunction = () => {
+      const stream = new AssistantMessageEventStream();
+      const answer = message(resumedCalls++ === 0
+        ? [{type:"toolCall",id:"sdk-resumed-review",name:"review_fixture",arguments:{}}]
+        : [{type:"text",text:"恢复后工具调用完成。"}]);
+      queueMicrotask(()=>{stream.push({type:"done",reason:answer.stopReason,message:answer});stream.end(answer);});
+      return stream;
+    };
+    await current.session.prompt("继续同一合成任务。",{source:"rpc"});
+    assert.ok(captured.events.some(event=>event.tool_call_id==="sdk-resumed-review" && event.phase==="end"));
   } finally {current?.session.dispose();captured.restore();await rm(options.cwd,{recursive:true,force:true});}
 });
 
@@ -164,7 +181,7 @@ test("stdin abort reaches actual SDK signal and retains an unknown write receipt
     // tool execution, cancellation signal and host protocol are the real SDK.
     const wrapper = join(options.cwd,"sdk/dist");
     await mkdir(wrapper,{recursive:true});
-    await writeFile(join(options.cwd,"sdk/package.json"),JSON.stringify({type:"module",version:"1.3.0"}));
+    await writeFile(join(options.cwd,"sdk/package.json"),JSON.stringify({type:"module",version:"1.4.0"}));
     await writeFile(join(wrapper,"index.js"),`
       export * from ${JSON.stringify(pathToFileURL(modulePath).href)};
       import {createAgentSession as open} from ${JSON.stringify(pathToFileURL(modulePath).href)};

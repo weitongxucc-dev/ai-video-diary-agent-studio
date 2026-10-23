@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const PI_VERSION = "1.3.0";
+export const PI_VERSION = "1.4.0";
 const resources = dirname(fileURLToPath(import.meta.url));
 
 /** One SDK session owns the model loop, history, compaction and input queues.

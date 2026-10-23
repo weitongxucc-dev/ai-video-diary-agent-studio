@@ -47,7 +47,7 @@ def isolated_host_preflight(monkeypatch):
 def _install_model_stream(monkeypatch, stream):
     def version(cmd, **_kwargs):
         assert cmd[-1] == "--version"
-        return sdk_completed(cmd, 0, stdout=("1.3.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+        return sdk_completed(cmd, 0, stdout=("1.4.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
     monkeypatch.setattr(pi_module.subprocess, "run", version)
     monkeypatch.setattr(pi_module, "_run_pi_streaming", stream)
 
