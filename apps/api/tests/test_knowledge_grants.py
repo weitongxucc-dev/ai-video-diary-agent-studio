@@ -7,6 +7,7 @@ import pytest
 from app.local_members import LocalMemberService
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
+from app.source_types import source_item_identity
 
 
 def test_grant_survives_reopen_and_revoke_blocks_reads_and_fixed_references(tmp_path):
@@ -56,13 +57,27 @@ def test_grant_survives_reopen_and_revoke_blocks_reads_and_fixed_references(tmp_
     referenced = repo.get_knowledge_reference_readable_by("workspace-b", item.id, "1", user_id=reader.member_id)
     assert referenced.body == fixed.body and referenced.workspace_id == "workspace-a"
     assert referenced.owner_user_id == uploader.member_id
+    window_args = {'kind': 'knowledge', 'object_id': item.id, 'version_or_identity': '1',
+                   'user_id': reader.member_id, 'offset': 1, 'limit': 3}
+    window = repo.read_fixed_reference_window('workspace-b', **window_args)
+    assert window['status'] == 'matched'
+    assert (window['text'], window['total_chars'], window['content_digest']) == ('一版原', 5, 'hash-v1')
+    assert window['text_offset'] == 1 and window['truncated']
+    assert repo.read_fixed_reference_window('workspace-b', **{**window_args, 'version_or_identity': 'unknown'})['status'] == 'missing'
+    assert repo.read_fixed_reference_window('workspace-b', **{**window_args, 'offset': 5})['text'] == ''
+    with pytest.raises(ValueError):
+        repo.read_fixed_reference_window('workspace-b', **{**window_args, 'limit': 8001})
+    with pytest.raises(ValueError):
+        repo.read_fixed_reference_window('workspace-b', **{**window_args, 'user_id': None})
     repo.set_knowledge_item_use_state("workspace-a", item.id, "excluded")
+    assert repo.read_fixed_reference_window('workspace-b', **window_args)['status'] == 'unavailable'
     assert repo.list_knowledge_items_readable_by("workspace-b", user_id=reader.member_id) == []
     with pytest.raises(KeyError):
         repo.get_knowledge_reference_readable_by(
             "workspace-b", item.id, "1", user_id=reader.member_id
         )
     repo.set_knowledge_item_use_state("workspace-a", item.id, "available")
+    assert repo.read_fixed_reference_window('workspace-c', **window_args)['status'] == 'unavailable'
     with pytest.raises(KeyError):
         repo.get_knowledge_item_readable_by("workspace-c", item.id, user_id=reader.member_id)
     revoked = repo.revoke_knowledge_grant("workspace-a", item.id, grant.id, user_id=uploader.member_id)
@@ -78,6 +93,21 @@ def test_grant_survives_reopen_and_revoke_blocks_reads_and_fixed_references(tmp_
     assert repo.get_knowledge_item("workspace-a", item.id).owner_user_id == uploader.member_id
     assert [snapshot.version for snapshot in repo.list_knowledge_item_versions("workspace-a", item.id)] == ["1", "2"]
     assert repo.list_knowledge_grants("workspace-a", item.id, user_id=uploader.member_id) == [revoked]
+    assert repo.read_fixed_reference_window('workspace-b', **window_args)['status'] == 'unavailable'
+
+    source_args = {'kind': 'source', 'object_id': source.id, 'version_or_identity': source_item_identity(source),
+                   'user_id': uploader.member_id, 'offset': 1, 'limit': 3}
+    assert repo.read_fixed_reference_window('workspace-a', **source_args)['text'] == '一版原'
+    assert repo.read_fixed_reference_window('workspace-b', **source_args)['status'] == 'missing'
+    repo.save_source_items('workspace-a', [replace(source, body='同一ID的后来正文')])
+    changed_window = repo.read_fixed_reference_window('workspace-a', **source_args)
+    assert changed_window['status'] == 'changed' and 'text' not in changed_window
+    unknown_window = repo.read_fixed_reference_window('workspace-a', **{**source_args, 'version_or_identity': None})
+    assert unknown_window['status'] == 'unknown' and 'text' not in unknown_window
+    subtitle_source = replace(source, body=None, subtitles='字幕中的原依据')
+    repo.save_source_items('workspace-a', [subtitle_source])
+    assert repo.read_fixed_reference_window('workspace-a', **{**source_args,
+        'version_or_identity': source_item_identity(subtitle_source), 'offset': 0})['text'] == '字幕中'
 
 
 def test_only_original_uploader_can_grant_or_revoke(tmp_path):
@@ -94,6 +124,9 @@ def test_only_original_uploader_can_grant_or_revoke(tmp_path):
     grant = repo.grant_knowledge_item("workspace-a", item.id, "workspace-b", user_id="uploader-a")
     fixed = repo.get_knowledge_version_readable_by("workspace-b", item.id, "1", user_id="reader-b")
     assert fixed.body == item.body and fixed.content_hash is None
+    window = repo.read_fixed_reference_window('workspace-b', kind='knowledge', object_id=item.id,
+        version_or_identity='1', user_id='reader-b')
+    assert window['status'] == 'unknown' and 'text' not in window
     with pytest.raises(KeyError):
         repo.get_knowledge_version_readable_by("workspace-b", item.id, "2", user_id="reader-b")
     with pytest.raises(KeyError):

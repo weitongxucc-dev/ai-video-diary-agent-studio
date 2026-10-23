@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -19,6 +20,7 @@ from app.source_types import (
     SourceConnector,
     SourceItem,
     SourceRunEvidence,
+    source_item_identity,
 )
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
@@ -1032,6 +1034,69 @@ class SourceRepository:
             parameters=snapshot.parameters, fetched_at=snapshot.fetched_at,
             source_url=snapshot.source_url,
         )
+
+    def read_fixed_reference_window(
+        self, workspace_id: str, *, kind: str, object_id: str,
+        version_or_identity: str | None, user_id: str | None,
+        local_diagnostic: bool = False, offset: int = 0, limit: int = 3000,
+    ) -> dict[str, object]:
+        """Read a fixed reference under today's permission, without editing it.
+
+        Knowledge text is sliced in SQL. SourceItem identity still covers its
+        complete existing record; the returned window digest cannot replace it.
+        """
+        self._require_workspace(workspace_id)
+        if user_id is None and not local_diagnostic:
+            raise ValueError('读取固定来源必须带已验证身份')
+        if kind not in {'knowledge', 'source'}:
+            raise ValueError('未知固定来源类型')
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 8000:
+            raise ValueError('固定来源正文需要非负偏移和1–8000字窗口')
+        result = {'version_or_identity': version_or_identity, 'text_offset': offset, 'truncated': False}
+        if not isinstance(version_or_identity, str) or not version_or_identity.strip():
+            return {**result, 'status': 'unknown', 'reason_code': 'fixed_reference_binding_missing'}
+        with self._connect() as conn:
+            conn.execute('BEGIN')
+            if kind == 'source':
+                row = conn.execute('SELECT * FROM source_items WHERE workspace_id=? AND id=?',
+                    (workspace_id, object_id)).fetchone()
+                if row is None:
+                    return {**result, 'status': 'missing', 'reason_code': 'fixed_source_missing'}
+                source = self._source_item_from_row(row)
+                if not content_allows_use(source.use_state, 'reference'):
+                    return {**result, 'status': 'unavailable', 'reason_code': 'reference_use_unavailable'}
+                if source_item_identity(source) != version_or_identity:
+                    return {**result, 'status': 'changed', 'reason_code': 'fixed_source_changed'}
+                body = source.body or source.subtitles or ''
+                title, content_hash, total, text = source.title, source.content_hash, len(body), body[offset:offset+limit]
+            else:
+                access = "workspace_id=:workspace_id AND use_state!='excluded'" if local_diagnostic else self._knowledge_access_clause()
+                parameters = {'workspace_id': workspace_id, 'item_id': object_id, 'user_id': user_id,
+                    'private': CONTENT_VISIBILITY_DEFAULT, 'shared': CONTENT_VISIBILITY_LEGACY}
+                item = conn.execute(f'SELECT workspace_id,version,use_state FROM knowledge_items WHERE id=:item_id AND {access}',
+                    parameters).fetchone()
+                if item is None or not content_allows_use(item['use_state'], 'reference'):
+                    # No distinction that reveals a private item in another workspace.
+                    return {**result, 'status': 'unavailable', 'reason_code': 'fixed_reference_unavailable'}
+                fixed = conn.execute(
+                    "SELECT title,content_hash,length(coalesce(body,'')) AS total_chars,"
+                    "substr(coalesce(body,''),?,?) AS text FROM knowledge_item_versions "
+                    "WHERE workspace_id=? AND knowledge_item_id=? AND version=?",
+                    (offset+1, limit, item['workspace_id'], object_id, version_or_identity)).fetchone()
+                if fixed is None and item['version'] == version_or_identity:
+                    fixed = conn.execute(
+                        "SELECT title,content_hash,length(coalesce(body,'')) AS total_chars,"
+                        "substr(coalesce(body,''),?,?) AS text FROM knowledge_items "
+                        "WHERE workspace_id=? AND id=? AND version=?",
+                        (offset+1, limit, item['workspace_id'], object_id, version_or_identity)).fetchone()
+                if fixed is None:
+                    return {**result, 'status': 'missing', 'reason_code': 'fixed_reference_version_missing'}
+                if not fixed['content_hash']:
+                    return {**result, 'status': 'unknown', 'reason_code': 'fixed_reference_hash_missing'}
+                title, content_hash, total, text = fixed['title'], fixed['content_hash'], fixed['total_chars'], fixed['text']
+        return {**result, 'status': 'matched', 'title': title, 'text': text, 'total_chars': total,
+            'truncated': offset > 0 or offset + len(text) < total,
+            'content_digest': content_hash, 'window_digest': hashlib.sha256(text.encode('utf-8')).hexdigest()}
 
     def read_knowledge_original(
         self, workspace_id: str, item_id: str, version: str, *,

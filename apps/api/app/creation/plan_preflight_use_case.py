@@ -14,7 +14,7 @@ from app.production import (CreationPlan, CreationPlanBlocker, CreationPlanKnowl
     CreationPlanPronunciationReference, CreationPlanSourceReference, ProductionRepository, VideoTemplate)
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository
-from app.source_types import SourceItem
+from app.source_types import SourceItem, source_item_identity
 
 
 @dataclass(frozen=True)
@@ -44,36 +44,6 @@ class CreationPlanPreflightRejected(RuntimeError):
     def __init__(self, code: PreflightRejectionCode, message: str):
         super().__init__(message)
         self.code, self.message = code, message
-
-
-def source_item_identity(item: SourceItem) -> str:
-    """Return a non-secret identity for the exact SourceItem snapshot in a Plan."""
-    return hashlib.sha256(
-        json.dumps(
-            {
-                "id": item.id,
-                "connector_id": item.connector_id,
-                "source_label": item.source_label,
-                "source_url": item.source_url,
-                "content_type": item.content_type,
-                "author": item.author,
-                "published_at": item.published_at.isoformat()
-                if item.published_at is not None
-                else None,
-                "body": item.body,
-                "subtitles": item.subtitles,
-                "media_references": list(item.media_references),
-                "license": item.license,
-                "title": item.title,
-                "file_reference": item.file_reference,
-                "created_at": item.created_at.isoformat(),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-
 
 
 class CreationPlanPreflightUseCase:
