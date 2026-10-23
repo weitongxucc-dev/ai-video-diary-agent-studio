@@ -25,6 +25,50 @@ def request(call, identity, end=False):
             "tool_call_id": call, "request_id": identity, "write": True, "timeout_ms": 120000}
 
 
+@pytest.mark.parametrize('status',['started','completed','cancelled','failed'])
+def test_compaction_projection_keeps_estimates_usage_and_the_actual_end_reason(status):
+    event={'type':'compaction_start' if status=='started' else 'compaction_end','reason':'threshold',
+        'contextUsage':{'tokens':112607,'contextWindow':1000000}}
+    if status=='completed':
+        event['result']={'tokensBefore':112607,'estimatedTokensAfter':23000,'summary':'PRIVATE_PROMPT',
+            'usage':{'input':61000,'output':2800,'totalTokens':63800,'cost':{'private':'not copied'}}}
+    if status=='cancelled':event['aborted']=True
+    if status=='failed':event['errorMessage']='Summarization failed: PRIVATE_USER_PROMPT PRIVATE_PROFILE api_key=private-key https://private.invalid/request'
+    value=_PiStreamProjector().project(json.dumps(event))
+    assert value['type']=='context_compaction' and value['status']==status and value['trigger']=='threshold'
+    if status=='started':
+        assert value['sdk_estimate']['tokens_before']==112607 and 'provider_usage' not in value
+    if status=='completed':
+        assert value['sdk_estimate']['tokens_before']==112607
+        assert value['provider_usage']=={'input':61000,'output':2800,'totalTokens':63800}
+    if status=='failed':
+        assert value['failure_origin']=='sdk' and value['reason_code']=='sdk_error_unknown'
+    if status=='cancelled':assert value['failure_origin']=='sdk_abort'
+    assert not any(secret in json.dumps(value) for secret in ('PRIVATE_PROMPT','PRIVATE_USER_PROMPT','PRIVATE_PROFILE','private-key','private.invalid'))
+
+
+def test_compaction_deadline_keeps_the_host_cause_and_late_sdk_abort(tmp_path):
+    events=[]
+    script='''import json,sys
+json.loads(sys.stdin.readline())
+print(json.dumps({'type':'compaction_start','reason':'threshold','contextUsage':{'tokens':112607,'contextWindow':1000000}}),flush=True)
+assert json.loads(sys.stdin.readline())['type']=='diary_abort'
+print(json.dumps({'type':'compaction_end','reason':'threshold','aborted':True}),flush=True)
+print(json.dumps({'type':'diary_abort_ack'}),flush=True)
+'''
+    with pytest.raises(AssistantPhaseTimeout) as failure:
+        run_pi_streaming([sys.executable,'-u','-c',script],message=json.dumps({'controlEnabled':True})+'\n',
+            env={'PATH':os.environ['PATH']},cwd=tmp_path,timeout_seconds=.1,on_event=events.append,
+            control=TurnControl(_terminate_process_group),terminate=_terminate_process_group,
+            projector_factory=_PiStreamProjector,business_event_lines=_business_event_lines)
+    assert failure.value.phase=='compaction'
+    assert [(event['status'],event.get('failure_origin')) for event in events]==[
+        ('started',None),('cancelled','host_deadline'),('cancelled','sdk_abort')]
+    assert all(event['trigger']=='threshold' for event in events)
+    assert events[1]['limit_seconds']==.1
+    assert all('provider_usage' not in event for event in events)
+
+
 def test_two_slow_business_requests_do_not_spend_either_model_call_budget():
     clock = _PhaseDeadlines(180, 0)
     for at, event in [(0, {"type": "turn_start"}),

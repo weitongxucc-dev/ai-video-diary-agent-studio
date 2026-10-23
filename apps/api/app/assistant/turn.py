@@ -109,6 +109,7 @@ def run_turn(
             on_event(event)
 
     model_message = message
+    task_context = None
     memory_facts = None
     try:
         if caller_user_id:
@@ -138,19 +139,18 @@ def run_turn(
                     control.forget(turn_id)
                     raise AssistantStopped("assistant turn stopped during task preflight")
             bind_task_capabilities(env, facts)
-            facts_text = json.dumps(facts, ensure_ascii=False)
-            prompt += "\n宿主发送前已实际读取本轮任务事实（不是历史对话）：\n" + facts_text
-            model_message = task_message(facts, message, continuation_context)
+            task_context = facts
+            model_message = task_message(facts, message, continuation_context, source_binding)
         model_message = memory_message(model_message, memory_facts)
         if creation_request is not None:
             context = creation_goal_context(creation_request)
             prompt += "\n" + context
             model_message = context + "\n" + model_message
-        model_message = envelope + model_message
         model_message = json.dumps({
             "modulePath": env["AI_VIDEO_DIARY_AGENT_PI_MODULE"], "cwd": str(runtime_root),
             "sessionDir": str(root / "sessions"), "sessionId": str(session_id),
-            "modelId": model, "systemPrompt": prompt, "extensionPath": str(extension),
+            "modelId": model, "modelProvider": settings.effective_llm_provider,
+            "taskContext": task_context, "systemPrompt": prompt, "extensionPath": str(extension),
             "tools": tool_names.split(","), "message": model_message, "inputEnabled": input_handler is not None,
             "controlEnabled": True,
             "businessEnabled": business_handler is not None,

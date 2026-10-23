@@ -26,6 +26,7 @@ class _PhaseDeadlines:
         self.turn_open = False
         self.model_open = False
         self.compacting = False
+        self.compaction_reason = None
         self.tools: dict[str, dict] = {}
         self.requests: dict[str, tuple[str, float]] = {}
         self.seen_requests: set[str] = set()
@@ -62,6 +63,7 @@ class _PhaseDeadlines:
             self.turn_open = self.model_open = False
         elif kind == "compaction_start" and not self.compacting and not self.tools:
             self.compacting = True
+            self.compaction_reason = event.get('reason') if event.get('reason') in {'manual','threshold','overflow'} else None
             self.phase, self.deadline = "compaction", now + self.seconds
         elif kind == "compaction_end" and self.compacting:
             self.compacting = False
@@ -300,7 +302,8 @@ def run_pi_streaming(
             return
         for business_line in business_event_lines(line, seen_business_calls):
             projected = projector.project(business_line)
-            if projected is not None and (not cancelling or projected.get("type") == "tool_end"):
+            if projected is not None and (not cancelling or projected.get("type") == "tool_end"
+                    or projected.get('type') == 'context_compaction' and projected.get('status') != 'started'):
                 on_event(projected)
 
     def cancel_and_collect() -> None:
@@ -388,6 +391,9 @@ def run_pi_streaming(
             raise AssistantStopped("assistant turn stopped") from exc
         raise
     except subprocess.TimeoutExpired as exc:
+        if isinstance(exc,AssistantPhaseTimeout) and exc.phase == 'compaction':
+            on_event({'type':'context_compaction','status':'cancelled','trigger':phases.compaction_reason,
+                'failure_origin':'host_deadline','limit_seconds':exc.timeout})
         cancel_and_collect()
         exc.output, exc.stderr = "".join(output_lines), "".join(error_lines)
         raise

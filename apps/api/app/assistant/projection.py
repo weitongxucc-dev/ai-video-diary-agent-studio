@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from app.assistant.catalogue import _PI_TOOL_LABELS
 
@@ -240,6 +241,30 @@ def _business_event_lines(output: str, seen: set[str] | None = None):
         yield line
 
 
+def _safe_compaction_event(value: dict) -> dict | None:
+    if value.get('type') != 'context_compaction' or value.get('status') not in {'started','completed','cancelled','failed'}:
+        return None
+    safe = {'type':'context_compaction','status':value['status'],
+        'trigger':value.get('trigger') if value.get('trigger') in {'manual','threshold','overflow'} else None}
+    for field,keys in (('sdk_estimate',{'tokens_before','tokens_after','context_window'}),
+            ('provider_usage',{'input','output','cacheRead','cacheWrite','totalTokens'})):
+        if isinstance(value.get(field),dict):
+            safe[field] = {key:number for key,number in value[field].items() if key in keys and type(number) is int and number >= 0}
+    if value.get('failure_origin') in {'sdk','sdk_abort','host_deadline'}:
+        safe['failure_origin'] = value['failure_origin']
+        # Upstream error bodies can echo prompts and credentials. Persist only
+        # controlled classes and descriptions, never the supplied error text.
+        code,description = {
+            'sdk':('sdk_error_unknown','SDK报告上下文压缩失败，具体上游原因尚未核实。'),
+            'sdk_abort':('sdk_abort','SDK上下文压缩已取消，原会话保留。'),
+            'host_deadline':('host_deadline','宿主压缩阶段等待截止，不能据此判定供应商已接收或失败。'),
+        }[value['failure_origin']]
+        safe['reason_code'],safe['reason'] = code,description
+    if type(value.get('limit_seconds')) in {int,float} and math.isfinite(value['limit_seconds']) and value['limit_seconds'] > 0:
+        safe['limit_seconds'] = value['limit_seconds']
+    return safe
+
+
 class _PiStreamProjector:
     """Project SDK events into a small UI-safe event vocabulary."""
 
@@ -253,6 +278,26 @@ class _PiStreamProjector:
         except json.JSONDecodeError:
             return None  # The SDK result reader reports malformed protocol messages.
         event_type = event.get("type")
+        if event_type in {'compaction_start','compaction_end'}:
+            started = event_type == 'compaction_start'
+            result = event.get('result') or {}
+            status = ('started' if started else 'cancelled' if event.get('aborted') is True
+                else 'failed' if event.get('errorMessage') or not result else 'completed')
+            projected = {'type':'context_compaction','status':status,
+                'trigger':event.get('reason') if event.get('reason') in {'manual','threshold','overflow'} else None}
+            estimates = ({'tokens_before':(event.get('contextUsage') or {}).get('tokens'),
+                'context_window':(event.get('contextUsage') or {}).get('contextWindow')} if started else
+                {'tokens_before':result.get('tokensBefore'),'tokens_after':result.get('estimatedTokensAfter')})
+            projected['sdk_estimate'] = {key:value for key,value in estimates.items() if type(value) is int and value >= 0}
+            usage = result.get('usage')
+            if isinstance(usage,dict):
+                projected['provider_usage'] = {key:value for key,value in usage.items()
+                    if key in {'input','output','cacheRead','cacheWrite','totalTokens'} and type(value) is int and value >= 0}
+            if status == 'failed':
+                projected['failure_origin'] = 'sdk'
+            elif status == 'cancelled':
+                projected['failure_origin'] = 'sdk_abort'
+            return _safe_compaction_event(projected)
         if event_type == "message_update":
             update = event.get("assistantMessageEvent")
             if isinstance(update, dict) and update.get("type") == "text_delta":

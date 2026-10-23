@@ -52,7 +52,7 @@ from app.assistant_pi import (
     request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
-from app.assistant.projection import _safe_business_failure
+from app.assistant.projection import _safe_business_failure, _safe_compaction_event
 from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection, GoalProjectionRejected
 from app.conversation_repository import (
     ConversationDraftVersionConflict,
@@ -7325,6 +7325,11 @@ def _assistant_stream_response(
 
     def publish(raw_event: dict[str, object]) -> None:
         event_type = raw_event.get("type")
+        if event_type == 'context_compaction':
+            diagnostic = _safe_compaction_event(raw_event)
+            if diagnostic is not None and turn_ref['id']:
+                stream_conversation_repo.append_event(turn_ref['id'],diagnostic)
+            return  # Diagnostic history does not extend the existing SSE schema.
         if event_type == "text_delta" and isinstance(raw_event.get("delta"), str):
             delta = text_sanitizer.feed(str(raw_event["delta"]))
             if not delta:
@@ -14667,6 +14672,11 @@ def _run_goal_turn(claim, fresh):
         return
     sanitizer = _AssistantStreamTextSanitizer(workspace_id)
     def on_event(event):
+        if event.get('type') == 'context_compaction':
+            diagnostic = _safe_compaction_event(event)
+            if diagnostic is not None:
+                conversation_repo.append_event(turn_id,diagnostic)
+            return
         if event.get("type") == "text_delta":
             delta = sanitizer.feed(str(event.get("delta", "")))
             if delta:

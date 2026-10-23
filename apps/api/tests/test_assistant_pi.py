@@ -465,33 +465,84 @@ def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
     assert "fixture-secret-123" not in redacted
 
 
-def test_assistant_stream_response_sends_safe_events_then_authoritative_result(monkeypatch):
+def test_assistant_stream_response_sends_safe_events_then_authoritative_result(monkeypatch,tmp_path):
     monkeypatch.setattr(main_module, "_workspace_settings_for",
                         lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
+    repo=ConversationRepository(tmp_path/'stream.sqlite')
+    chat=repo.current_or_create('local','member','home','home')
+    draft=repo.save_draft(chat['id'],'local','member','原委托',0)
+    turn,_=repo.create_turn_idempotent(chat['id'],'local','member','原委托','request',draft['draft_version'])
+    monkeypatch.setattr(main_module,'conversation_repo',repo)
     app = FastAPI()
 
     @app.get("/assistant-stream")
     def stream():
         def execute(publish):
+            diagnostic=_PiStreamProjector().project(json.dumps({'type':'compaction_end','reason':'threshold',
+                'errorMessage':'PRIVATE_USER_PROMPT PRIVATE_PROFILE fixture-secret-123'}))
+            publish({**diagnostic,
+                'sdk_estimate':{'tokens_before':112607,'raw_prompt':'PRIVATE_CONTEXT'},
+                'reason':'压缩SDK失败 fixture-secret-123','summary':'PRIVATE_CONTEXT','provider_usage':{'input':61000,'cost':99}})
             publish({"type": "text_delta", "delta": "输出 fixture-secret-"})
             publish({"type": "tool_start", "tool_id": 1, "label": "读取当前任务", "args": {"path": "/private/key"}})
             publish({"type": "text_delta", "delta": "123 完成"})
             publish({"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
                      "summary": "当前任务和所选对象状态已读取。", "result": {"token": "fixture-secret-123"}})
             return SimpleNamespace(model_dump=lambda mode: {"reply": "当前制作条件已回读。"})
-        return main_module._assistant_stream_response(execute, workspace_id="local")
+        return main_module._assistant_stream_response(execute, workspace_id="local",turn_id=turn['id'])
 
     response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
-    assert [event["type"] for event in events] == ["text_delta", "tool_start", "text_delta", "tool_end", "result"]
+    assert [event["type"] for event in events] == ["turn_started", "text_delta", "tool_start", "text_delta", "tool_end", "turn_status", "result"]
+    assert events[0]['turn_id'] == turn['id']
     streamed_text = "".join(event.get("delta", "") for event in events if event["type"] == "text_delta")
     assert "fixture-secret-123" not in streamed_text and "[已隐藏凭据]" in streamed_text
-    assert events[1] == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
-    assert events[3] == {"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+    assert events[2] == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    assert events[4] == {"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
                          "summary": "当前任务和所选对象状态已读取。"}
     assert events[-1]["result"]["reply"] == "当前制作条件已回读。"
+    diagnostic=repo.get_turn(turn['id'])['events'][0]
+    assert diagnostic['type']=='context_compaction' and diagnostic['status']=='failed'
+    assert diagnostic['sdk_estimate']=={'tokens_before':112607} and diagnostic['provider_usage']=={'input':61000}
+    assert diagnostic['reason_code']=='sdk_error_unknown'
+    assert all(secret not in json.dumps(repo.get_turn(turn['id'])['events'])
+        for secret in ('PRIVATE_CONTEXT','PRIVATE_USER_PROMPT','PRIVATE_PROFILE','fixture-secret-123'))
+
+
+def test_background_goal_turn_persists_the_same_finite_compaction_diagnostic(monkeypatch,tmp_path):
+    repo=ConversationRepository(tmp_path/'background.sqlite')
+    chat=repo.current_or_create('local','member','home','home')
+    raw='保留原委托，未知动作先查原请求。'
+    draft=repo.save_draft(chat['id'],'local','member',raw,0)
+    turn,_=repo.create_turn_idempotent(chat['id'],'local','member',raw,'request',draft['draft_version'])
+    monkeypatch.setattr(main_module,'conversation_repo',repo)
+    monkeypatch.setattr(main_module,'assistant_continuation_driver',None)
+    monkeypatch.setattr(main_module,'_workspace_settings_for',lambda _:SimpleNamespace(effective_llm_api_key='fixture-secret-123'))
+    task=SimpleNamespace(confirmed_script_id=None,stage='montage')
+    monkeypatch.setattr(main_module,'_creation_task_or_404',lambda *_:task)
+    monkeypatch.setattr(main_module,'_assistant_turn_scope',lambda *_:('montage',[]))
+    business=SimpleNamespace(native_case=None,original=lambda *_:(None,task,None),native_call=None,input_delivery=lambda _:None)
+    def run(_settings,**kwargs):
+        assert kwargs['message']==raw
+        kwargs['on_event']({'type':'context_compaction','status':'cancelled','trigger':'threshold',
+            'failure_origin':'host_deadline','limit_seconds':180,'reason':'host截止 fixture-secret-123',
+            'prompt':'PRIVATE_CONTEXT','sdk_estimate':{'tokens_before':112607,'raw_prompt':'PRIVATE_CONTEXT'}})
+        raise AssistantUnavailable('宿主压缩阶段截止，不证明provider已接收。')
+    monkeypatch.setattr(main_module,'run_task_turn',run)
+    goal={'task_id':'task','workspace_id':'local','member_id':'member','conversation_id':chat['id'],
+        'original_turn_id':turn['id'],'original_instruction':raw,'round_count':1,'target_snapshot':{},
+        'unfinished_steps':['read_original'],'handled_event_ids':[]}
+    main_module._run_goal_turn({'goal':goal,'turn_id':turn['id'],'request_context':{'stage':'montage'},
+        'event':{'status':'succeeded'},'phase':'business'}, {'business':business,'facts':{},'task_version':{}})
+    saved=repo.get_turn(turn['id'])
+    assert saved['status']=='failed' and saved['user_message']==raw
+    diagnostic=saved['events'][0]
+    assert diagnostic['type']=='context_compaction' and diagnostic['failure_origin']=='host_deadline'
+    assert diagnostic['limit_seconds']==180 and diagnostic['sdk_estimate']=={'tokens_before':112607}
+    assert 'provider_usage' not in diagnostic
+    assert 'PRIVATE_CONTEXT' not in json.dumps(diagnostic) and 'fixture-secret-123' not in json.dumps(diagnostic)
 
 
 def test_assistant_stream_reports_version_rejection_before_turn_started(monkeypatch):
@@ -743,6 +794,11 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
     captured = {}
+    schema = {'type':'object','properties':{'operation_type':{'type':'string'}}}
+    monkeypatch.setattr(pi_module,'_read_task_before_pi',lambda *_args:{'task_id':'task-1',
+        'current_timeline_version_id':'read-version','timeline_sequence':7,'selected_refs':['clip:clip-1'],
+        'script_context':{'content':'TASK_FACTS_SENTINEL'},'_edit_capabilities':{'task_id':'task-1',
+        'schema':schema,'operations':[{'operation_type':'TrimClip','available':True,'parameter_fields':['large_catalog']} ]}})
 
     def fake_stream(cmd, **kwargs):
         captured.update(cmd=cmd, kwargs=kwargs)
@@ -757,8 +813,20 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
                                     message="请说明当前任务", stage="montage",
                                     selected_refs=["clip:clip-1"], playhead_ms=1200)
     assert (answer, preview) == ("收到。", None)
-    model_input = json.loads(json.loads(captured["kwargs"]["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
+    payload = json.loads(captured['kwargs']['message'])
+    model_input = json.loads(payload["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert model_input["original_user_instruction"] == "请说明当前任务"
+    assert model_input['task_binding']['current_timeline_version_id'] == 'read-version'
+    assert model_input['task_binding']['timeline_sequence'] == 7
+    assert 'current_task_facts' not in model_input
+    assert 'TASK_FACTS_SENTINEL' not in payload['message'] + payload['systemPrompt']
+    assert captured['kwargs']['message'].count('TASK_FACTS_SENTINEL') == 1
+    assert payload['taskContext']['edit_capabilities']['read_tool'] == 'read_task_edit_capabilities'
+    assert 'read_task_edit_capabilities' in payload['tools']
+    assert payload['taskContext']['edit_capabilities']['available_operation_count'] == 1
+    assert 'operations' not in payload['taskContext']['edit_capabilities']
+    assert json.loads(captured['kwargs']['env']['AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES'])['schema'] == schema
+    assert payload['modelProvider'] == 'minimax'
     assert captured["kwargs"]["env"]["PATH"].split(__import__("os").pathsep)[0] == str(fake_pi.parent)
     assert captured["kwargs"]["env"]["AI_VIDEO_DIARY_LLM_KEY"] == "private-test-key"
     assert "private-test-key" not in " ".join(captured["cmd"])
