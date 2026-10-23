@@ -118,6 +118,17 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
           else break;
         } while (!signal?.aborted);
         if (signal?.aborted) throw new Error('aborted');
+        if (receipt.status==='failed') {
+          const released=['released','not_acquired'].includes(receipt.release_state);
+          if (released) unresolvedCommands.delete(commandKey);
+          call.executionFailure={error:'native_command_failed',failure_category:'execution_failed',stage:'native_execution',
+            reason:receipt.failure_reason || '原程序执行已记录失败，请查询该作业的具体回执。',
+            repair_action:(receipt.repair_action || '先读取原执行回执，修复已确认的原因后再决定下一步；不要原样重放命令。')
+              +(released?'':' 进程退出或资源释放尚未证实，先沿原请求查询，不能视为已经释放。'),
+            request_id,job_id:receipt.job_id,query_tool:'read_task_command',
+            submission_effect:receipt.submission_effect ?? 'unknown'};
+          throw new Error(call.executionFailure.reason);
+        }
         if (!['released','not_acquired'].includes(receipt.release_state)) throw new Error('原进程或资源释放尚未证实；请回读原请求，不重放命令');
         unresolvedCommands.delete(commandKey);
         onData(Buffer.from(receipt.output,'utf8'));
@@ -203,6 +214,9 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
           unresolvedFiles.delete(call.fileKey);call.recoveredMkdir=pendingFile.path;
         }
         const result=await tool.execute(id,tool.name==='read'?{path:params.path,offset:1}:params,signal,onUpdate,{...ctx,cwd:'/task/work'});
+        // The SDK may catch operations.exec errors. Its generic missing-exit-code
+        // message must not overwrite the owner's confirmed failure receipt.
+        if (call.executionFailure) throw new Error(call.executionFailure.reason);
         const native=call.command?{request_id:call.command.request_id ?? identity(id,'command'),job_id:call.command.job_id,
           status:call.command.status,process_state:call.command.process_state,release_state:call.command.release_state,truncated:call.command.truncated}:call.fileReceipt;
         const note=call.window?`原文件窗口：${JSON.stringify(call.window)}。窗口外未读取不代表不存在。`:
@@ -215,7 +229,7 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
         return {...result,content,details:{...result.details,native_execution:native,read_window:call.window},
           ...(structured===undefined?{}:{structuredContent:structured})};
       } catch(error) {
-        const failure=error.failure ?? {reason:error.message,submission_effect:call.command || call.fileReceipt?'unknown':'not_submitted'};
+        const failure=call.executionFailure ?? error.failure ?? {reason:error.message,submission_effect:call.command || call.fileReceipt?'unknown':'not_submitted'};
         const details={failure:error.operation==='read_task_command' && (call.command || call.fileReceipt)
           ?{...failure,submission_effect:'unknown'}:failure,
           native_execution:call.command ?? call.fileReceipt};

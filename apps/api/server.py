@@ -143,6 +143,11 @@ def _exec_granted_command(arguments: list[str], *, cpu_mode: str | None = None, 
         print(f"GRANT_CPU_POLICY mode={cpu_mode} state=verified {marker} errno=0",
               file=sys.stderr, flush=True)
     try:
+        # Only the fixed host worker needs the bootloader context. A target
+        # executable receives its requested environment without these internals.
+        for key in tuple(os.environ):
+            if key.startswith(('_PYI_','PYINSTALLER_')):
+                os.environ.pop(key)
         os.execvp(arguments[1], arguments[1:])
     except OSError as exc:
         print(f"exec failed: {exc}", file=sys.stderr)

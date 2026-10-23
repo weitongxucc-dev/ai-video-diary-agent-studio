@@ -26,6 +26,25 @@ from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneR
 
 logger = logging.getLogger(__name__)
 _PERMISSION_SAMPLE_SECONDS = 1.0
+# PyInstaller's documented worker context, copied only from this trusted host.
+# The fixed server entry removes it again before executing the target program.
+_BOOTLOADER_WORKER_ENV = ('_PYI_ARCHIVE_FILE','_PYI_APPLICATION_HOME_DIR','_PYI_PARENT_PROCESS_LEVEL')
+
+
+def _worker_environment(environment):
+    if not getattr(sys,'frozen',False):
+        return environment
+    missing = [key for key in _BOOTLOADER_WORKER_ENV if not os.environ.get(key)]
+    if missing:
+        raise ValueError('打包启动器缺少当前宿主运行上下文：'+', '.join(missing))
+    child = dict(os.environ if environment is None else environment)
+    for key in tuple(child):
+        if key.startswith(('_PYI_','PYINSTALLER_')):
+            child.pop(key)
+    child.update({key:os.environ[key] for key in _BOOTLOADER_WORKER_ENV})
+    return child
+
+
 _QWEN_PHASE = re.compile(rb"QWEN_PHASE (?:worker_started|importing_runtime|loading_weights|weights_loaded|inference_started|inference_returned|audio_written)")
 _QWEN_MEMORY = re.compile(rb"QWEN_MEMORY phase=(?:cache_disabled|weights_loaded|inference_started|inference_returned|audio_written) active_bytes=[0-9]{1,20} cache_bytes=[0-9]{1,20} peak_bytes=[0-9]{1,20}")
 _CPU_POLICY = re.compile(rb"GRANT_CPU_POLICY mode=(?:darwin_background state=(?:verified background=1 errno=0|failed errno=[0-9]{1,10})|darwin_nice state=(?:verified nice=(?:[1-9]|1[0-9]|20) background=0 errno=0|failed errno=[0-9]{1,10}))")
@@ -94,7 +113,7 @@ class GrantedCommandCancelled(GrantedCommandError):
 
 
 class GrantedCommandOutputLimit(GrantedCommandError):
-    def __init__(self, message: str, *, file_sample: dict[str, int] | None = None):
+    def __init__(self, message: str, *, file_sample: dict[str, int | str] | None = None):
         self.file_sample = file_sample
         super().__init__(message)
 
@@ -372,6 +391,7 @@ def run_granted_command(
         child_entry = ["--grant-exec-nice", str(cpu_policy.nice)]
     else:
         raise RecoveryBlocked("受许可子进程CPU调度策略不可识别")
+    worker_env = _worker_environment(env)
     read_fd, write_fd = os.pipe()
     process: subprocess.Popen[bytes] | None = None
     child: ProcessIdentity | None = None
@@ -391,7 +411,7 @@ def run_granted_command(
             [*entrypoint, *child_entry, str(read_fd), *argv],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
-            env=env,
+            env=worker_env,
             cwd=cwd,
         )
         os.close(read_fd)
@@ -445,14 +465,17 @@ def run_granted_command(
             if max_output_file_bytes is not None:
                 output_size = 0
                 output_count = 0
-                for target in output_paths:
+                for root_index,target in enumerate(output_paths):
                     try:
                         path = Path(target)
                         if max_output_files is not None and path.is_dir():
                             for member in path.rglob('*'):
                                 output_count += 1
                                 if output_count>max_output_files:
-                                    raise GrantedCommandOutputLimit('任务工作文件数超过本次有限上限')
+                                    raise GrantedCommandOutputLimit(
+                                        f'任务工作目录条目超过本次有限上限：已观察{output_count}项，上限{max_output_files}项',
+                                        file_sample={'budget_kind':'file_count','actual_count':output_count,
+                                            'maximum_count':max_output_files,'output_root_index':root_index})
                                 if member.is_symlink():
                                     continue
                                 if member.is_file():

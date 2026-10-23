@@ -426,6 +426,7 @@ class NativeTaskOperations:
             'release_state':result.get('release_state','not_acquired' if job.attempt==0 else 'unknown'),
             'artifacts':result.get('artifacts',[]),'work_outputs':self.repository.native_output_window(job.workspace_id,job.id),
             'failure_reason':job.failure_reason,'repair_action':job.repair_action,'submission_effect':result.get('submission_effect'),
+            'output_file_sample':result.get('output_file_sample'),
             'waiting_reason':(requests[-1]['wait_reason'] or requests[-1]['last_failure_reason']) if requests else None}
 
     def verify_submission(self,intent,actor,owner,*,connection=None):
@@ -628,6 +629,8 @@ class NativeTaskOperations:
                 'unknown' if diagnostic else result['process_state'])
             result.update(cancelled=isinstance(exc,GrantedCommandCancelled),timed_out=isinstance(exc,GrantedCommandTimeout),
                 process_state=process_state,error=str(exc))
+            if diagnostic and diagnostic.get('output_file_sample') is not None:
+                result['output_file_sample']=diagnostic['output_file_sample']
             try:
                 if not locked or result['process_state'] not in {'exited','not_started'} or before is None or result['publication_in_progress']:
                     raise ValueError('原进程状态或同任务观测锁未确定，保留输出消耗未知')

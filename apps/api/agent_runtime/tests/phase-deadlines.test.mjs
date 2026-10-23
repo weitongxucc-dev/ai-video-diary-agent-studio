@@ -354,3 +354,34 @@ test('native command identity follows input and SDK round while unknown commands
   assert.equal(calls.filter(call=>call.operation==='register_task_artifacts').length,1);
   assert.equal(calls.findLast(call=>call.operation==='read_task_command').args.request_id,originalRegistration);
 });
+
+test('native failed receipt keeps the host reason without an exit code and preserves release uncertainty',async()=>{
+  const {createNativeTaskTools}=await import('../native-tools.mjs');
+  const sdk=await import(pathToFileURL(modulePath).href),calls=[];
+  let release='unknown';
+  const native=createNativeTaskTools({sdk,turnId:'failed-turn',inputId:'failed-input',callNative:async(operation,args)=>{
+    calls.push({operation,args});
+    if (operation==='open_task_working_context') return {ok:true,value:{command_budget:{status:'ready'},capabilities:{max_log_page_bytes:65536}}};
+    if (operation==='submit_task_command') return {ok:true,value:{request_id:args.request_id,job_id:'original-failed-job',status:'queued'}};
+    return {ok:true,value:{request_id:args.request_id,job_id:'original-failed-job',status:'failed',exit_code:null,
+      process_state:'exited',release_state:release,output:'',failure_reason:'任务工作文件数超过本次有限上限',
+      repair_action:'先核对宿主工作目录与计数范围，再决定后续动作。'}};
+  }});
+  const bash=native.tools.find(tool=>tool.name==='bash');
+  const first=await bash.execute('failed-one',{command:'echo ok'});
+  assert.equal(first.isError,true);
+  assert.equal(first.details.failure.reason,'任务工作文件数超过本次有限上限');
+  assert.equal(first.details.failure.failure_category,'execution_failed');
+  assert.equal(first.details.failure.submission_effect,'unknown');
+  assert.equal(first.details.native_execution.exit_code,null);
+  assert.equal(first.details.native_execution.release_state,'unknown');
+  assert.equal(first.details.failure.job_id,'original-failed-job');
+  assert.doesNotMatch(first.content[0].text,/Command terminated without an exit code/);
+  release='released';native.beginRound();
+  const settled=await bash.execute('failed-two',{command:'echo ok'});
+  assert.equal(settled.isError,true);
+  assert.equal(settled.details.native_execution.release_state,'released');
+  assert.equal(settled.details.failure.reason,first.details.failure.reason);
+  assert.equal(settled.details.failure.request_id,first.details.failure.request_id);
+  assert.equal(calls.filter(call=>call.operation==='submit_task_command').length,1);
+});

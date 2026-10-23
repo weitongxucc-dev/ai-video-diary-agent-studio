@@ -99,7 +99,10 @@ def grant_entry(request, tmp_path, monkeypatch):
     executable = tmp_path / "simulated-api-server"
     executable.write_text(
         f"#!{sys.executable}\n"
-        "import builtins, runpy, sys\n"
+        "import builtins, os, runpy, sys\n"
+        f"assert os.environ['_PYI_ARCHIVE_FILE'] == {str(executable)!r}\n"
+        f"assert os.environ['_PYI_APPLICATION_HOME_DIR'] == {str(tmp_path/'host-runtime')!r}\n"
+        "assert os.environ['_PYI_PARENT_PROCESS_LEVEL'] == '1'\n"
         "original_import = builtins.__import__\n"
         "def guarded_import(name, *args, **kwargs):\n"
         "    if name == 'uvicorn' or name == 'app' or name.startswith('app.'):\n"
@@ -110,9 +113,39 @@ def grant_entry(request, tmp_path, monkeypatch):
         f"runpy.run_path({str(server)!r}, run_name='__main__')\n"
     )
     executable.chmod(0o700)
+    monkeypatch.setenv('_PYI_ARCHIVE_FILE',str(executable))
+    monkeypatch.setenv('_PYI_APPLICATION_HOME_DIR',str(tmp_path/'host-runtime'))
+    monkeypatch.setenv('_PYI_PARENT_PROCESS_LEVEL','1')
     monkeypatch.setattr(commands, "sys", SimpleNamespace(
         executable=str(executable), frozen=True, platform=sys.platform,
     ))
+
+
+def test_frozen_worker_context_is_reused_without_reaching_target(tmp_path,monkeypatch,grant_entry):
+    scheduler=RecordingScheduler()
+    monkeypatch.setenv('UNRELATED_HOST_SECRET','synthetic-secret')
+    environment={'PATH':os.environ['PATH'],'TMPDIR':str(tmp_path),'SAFE_TARGET_VALUE':'retained',
+        '_PYI_APPLICATION_HOME_DIR':'untrusted-caller-value','PYINSTALLER_RESET_ENVIRONMENT':'1'}
+    result=run(scheduler,[sys.executable,'-c',
+        "import json,os; print(json.dumps({'safe':os.environ.get('SAFE_TARGET_VALUE'),"
+        "'secret':os.environ.get('UNRELATED_HOST_SECRET'),"
+        "'bootloader':[key for key in os.environ if key.startswith(('_PYI_','PYINSTALLER_'))]}))"],env=environment)
+    assert result.returncode==0,result.stderr
+    assert json.loads(result.stdout)=={'safe':'retained','secret':None,'bootloader':[]}
+    assert scheduler.processes.children_released(tuple(scheduler.children)) is True
+
+
+def test_task_file_count_failure_keeps_actual_limit_and_release_receipt(tmp_path):
+    scheduler=RecordingScheduler()
+    output=tmp_path/'task-output';output.mkdir()
+    for index in range(4): (output/str(index)).write_bytes(b'x')
+    with pytest.raises(GrantedCommandOutputLimit) as stopped:
+        run(scheduler,[sys.executable,'-c','import time;time.sleep(5)'],output_paths=(output,),
+            max_output_file_bytes=1024,max_output_files=3)
+    expected={'budget_kind':'file_count','actual_count':4,'maximum_count':3,'output_root_index':0}
+    assert stopped.value.file_sample==expected
+    assert stopped.value.command_diagnostics['output_file_sample']==expected
+    assert stopped.value.command_diagnostics['group_released'] is True
 
 
 def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
