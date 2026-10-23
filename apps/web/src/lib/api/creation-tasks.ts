@@ -33,8 +33,10 @@ export function confirmCreationTaskTopic(taskId: string, topicId: string, input:
 export function getCreationTaskWorkspace(taskId: string): Promise<CreationTaskWorkspace> {
     return creationPlanRequest<CreationTaskWorkspace>(`/api/creation-tasks/${encodeURIComponent(taskId)}`);
 }
-export function listCreationTaskTimelineVersions(taskId: string): Promise<CreationTaskTimelineVersionList> {
-    return creationPlanRequest<CreationTaskTimelineVersionList>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions`);
+export function listCreationTaskTimelineVersions(taskId: string, beforeSequence?: number): Promise<CreationTaskTimelineVersionList> {
+    const query = new URLSearchParams({limit: '20'});
+    if (beforeSequence !== undefined) query.set('before_sequence', String(beforeSequence));
+    return creationPlanRequest<CreationTaskTimelineVersionList>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions?${query}`);
 }
 export function getCreationTaskTimelineVersion(taskId: string, versionId: string): Promise<CreationTaskTimelineVersionDetail> {
     return creationPlanRequest<CreationTaskTimelineVersionDetail>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions/${encodeURIComponent(versionId)}`);
@@ -188,9 +190,14 @@ export function confirmCreationTaskEdit(taskId: string, proposalId: string): Pro
     return creationPlanRequest<CreationTaskEditResult>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/confirm`, { method: "POST", body: JSON.stringify({}) });
 }
 type TimelineRestoreInput = {
+    request_id: string;
+    target_operation_id?: string;
     expected_timeline_version_id: string | null;
     expected_timeline_sequence: number;
 };
+export function readCreationTaskTimelineRestore(taskId: string, requestId: string): Promise<import('../types/timeline-history').TimelineRestoreReceipt> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/restore-requests/${encodeURIComponent(requestId)}`);
+}
 export function undoCreationTaskTimeline(taskId: string, input: TimelineRestoreInput): Promise<CreationTaskEditConfirmResponse> {
     return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/undo`, { method: "POST", body: JSON.stringify(input) });
 }

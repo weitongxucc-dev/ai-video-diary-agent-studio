@@ -332,6 +332,27 @@ const resourceReceipt: ResourceAdmissionReceipt = {
   summary: "首次检查时设备资源余量不足，本请求仍在等待。", repair_action: "请等待资源恢复后查询原请求。",
 };
 
+describe('persisted section and restore receipts',()=>{
+  it('shows an invalidated section as history and offers original request readback for unknown restoration',()=>{
+    const saved=projectedTaskConversation('queued');
+    const response=saved.turns[0].result!.response as Record<string,unknown>;
+    response.media_job=null;response.edit_preview=null;
+    response.segment_revision={kind:'segment_revision',action:'query',request_id:'section-request',revision:{
+      task_id:'task-one',request_id:'section-request',status:'succeeded',adoption:{status:'invalidated',reason:'section_render_inputs_changed'}}};
+    const panel=()=> <AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view=render(panel());
+    expect(screen.getByText('原段产物仅保留为历史，当前作品未采用')).toBeVisible();
+    expect(screen.getByText('当前片段的画面、声音或字幕已变化，原视频仅供历史查看。')).toBeVisible();
+    expect(screen.queryByText('section_render_inputs_changed')).not.toBeInTheDocument();
+    response.segment_revision=null;
+    response.timeline_restore={kind:'timeline_restore_request',action:'undo',request_id:'restore-original',receipt:null,
+      failure:{reason:'响应中断',submission_effect:'unknown',repair_action:'查询原请求'}};
+    view.rerender(panel());
+    expect(screen.getByText('撤销或重做结果尚未知；请查询原请求')).toBeVisible();
+    expect(screen.getByRole('button',{name:'查询本轮结果'})).toBeVisible();
+  });
+});
+
 describe("persisted storyboard regeneration receipts", () => {
   function storyboard(status: Extract<AssistantStoryboardRegeneration, {kind: "storyboard_regeneration_receipt"}>["receipt"]["status"],
     action: "submit" | "query" = "submit"): AssistantStoryboardRegeneration {

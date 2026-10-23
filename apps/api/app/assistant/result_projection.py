@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from app.assistant.projection import _business_event_lines
+from app.assistant.projection import _business_event_lines, _safe_business_failure
 from app.assistant.failures import _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
 
 
@@ -22,6 +22,104 @@ def storyboard_regeneration_message(value: dict) -> str:
         "failed": "故事板重算失败，原稿保留；未生成新视频。",
         "cancelled": "故事板重算已取消，原稿保留；未生成新视频。",
     }[status]
+
+
+def segment_revision_message(value: dict) -> str:
+    revision = value.get('revision')
+    if revision is None:
+        effect = (value.get('failure') or {}).get('submission_effect')
+        return {'not_submitted': '本段修改未提交；请按原原因处理后再决定下一步。',
+                'rejected': '本段修改已被拒绝；未沿此请求采用修改。'}.get(effect,
+                '本段修改结果尚未知；先查询原请求，不重复提交。')
+    adoption = (revision.get('adoption') or {}).get('status')
+    if adoption == 'current':
+        return '本段结果已被当前作品采用；整片输出和实际播放状态仍须分别核对。'
+    if adoption in {'superseded', 'invalidated'}:
+        return '原段产物保留为历史；当前作品未采用这一段结果。'
+    if adoption == 'candidate':
+        return '本段产物已登记，尚未被当前作品采用。'
+    return {'queued': '本段修改已排队，尚未完成或采用。',
+            'running': '正在处理本段修改，尚未确认采用结果。',
+            'interrupted': '本段修改已中断；原请求和已保存成果保留。',
+            'failed': '本段修改未完成；请按原回执处理，保留已有成果。',
+            'cancelled': '本段修改已取消；已有成果以原回执为准。',
+            'succeeded': '本段执行已完成；采用关系仍须按原请求核对。'}.get(revision.get('status'),
+            '原段修改回执已返回；采用关系和产物以实际回执为准。')
+
+
+def resolve_segment_revision(details: dict, *, task_id: str, input_id: str, read_original) -> dict:
+    """Resolve only this concrete request through its authorized business owner."""
+    request_id = details.get('request_id')
+    action = details.get('action')
+    if not isinstance(request_id, str) or not request_id or action not in {'submit', 'query', 'resume'}:
+        raise ValueError('段修改原请求身份或动作不可核验')
+    failure = _safe_business_failure(details.get('failure'))
+    try:
+        revision = read_original(request_id)
+    except KeyError:
+        # Absence of a journal is not evidence that the write never happened.
+        failure = {**failure, 'submission_effect': failure.get('submission_effect', 'unknown'),
+            'reason': failure.get('reason') or '原段修改请求尚未取得可核验回执。',
+            'repair_action': failure.get('repair_action') or '查询原请求，不换新请求重复提交。'}
+        return {'kind': 'segment_revision', 'action': action, 'request_id': request_id,
+            'revision': None, 'failure': failure}
+    if revision.get('task_id') != task_id or revision.get('request_id') != request_id:
+        raise ValueError('段修改原请求不属于当前可信任务')
+    if action == 'submit' and revision.get('input_id') != input_id:
+        raise ValueError('段修改不属于本次可信输入，不能据旧结果宣布新修改完成')
+    return {'kind': 'segment_revision', 'action': action, 'request_id': request_id, 'revision': revision}
+
+
+def timeline_restore_message(value: dict) -> str:
+    receipt = value.get('receipt') or {}
+    if receipt.get('status') == 'applied':
+        return '原修改的撤销或重做已保存为新版本；实际采用和产物以当前作品为准。'
+    if receipt.get('status') == 'refused' or (value.get('failure') or {}).get('submission_effect') == 'rejected':
+        return '原撤销或重做已被拒绝；请按具体冲突处理，保留当前作品。'
+    if (value.get('failure') or {}).get('submission_effect') == 'not_submitted':
+        return '撤销或重做未提交；原作品保留。'
+    return '撤销或重做结果尚未知；查询原请求，不重复提交。'
+
+
+def resolve_timeline_restore(details: dict, *, task_id: str, read_original) -> dict:
+    request_id, action = details.get('request_id'), details.get('action')
+    if not isinstance(request_id, str) or not request_id or action not in {'undo', 'redo', 'query'}:
+        raise ValueError('原撤销重做请求身份不可核验')
+    failure = _safe_business_failure(details.get('failure'))
+    try:
+        receipt = read_original(request_id)
+    except KeyError:
+        receipt = None
+        failure = {**failure, 'submission_effect': failure.get('submission_effect', 'unknown'),
+            'reason': failure.get('reason') or '原撤销重做尚未取得可核验回执。',
+            'repair_action': failure.get('repair_action') or '查询原请求，不换新身份重复提交。'}
+    if receipt is not None and (receipt.get('task_id') != task_id or receipt.get('request_id') != request_id
+            or action != 'query' and receipt.get('action') != action):
+        raise ValueError('撤销重做回执不属于原任务或动作')
+    return {'kind': 'timeline_restore_request', 'action': action, 'request_id': request_id,
+        'receipt': receipt, **({'failure': failure} if receipt is None and failure else {})}
+
+
+def refresh_original_receipts(turn: dict, *, task_id: str, input_id: str, read_segment, read_restore) -> dict:
+    """Refresh this HTTP read projection only; saved inputs and journals stay owned."""
+    result = turn.get('result') or {}
+    response = result.get('response')
+    if result.get('kind') != 'task_turn' or not isinstance(response, dict):
+        return turn
+    response = dict(response)
+    for field, reader in (('segment_revision', read_segment), ('timeline_restore', read_restore)):
+        original = response.get(field)
+        if not isinstance(original, dict):
+            continue
+        query = {**original, 'action': 'query'}
+        try:
+            response[field] = (resolve_segment_revision(query, task_id=task_id, input_id=input_id, read_original=reader)
+                if field == 'segment_revision' else resolve_timeline_restore(query, task_id=task_id, read_original=reader))
+        except (PermissionError, ValueError) as exc:
+            response[field] = {**query, 'revision' if field == 'segment_revision' else 'receipt': None,
+                'failure': _safe_business_failure({'reason': str(exc), 'submission_effect': 'unknown',
+                    'repair_action': '核对原任务和请求权限后再查询，不重复提交。'})}
+    return {**turn, 'result': {**result, 'response': response}}
 
 
 def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[str, dict | None]:
@@ -58,6 +156,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     script_tool_status = None
     storyboard_result = None
     storyboard_attempted = False
+    segment_result = None
+    restore_result = None
     try:
         events = [json.loads(line) for line in _business_event_lines("\n".join(json.dumps(event) for event in result["tool_results"]))]
     except json.JSONDecodeError as exc:
@@ -70,6 +170,14 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
+        if (event.get('type') == 'tool_execution_end'
+                and event.get('toolName') in {'revise_narration_segment', 'read_narration_revision', 'resume_narration_revision'}
+                and details.get('kind') == 'segment_revision'):
+            segment_result = details
+        if (event.get('type') == 'tool_execution_end'
+                and event.get('toolName') in {'undo_last_edit', 'redo_last_edit', 'read_timeline_restore_request'}
+                and details.get('kind') == 'timeline_restore_request'):
+            restore_result = details
         if event.get("type") == "tool_execution_end" and event.get("toolName") in {"regenerate_storyboard", "read_storyboard_regeneration"}:
             storyboard_attempted = True
             action = "submit" if event["toolName"] == "regenerate_storyboard" else "query"
@@ -200,6 +308,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                     preview = details.get("preview")
                     if kind == "topic_generation":
                         preview = {"kind": "topic_generation", "topics": details.get("topics")}
+    if restore_result is not None:
+        return timeline_restore_message(restore_result), restore_result
     if storyboard_result is not None:
         return storyboard_regeneration_message(storyboard_result), storyboard_result
     if storyboard_attempted:
@@ -238,6 +348,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         message = {"save": "可复用图片工具已保存；未应用图片或生成成片。", "query": "已回读原工具创建结果，不代表其他新输入已经保存。",
                    "update": "可复用工具的新版本已保存；既有媒体保持不变。", "revoke": "工具已停用；已存在的合法图片和视频仍保留。"}.get(action, "工具实际回执已返回。")
         return message, script_tool_result
+    if segment_result is not None:
+        return segment_revision_message(segment_result), segment_result
     if edit_request_status is not None and preview is None:
         if media_job is not None:
             edit_request_status = {**edit_request_status, "related_media_job": media_job}

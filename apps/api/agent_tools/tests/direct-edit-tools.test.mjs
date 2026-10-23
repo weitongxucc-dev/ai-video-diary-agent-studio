@@ -89,7 +89,7 @@ test('local rewrite binds complete section, input and semantic comparison to the
   const after='适用于干燥地面，最高可达每分钟30米。';
   const request=async (path,init)=>{
     const body=init?.body?JSON.parse(init.body):null; calls.push({path,body});
-    if (path.endsWith('/context')) return {script_id:'script',base_version_id:'v1',dependency_digest:'dependencies',section_id:'section',segment_version:'s1',text:before,adjacent_sections:[]};
+    if (path.endsWith('/context')) return {task_id:'task',script_id:'script',base_version_id:'v1',dependency_digest:'dependencies',section_id:'section',segment_version:'s1',text:before,adjacent_sections:[]};
     if (path.endsWith('/narration-semantic-review')) return {semantic_review_ref:'review'};
     return {request_id:'request',status:'queued',job:{id:'real-job'}};
   };
@@ -105,7 +105,8 @@ test('local rewrite binds complete section, input and semantic comparison to the
   await tools.read_narration_segment_context.execute('read',{segment_id:'section'});
   const result=await tools.revise_narration_segment.execute('call',params);
   assert.equal(result.details.revision.job.id,'real-job');
-  const review=calls[3].body,revision=calls[4].body;
+  const review=calls.find(call=>call.path.endsWith('/narration-semantic-review')).body;
+  const revision=calls.find(call=>call.path.endsWith('/revision')).body;
   assert.equal(review.source_text_sha256,createHash('sha256').update(before).digest('hex'));
   assert.equal(review.replacement_text_sha256,createHash('sha256').update(after).digest('hex'));
   assert.equal(review.conclusion,'preserved');
@@ -113,6 +114,6 @@ test('local rewrite binds complete section, input and semantic comparison to the
   assert.equal(revision.section_id,'section'); assert.equal(revision.input_id,'input');
   assert.equal(revision.replacement_text,after); assert.equal(revision.semantic_review_ref,'review');
   assert.equal(review.dependency_digest,'dependencies'); assert.equal(revision.dependency_digest,review.dependency_digest);
-  await assert.rejects(tools.revise_narration_segment.execute('call',params),/原修改已尝试提交/);
-  assert.equal(calls.length,5);
+  await assert.rejects(tools.revise_narration_segment.execute('call',params),/原请求/);
+  assert.equal(calls.filter(call=>call.path.endsWith('/revision')).length,1);
 });

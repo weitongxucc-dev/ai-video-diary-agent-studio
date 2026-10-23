@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 
 import styles from "./TimelineVersionHistory.module.css";
+import { Button } from './ui/button';
 import {
   CreationPlanApiError,
   getCreationTaskTimelineVersion,
@@ -17,6 +18,8 @@ export type TimelineVersionHistoryProps = {
   taskId: string;
   open: boolean;
   currentVersionId: string | null;
+  restoreBusy?: boolean;
+  onRestore?: (operationId: string, redo: boolean) => void;
 };
 
 const artifactLabels: Record<CreationTaskTimelineVersionArtifactKind, string> = {
@@ -53,7 +56,7 @@ function errorText(error: unknown) {
   return "历史版本暂时读不出来。";
 }
 
-export function TimelineVersionHistory({ taskId, open, currentVersionId }: TimelineVersionHistoryProps) {
+export function TimelineVersionHistory({ taskId, open, currentVersionId, restoreBusy, onRestore }: TimelineVersionHistoryProps) {
   const [versions, setVersions] = useState<CreationTaskTimelineVersionList | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CreationTaskTimelineVersionDetail | null>(null);
@@ -62,14 +65,19 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId }: Timel
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const detailRequest = useRef(0);
+  const currentTask=useRef(taskId);currentTask.current=taskId;
+  const [pages,setPages]=useState<(number|undefined)[]>([undefined]);
+  const beforeSequence=pages.at(-1);
+  useEffect(()=>{detailRequest.current++;setSelectedId(null);setDetail(null);setPages([undefined]);},[taskId]);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoadingList(true);
-    listCreationTaskTimelineVersions(taskId)
+    (beforeSequence===undefined?listCreationTaskTimelineVersions(taskId):listCreationTaskTimelineVersions(taskId,beforeSequence))
       .then((loaded) => {
         if (cancelled) return;
+        if (loaded.task_id!==taskId) throw new Error('历史版本不属于当前任务。');
         setVersions(loaded);
         setListError(null);
       })
@@ -83,7 +91,7 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId }: Timel
     return () => {
       cancelled = true;
     };
-  }, [taskId, open, currentVersionId]);
+  }, [taskId, open, currentVersionId,beforeSequence]);
 
   const loadDetail = useCallback((versionId: string) => {
     // 每次选择自增一次令牌：响应只允许作用于仍是最新选择的那一次，否则快速点 A 再 B 时 A 会覆盖 B
@@ -95,7 +103,8 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId }: Timel
     setDetailError(null);
     getCreationTaskTimelineVersion(taskId, versionId)
       .then((loaded) => {
-        if (detailRequest.current !== request) return;
+        if (currentTask.current!==taskId || detailRequest.current !== request) return;
+        if (loaded.task_id!==taskId || loaded.version.id!==versionId) throw new Error('历史版本详情身份不一致。');
         setDetail(loaded);
         setDetailError(null);
       })
@@ -111,16 +120,16 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId }: Timel
   }, [taskId]);
 
   return <section className={styles.history} aria-label="历史时间线版本">
-    <p className={styles.note}>只读查看。打开旧版本不会改动当前版本、提案、音轨或任务，也不能在这里回滚。</p>
+    <p className={styles.note}>查看历史不会改变当前作品。指定撤销或重做作用于原修改，是否可执行由实际依赖判断。</p>
 
     {loadingList ? <p className={styles.note}><LoaderCircle size={14} aria-hidden /> 正在读取版本…</p> : null}
     {listError ? <p className={styles.error}><AlertCircle size={14} aria-hidden /> {listError}</p> : null}
 
-    {versions && versions.items.length <= 1 && !listError
+    {versions && versions.total_count === 1 && !listError
       ? <p className={styles.note}>这个任务目前只有一个版本，还没有更早的版本可以查看。</p>
       : null}
 
-    {versions && versions.items.length > 1 ? <ol className={styles.list}>
+    {versions && versions.items.length > 0 ? <ol className={styles.list}>
       {versions.items.slice().reverse().map((version) => (
         <li key={version.id}>
           <button
@@ -142,12 +151,18 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId }: Timel
         </li>
       ))}
     </ol> : null}
+    {pages.length>1?<Button variant="outline" disabled={loadingList} onClick={()=>setPages(value=>value.slice(0,-1))}>较新版本</Button>:null}
+    {versions?.truncated && typeof versions.next_before_sequence==='number'?<Button variant="outline" disabled={loadingList} onClick={()=>setPages(value=>[...value,versions.next_before_sequence!])}>更早版本</Button>:null}
 
     {loadingDetail ? <p className={styles.note}><LoaderCircle size={14} aria-hidden /> 正在读取这一版…</p> : null}
     {detailError ? <p className={styles.error}><AlertCircle size={14} aria-hidden /> {detailError}</p> : null}
 
     {detail ? <div className={styles.detail}>
       <h3 className={styles.detailTitle}>第 {detail.version.sequence} 版 · {versionTime(detail.version.created_at)}</h3>
+      {onRestore && detail.version.operation_id && !['UndoTimelineVersion','RedoTimelineVersion'].includes(detail.version.operation_type ?? '')?<div>
+        <Button variant="outline" disabled={restoreBusy} onClick={()=>onRestore(detail.version.operation_id!,false)}>撤销这项修改</Button>
+        <Button variant="outline" disabled={restoreBusy} onClick={()=>onRestore(detail.version.operation_id!,true)}>重做这项修改</Button>
+      </div>:null}
 
       <h4 className={styles.sectionTitle}>镜头（{detail.shots.length}）</h4>
       {detail.shots.length ? <ol className={styles.shots}>

@@ -12,6 +12,7 @@ import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
 import { getCreationTaskNarrationVoiceSelection } from "@/lib/api/creation-tasks";
+import { readCreationTaskTimelineRestore } from '@/lib/api';
 import { CreationPlanApiError } from "@/lib/api";
 import { Tabs, TabsContent } from "./ui/tabs";
 import { Button } from "./ui/button";
@@ -135,6 +136,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       ?? null,
   );
   const [pendingVoiceSelection, setPendingVoiceSelection] = useWorkspaceViewState<CreationTaskNarrationVoiceSelectionRequest | null>(`task:${workspace.task.id}.voiceSelectionRequest`, null);
+  const [pendingTimelineRestore, setPendingTimelineRestore] = useWorkspaceViewState<{taskId:string;requestId:string}|null>(`task:${workspace.task.id}.timelineRestoreRequest`,null);
+  const restoreReadSequence=useRef(0);
   const [voiceSelectionNotFound, setVoiceSelectionNotFound] = useState<string | null>(null);
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
@@ -878,7 +881,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (result.execution_status) executionController.acceptExecution(result.execution_status);
       executionController.pollExecution();
       if (result.script_draft) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
-      if (result.timeline_action) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
+      if (result.timeline_action || result.segment_revision || result.timeline_restore) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
       if (ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId)) {
         const preview = result.media_job ? await resolveEditMedia(result.media_job, revision, turn.conversationId) : result.edit_preview;
         if (!ownsRequest() || revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
@@ -1230,26 +1233,60 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return saved;
   }
 
-  async function undoTimeline(redo = false) {
+  async function queryTimelineRestore() {
+    const pending=pendingTimelineRestore;
+    if (!pending || pending.taskId!==task.id) return;
+    const sequence=++restoreReadSequence.current;
+    const owns=()=>currentTaskId.current===pending.taskId && sequence===restoreReadSequence.current;
+    setBusy('undo');setError(null);
+    try {
+      const receipt=await readCreationTaskTimelineRestore(pending.taskId,pending.requestId);
+      if (!owns()) return;
+      if (receipt.task_id!==pending.taskId || receipt.request_id!==pending.requestId) throw new Error('撤销重做回执身份不一致');
+      if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
+      setNotice(receipt.status==='applied'?'原修改的撤销或重做已保存。':receipt.status==='refused'?(receipt.failure?.reason ?? '原操作因冲突被拒绝。'):'原结果尚未核实，请继续查询原请求。');
+      await refresh(true);
+    } catch(cause) {if (owns()) setError(errorDetails(cause));}
+    finally {if (owns()) setBusy(null);}
+  }
+  async function undoTimeline(redo = false, targetOperationId?: string) {
+    if (pendingTimelineRestore) {setNotice('原撤销重做请求等待核对，请先查询原结果。');return;}
+    const taskId=task.id,requestId=crypto.randomUUID(),sequence=++restoreReadSequence.current;
+    const owns=()=>currentTaskId.current===taskId && sequence===restoreReadSequence.current;
+    setPendingTimelineRestore({taskId,requestId});
     setBusy("undo");
     setError(null);
     setNotice(null);
     invalidateEditPreview();
+    let writeReturned=false;
     try {
       await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(task.id, {
+        request_id: requestId,
+        ...(targetOperationId?{target_operation_id:targetOperationId}:{}),
         expected_timeline_version_id: task.current_timeline_version_id,
         expected_timeline_sequence: task.timeline_sequence,
       });
+      writeReturned=true;
+      const receipt=await readCreationTaskTimelineRestore(taskId,requestId);
+      if (!owns()) return;
+      if (receipt.task_id!==taskId || receipt.request_id!==requestId) throw new Error('撤销重做回执身份不一致');
+      if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
+      if (receipt.status!=='applied') {
+        setNotice(receipt.failure?.reason ?? '原操作结果尚未核实，请查询原请求。');
+        await refresh(true);return;
+      }
       setClipDrafts({});
       setSelectedCueId(null);
       setSelectedNarrationSegmentId(null);
       setSelectedCover(false);
       await refresh(true);
     } catch (cause) {
-      setError(errorDetails(cause));
-      await refresh(true).catch(() => undefined);
+      if (owns()) {
+        if (!writeReturned && cause instanceof CreationPlanApiError && ['not_submitted','rejected'].includes(cause.submissionEffect ?? '')) setPendingTimelineRestore(null);
+        setError(errorDetails(cause));await refresh(true).catch(() => undefined);
+      }
     } finally {
-      setBusy(null);
+      if (owns()) setBusy(null);
     }
   }
 
@@ -1372,9 +1409,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             selectedRefs={selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
         </header>
         <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
-          <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} />
+          <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} restoreBusy={busy!==null || Boolean(pendingTimelineRestore)} onRestore={(operationId,redo)=>void undoTimeline(redo,operationId)} />
         </HomeCardDialog>
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
+        {pendingTimelineRestore?.taskId===task.id ? <p role="status">撤销或重做请求等待核对。<Button variant="outline" disabled={busy!==null} onClick={()=>void queryTimelineRestore()}>查询原撤销重做结果</Button></p> : null}
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">重新核对文案和制作要求</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}

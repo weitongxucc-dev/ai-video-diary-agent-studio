@@ -77,6 +77,9 @@ export function assistantConversationGoal(conversation: AssistantConversation | 
 
 export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) {
   const result = assistantTaskTurnResult(turn);
+  if (result?.response?.segment_revision?.failure?.submission_effect === 'unknown'
+      || result?.response?.timeline_restore?.failure?.submission_effect === 'unknown'
+      || result?.response?.timeline_restore?.receipt?.status === 'result_unknown') return true;
   if (result?.continuation && settledBusinessStatuses.has(result.continuation.status)) return false;
   return result?.continuation?.status === "unknown" || result?.response?.edit_request?.status === "unknown"
     || result?.response?.script_tool?.status === "unknown";
@@ -84,6 +87,9 @@ export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) 
 
 export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn) {
   if (turn.status === "stopped") return false;
+  const original=assistantTaskTurnResult(turn)?.response;
+  if (assistantTurnHasUnknownRequest(turn) || original?.segment_revision?.revision
+      && ['queued','running','interrupted'].includes(original.segment_revision.revision.status)) return true;
   const goal = assistantTurnGoalRefreshState(turn);
   if (goal) return activeGoalStatuses.has(goal.status);
   if (turn.status === "running") return true;
@@ -95,6 +101,7 @@ export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn)
   return assistantTurnHasUnknownRequest(turn) || continuation?.actionable === true
     || Boolean(response?.media_job && ["queued", "running"].includes(response.media_job.status))
     || Boolean(response?.execution_status?.job && ["queued", "running", "interrupted"].includes(response.execution_status.job.status))
+    || Boolean(response?.segment_revision?.revision && ["queued", "running", "interrupted"].includes(response.segment_revision.revision.status))
     || (!continuation && response?.edit_preview?.proposal.status === "proposed");
 }
 

@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => {
       message: string,
       public readonly impact: string | null = null,
       public readonly repairAction: string | null = null,
+      public readonly reason: string | null = null,
+      public readonly submissionEffect: 'not_submitted'|'rejected'|'unknown'|null = null,
     ) {
       super(message);
     }
@@ -81,6 +83,7 @@ const mocks = vi.hoisted(() => {
     selectVoice: vi.fn(),
     getVoiceSelection: vi.fn(),
     undoTimeline: vi.fn(),
+    readTimelineRestore: vi.fn(),
     redoTimeline: vi.fn(),
     saveRecording: vi.fn(),
     listRecordings: vi.fn().mockResolvedValue({ items: [] }),
@@ -257,6 +260,7 @@ vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof 
   renderCreationTaskMontage: mocks.renderMontage,
   selectCreationTaskNarrationVoice: mocks.selectVoice,
   undoCreationTaskTimeline: mocks.undoTimeline,
+  readCreationTaskTimelineRestore: mocks.readTimelineRestore,
   redoCreationTaskTimeline: mocks.redoTimeline,
   saveCreationTaskRecording: mocks.saveRecording,
   listCreationTaskRecordings: mocks.listRecordings,
@@ -618,6 +622,7 @@ afterEach(() => {
   mocks.assistantSequence = 0;
   mocks.assistantActions = null;
   mocks.getWorkspace.mockReset();
+  mocks.readTimelineRestore.mockReset().mockImplementation(async(taskId:string,requestId:string)=>({task_id:taskId,request_id:requestId,action:'undo',status:'applied',operation_id:'restored',result_version_id:'restored-version',failure:null}));
   mocks.previewEdit.mockReset();
   mocks.previewSelection.mockReset();
   vi.clearAllMocks();
@@ -1530,6 +1535,51 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(screen.getByLabelText("封面标题")).toHaveValue("恢复后的标题"));
     expect(screen.getByLabelText("封面画面时间")).toHaveValue(1.2);
     expect(within(screen.getByRole("group", { name: "封面标题位置" })).getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each(['not_submitted','unknown'] as const)('timeline restore %s preserves the correct retry boundary', async effect=>{
+    const initial=workspaceWithCover();
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.undoTimeline.mockReset().mockRejectedValueOnce(new mocks.MockCreationPlanApiError(409,null,'原修改未完成',null,null,null,effect));
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    fireEvent.click(getWorkspaceViewControl('字幕与封面：已完成'));
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    await screen.findByText('原修改未完成');
+    if (effect==='not_submitted') {
+      mocks.undoTimeline.mockResolvedValue({});
+      fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+      await waitFor(()=>expect(mocks.undoTimeline).toHaveBeenCalledTimes(2));
+      expect(mocks.undoTimeline.mock.calls[0][1].request_id).not.toBe(mocks.undoTimeline.mock.calls[1][1].request_id);
+    } else {
+      fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+      expect(mocks.undoTimeline).toHaveBeenCalledTimes(1);
+      const requestId=mocks.undoTimeline.mock.calls[0][1].request_id;
+      mocks.readTimelineRestore.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(404,null,'原回执未取得'));
+      fireEvent.click(screen.getByRole('button',{name:'查询原撤销重做结果'}));
+      await screen.findByText('原回执未取得');
+      expect(mocks.readTimelineRestore).toHaveBeenCalledWith(initial.task.id,requestId);
+      expect(screen.getByRole('button',{name:'查询原撤销重做结果'})).toBeInTheDocument();
+      expect(mocks.undoTimeline).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it.each(['not_submitted','rejected'] as const)('timeline readback %s keeps the written original UUID',async effect=>{
+    const initial=workspaceWithCover();
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.undoTimeline.mockReset().mockResolvedValue({});
+    mocks.readTimelineRestore.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(404,null,'读取原回执失败',null,null,null,effect));
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    fireEvent.click(getWorkspaceViewControl('字幕与封面：已完成'));
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    await screen.findByText('读取原回执失败');
+    await waitFor(()=>expect(screen.getByRole('button',{name:'查询原撤销重做结果'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button',{name:'撤销'}));
+    expect(mocks.undoTimeline).toHaveBeenCalledTimes(1);
+    const requestId=mocks.undoTimeline.mock.calls[0][1].request_id;
+    expect(screen.getByRole('button',{name:'查询原撤销重做结果'})).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'查询原撤销重做结果'}));
+    await waitFor(()=>expect(mocks.readTimelineRestore).toHaveBeenLastCalledWith(initial.task.id,requestId));
+    expect(mocks.undoTimeline).toHaveBeenCalledTimes(1);
   });
 
   it("uses persisted cues when switching tracks and selecting another cue", async () => {
@@ -4485,6 +4535,23 @@ const segmentApi=vi.hoisted(()=>({read:vi.fn(()=>new Promise(()=>{})),budget:vi.
 vi.mock('@/lib/api/task-media',async importOriginal=>({
   ...await importOriginal<typeof import('@/lib/api/task-media')>(),readCreationTaskSegments:segmentApi.read,readCreationTaskBudget:segmentApi.budget,readCreationTaskNativeOperations:segmentApi.native,readCreationTaskNativeArtifact:segmentApi.content,
 }));
+
+it('history pagination selects the original operation rather than the later edit',async()=>{
+  const {TimelineVersionHistory}=await import('../TimelineVersionHistory');
+  const onRestore=vi.fn();
+  const original={id:'older',sequence:1,parent_version_id:null,created_at:'2026-10-01T00:00:00Z',is_current:false,
+    shot_count:1,subtitle_track_count:0,narration_segment_count:1,operation_id:'original-operation',operation_type:'ReviseScriptSection'};
+  mocks.listTimelineVersions.mockImplementation(async(taskId:string,before?:number)=>({task_id:taskId,current_version_id:'newer',
+    items:before?[original]:[{...original,id:'newer',sequence:2,operation_id:'later-operation'}],
+    total_count:2,truncated:before===undefined,next_before_sequence:before===undefined?2:null}));
+  mocks.getTimelineVersion.mockResolvedValue({task_id:'task',version:original,shots:[],narration_segments:[],subtitle_tracks:[],cover_asset:null,artifacts:[]});
+  render(<TimelineVersionHistory taskId="task" open currentVersionId="newer" onRestore={onRestore}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'更早版本'}));
+  fireEvent.click(await screen.findByRole('button',{name:/第 1 版/}));
+  fireEvent.click(await screen.findByRole('button',{name:'撤销这项修改'}));
+  expect(onRestore).toHaveBeenCalledWith('original-operation',false);
+  expect(mocks.listTimelineVersions).toHaveBeenLastCalledWith('task',2);
+});
 
 it('segment preview keeps the playing version and presents unknown cost as pending',async()=>{
   const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');

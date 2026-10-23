@@ -77,6 +77,20 @@ export type CreationTaskAssistantTurnResponse = {
     edit_request?: AssistantEditRequest | null;
     script_tool?: AssistantScriptToolReceipt | null;
     storyboard_regeneration?: AssistantStoryboardRegeneration | null;
+    segment_revision?: {
+        kind: "segment_revision";
+        action: "submit" | "query" | "resume";
+        request_id: string;
+        revision: import('./creation-tasks').CreationTaskSegmentRevision | null;
+        failure?: AssistantToolFailure & {submission_effect?: "not_submitted" | "rejected" | "unknown"};
+    } | null;
+    timeline_restore?: {
+        kind: "timeline_restore_request";
+        action: "undo" | "redo" | "query";
+        request_id: string;
+        receipt: import('./timeline-history').TimelineRestoreReceipt | null;
+        failure?: AssistantToolFailure & {submission_effect?: "not_submitted" | "rejected" | "unknown"};
+    } | null;
     script_draft: CreationTaskScript | null;
     execution_action: "start" | "resume" | "cancel" | null;
     execution_status: CreationExecutionStatus | null;

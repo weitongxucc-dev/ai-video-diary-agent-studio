@@ -8,11 +8,28 @@ export type CreationTaskTimelineVersionSummary = {
     shot_count: number;
     subtitle_track_count: number;
     narration_segment_count: number;
+    operation_id?: string | null;
+    operation_type?: string | null;
+    target_refs?: string[];
+    source_request_id?: string | null;
 };
 export type CreationTaskTimelineVersionList = {
     task_id: string;
     current_version_id: string | null;
     items: CreationTaskTimelineVersionSummary[];
+    total_count?: number;
+    truncated?: boolean;
+    next_before_sequence?: number | null;
+};
+export type TimelineRestoreReceipt = {
+    task_id: string;
+    request_id: string;
+    action: "undo" | "redo";
+    target_operation_id: string | null;
+    status: "applied" | "refused" | "result_unknown";
+    operation_id: string | null;
+    result_version_id: string | null;
+    failure: {reason: string; impact?: string; repair_action?: string; submission_effect?: string} | null;
 };
 export type CreationTaskTimelineVersionShot = {
     index: number;

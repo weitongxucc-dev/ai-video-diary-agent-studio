@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerExecutionTools} from '../diary/execution-tools.ts';
+import {BusinessRequestError, RequestNotSubmitted} from '../diary/transport.ts';
+import {typedRequestId} from '../diary/request-identity.ts';
 
-function setup({lost = false} = {}) {
+function setup({lost = false, selectionError, selection = {profile_id: 'voice', version: 'fixed-version'}} = {}) {
   const tools = {}, calls = [];
   let written = false, productionActions = 0;
-  const requestId = '87fcab2d-bb01-5f26-8d09-324b940240ab';
+  const requestId = typedRequestId('task', 'trusted-turn', 'call');
   const source = {turnId: 'trusted-turn', inputId: 'trusted-input'};
-  const selection = {profile_id: 'voice', version: 'fixed-version'};
   const receipt = {request_id: requestId, task_id: 'task', selected_voice: selection,
     plan_updated_at: 'after-plan', task_updated_at: 'after-task'};
   const facts = () => ({task_id: 'task', stage: 'narration', stage_status: 'not_started',
@@ -17,6 +18,9 @@ function setup({lost = false} = {}) {
   const request = async (path, init) => {
     calls.push({path, body: init?.body ? JSON.parse(init.body) : null});
     if (path.endsWith('/narration/voice')) {
+      const error = typeof selectionError === 'function' ? selectionError() : selectionError;
+      if (error) throw error;
+      receipt.request_id = JSON.parse(init.body).request_id;
       written = true;
       if (lost) throw new TypeError('connection lost after commit');
       return receipt;
@@ -30,7 +34,7 @@ function setup({lost = false} = {}) {
   registerExecutionTools({registerTool: tool => {tools[tool.name] = tool;}}, {request, taskId: 'task', isTaskRead: () => true,
     hasCreationAction: () => productionActions > 0, markCreationAction: () => {productionActions++;},
     hasEditControlWrite: () => false, hasPreview: () => false, readActionSource: () => source,
-    getSignal: () => undefined, typedRequestId: (turn, call) => {assert.equal(turn, source.turnId); return requestId;},
+    getSignal: () => undefined, typedRequestId: (turn, call) => {assert.equal(turn, source.turnId); return typedRequestId('task', turn, call);},
     readCurrentTaskFacts: async () => facts()});
   return {tools, calls, source, requestId, receipt, productionActions: () => productionActions};
 }
@@ -43,6 +47,7 @@ test('fixed voice selection carries trusted turn and both revisions, then produc
   assert.deepEqual(state.calls[0].body, {voice_profile_id: 'voice', voice_version: 'fixed-version', request_id: state.requestId,
     assistant_turn_id: 'trusted-turn', expected_plan_updated_at: 'before-plan', expected_task_updated_at: 'before-task'});
   assert.equal(state.productionActions(), 0);
+  await assert.rejects(state.tools.select_narration_voice.execute('duplicate', {voice_profile_id: 'voice', voice_version: 'fixed-version'}), /先查询原请求/);
   const produced = await state.tools.start_creation_execution.execute('start', {});
   assert.equal(produced.details.status.job.id, 'job');
   assert.equal(state.productionActions(), 1);
@@ -53,6 +58,7 @@ test('a lost response is queried by its original UUID and is not posted again', 
   const unknown = await state.tools.select_narration_voice.execute('call', {voice_profile_id: 'voice', voice_version: 'fixed-version'});
   assert.equal(unknown.details.kind, 'voice_selection_unknown');
   assert.equal(unknown.details.request_id, state.requestId);
+  assert.equal(unknown.details.failure.submission_effect, 'unknown');
   await assert.rejects(state.tools.select_narration_voice.execute('new-call', {voice_profile_id: 'voice', voice_version: 'fixed-version'}), /先查询原请求/);
   const read = await state.tools.read_narration_voice_selection.execute('read', {request_id: state.requestId});
   assert.deepEqual(read.details.receipt, state.receipt);
@@ -65,4 +71,43 @@ test('voice not listed as a runnable fixed candidate is never posted', async () 
   const state = setup();
   await assert.rejects(state.tools.select_narration_voice.execute('call', {voice_profile_id: 'invented', voice_version: 'fixed-version'}), /候选/);
   assert.equal(state.calls.length, 0);
+});
+
+test('known voice failures preserve the cause and only not_submitted permits a corrected selection from current facts',async()=>{
+  const reason='此任务仍有未结束的制作作业';
+  const repair='先结算或取消原制作作业，再读取当前声音候选。';
+  for (const effect of ['rejected','not_submitted']) {
+    const failure={error:'voice_selection_conflict',reason,repair_action:repair,impact:'原任务声音未改变。',
+      stage:'voice_selection',submission_effect:effect};
+    let selectionError=effect==='rejected' ? new BusinessRequestError(reason,409,repair,undefined,failure)
+      :new RequestNotSubmitted(reason,failure);
+    const selection={profile_id:'voice',version:'fixed-version'};
+    const state=setup({selection,selectionError:()=>selectionError});
+    const result=await state.tools.select_narration_voice.execute('call',{voice_profile_id:'voice',voice_version:'fixed-version'});
+    assert.equal(result.isError,true);
+    assert.equal(result.details.failure.reason,reason);
+    assert.equal(result.details.failure.repair_action,repair);
+    assert.equal(result.details.failure.impact,failure.impact);
+    assert.equal(result.details.failure.submission_effect,effect);
+    assert.equal(result.details.query_url,undefined);
+    assert.equal(state.calls.filter(call=>call.body).length,1);
+    if (effect==='rejected') {
+      await assert.rejects(state.tools.select_narration_voice.execute('another-call',{voice_profile_id:'voice',voice_version:'fixed-version'}));
+      assert.equal(state.calls.filter(call=>call.body).length,1);
+    } else {
+      selectionError=undefined;
+      selection.profile_id='corrected-voice';
+      selection.version='corrected-fixed-version';
+      const corrected=await state.tools.select_narration_voice.execute('corrected-call',{
+        voice_profile_id:selection.profile_id,voice_version:selection.version});
+      assert.equal(corrected.details.kind,'voice_selected');
+      assert.equal(corrected.details.current_task_facts.plan.selected_voice.version,selection.version);
+      const writes=state.calls.filter(call=>call.body);
+      assert.equal(writes.length,2);
+      assert.equal(writes[1].body.voice_profile_id,selection.profile_id);
+      assert.equal(writes[1].body.voice_version,selection.version);
+      assert.notEqual(writes[1].body.request_id,writes[0].body.request_id);
+    }
+    assert.equal(state.productionActions(),0);
+  }
 });

@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
+import { readCreationTaskTimelineRestore } from '@/lib/api';
 import type { AssistantConversation, AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
@@ -126,7 +127,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const [taskVersionConflict, setTaskVersionConflict] = useState<CreationTask | null>(null);
   const awaitingTaskRead = Boolean(task && taskAwaitingRead === task);
   const awaitingVersionRead = Boolean(task && taskVersionConflict === task);
-  const undoAvailable = task?.can_undo === true && !awaitingTaskRead;
+  const [restoreRequests,setRestoreRequests]=useState<Record<string,string>>({});
+  const restoreRequest=task?restoreRequests[task.id]:undefined;
+  const undoAvailable = task?.can_undo === true && !awaitingTaskRead && !restoreRequest;
   const [modelConfigured, setModelConfigured] = useState(false);
   const [pending, setPending] = useState<"chat" | "confirm" | "undo" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -236,7 +239,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
-        if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration)) {
+        if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore)) {
           if (fresh) for (const key of appliedTaskReceiptKeys(fresh, task.id)) appliedTaskReads.current.add(key);
           onTaskUpdated();
         }
@@ -309,16 +312,28 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     const revision = scopeRevision.current;
     setPending("undo");
     setError(null);
+    const requestId=crypto.randomUUID();
+    setRestoreRequests(value=>({...value,[task.id]:requestId}));
+    let writeReturned=false;
     try {
       await undoCreationTaskTimeline(task.id, {
+        request_id:requestId,
         expected_timeline_version_id: task.current_timeline_version_id,
         expected_timeline_sequence: task.timeline_sequence,
       });
+      writeReturned=true;
       if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id) return;
+      const receipt=await readCreationTaskTimelineRestore(task.id,requestId);
+      if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id) return;
+      if (receipt.task_id!==task.id || receipt.request_id!==requestId) throw new Error('原撤销回执身份不一致');
+      if (receipt.status==='applied' || receipt.status==='refused') setRestoreRequests(value=>{const next={...value};delete next[task.id];return next;});
+      if (receipt.status!=='applied') setError(receipt.failure?.reason ?? '原撤销结果尚未核实，请查询原请求。');
       setTaskAwaitingRead(latestTaskFacts.current);
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current && latestTaskFacts.current?.id === task.id) {
+        if (!writeReturned && cause instanceof CreationPlanApiError && ['not_submitted','rejected'].includes(cause.submissionEffect ?? ''))
+          setRestoreRequests(value=>{const next={...value};delete next[task.id];return next;});
         setError(cause instanceof Error ? cause.message : "撤销未完成，请到任务页查看。");
         setTaskAwaitingRead(latestTaskFacts.current);
         onTaskUpdated?.();
@@ -326,6 +341,21 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     } finally {
       if (revision === scopeRevision.current) setPending(null);
     }
+  }
+
+  async function queryTaskRestore() {
+    if (!task || !restoreRequest || pending) return;
+    const revision=scopeRevision.current;
+    setPending('undo');setError(null);
+    try {
+      const receipt=await readCreationTaskTimelineRestore(task.id,restoreRequest);
+      if (revision!==scopeRevision.current || latestTaskFacts.current?.id!==task.id) return;
+      if (receipt.task_id!==task.id || receipt.request_id!==restoreRequest) throw new Error('原撤销回执身份不一致');
+      if (receipt.status==='applied' || receipt.status==='refused') setRestoreRequests(value=>{const next={...value};delete next[task.id];return next;});
+      if (receipt.status!=='applied') setError(receipt.failure?.reason ?? '原结果尚未核实，请继续查询原请求。');
+      setTaskAwaitingRead(latestTaskFacts.current);onTaskUpdated?.();
+    } catch(cause) {if (revision===scopeRevision.current) setError(cause instanceof Error?cause.message:'原撤销结果暂不可读取。');}
+    finally {if (revision===scopeRevision.current) setPending(null);}
   }
 
   async function confirmPlan() {
@@ -493,6 +523,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         : "当前作品已重新读取，请核对内容与引用后再发送；原要求已保留。"}</p> : null}
       {awaitingTaskRead ? <p role="status">正在回读当前草稿，撤销暂不可用。</p> : null}
       {task && undoAvailable ? <div className="home-composer__footer"><button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button></div> : null}
+      {task && restoreRequest?<div className="home-composer__footer"><button disabled={pending!==null} onClick={()=>void queryTaskRestore()} type="button">查询原撤销结果</button></div>:null}
     </div>
   );
 }

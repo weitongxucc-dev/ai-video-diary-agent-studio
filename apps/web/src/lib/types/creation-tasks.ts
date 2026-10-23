@@ -492,7 +492,9 @@ export type CreationTaskSegment = {
     narration_segment_id: string | null;
     audio: { kind: "audio"; artifact_ref: string | null; status: string; duration_seconds: number | null } | null;
     video: { kind: "video"; artifact_ref: string; sha256: string; segment_version: string; duration_seconds: number; url: string } | null;
+    historical_video?: CreationTaskSegment['video'];
     adopted: boolean;
+    adoption?: CreationTaskSegmentRevision['adoption'];
 };
 export type CreationTaskSegmentRevision = {
     task_id: string;
@@ -507,6 +509,15 @@ export type CreationTaskSegmentRevision = {
     rules_check: { status: string };
     result: Record<string, unknown> | null;
     usage_source: string;
+    adoption: {
+        status: "not_produced" | "candidate" | "current" | "superseded" | "invalidated";
+        current_timeline_version_id: string | null;
+        current_timeline_sequence: number | null;
+        current_segment_version: string | null;
+        result_segment_version: string | null;
+        reason: string | null;
+    };
+    recovery: {action: "resume_original" | "wait" | "query_original" | "none"; reason_code: string; requires_revalidation: boolean};
 };
 export type CreationTaskSegments = {
     task_id: string;

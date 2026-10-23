@@ -203,6 +203,9 @@ export function readCreationTaskBudget(taskId: string): Promise<import('../types
 export function readCreationTaskSegmentRevision(taskId: string, requestId: string): Promise<import('../types/creation-tasks').CreationTaskSegmentRevision> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/segment-requests/${encodeURIComponent(requestId)}`);
 }
+export function resumeCreationTaskSegmentRevision(taskId: string, requestId: string): Promise<import('../types/creation-tasks').CreationTaskSegmentRevision> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/segment-requests/${encodeURIComponent(requestId)}/resume`, {method: 'POST', body: '{}'});
+}
 
 export function readCreationTaskNativeOperations(taskId: string, offset = 0, signal?: AbortSignal): Promise<import('../types/creation-tasks').CreationTaskNativeOperations> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/native-operations?offset=${offset}&limit=30`, { signal });

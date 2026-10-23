@@ -13,6 +13,7 @@ export function createExecutionGuards() {
     hasEditControlWrite: () => editControlWriteAttempted || directEditAttempted,
     hasHistoryControlWrite: () => editControlWriteAttempted,
     markEditControlWrite: () => {editControlWriteAttempted = true;},
+    releaseNotSubmittedEditControl: () => {editControlWriteAttempted = false;},
     markDirectEditAttempt: () => {directEditAttempted = true;},
     verifyDirectEdit: () => {directEditVerified = true;},
     directEditUnverified: () => directEditAttempted && !directEditVerified};

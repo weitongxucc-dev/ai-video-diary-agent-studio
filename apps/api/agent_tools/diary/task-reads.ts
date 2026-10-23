@@ -17,6 +17,21 @@ export function registerTaskReads(pi: ToolRegistrar, {request, taskId, readCurre
 
   if (taskId) {
     pi.registerTool({
+      name: "read_narration_segments", label: "读取作品段落",
+      description: "按页读取当前作品的稳定文案段ID、段版本、依赖摘要、实际音画和原修改请求。用户指定第几段或某段正文时先据此定位，再读取该段全文；不把无关段发布造成的整片版本推进当作目标段冲突，不改绑既有修改的原依据。",
+      parameters: {type: "object", properties: {offset: {type: "integer", minimum: 0},
+        limit: {type: "integer", minimum: 1, maximum: 30}}, additionalProperties: false},
+      execute: async (_id: string, params: {offset?: number; limit?: number} = {}) => {
+        const offset = params.offset ?? 0, limit = params.limit ?? 24;
+        if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 30)
+          throw new Error("段落读取范围必须是有界整数分页");
+        const details = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/segments?offset=${offset}&limit=${limit}`);
+        if (details.task_id !== taskId || !Array.isArray(details.segments)) throw new Error("段落列表不属于当前任务或不可读");
+        markTaskRead();
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      },
+    });
+    pi.registerTool({
       name: "read_task_edit_capabilities", label: "读取真实编辑能力",
       description: "读取 API 的精确编辑 schema、可预览动作、对象前置条件与单位。阶段不代表对象不可编辑；没有能力或缺少对象时保留实际原因。",
       parameters: {type: "object", properties: {}, additionalProperties: false},

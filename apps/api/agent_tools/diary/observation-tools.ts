@@ -12,8 +12,6 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
       execute: async () => {
         const details = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/observations`);
         if (details.task_id !== taskId) throw new Error("结果观察不属于当前任务");
-        verifyTaskVersion({task: {current_timeline_version_id: details.timeline_version_id,
-          timeline_sequence: details.timeline_sequence}});
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });

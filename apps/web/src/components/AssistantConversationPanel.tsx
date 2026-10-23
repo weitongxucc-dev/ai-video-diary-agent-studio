@@ -1,6 +1,7 @@
 "use client";
 import { InputGroup, InputGroupTextarea } from "./ui/input-group";
 import { Button } from "./ui/button";
+import { segmentRevisionStatus, segmentAdoptionReason } from './creation-task/stage-labels';
 
 import { ReferenceChips } from "./ui/reference-chips";
 
@@ -359,6 +360,16 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const toolSummary = scriptToolSummary(taskResult?.response?.script_tool);
   const storyboard = taskResult?.response?.storyboard_regeneration;
   const storyboardSummary = storyboardRegenerationSummary(storyboard);
+  const segment = taskResult?.response?.segment_revision;
+  const segmentSummary = segment?.revision ? segmentRevisionStatus(segment.revision)
+    : segment?.failure?.submission_effect === 'not_submitted' ? '本段修改未提交'
+      : segment?.failure?.submission_effect === 'rejected' ? '本段修改已被拒绝'
+        : segment ? '本段修改结果尚未知；请先查询原请求' : null;
+  const restore=taskResult?.response?.timeline_restore;
+  const restoreSummary=restore?.receipt?.status==='applied'?'原修改的撤销或重做已保存为新版本'
+    : restore?.receipt?.status==='refused' || restore?.failure?.submission_effect==='rejected'?'原撤销或重做已被拒绝'
+      : restore?.failure?.submission_effect==='not_submitted'?'撤销或重做未提交'
+        : restore?'撤销或重做结果尚未知；请查询原请求':null;
   const storyboardFailure = storyboard?.kind === "storyboard_regeneration_receipt"
     ? storyboard.receipt.failure_reason : storyboard?.failure.reason;
   const outcomeStatus = continuation?.status ?? job?.status;
@@ -390,7 +401,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
     cancelled: "已取消", interrupted: "中断等待继续",
   };
-  const resultSummary = businessSummary ?? storyboardSummary ?? toolSummary ?? (result?.kind === "plan_preview"
+  const resultSummary = restoreSummary ?? segmentSummary ?? businessSummary ?? storyboardSummary ?? toolSummary ?? (result?.kind === "plan_preview"
     ? (result.plan_preview as Record<string, unknown> | undefined)?.confirmable === true
       ? "方案已检查，可查看页面中的方案卡后决定是否创建。"
       : "方案检查已返回阻断项；请按页面中的真实原因处理。"
@@ -415,6 +426,9 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
+      {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}
+      {segment?.revision?.adoption?.reason ? <p>{segmentAdoptionReason(segment.revision.adoption.reason)}</p> : null}
+      {restore?.failure || restore?.receipt?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:restore:diagnostic`} message={restore.failure?.reason ?? restore.receipt?.failure?.reason ?? ''}/>{restore.failure?.repair_action || restore.receipt?.failure?.repair_action ? <p>{restore.failure?.repair_action ?? restore.receipt?.failure?.repair_action}</p> : null}</div> : null}
       {storyboardFailure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:storyboard:diagnostic`} message={storyboardFailure}/></div> : null}
       {storyboard && storyboard.kind !== "storyboard_regeneration_receipt" && storyboard.failure.repair_action ? <p>{storyboard.failure.repair_action}</p> : null}
       {unknownRequest && graphicSourceReady ? <p>{graphicSourceSummary}</p> : null}

@@ -61,7 +61,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -74,6 +74,7 @@ class TaskBusiness:
         self.record_adoption=record_adoption
         self.segments=segments
         self.native_case=native_case
+        self.timeline_restores=timeline_restores
 
     def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -174,13 +175,14 @@ class TaskBusiness:
         entered=False
         try:
             binding=dict(source_binding)
-            reconcile_original=(operation in {'read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision'}
+            reconcile_original=(operation in {'read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision'}
                 or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
             # Section owners validate the frozen target and dependency digest at
             # commit. An unrelated timeline publication may legitimately move HEAD.
             section_scoped=operation in {'read_narration_segment_context','read_narration_segments',
-                'record_narration_semantic_review','revise_narration_segment'}
-            check_version=not (reconcile_original or section_scoped)
+                'read_narration_segment_sources','record_narration_semantic_review','revise_narration_segment','resume_narration_revision'}
+            targeted_restore=operation=='restore_timeline' and bool((arguments.get('payload') or {}).get('target_operation_id'))
+            check_version=not (reconcile_original or section_scoped or targeted_restore)
             actor,task,goal,origin,sealed=self.check(binding,cancel_event,deadline_monotonic,check_version=check_version)
             if arguments.get('task_id',task.id)!=task.id:
                 raise TaskBusinessRejected('工具参数不能切换原任务')
@@ -365,11 +367,32 @@ class TaskBusiness:
 
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
-        if operation in {'read_narration_segment_context','read_narration_segments','read_narration_revision','revise_narration_segment'}:
+        if operation in {'read_timeline_history','read_timeline_restore_request','restore_timeline'}:
+            if self.timeline_restores is None: raise TaskBusinessRejected('原修改恢复用例尚未装配')
+            if operation=='read_timeline_history': return self.timeline_restores.history(ws,task_id,actor,
+                limit=args.get('limit',20),before_sequence=args.get('before_sequence'))
+            if operation=='read_timeline_restore_request': return self.timeline_restores.read_request(ws,task_id,args['request_id'],actor)
+            from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand
+            from app.schemas import CreationTaskTimelineRestoreRequest
+            payload=CreationTaskTimelineRestoreRequest.model_validate(args['payload'])
+            if args['action'] not in {'undo','redo'}: raise TaskBusinessRejected('恢复动作不可用')
+            result=self.timeline_restores.execute(TimelineRestoreCommand(ws,task,args['action']=='redo'),actor=actor,
+                request_id=payload.request_id,target_operation_id=payload.target_operation_id,
+                expected_timeline_version_id=payload.expected_timeline_version_id,
+                expected_timeline_sequence=payload.expected_timeline_sequence,write_guard=guard,
+                source={'assistant_turn_id':goal['current_turn_id'],'input_id':origin.get('input_id') or goal['current_turn_id']})
+            return {'operation':result.operation,'montage':result.montage,'narration':result.narration,
+                'restore_request':result.restore_request}
+        if operation in {'read_narration_segment_context','read_narration_segment_sources','read_narration_segments','read_narration_revision','revise_narration_segment','resume_narration_revision'}:
             if self.segments is None: raise TaskBusinessRejected('局部修改业务用例尚未装配')
             if operation=='read_narration_segment_context': return self.segments.context(ws,task_id,args['segment_id'],actor)
-            if operation=='read_narration_segments': return self.segments.list_segments(ws,task_id,actor)
+            if operation=='read_narration_segment_sources': return self.segments.sources(ws,task_id,args['segment_id'],actor,
+                offset=args.get('offset',0),limit=args.get('limit',8),text_offset=args.get('text_offset',0),max_chars=args.get('max_chars',3000))
+            if operation=='read_narration_segments': return self.segments.list_segments(ws,task_id,actor,
+                offset=args.get('offset',0),limit=args.get('limit',24))
             if operation=='read_narration_revision': return self.segments.read_request(ws,task_id,args['request_id'],actor)
+            if operation=='resume_narration_revision': return self.segments.resume_request(ws,task_id,args['request_id'],actor,
+                runtime=self.runtime(),write_guard=guard)
             from app.schemas import NarrationRevisionRequest
             payload=NarrationRevisionRequest.model_validate({k:v for k,v in args['payload'].items() if k!='assistant_turn_id'})
             self.conversations.record_input_submission(goal['current_turn_id'],ws,goal['member_id'],

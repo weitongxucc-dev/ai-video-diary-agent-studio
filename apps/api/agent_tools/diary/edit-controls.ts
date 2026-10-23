@@ -1,13 +1,52 @@
 import type {BusinessRequest, ToolRegistrar, TaskVersion, ActionSource} from './contracts.ts';
+import {BusinessRequestError, BusinessResultUnknown, RequestNotSubmitted, safeBusinessFailure} from './transport.ts';
 
-export function registerEditControls(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead, verifyTaskVersion, readActionSource, hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite}: {
+export function registerEditControls(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead, markTaskRead, verifyTaskVersion, readActionSource, typedRequestId, hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite, releaseNotSubmittedEditControl}: {
   request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; readActionSource: () => ActionSource; hasPreview: () => boolean; markPreview: () => void; hasCreationAction: () => boolean; hasEditControlWrite: () => boolean; markEditControlWrite: () => void;
+  markTaskRead: () => void; typedRequestId: (turn: string, call: string) => string;
+  releaseNotSubmittedEditControl: () => void;
 }) {
   type ControlStep = { index: number; command: string; enabled: boolean };
   type ControlProposal = { id: string; summary: string; operation_type: string; steps: ControlStep[] };
   type ControlContext = { task_id: string; timeline_version_id: string | null; timeline_sequence: number;
     can_undo: boolean; can_redo: boolean; proposals: ControlProposal[] };
   let editControls: ControlContext | null = null;
+  const historicalOperations = new Set<string>();
+  let historyRead = false;
+  const restorePath = (id: string) => `/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/restore-requests/${encodeURIComponent(id)}`;
+  const restoreResult = (action: 'undo' | 'redo' | 'query', requestId: string, receipt: any, error?: unknown) => {
+    const original = error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted
+      ? error.businessFailure : undefined;
+    const failure = error ? {...safeBusinessFailure({...original,
+      reason: original?.reason ?? (error instanceof Error ? error.message : String(error))}),
+      submission_effect: original?.submission_effect ?? (error instanceof RequestNotSubmitted ? 'not_submitted'
+        : error instanceof BusinessRequestError ? 'rejected' : 'unknown')} : undefined;
+    const details = {kind: 'timeline_restore_request', action, request_id: requestId, receipt, ...(failure ? {failure} : {})};
+    return {isError: Boolean(error), content: [{type: 'text' as const, text: JSON.stringify(details)}], details};
+  };
+  pi.registerTool({name: 'read_edit_history', label: '读取修改历史',
+    description: '分页读取本任务真实版本和原操作ID、类型、目标引用及来源请求。用户指定较早修改时据此定位；不能猜ID，也不能用最近修改替代。历史可播放不代表当前采用。',
+    parameters: {type: 'object', properties: {limit: {type: 'integer', minimum: 1, maximum: 50},
+      before_sequence: {type: 'integer', minimum: 1}}, additionalProperties: false},
+    execute: async (_id: string, params: {limit?: number; before_sequence?: number} = {}) => {
+      if (!taskId) throw new Error('当前任务不可用');
+      const query = new URLSearchParams({limit: String(params.limit ?? 20)});
+      if (params.before_sequence !== undefined) query.set('before_sequence', String(params.before_sequence));
+      const details = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions?${query}`);
+      if (details.task_id !== taskId || !Array.isArray(details.items)) throw new Error('历史版本不属于当前任务');
+      for (const item of details.items) if (typeof item.operation_id === 'string') historicalOperations.add(item.operation_id);
+      historyRead = true;
+      markTaskRead();
+      return {content: [{type: 'text', text: JSON.stringify(details)}], details};
+    }});
+  pi.registerTool({name: 'read_timeline_restore_request', label: '查询原撤销重做请求',
+    description: '仅按原UUID查询撤销或重做实际结果，不重发；404不能证明未提交，历史版本存在不代表当前恢复成功。',
+    parameters: {type: 'object', properties: {request_id: {type: 'string', format: 'uuid'}}, required: ['request_id'], additionalProperties: false},
+    execute: async (_id: string, params: {request_id: string}) => {
+      const receipt = await request(restorePath(params.request_id));
+      if (receipt.task_id !== taskId || receipt.request_id !== params.request_id) throw new Error('恢复原请求身份不一致');
+      return restoreResult('query', params.request_id, receipt);
+    }});
 
   function requireControlScope() {
     if (!taskId || !isTaskRead()) throw new Error("请先读取当前创作任务，再读取编辑控制范围");
@@ -55,11 +94,10 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
       expected_timeline_version_id: selectedTaskVersion.timeline_version_id,
       expected_timeline_sequence: selectedTaskVersion.timeline_sequence };
   }
-  function controlResult(action: "undo" | "redo" | "reject", result: unknown) {
-    return { content: [{ type: "text", text: JSON.stringify({ action, receipt_returned: true,
-      instruction: action === "reject" ? "这是取消当前待确认提案的实际回执，没有取消制作作业。普通回复不展示内部编号。"
-        : "这是整个上一编辑的撤销或重做回执；包括复合编辑中的全部子项，不能称为只撤销其中调色等单项。未自动开始新的渲染。普通回复不展示内部编号。" }) }],
-      details: { kind: "edit_control", action, task_id: taskId, result } };
+  function controlResult(result: unknown) {
+    return { content: [{ type: "text", text: JSON.stringify({action: 'reject', receipt_returned: true,
+      instruction: '这是取消当前待确认提案的实际回执，没有取消制作作业。普通回复不展示内部编号。'}) }],
+      details: {kind: 'edit_control', action: 'reject', task_id: taskId, result} };
   }
   pi.registerTool({
     name: "read_edit_control_context", label: "读取可调整编辑",
@@ -70,7 +108,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
       return { content: [{ type: "text", text: JSON.stringify({ can_undo: editControls.can_undo,
         can_redo: editControls.can_redo, proposals: editControls.proposals.map((proposal, index) => ({
           proposal_index: index + 1, summary: proposal.summary, operation_type: proposal.operation_type, steps: proposal.steps })),
-        instruction: "proposal_index从1开始；selection使用实际步骤index。撤销只支持整个上一编辑；已应用复合编辑中的单项逆编辑尚未实现。" }) }],
+        instruction: "proposal_index从1开始；selection使用实际步骤index。指定原修改先读read_edit_history并传其target_operation_id；已应用复合操作内部单项逆编辑尚未实现。" }) }],
         details: { kind: "edit_control_context", context: editControls } };
     },
   });
@@ -115,27 +153,37 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
       const result = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/edits/${encodeURIComponent(proposal.id)}/reject`, {
         method: "POST", body: JSON.stringify(body),
       });
-      return controlResult("reject", result);
+      return controlResult(result);
     },
   });
   for (const action of ["undo", "redo"] as const) {
     pi.registerTool({
       name: action === "undo" ? "undo_last_edit" : "redo_last_edit",
-      label: action === "undo" ? "撤销上一修改" : "重做上一修改",
-      description: `${action === "undo" ? "撤销" : "重做"}整个上一编辑，包括复合编辑全部子项。必须先读取当前编辑控制范围；不能将其用于已应用复合编辑中的单项逆编辑。模型不传任务或版本，服务器核用户本轮明确要求。每轮最多一次历史控制写入，失败不自动重试。`,
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-      execute: async () => {
+      label: action === "undo" ? "撤销原修改" : "重做原修改",
+      description: `${action === "undo" ? "撤销" : "重做"}原编辑。指定较早修改先读read_edit_history并传原target_operation_id；省略才按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。`,
+      parameters: {type: 'object', properties: {target_operation_id: {type: 'string', minLength: 1}}, additionalProperties: false},
+      execute: async (callId: string, params: {target_operation_id?: string} = {}) => {
         const body = controlWriteContext();
-        readControlContext();
-        const current = await loadEditControls();
-        if (!(action === "undo" ? current.can_undo : current.can_redo)) {
-          throw new Error(action === "undo" ? "当前版本没有可撤销的上一编辑" : "当前版本没有可重做的编辑");
-        }
+        if (params.target_operation_id) {
+          if (!historicalOperations.has(params.target_operation_id)) throw new Error('请从本次读取的真实修改历史选择原操作');
+        } else if (!editControls && !historyRead) throw new Error('请先读取修改历史或当前编辑控制范围');
+        const requestId = typedRequestId(body.assistant_turn_id, callId);
         markEditControlWrite();
-        const result = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/${action}`, {
-          method: "POST", body: JSON.stringify(body),
-        });
-        return controlResult(action, result);
+        let posted = false;
+        try {
+          const result = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/${action}`, {
+            method: 'POST', body: JSON.stringify({...body, request_id: requestId, ...params})});
+          posted = true;
+          const receipt = result.restore_request ?? await request(restorePath(requestId));
+          if (receipt.task_id !== taskId || receipt.request_id !== requestId) throw new Error('恢复回执不属于原请求，请先查询');
+          return restoreResult(action, requestId, receipt);
+        } catch (error) {
+          if (!posted && error instanceof RequestNotSubmitted) releaseNotSubmittedEditControl();
+          if (posted) error = new BusinessResultUnknown({reason:'写入已返回，但原撤销重做回执尚未核实。',
+            submission_effect:'unknown',request_id:requestId,query_url:restorePath(requestId),
+            impact:'写入响应已返回，读取原回执失败不能证明原操作未提交。',repair_action:'先查询原请求，不重复提交。'});
+          return restoreResult(action, requestId, null, error);
+        }
       },
     });
   }

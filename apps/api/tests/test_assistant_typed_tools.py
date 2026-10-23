@@ -12,6 +12,66 @@ import pytest
 from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS
 import app.assistant_pi as host
 
+
+def test_segment_revision_projection_retains_only_the_current_invocation_and_real_adoption():
+    from app.assistant.result_projection import project_business_result
+    original = {'kind': 'segment_revision', 'action': 'submit', 'request_id': 'old-request',
+        'invocation_input_id': 'old-input', 'revision': {'status': 'succeeded', 'adoption': {'status': 'current'}}}
+    current = {'kind': 'segment_revision', 'action': 'query', 'request_id': 'original-request',
+        'invocation_input_id': 'new-input', 'revision': {'status': 'succeeded', 'adoption': {'status': 'invalidated'}}}
+    events = [{'type': 'tool_execution_end', 'toolName': 'revise_narration_segment', 'isError': False,
+        'result': {'details': value}} for value in (current, original)]
+    answer, result = project_business_result({'answer': '已经完成整片', 'status': 'settled',
+        'input_id': 'new-input', 'tool_results': events})
+    assert result == current
+    assert '历史' in answer and '当前作品未采用' in answer
+    assert '已经完成整片' not in answer
+
+
+def test_segment_revision_resolver_reads_the_authorized_original_and_never_infers_non_submission_from_absence():
+    from app.assistant.result_projection import resolve_segment_revision
+    details = {'kind': 'segment_revision', 'action': 'submit', 'request_id': 'original-request',
+        'revision': {'adoption': {'status': 'current'}}}
+    actual = {'task_id': 'task', 'request_id': 'original-request', 'input_id': 'input',
+        'job_id': 'original-job', 'status': 'failed', 'adoption': {'status': 'candidate'},
+        'recovery': {'action': 'resume_original'}}
+    result = resolve_segment_revision(details, task_id='task', input_id='input', read_original=lambda request_id: actual)
+    assert result['revision'] is actual
+    with pytest.raises(ValueError, match='可信输入'):
+        resolve_segment_revision(details, task_id='task', input_id='new-input', read_original=lambda request_id: actual)
+    def missing(request_id):
+        assert request_id == 'original-request'
+        raise KeyError(request_id)
+    unknown = resolve_segment_revision(details, task_id='task', input_id='input', read_original=missing)
+    assert unknown['revision'] is None and unknown['request_id'] == 'original-request'
+    assert unknown['failure']['submission_effect'] == 'unknown'
+
+
+def test_original_receipt_refresh_reuses_saved_locators_without_mutating_the_turn_or_replaying():
+    from app.assistant.result_projection import refresh_original_receipts
+    turn = {'id': 'old-turn', 'result': {'kind': 'task_turn', 'response': {
+        'segment_revision': {'kind': 'segment_revision', 'action': 'submit', 'request_id': 'original-segment', 'revision': None,
+            'failure': {'reason': '响应丢失', 'submission_effect': 'unknown'}},
+        'timeline_restore': {'kind': 'timeline_restore_request', 'action': 'undo', 'request_id': 'original-restore', 'receipt': None,
+            'failure': {'reason': '响应丢失', 'submission_effect': 'unknown'}}}}}
+    before = json.loads(json.dumps(turn))
+    calls = []
+    def read_segment(request_id):
+        calls.append(request_id)
+        return {'task_id': 'task', 'request_id': request_id, 'input_id': 'original-input', 'status': 'succeeded',
+            'adoption': {'status': 'superseded'}}
+    def read_restore(request_id):
+        calls.append(request_id)
+        return {'task_id': 'task', 'request_id': request_id, 'action': 'undo', 'status': 'applied'}
+    refreshed = refresh_original_receipts(turn, task_id='task', input_id='different-current-input',
+        read_segment=read_segment, read_restore=read_restore)
+    assert turn == before
+    assert calls == ['original-segment', 'original-restore']
+    assert refreshed['result']['response']['segment_revision']['revision']['adoption']['status'] == 'superseded'
+    assert refreshed['result']['response']['timeline_restore']['receipt']['status'] == 'applied'
+    assert 'failure' not in refreshed['result']['response']['segment_revision']
+    assert 'failure' not in refreshed['result']['response']['timeline_restore']
+
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 RUNNER = r"""
 let raw=''; for await (const part of process.stdin) raw+=part;

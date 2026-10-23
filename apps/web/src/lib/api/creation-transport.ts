@@ -3,7 +3,8 @@ import { isLocalAuthMode } from "../auth/routing";
 import type { AssistantStreamEvent } from '../types/assistant';
 import { API_BASE, authorizedFetch } from './transport';
 export class CreationPlanApiError extends Error {
-    constructor(public readonly status: number, public readonly code: string | null, message: string, public readonly impact: string | null = null, public readonly repairAction: string | null = null, public readonly reason: string | null = null) {
+    constructor(public readonly status: number, public readonly code: string | null, message: string, public readonly impact: string | null = null, public readonly repairAction: string | null = null, public readonly reason: string | null = null,
+        public readonly submissionEffect: "not_submitted" | "rejected" | "unknown" | null = null) {
         super(message);
         this.name = "CreationPlanApiError";
     }
@@ -70,7 +71,8 @@ export async function creationPlanRequest<T>(path: string, init?: RequestInit): 
                         ? details.message
                         : typeof payload === "string"
                             ? payload
-                            : `请求失败：${response.status}`), typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, reason);
+                            : `请求失败：${response.status}`), typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, reason,
+            details.submission_effect === 'not_submitted' || details.submission_effect === 'rejected' || details.submission_effect === 'unknown' ? details.submission_effect : null);
     }
     return payload as T;
 }

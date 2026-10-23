@@ -1,6 +1,6 @@
 import {readAgentContext, verifyTaskVersion as verifyVersion} from './trusted-context.ts';
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {createBusinessRequest, RequestNotSubmitted, safeBusinessFailure, safeFailureText, credentialSecrets} from './transport.ts';
+import {createBusinessRequest, BusinessRequestError, BusinessResultUnknown, RequestNotSubmitted, safeBusinessFailure, safeFailureText, credentialSecrets} from './transport.ts';
 import type {BusinessFailure, HostBusinessCall} from './transport.ts';
 import {typedRequestId as requestIdentity} from './request-identity.ts';
 import {createToolCallScope} from './registration.ts';
@@ -62,11 +62,13 @@ export function createDiaryTools(environment: Record<string, string | undefined>
         catch (error) {
           const notSubmitted = error instanceof RequestNotSubmitted;
           const secrets = credentialSecrets(readCredentials());
+          const original = error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted
+            ? safeBusinessFailure(error.businessFailure,secrets) : {};
           const failure = safeBusinessFailure({task_id: taskId, request_id: readActionSource().creationRequestId,
             error: notSubmitted ? "request_not_submitted" : "business_tool_failed", stage: "tool",
-            submission_effect: notSubmitted ? "not_submitted" : "unknown",
+            submission_effect: notSubmitted ? "not_submitted" : error instanceof BusinessRequestError ? "rejected" : "unknown",
             reason: error instanceof Error ? safeFailureText(error.message, secrets) : "业务工具未完成，尚未确认原请求结果。",
-            repair_action: "先读取原请求及当前对象状态，核实结果后再决定后续动作；不要盲重试。"}, secrets);
+            repair_action: "先读取原请求及当前对象状态，核实结果后再决定后续动作；不要盲重试。",...original}, secrets);
           result = {isError: true, content: [{type: "text", text: JSON.stringify({failure})}], details: {failure}};
         }
         const receipt = failures.getStore()?.first;
@@ -80,6 +82,14 @@ export function createDiaryTools(environment: Record<string, string | undefined>
         const failure = receipt && !scriptFailure
           ? {...safeBusinessFailure(result.details, secrets), ...safeBusinessFailure(original, secrets), ...receipt}
           : safeBusinessFailure(original, secrets);
+        // A failed follow-up read cannot prove that the preceding write was not
+        // submitted. Keep the conservative operation effect and original locator.
+        if (original?.submission_effect === 'unknown' && receipt
+            && ['not_submitted','rejected'].includes(receipt.submission_effect)) {
+          const operationFailure = safeBusinessFailure(original, secrets);
+          Object.assign(failure, Object.fromEntries((['submission_effect','request_id','query_url','repair_action','impact'] as const)
+            .flatMap(key => operationFailure[key] === undefined ? [] : [[key, operationFailure[key]]])));
+        }
         if (original && Object.keys(original).length === Object.keys(failure).length
             && Object.entries(failure).every(([key, value]) => original[key] === value)) return result;
         const details = {...result.details, failure};
@@ -87,11 +97,11 @@ export function createDiaryTools(environment: Record<string, string | undefined>
       })});
     }});
     registerReferenceRead(pi,request,selectedReferences);
-    const {hasCreationAction, markCreationAction, hasEditControlWrite, markEditControlWrite, hasHistoryControlWrite, markDirectEditAttempt, verifyDirectEdit, directEditUnverified} = createExecutionGuards();
+    const {hasCreationAction, markCreationAction, hasEditControlWrite, markEditControlWrite, releaseNotSubmittedEditControl, hasHistoryControlWrite, markDirectEditAttempt, verifyDirectEdit, directEditUnverified} = createExecutionGuards();
     registerRecipeTools(pi, {request, taskId, selectedTaskVersion, isTaskRead, readActionSource,
       typedRequestId, getScriptToolCapabilities, getDeclaredCapabilities: () => declarations.initialScriptToolCapabilities, readMediaScriptToolCapabilities, markPreview});
     registerEditControls(pi, {request, taskId, selectedTaskVersion, isTaskRead, verifyTaskVersion, readActionSource,
-      hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite});
+      hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite, releaseNotSubmittedEditControl, markTaskRead, typedRequestId});
     registerWorkspaceTools(pi, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge,
       isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection});
     preferences.register(pi);

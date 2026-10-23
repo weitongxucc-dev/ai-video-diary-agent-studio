@@ -17,13 +17,13 @@ ASSISTANT_BUSINESS_TOOLS = {
               "preview_script_draft", "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
     "script": ("read_current_task", "find_knowledge", "preview_script_draft",
                "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
-    "task_edit": ("record_input_understanding", "read_narration_segment_context", "revise_narration_segment", "read_narration_revision", "read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
+    "task_edit": ("record_input_understanding", "read_narration_segment_context", "read_narration_segment_sources", "revise_narration_segment", "read_narration_revision", "resume_narration_revision", "read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "regenerate_storyboard"),
 }
 
-TASK_READ_PREVIEW_TOOLS = ("read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -58,10 +58,15 @@ _PI_TOOL_LABELS = {
     "read_edit_control_context": "读取当前修改",
     "preview_edit_selection": "调整保留的修改",
     "discard_edit_proposal": "取消修改方案",
-    "undo_last_edit": "撤销上一步",
-    "redo_last_edit": "重做上一步",
+    "undo_last_edit": "撤销原修改",
+    "redo_last_edit": "重做原修改",
     "record_input_understanding": "记录本次要求",
     "read_narration_segment_context": "读取段落全文",
+    "read_narration_segment_sources": "读取本段固定依据",
+    "read_narration_segments": "读取作品段落",
+    "read_edit_history": "读取修改历史",
+    "read_timeline_restore_request": "查询原撤销重做请求",
+    "resume_narration_revision": "恢复原段修改",
     "revise_narration_segment": "修改本段文案",
     "read_narration_revision": "查看本段修改",
     "read_current_task": "读取当前任务",
@@ -122,7 +127,7 @@ SYSTEM_PROMPT = """你是 AI 视频日记的创作助手。你只能处理当前
 不得声称已执行、已保存或已出片，除非工具返回相应事实。
 用read_task_observations读取本轮实际检查和可观察目标；需要新检查时observe_task_output，只提交当前已登记的预览、成片或PNG目标。按实际返回区分技术检查、抽帧、OCR和不可用的语义/听感，不能把尺寸或像素检测说成画面正确、字幕易读或声音自然；排队不代表已看，历史stale检查不代表当前版本，缺少证据就明确说明。
 apply_typed_edit只在本轮明确指令及API直接能力内执行，成功以原请求journal回执为准；结果未知用read_typed_edit_request phase=apply查询，不重POST。preview_typed_edit只生成待确认提案；让用户检查影响并确认。
-用户明确要求保留或取消待确认修改的部分步骤，先读取read_edit_control_context，用preview_edit_selection准备新的范围并等待确认；明确取消整份修改方案用discard_edit_proposal。用户明确整体撤销或重做上一步时同样先读取当前控制状态，再用undo_last_edit或redo_last_edit。只能整项历史恢复，已应用复合编辑中的单项逆编辑尚未接通，不得用整体撤销冒充只撤销调色，也不得把重做口型解释为历史重做。
+用户明确要求保留或取消待确认修改的部分步骤，先读取read_edit_control_context，用preview_edit_selection准备新的范围并等待确认；明确取消整份修改方案用discard_edit_proposal。撤销或重做先读read_edit_history，指定较早修改须向undo_last_edit或redo_last_edit传真实target_operation_id；省略才按最近历史，保留无关后续成果。未知结果用read_timeline_restore_request查原UUID。已应用复合操作内部单项逆编辑尚未接通，不得用整体撤销冒充只撤销调色，也不得把重做口型解释为历史重做。
 界面选择只是默认上下文；用户给出镜头序号时，从当前任务事实的index找到实际clip_id并用typed字段提交，查候选也可传该clip_id，不要求界面先多选。任务、阶段与selected_refs仍由宿主绑定；模型选出的提案目标不能被当作界面当前选择。范围不明确才问。资料不足或工具失败时说明具体阻断，不虚构结果。
 typed动作直接提供API已声明字段，原句仍由宿主绑定为来源；替换使用本轮实际读到的候选素材和片段。用户的限制必须由实际作用对象和提案影响满足；不能满足就先说明阻断，不丢弃限制。
 水平、垂直裁剪百分比表示裁剪窗口的位置，不是画面宽度、面积或保留比例；“向左一点”等缺少明确位置时先问，不猜步长。

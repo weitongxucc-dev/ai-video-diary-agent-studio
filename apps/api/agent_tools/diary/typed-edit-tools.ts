@@ -1,6 +1,6 @@
 import type {BusinessRequest, ToolRegistrar, TaskVersion, ActionSource} from './contracts.ts';
 import {typedEditSchema, isHostEditField} from './schemas.ts';
-import {BusinessRequestError, RequestNotSubmitted} from './transport.ts';
+import {BusinessRequestError, BusinessResultUnknown, RequestNotSubmitted, safeBusinessFailure} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 import {createHash} from 'node:crypto';
 
@@ -13,7 +13,20 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
   function registerNarrationRevision(pi: ToolRegistrar) {
     const contexts = new Map<string, any>();
     const submitted = new Set<string>();
+    const sectionAttempts = new Map<string, string>();
+    const originals = new Map<string, any>();
     const root = `/api/creation-tasks/${encodeURIComponent(taskId!)}`;
+    const outcome = (action: 'submit' | 'query' | 'resume', requestId: string, revision: any, error?: unknown) => {
+      const original = error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted
+        ? error.businessFailure : undefined;
+      const failure = error ? {...safeBusinessFailure({...original,
+        reason: original?.reason ?? (error instanceof Error ? error.message : String(error))}),
+        submission_effect: original?.submission_effect ?? (error instanceof RequestNotSubmitted ? 'not_submitted'
+          : error instanceof BusinessRequestError ? 'rejected' : 'unknown')} : undefined;
+      const details = {kind: 'segment_revision', action, request_id: requestId, revision,
+        ...(failure ? {failure} : {})};
+      return {isError: Boolean(error), content: [{type: 'text' as const, text: JSON.stringify(details)}], details};
+    };
     pi.registerTool({
       name: 'record_input_understanding', label: '记录本次要求',
       description: '阅读当前对象后记录用户是在查询、澄清、试稿、正式修改、采用还是提出独立目标。这里只记录理解，不声明业务生效或已完成；试稿和查询不改变当前采用版本。',
@@ -29,20 +42,42 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
     });
     pi.registerTool({
       name:'read_narration_segment_context',label:'读取段落全文',
-      description:'按真实ScriptSection.id读取本段和相邻段完整正文、脚本与时间线版本、来源依据、锁定规则和已有观察。先用当前任务事实找到用户明确指定的段；不以输入框默认选择覆盖用户“第1段”等指向。',
+      description:'按真实ScriptSection.id读取本段和相邻段完整正文、脚本与时间线版本、来源依据和锁定规则。先用read_narration_segments找到用户明确指定的段；不以输入框默认选择覆盖用户“第1段”等指向。观察只以已有明确回执为依据。',
       parameters:{type:'object',properties:{segment_id:{type:'string',minLength:1}},required:['segment_id'],additionalProperties:false},
       execute:async (_id:string,params:{segment_id:string}) => {
         if (!isTaskRead()) throw new Error('请先读取当前任务及实际段落身份');
         const value=await request(`${root}/segments/${encodeURIComponent(params.segment_id)}/context`);
-        if (value.section_id!==params.segment_id || typeof value.text!=='string'
+        if (value.task_id!==taskId || value.section_id!==params.segment_id || typeof value.text!=='string'
             || typeof value.segment_version!=='string' || !value.script_id || value.text_truncated===true) throw new Error('段落全文或版本未完整返回，不能据此改写');
-        const source_context=await request(`${root}/assistant/script-context`);
-        const observations=await request(`${root}/observations`);
         contexts.set(params.segment_id,value);
-        value.source_context=source_context; value.observations=observations;
         return {content:[{type:'text',text:JSON.stringify(value)}],details:{kind:'narration_segment_context',context:value}};
       },
     });
+    pi.registerTool({name:'read_narration_segment_sources',label:'读取本段固定依据',
+      description:'先读本段上下文，再按页读取其原来源绑定的正文窗口。matched才有正文；changed/missing/unavailable/unknown分别保留，不用同ID最新内容追认旧依据。window_digest只标识当前文字窗口，不是原来源版本。',
+      parameters:{type:'object',properties:{segment_id:{type:'string',minLength:1},offset:{type:'integer',minimum:0},
+        limit:{type:'integer',minimum:1,maximum:24},text_offset:{type:'integer',minimum:0},max_chars:{type:'integer',minimum:1,maximum:8000}},
+        required:['segment_id'],additionalProperties:false},
+      execute:async (_id:string,params:{segment_id:string;offset?:number;limit?:number;text_offset?:number;max_chars?:number})=>{
+        const context=contexts.get(params.segment_id);
+        if (!context) throw new Error('先读取本段完整正文、版本和原来源绑定');
+        const query=new URLSearchParams({offset:String(params.offset??0),limit:String(params.limit??8),
+          text_offset:String(params.text_offset??0),max_chars:String(params.max_chars??3000)});
+        const value=await request(`${root}/segments/${encodeURIComponent(params.segment_id)}/sources?${query}`);
+        if (value.task_id!==taskId || value.section_id!==params.segment_id || value.script_id!==context.script_id
+            || value.segment_version!==context.segment_version || !Array.isArray(value.items))
+          throw new Error('本段原读取依据已变化，不能把新来源绑定为原证据');
+        const keys=['reference_id','kind','object_id','version_or_identity','content_digest','binding_status'];
+        const items=value.items.map((item:any)=>{
+          const original=context.source_bindings?.find((binding:any)=>binding.reference_id===item.binding?.reference_id);
+          if (original?.binding_status==='fixed' && keys.every(key=>original[key]===item.binding?.[key])) return item;
+          const {text,title,window_digest,content_digest,...metadata}=item;
+          return {...metadata,status:original?.binding_status==='fixed'?'changed':'unknown',
+            reason_code:original?.binding_status==='fixed'?'fixed_source_binding_changed':'original_source_binding_unavailable'};
+        });
+        const details={...value,items};
+        return {content:[{type:'text',text:JSON.stringify(details)}],details};
+      }});
     const rule={type:'object',properties:{id:{type:'string',minLength:1},kind:{type:'string',enum:['exact_text','number','qualified_claim']},
       source_text:{type:'string',minLength:1},required_text:{type:'string',minLength:1},source_reference:{type:'string',minLength:1}},
       required:['id','kind','source_text','required_text','source_reference'],additionalProperties:false};
@@ -65,14 +100,18 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
         if (params.protected_rules.some((r:any)=>!params.findings.some((f:any)=>f.rule_id===r.id)))
           throw new Error('每项受保护事实与限定都须有语义对照依据');
         const requestId=typedRequestId(source.turnId,id);
+        const attemptKey=JSON.stringify([source.inputId ?? source.turnId,params.segment_id]);
+        if (sectionAttempts.has(attemptKey)) throw new Error(`本段修改已尝试提交；先查询原请求 ${sectionAttempts.get(attemptKey)}，不换新身份重复提交`);
         if (submitted.has(requestId)) throw new Error('原修改已尝试提交，请按原请求身份回读结果');
         submitted.add(requestId);
+        sectionAttempts.set(attemptKey,requestId);
         const digest=(value:string)=>createHash('sha256').update(value,'utf8').digest('hex');
         const review={request_id:requestId,section_id:params.segment_id,script_id:context.script_id,expected_segment_version:context.segment_version,
           dependency_digest:context.dependency_digest,
           base_version_id:context.base_version_id,source_text_sha256:digest(context.text),
           replacement_text_sha256:digest(params.replacement_text),protected_rules:params.protected_rules,
           conclusion:params.conclusion,findings:params.findings,authorized_locked_section_ids:[]};
+        try {
         const receipt=await request(`${root}/assistant/narration-semantic-review`,{method:'POST',body:JSON.stringify({
           ...review,assistant_turn_id:source.turnId,input_id:source.inputId ?? source.turnId})});
         if (!receipt.semantic_review_ref) throw new Error('语义复核未返回持久引用，尚未提交改稿');
@@ -82,15 +121,11 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
           base_version_id:context.base_version_id,source_text_sha256:review.source_text_sha256,
           replacement_text_sha256:review.replacement_text_sha256,replacement_text:params.replacement_text,
           protected_rules:params.protected_rules,semantic_review_ref:receipt.semantic_review_ref,adoption_mode:params.adoption_mode};
-        try {
           const result=await request(`${root}/segments/${encodeURIComponent(params.segment_id)}/revision`,{method:'POST',body:JSON.stringify(payload)});
-          return {content:[{type:'text',text:JSON.stringify(result)}],details:{kind:'segment_revision',revision:result}};
+          return outcome('submit',requestId,result);
         } catch (error) {
-          const details={kind:'segment_revision',revision:{request_id:requestId,segment_id:params.segment_id,
-            status:error instanceof RequestNotSubmitted?'not_submitted':error instanceof BusinessRequestError && error.httpStatus<500?'rejected':'result_unknown',
-            query_url:`${root}/segment-requests/${encodeURIComponent(requestId)}`,
-            failure_reason:boundedText(error instanceof Error?error.message:String(error),500)}};
-          return {isError:true,content:[{type:'text',text:JSON.stringify(details)}],details};
+          if (error instanceof RequestNotSubmitted && sectionAttempts.get(attemptKey)===requestId) sectionAttempts.delete(attemptKey);
+          return outcome('submit',requestId,null,error);
         }
       },
     });
@@ -100,10 +135,29 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
       parameters:{type:'object',properties:{request_id:{type:'string',minLength:1}},required:['request_id'],additionalProperties:false},
       execute:async (_id:string,params:{request_id:string}) => {
         const revision=await request(`${root}/segment-requests/${encodeURIComponent(params.request_id)}`);
-        if (revision.request_id!==params.request_id) throw new Error('原修改回执身份不一致');
-        return {content:[{type:'text',text:JSON.stringify(revision)}],details:{kind:'segment_revision',revision}};
+        if (revision.task_id!==taskId || revision.request_id!==params.request_id) throw new Error('原修改回执身份不一致');
+        originals.set(params.request_id,revision);
+        return outcome('query',params.request_id,revision);
       },
     });
+    pi.registerTool({name:'resume_narration_revision',label:'恢复原段修改',
+      description:'先回读原段修改请求，仅当业务回执recovery.action为resume_original时沿同一request/job和累计预算恢复；未知先查询，不换ID重做，不把历史可播放视为当前采用。',
+      parameters:{type:'object',properties:{request_id:{type:'string',minLength:1}},required:['request_id'],additionalProperties:false},
+      execute:async (_id:string,params:{request_id:string})=>{
+        const source=readActionSource();
+        if (!source.turnId) throw new Error('当前恢复要求的可信回合不可用');
+        if (!originals.has(params.request_id)) throw new Error('先回读原段修改请求及可用恢复动作');
+        const current=await request(`${root}/segment-requests/${encodeURIComponent(params.request_id)}`);
+        if (current.task_id!==taskId || current.request_id!==params.request_id || current.recovery?.action!=='resume_original')
+          throw new Error('原段修改当前不可恢复，请按原请求回执处理');
+        try {
+          const revision=await request(`${root}/segment-requests/${encodeURIComponent(params.request_id)}/resume`,{
+            method:'POST',body:JSON.stringify({assistant_turn_id:source.turnId})});
+          if (revision.task_id!==taskId || revision.request_id!==params.request_id || revision.job_id!==current.job_id)
+            throw new Error('恢复回执未保留原请求和作业，请先查询原请求');
+          return outcome('resume',params.request_id,revision);
+        } catch(error) {return outcome('resume',params.request_id,null,error);}
+      }});
   }
   function registerRequestReader(pi: ToolRegistrar) {
     pi.registerTool({

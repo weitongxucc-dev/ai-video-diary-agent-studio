@@ -6,6 +6,8 @@ import { useScopedAssistantConversation } from "../useAssistantConversation";
 import type { AssistantConversation, AssistantConversationTurn, CreationTask } from "@/lib/types";
 import type { AssistantBusinessContinuation, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
+const restoreApi=vi.hoisted(()=>({read:vi.fn(async(taskId:string,requestId:string)=>({task_id:taskId,request_id:requestId,
+  action:'undo',status:'applied',operation_id:'restored-operation',result_version_id:'restored-version',failure:null}))}));
 
 const queuedStoryboard: AssistantStoryboardRegeneration = {
   kind: "storyboard_regeneration_receipt", action: "submit",
@@ -115,6 +117,7 @@ vi.mock("@/lib/api", () => {
   sendCreationTaskAssistantTurn: mocks.sendTaskTurn.mockImplementation((taskId: string, payload: { conversation_id: string; message: string; client_request_id: string; expected_draft_version: number }, onEvent: (event: never) => void) => runTurn(payload.conversation_id, payload.message, payload.client_request_id, payload.expected_draft_version, onEvent, (emit) => mocks.editAsk(taskId, payload, emit))),
   confirmCreationTaskEdit: mocks.confirmEdit,
   undoCreationTaskTimeline: mocks.undoEdit,
+  readCreationTaskTimelineRestore: restoreApi.read,
   };
 });
 
@@ -613,7 +616,7 @@ describe("HomeCommandComposer", () => {
     view.rerender(<HomeCommandComposer onTaskUpdated={onTaskUpdated} task={{ ...task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: true }} />);
     fireEvent.click(screen.getByRole("button", { name: "撤销修改" }));
     await waitFor(() => expect(mocks.undoEdit).toHaveBeenCalledWith("task-1", {
-      expected_timeline_version_id: "v2", expected_timeline_sequence: 2,
+      expected_timeline_version_id: "v2", expected_timeline_sequence: 2, request_id:expect.any(String),
     }));
     expect(onTaskUpdated).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
@@ -863,6 +866,25 @@ describe("HomeCommandComposer", () => {
     expect(screen.getByText("正在回读当前草稿，撤销暂不可用。")).toBeInTheDocument();
     view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v2", can_undo: false }} onTaskUpdated={onTaskUpdated} />);
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
+  });
+
+  it.each(['not_submitted','rejected'] as const)('home undo readback %s cannot enable a new write UUID',async effect=>{
+    configuredModel();
+    const task={id:'task-1',stage:'montage',name:'测试任务',current_timeline_version_id:'v1',timeline_sequence:1,can_undo:true} as CreationTask;
+    mocks.undoEdit.mockReset().mockResolvedValue({});
+    restoreApi.read.mockRejectedValueOnce(new CreationPlanApiError(404,null,'原读取拒绝',null,null,null,effect));
+    const onTaskUpdated=vi.fn();
+    const view=render(<HomeCommandComposer task={task} onTaskUpdated={onTaskUpdated}/>);
+    await readyInput('任务对话要求');
+    fireEvent.click(screen.getByRole('button',{name:'撤销修改'}));
+    await screen.findByText('原读取拒绝');
+    await waitFor(()=>expect(onTaskUpdated).toHaveBeenCalledOnce());
+    const requestId=mocks.undoEdit.mock.calls[0][1].request_id;
+    view.rerender(<HomeCommandComposer task={{...task}} onTaskUpdated={onTaskUpdated}/>);
+    expect(screen.queryByRole('button',{name:'撤销修改'})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'查询原撤销结果'}));
+    await waitFor(()=>expect(restoreApi.read).toHaveBeenLastCalledWith(task.id,requestId));
+    expect(mocks.undoEdit).toHaveBeenCalledTimes(1);
   });
 
   it.each(["switch", "unmount"])("does not invoke the old task read callback after confirmation and %s", async change => {

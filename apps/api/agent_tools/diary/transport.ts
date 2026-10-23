@@ -181,6 +181,12 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   const args = {task_id: decodeURIComponent(task[1])};
   const suffix = task[2];
   if (method === 'GET') {
+    if (suffix === '/timeline/versions' && only('limit', 'before_sequence')) return result('read_timeline_history',
+      {...args, limit: Number(query.get('limit') || 20), ...(query.has('before_sequence') ? {before_sequence: Number(query.get('before_sequence'))} : {})});
+    const restoreRequest = suffix.match(/^\/timeline\/restore-requests\/([^/]+)$/);
+    if (restoreRequest && !search) return result('read_timeline_restore_request', {...args, request_id: decodeURIComponent(restoreRequest[1])});
+    if (suffix === '/segments' && only('offset', 'limit')) return result('read_narration_segments',
+      {...args, offset: Number(query.get('offset') || 0), limit: Number(query.get('limit') || 24)});
     if (!suffix && !search) return result('read_task_workspace', args);
     if (suffix === '/execution' && only('job_id')) return result('read_creation_execution',
       {...args, ...(query.has('job_id') ? {job_id: query.get('job_id')} : {})});
@@ -194,6 +200,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (reads[suffix] && !search) return result(reads[suffix], args);
     const segmentContext=suffix.match(/^\/segments\/([^/]+)\/context$/);
     if (segmentContext && !search) return result('read_narration_segment_context',{...args,segment_id:decodeURIComponent(segmentContext[1])});
+    const segmentSources=suffix.match(/^\/segments\/([^/]+)\/sources$/);
+    if (segmentSources && only('offset','limit','text_offset','max_chars')) return result('read_narration_segment_sources',
+      {...args,segment_id:decodeURIComponent(segmentSources[1]),offset:Number(query.get('offset')||0),limit:Number(query.get('limit')||8),
+        text_offset:Number(query.get('text_offset')||0),max_chars:Number(query.get('max_chars')||3000)});
     const segmentRequest=suffix.match(/^\/segment-requests\/([^/]+)$/);
     if (segmentRequest && !search) return result('read_narration_revision',{...args,request_id:decodeURIComponent(segmentRequest[1])});
     const observationRequest = suffix.match(/^\/assistant\/edit-requests\/([^/]+)$/);
@@ -207,6 +217,11 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     return result(suffix.endsWith('/start') ? 'start_creation_execution' : 'resume_creation_execution',
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
   if (search) return null;
+  if (suffix === '/timeline/undo' || suffix === '/timeline/redo') return result('restore_timeline',
+    {...args, action: suffix.endsWith('/undo') ? 'undo' : 'redo', payload});
+  const segmentResume = suffix.match(/^\/segment-requests\/([^/]+)\/resume$/);
+  if (segmentResume) return result('resume_narration_revision', {...args,
+    request_id: decodeURIComponent(segmentResume[1]), assistant_turn_id: payload.assistant_turn_id});
   const writes: Record<string, string> = {
     '/assistant/input-understanding':'record_input_understanding',
     '/assistant/narration-semantic-review':'record_narration_semantic_review',
@@ -265,7 +280,14 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     const operation = businessCall ? hostOperation(path, (init?.method || 'GET').toUpperCase(), requestBody) : null;
     if (businessCall && !operation) return notSubmitted('business_operation_not_supported', '该操作未接入原目标后台执行，请求未提交。', 'capability');
     if (!businessCall && !apiBase) return notSubmitted("business_service_unavailable", "本地业务服务不可用，请求未提交。", "connection");
-    if (taskId && selectedTaskVersion && init?.method && init.method !== "GET" && path.startsWith(`/api/creation-tasks/${encodeURIComponent(taskId)}/`)) {
+    const taskRoot = `/api/creation-tasks/${encodeURIComponent(taskId || '')}`;
+    const sectionWrite = path === `${taskRoot}/assistant/narration-semantic-review`
+      || (path.startsWith(`${taskRoot}/segments/`) && /^\/segments\/[^/]+\/revision$/.test(path.slice(taskRoot.length)))
+      || (path.startsWith(`${taskRoot}/segment-requests/`) && /^\/segment-requests\/[^/]+\/resume$/.test(path.slice(taskRoot.length)));
+    const targetedRestore = (path === `${taskRoot}/timeline/undo` || path === `${taskRoot}/timeline/redo`)
+      && typeof requestBody?.target_operation_id === 'string' && requestBody.target_operation_id.length > 0;
+    // The section owner checks the original section and dependency digest.
+    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && path.startsWith(`${taskRoot}/`)) {
       try {
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`, undefined, false);
         verifyTaskVersion(current);

@@ -4,10 +4,10 @@ import { LoaderCircle, UserRound } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskPersonRender, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
-import { narrationSegmentStatus } from './stage-labels';
-import { useCallback, useEffect, useState } from 'react';
+import { narrationSegmentStatus, segmentRevisionStatus, segmentAdoptionReason } from './stage-labels';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
-import { readCreationTaskSegments, readCreationTaskBudget, readCreationTaskSegmentRevision } from '@/lib/api/task-media';
+import { readCreationTaskSegments, readCreationTaskBudget, readCreationTaskSegmentRevision, resumeCreationTaskSegmentRevision } from '@/lib/api/task-media';
 import type { CreationTaskSegments, CreationTaskSegment, CreationTaskBudget, CreationTaskSegmentRevision } from '@/lib/types/creation-tasks';
 
 export function SegmentProductionPanel({ taskId }: { taskId: string }) {
@@ -21,14 +21,28 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
     const [offset,setOffset]=useState(0);
     const [receipt,setReceipt]=useState<CreationTaskSegmentRevision|null>(null);
     const [readingReceipt,setReadingReceipt]=useState(false);
-    async function inspectReceipt(requestId:string) {
+    const [receiptUnknown,setReceiptUnknown]=useState(false);
+    const receiptScope=useRef({taskId,sequence:0});
+    if (receiptScope.current.taskId!==taskId) receiptScope.current={taskId,sequence:0};
+    useEffect(()=>{const scope=receiptScope.current;setReadingReceipt(false);setReceiptUnknown(false);
+        return()=>{scope.sequence++;};},[taskId]);
+    async function inspectReceipt(requestId:string, recover=false) {
+        const scope=receiptScope.current,sequence=++scope.sequence;
+        const owns=()=>receiptScope.current===scope && scope.sequence===sequence;
         setReadingReceipt(true);
         try {
-            const value=await readCreationTaskSegmentRevision(taskId,requestId);
+            let value=await readCreationTaskSegmentRevision(taskId,requestId);
             if (value.task_id!==taskId || value.request_id!==requestId) throw new Error('修改回执身份不一致');
-            setReceipt(value);setError(null);
-        } catch(cause) { setError(cause instanceof Error?cause.message:'修改回执读取失败'); }
-        finally {setReadingReceipt(false);}
+            if (!owns()) return;
+            if (recover && value.recovery?.action==='resume_original') {
+                const originalJob=value.job_id;
+                value=await resumeCreationTaskSegmentRevision(taskId,requestId);
+                if (value.task_id!==taskId || value.request_id!==requestId || value.job_id!==originalJob)
+                    throw new Error('恢复回执未保留原请求和作业，请先查询原结果');
+            }
+            if (owns()) {setReceipt(value);setReceiptUnknown(false);setError(null);refresh();}
+        } catch(cause) {if (owns()) {setReceiptUnknown(true);setError(cause instanceof Error?cause.message:'修改回执读取失败');}}
+        finally {if (owns()) setReadingReceipt(false);}
     }
     const refresh=useCallback(()=>setRevision(value=>value+1),[]);
     useEffect(()=>{
@@ -61,14 +75,15 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
         {error?<p role="alert">{error}</p>:null}
         {selected?.video?<div className={styles.segmentVideoPreview}>
             <WorkspaceVideo key={selected.video.url} controls preload="metadata" src={apiUrl(selected.video.url)} aria-label={`第 ${selected.ordinal} 段有声预览`}/>
-            <p>第 {selected.ordinal} 段 · {selected.video.duration_seconds.toFixed(1)} 秒 · {selected.adopted?'已采用的段版本':'候选段版本'}</p>
+            <p>第 {selected.ordinal} 段 · {selected.video.duration_seconds.toFixed(1)} 秒 · {currentSelected?.adopted && currentSelected.segment_version===selected.segment_version?'当前采用的段版本':'历史或候选段版本'}</p>
             {newer && currentSelected?<div role="status"><p>本段已有新版本，当前预览保持原版本。</p><Button variant="outline" onClick={()=>setPreview(currentSelected)}>查看新版本</Button></div>:null}
         </div>:null}
         <div className={styles.segmentProductionList}>
             {current?.segments.map(segment=><article key={segment.section_id}>
-                <div><strong>第 {segment.ordinal} 段 · {segment.title}</strong><span>{segment.video?'有声视频就绪':segment.audio?.status==='failed'?'配音失败':segment.audio?.status==='generating'?'正在配音':'等待段产物'}</span></div>
+                <div><strong>第 {segment.ordinal} 段 · {segment.title}</strong><span>{segment.video?(segment.adopted?'段视频已采用':'历史或候选段视频'):segment.audio?.status==='failed'?'配音失败':segment.audio?.status==='generating'?'正在配音':'等待段产物'}</span></div>
                 <p>{segment.text}</p>
                 {segment.video?<Button variant="outline" aria-pressed={selected?.section_id===segment.section_id && selected.segment_version===segment.segment_version} onClick={()=>setPreview(segment)}>播放本段</Button>:null}
+                {!segment.video && segment.historical_video?<Button variant="outline" onClick={()=>setPreview({...segment,video:segment.historical_video!})}>查看历史段视频</Button>:null}
                 {current.revision_requests.items.filter(request=>request.section_id===segment.section_id).map(request=><div className={styles.segmentRevisionReceipt} key={request.request_id}>
                     <strong>本段修改 · {statuses[request.status]??request.status}</strong>
                     {request.waiting_reason?<p>{request.waiting_reason}</p>:null}
@@ -79,7 +94,11 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
         </div>
         {current && (current.offset>0 || current.truncated)?<div><Button variant="outline" disabled={reading || offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>上一页</Button><Button variant="outline" disabled={reading || !current.truncated} onClick={()=>setOffset(offset+30)}>下一页</Button></div>:null}
         {current?.revision_requests.truncated?<p>当前显示 {current.revision_requests.items.length} / {current.revision_requests.total_count} 条修改回执。</p>:null}
-        {receipt?.task_id===taskId?<div className={styles.segmentRevisionReceipt} aria-label="修改回执详情"><strong>{statuses[receipt.status]??receipt.status}</strong><p>规则检查：{receipt.rules_check.status==='passed'?'通过':'未通过'} · Pi 语义对照已记录</p><small>语义复核记录 {receipt.semantic_review_ref}</small>{receipt.waiting_reason?<p>{receipt.waiting_reason}</p>:null}</div>:null}
+        {receipt?.task_id===taskId?<div className={styles.segmentRevisionReceipt} aria-label="修改回执详情"><strong>{segmentRevisionStatus(receipt)}</strong><p>规则检查：{receipt.rules_check.status==='passed'?'通过':'未通过'} · Pi 语义对照已记录</p><small>语义复核记录 {receipt.semantic_review_ref}</small>{receipt.waiting_reason?<p>{receipt.waiting_reason}</p>:null}{receipt.adoption?.reason?<p>{segmentAdoptionReason(receipt.adoption.reason)}</p>:null}
+            {receiptUnknown?<p role="status">原结果尚未核实，请先查询修改回执。</p>:null}
+            <Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(receipt.request_id)}>查询原修改结果</Button>
+            {receipt.recovery?.action==='resume_original' && !receiptUnknown?<Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(receipt.request_id,true)}>恢复原段修改</Button>:null}
+        </div>:null}
         <details className={styles.segmentUsage}><summary>费用与资源记录</summary>
             <p>实际费用：{actualKnown?`${paid!.amount} ${paid!.currency??''}`:'待核对供应商用量或账单'}</p>
             <p>费用估算：{typeof usage?.estimates.cost==='number'?usage.estimates.cost:'暂无估算'} · 完成时间估算：{typeof usage?.estimates.eta_seconds==='number'?`${usage.estimates.eta_seconds} 秒`:'暂无估算'}</p>

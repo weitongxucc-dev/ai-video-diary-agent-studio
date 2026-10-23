@@ -12,6 +12,15 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+it('creation errors retain only finite submission effects for the original write', async()=>{
+  const {creationPlanRequest}=await import('../api/creation-transport');
+  for (const effect of ['not_submitted','rejected','unknown','invented']) {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({detail:{reason:'原操作未确认',submission_effect:effect}},{status:409})));
+    await expect(creationPlanRequest('/api/creation-tasks/task/timeline/undo',{method:'POST',body:'{}'})).rejects.toMatchObject({
+      reason:'原操作未确认',submissionEffect:effect==='invented'?null:effect});
+  }
+});
+
 it('JSON, stream and FormData use one identity boundary without corrupting body headers', async () => {
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     if (init?.headers && (init.headers as Record<string, string>).Accept === 'text/event-stream') {
