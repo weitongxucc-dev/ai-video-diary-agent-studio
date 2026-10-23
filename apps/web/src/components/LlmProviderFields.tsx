@@ -23,7 +23,7 @@ const PROVIDERS: ProviderPreset[] = [
     id: "deepseek",
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
-    models: ["deepseek-chat", "deepseek-reasoner"],
+    models: ["deepseek-flash", "deepseek-v4-pro"],
   },
   {
     id: "openai",

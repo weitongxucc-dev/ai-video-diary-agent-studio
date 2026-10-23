@@ -221,7 +221,7 @@ class Settings:
     llm_model: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = "deepseek-flash"
     obsidian_vault_path: str | None = None
     product_hunt_token: str | None = None
     product_hunt_api_url: str = "https://api.producthunt.com/v2/api/graphql"
