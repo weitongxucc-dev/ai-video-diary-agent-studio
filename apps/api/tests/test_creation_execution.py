@@ -4462,3 +4462,143 @@ def test_account_queued_voice_selection_rechecks_original_actor_in_writer(tmp_pa
         case.control.select_narration_voice(runtime=case.runtime,actor=case.actor,**case.selection)
     assert _voice_selection_snapshot(case) == before
     case.scheduler.close()
+
+
+def _visual_decision_case(tmp_path, monkeypatch):
+    case = _segment_units_case(tmp_path,monkeypatch)
+    asset = case.repo.get_asset('local','section_video')
+    asset.segments[0].end_seconds = asset.duration_seconds
+    case.repo._save_asset(asset)
+    return case
+
+
+def _require_section_visual_decision(case, monkeypatch):
+    from app.montage import creation_task_montage_plan_to_payload
+    original = case.segments.section_plan
+    def unconfirmed(*args, **kwargs):
+        plan, sources, _ = original(*args, **kwargs)
+        plan.clips[0].needs_confirmation = True
+        plan.low_confidence_clip_count = 1
+        plan.status = 'waiting_for_user'
+        return plan, sources, creation_task_montage_plan_to_payload(plan)
+    monkeypatch.setattr(case.segments, 'section_plan', unconfirmed)
+
+
+@pytest.mark.parametrize('revision', [False, True])
+def test_segment_visual_decision_keeps_audio_usage_and_resumes_original_job(tmp_path, monkeypatch, revision):
+    from types import SimpleNamespace
+    from app.creation_execution import next_creation_intent
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    runtime = SimpleNamespace(scheduler=case.scheduler, wake=lambda:None,
+        registrations={'creation_job':SimpleNamespace(owner=case.owner)})
+    if revision:
+        for _ in range(2):
+            case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+        before, result, runtime = _submit_section_revision(case)
+        job = case.repo.get_job_run('local', result['job_id'])
+    else:
+        job = case.job
+    _require_section_visual_decision(case, monkeypatch)
+    grant = case.scheduler.pick_and_grant()
+    assert grant.owner_id == job.id, (grant.unit_key,case.repo.list_creation_job_request_states('local',job.id))
+    case.executor.execute(grant, case.scheduler)
+    updated = case.repo.get_job_run('local', job.id)
+    assert updated.status == 'queued', updated.failure_reason
+    assert case.scheduler._get(grant.request_id).state == 'done'
+    view = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
+    assert view['status'] == 'waiting_for_user'
+    assert view['audio']['persisted'] and view['usage']['settled']
+    assert view['usage']['used_output_bytes'] > 0
+    assert all(row['state'] == 'done' for row in case.repo.list_creation_job_request_states('local',job.id))
+    if revision:
+        case.segments.resume_request('local',case.task_id,'revision_1',case.actor,runtime=runtime)
+        assert case.segments.context('local',case.task_id,'section_1',case.actor)['text'] == before['text']
+        monkeypatch.setattr(case.stage,'prepare_revision',lambda *a,**kw:pytest.fail('audio regenerated'))
+    else:
+        assert next_creation_intent(case.repo,case.scheduler,updated) is None
+        segments = case.repo.list_narration_segments('local',case.task_id,case.script_id)
+        assert segments[0].status == 'ready'
+        monkeypatch.setattr(case.stage,'prepare_segment',lambda *a,**kw:pytest.fail('audio regenerated'))
+    with pytest.raises(ValueError):
+        case.segments.adopt_visual_decision('local',case.task_id,job.id,'section_1',case.actor,
+            decision_digest=view['decision_digest'],confirmed_clip_ids=[],runtime=runtime)
+    adopted = case.segments.adopt_visual_decision('local',case.task_id,job.id,'section_1',case.actor,
+        decision_digest=view['decision_digest'],confirmed_clip_ids=view['required_confirmation_ids'],runtime=runtime)
+    replay = case.segments.adopt_visual_decision('local',case.task_id,job.id,'section_1',case.actor,
+        decision_digest=view['decision_digest'],confirmed_clip_ids=view['required_confirmation_ids'],runtime=runtime)
+    assert replay['replayed'] and replay['device_request_id'] == adopted['device_request_id']
+    assert adopted['usage'] == view['usage']
+    video = case.scheduler.pick_and_grant()
+    assert video.owner_id == job.id and video.unit_key.startswith('segment_video:')
+    assert video.request_id == adopted['device_request_id']
+    case.executor.execute(video,case.scheduler)
+    assert case.scheduler._get(video.request_id).state == 'done'
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+def test_segment_visual_decision_submit_gap_and_cancel_preserve_checkpoint(tmp_path, monkeypatch, cancel):
+    from types import SimpleNamespace
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    _require_section_visual_decision(case,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    view = case.segments.read_visual_decision('local',case.task_id,case.job.id,'section_1',case.actor)
+    submit = case.scheduler.submit
+    def interrupted(*args, **kwargs):
+        if cancel:
+            case.repo.finish_job_run('local',case.job.id,status='cancelled',failure_reason='user_cancelled',
+                impact='保留段落音频检查点。',repair_action='需要时从原任务继续。')
+            return submit(*args,**kwargs)
+        raise RuntimeError('after durable adoption, before queue')
+    monkeypatch.setattr(case.scheduler,'submit',interrupted)
+    runtime = SimpleNamespace(scheduler=case.scheduler,wake=lambda:None,
+        registrations={'creation_job':SimpleNamespace(owner=case.owner)})
+    with pytest.raises((RuntimeError,PermissionError,ValueError)):
+        case.segments.adopt_visual_decision('local',case.task_id,case.job.id,'section_1',case.actor,
+            decision_digest=view['decision_digest'],confirmed_clip_ids=view['required_confirmation_ids'],runtime=runtime)
+    after = case.segments.read_visual_decision('local',case.task_id,case.job.id,'section_1',case.actor)
+    assert after['usage'] == view['usage'] and after['audio'] == view['audio']
+    assert after['device_request_id'] is None
+    monkeypatch.setattr(case.scheduler,'submit',submit)
+    if cancel:
+        assert after['status'] == 'stale'
+        with pytest.raises(ValueError):
+            case.segments.adopt_visual_decision('local',case.task_id,case.job.id,'section_1',case.actor,
+                decision_digest=view['decision_digest'],confirmed_clip_ids=view['required_confirmation_ids'],runtime=runtime)
+        assert case.scheduler.pick_and_grant() is None
+    else:
+        assert after['status'] == 'adopted' and after['recovery']['action'] == 'submit_video'
+        result = case.segments.adopt_visual_decision('local',case.task_id,case.job.id,'section_1',case.actor,
+            decision_digest=view['decision_digest'],confirmed_clip_ids=view['required_confirmation_ids'],runtime=runtime)
+        assert result['replayed'] and result['device_request_id']
+
+
+@pytest.mark.parametrize('blocker', ['source_changed', 'write_guard'])
+def test_segment_visual_decision_rejects_stale_or_revoked_adoption(tmp_path, monkeypatch, blocker):
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    _require_section_visual_decision(case, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    view = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
+    decision = case.segments.visual_decision(case.job, 'section_1')
+    runtime = SimpleNamespace(scheduler=case.scheduler, wake=lambda: None,
+        registrations={'creation_job': SimpleNamespace(owner=case.owner)})
+    if blocker == 'source_changed':
+        source = Path(decision.payload['sources'][0]['path'])
+        source.write_bytes(source.read_bytes() + b'changed')
+    def denied(conn):
+        assert conn.in_transaction
+        raise PermissionError('authorization revoked')
+    with pytest.raises((ValueError, PermissionError)):
+        case.segments.adopt_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor,
+            decision_digest=view['decision_digest'], confirmed_clip_ids=view['required_confirmation_ids'],
+            runtime=runtime, write_guard=denied if blocker == 'write_guard' else None)
+    after = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
+    assert after['status'] == ('stale' if blocker == 'source_changed' else 'waiting_for_user')
+    assert after['audio'] == view['audio'] and after['usage'] == view['usage']
+    assert after['device_request_id'] is None
+    assert case.segments.visual_decision(case.job, 'section_1') == decision
+    with pytest.raises(KeyError):
+        case.repo.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
+    assert case.scheduler.pick_and_grant() is None

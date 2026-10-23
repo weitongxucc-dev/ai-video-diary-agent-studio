@@ -275,8 +275,6 @@ class SegmentProductionUseCase:
             narration_duration_seconds=audio.duration_seconds,
             narration_segment_ids_by_section={section_id: self.narration_stage.segment_id(task.id, script.id, section_id)},
             narration_segment_durations_by_section={section_id: audio.duration_seconds})
-        if any(item.needs_confirmation for item in plan.clips):
-            raise ValueError('当前段落的真实画面仍需范围决定，不能发布未确认视频')
         plan.aspect_ratio = self.repository.get_creation_plan(task.workspace_id, task.plan_id).aspect_ratio
         # Planner IDs/timestamps are presentation metadata, not fresh inputs on each eligibility check.
         plan.id = 'section_montage_' + digest([task.id, section_id, audio.cache_key])[:24]
@@ -332,8 +330,173 @@ class SegmentProductionUseCase:
         facts = {'section_id':section_id,'audio_cache_key':audio.cache_key,'montage':payload,'sources':sources,
             'expected_segment_version':version,'resources':resources}
         facts['unit_key'] = f'segment_video:{section_id}:{digest(facts)}'
-        return TaskEvent(id=self.video_preparation_id(job,section_id),workspace_id=task.workspace_id,task_id=task.id,
-            job_id=job.id,event_type='segment_video_prepared',payload=facts)
+        facts.update(input_digest=job.input_digest,script_id=task.confirmed_script_id,
+            audio_reference=self.repository.narration_artifact_reference(audio.cache_key))
+        facts['decision_digest'] = digest(facts)
+        waiting = any(clip.needs_confirmation for clip in plan.clips)
+        return TaskEvent(id=self.visual_decision_id(job,section_id) if waiting else self.video_preparation_id(job,section_id),
+            workspace_id=task.workspace_id,task_id=task.id,job_id=job.id,
+            event_type='segment_visual_decision_required' if waiting else 'segment_video_prepared',payload=facts)
+
+    @staticmethod
+    def visual_decision_id(job, section_id):
+        return f'event_{job.id}_visual_decision_{section_id}'
+
+    def visual_decision(self, job, section_id, *, connection=None):
+        try:
+            return self.repository.get_task_event(job.workspace_id,self.visual_decision_id(job,section_id),connection=connection)
+        except KeyError:
+            return None
+
+    def waiting_for_visual_decision(self, job, *, connection=None):
+        with nullcontext(connection) if connection is not None else self.repository._connect() as conn:
+            rows = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                "AND event_type='segment_visual_decision_required'",(job.workspace_id,job.id)).fetchall()
+            for row in rows:
+                section_id = json.loads(row['payload_json'])['section_id']
+                try:
+                    self.repository.get_task_event(job.workspace_id,self.video_preparation_id(job,section_id),connection=conn)
+                except KeyError:
+                    return True
+        return False
+
+    def persist_video_preparation(self, prepared, grant, *, connection):
+        if prepared.event_type == 'segment_visual_decision_required':
+            prepared = replace(prepared,payload={**prepared.payload,'request_id':grant.request_id})
+        self.repository.append_task_event(prepared,connection=connection)
+        if prepared.event_type == 'segment_visual_decision_required':
+            connection.execute("UPDATE job_runs SET failure_reason='waiting_for_user' WHERE workspace_id=? AND id=?",
+                (prepared.workspace_id,prepared.job_id))
+
+    def _validate_visual_decision(self, job, task, actor, owner, payload, *, connection=None):
+        event = self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start',connection=connection).payload
+        if (job.task_id != task.id or actor != self.actor_from_event(job.workspace_id,event)
+                or job.status not in {'queued','running','interrupted'} or payload['input_digest'] != job.input_digest
+                or payload['script_id'] != task.confirmed_script_id
+                or payload['expected_segment_version'] != self.repository.stage_section_version(
+                    job.workspace_id,task.id,payload['section_id'],connection=connection)):
+            raise ValueError('原画面决定的作业或段落版本已变化')
+        operation = 'narration_edit' if job.kind == SEGMENT_REVISION_KIND else 'render'
+        if owner is not None and owner.authorization_verdict(task,actor,operation,connection=connection,
+                check_scope=connection is None) != 'ready':
+            raise PermissionError('原画面决定授权不可用')
+        if event.get('command'):
+            from app.schemas import NarrationRevisionRequest
+            command = NarrationRevisionRequest.model_validate(event['command'])
+            self.verify_revision(job.workspace_id,task.id,actor,command,connection=connection)
+            if command.section_id != payload['section_id']:
+                raise ValueError('画面决定不属于原修改段落')
+        else:
+            rows = self.repository.list_narration_segments(job.workspace_id,task.id,task.confirmed_script_id,connection=connection)
+            if not any(row.source_section_id == payload['section_id'] and row.status == 'ready'
+                    and row.audio_reference == payload['audio_reference'] for row in rows):
+                raise ValueError('原段落音频检查点已变化')
+        artifact = self.repository.get_narration_artifact(job.workspace_id,payload['audio_reference'].removeprefix('narration://artifact/'),connection=connection)
+        if artifact is None or not Path(artifact.audio_path).is_file() or Path(artifact.audio_path).stat().st_size <= 0:
+            raise ValueError('原段落音频产物不可用')
+        for source in payload['sources']:
+            stat = Path(source['path']).stat()
+            if (stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns) != (source['size'],source['mtime_ns'],source['ctime_ns']):
+                raise ValueError('原画面决定的媒体来源已变化')
+
+    def read_visual_decision(self, workspace_id, task_id, job_id, section_id, actor):
+        task = self.require_actor(workspace_id,task_id,actor)
+        job = self.repository.get_job_run(workspace_id,job_id)
+        if job.task_id != task_id:
+            raise PermissionError('画面决定不属于当前任务')
+        start = self.repository.get_task_event(workspace_id,f'event_{job_id}_start').payload
+        if actor != self.actor_from_event(workspace_id,start):
+            raise PermissionError('画面决定不属于原身份')
+        waiting = self.visual_decision(job,section_id)
+        if waiting is None:
+            raise KeyError(section_id)
+        payload = waiting.payload
+        try:
+            prepared = self.repository.get_task_event(workspace_id,self.video_preparation_id(job,section_id))
+        except KeyError:
+            prepared = None
+        status = 'adopted' if prepared is not None else 'waiting_for_user'
+        try:
+            self._validate_visual_decision(job,task,actor,None,payload)
+        except (ValueError,KeyError,OSError):
+            status = 'stale'
+        requests = self.repository.list_creation_job_request_states(workspace_id,job_id)
+        video_requests = [row for row in requests if row['unit_key'] == payload['unit_key']]
+        if job.kind == SEGMENT_REVISION_KIND:
+            with self.repository._connect() as conn:
+                rows = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                    "AND event_type='task_execution_unit_settled'",(workspace_id,job_id)).fetchall()
+            usage = {'settled':not self.repository.unsettled_segment_units(workspace_id,job_id),
+                'used_seconds':sum(json.loads(row['payload_json'])['elapsed_seconds'] for row in rows),
+                'used_output_bytes':sum(json.loads(row['payload_json'])['output_bytes'] for row in rows),
+                'remaining_budget':None}
+        else:
+            measured = self.repository.creation_narration_usage(workspace_id,job_id)
+            budget = measured['budget']
+            usage = {'settled':measured['consumption_known'],'used_seconds':measured['used_seconds'],
+                'used_output_bytes':measured['used_output_bytes'],'remaining_budget':None if budget is None else {
+                    'seconds':budget['parent_timeout_seconds']-measured['used_seconds'],
+                    'output_bytes':budget['parent_max_output_bytes']-measured['used_output_bytes']}}
+        return {'status':status,'decision_digest':payload['decision_digest'],'job_id':job_id,
+            'request_id':payload['request_id'],'revision_request_id':start.get('command',{}).get('request_id'),
+            'section_id':section_id,'expected_segment_version':payload['expected_segment_version'],
+            'audio':{'artifact_reference':payload['audio_reference'],'persisted':True},'usage':usage,
+            'candidate_clips':payload['montage']['clips'],
+            'required_confirmation_ids':[clip['id'] for clip in payload['montage']['clips'] if clip['needs_confirmation']],
+            'device_request_id':video_requests[0]['id'] if video_requests else None,
+            'recovery':{'action':'revalidate' if status == 'stale' else 'await_confirmation' if status == 'waiting_for_user'
+                else 'query_original' if video_requests else 'submit_video'}}
+
+    def adopt_visual_decision(self, workspace_id, task_id, job_id, section_id, actor, *,
+            decision_digest, confirmed_clip_ids, runtime, write_guard=None):
+        from app.creation.contracts import TaskEvent
+        from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+        from app.creation.editing.clips import apply_clip_patch
+        owner = runtime.registrations['creation_job'].owner
+        with self.repository._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if write_guard is not None:
+                write_guard(conn)
+            task = self.require_actor(workspace_id,task_id,actor,connection=conn)
+            job = self.repository.get_job_run(workspace_id,job_id,connection=conn)
+            waiting = self.visual_decision(job,section_id,connection=conn)
+            if waiting is None or job.task_id != task_id:
+                raise ValueError('原段落画面决定不存在')
+            payload = waiting.payload
+            if decision_digest != payload['decision_digest']:
+                raise ValueError('画面决定摘要已变化')
+            required = [clip['id'] for clip in payload['montage']['clips'] if clip['needs_confirmation']]
+            if len(confirmed_clip_ids) != len(set(confirmed_clip_ids)) or set(confirmed_clip_ids) != set(required):
+                raise ValueError('必须明确确认原候选全部待决定画面，不能自动采用或替换')
+            self._validate_visual_decision(job,task,actor,owner,payload,connection=conn)
+            try:
+                prepared = self.repository.get_task_event(workspace_id,self.video_preparation_id(job,section_id),connection=conn)
+            except KeyError:
+                prepared = None
+            replayed = prepared is not None
+            if prepared is None:
+                plan = creation_task_montage_plan_from_payload(payload['montage'])
+                for clip_id in required:
+                    plan,_,_ = apply_clip_patch(plan,clip_id,{'confirmed':True},
+                        resolve_source=lambda clip, values:self.repository.resolve_edit_clip_source(
+                            workspace_id,task_id,clip,{**values,'automation_only':True},
+                            user_id=actor.user_id,local_diagnostic=actor.device_id is None),link_reordered=None)
+                from app.creation.editing.metadata_use_case import refresh_montage_review_state
+                refresh_montage_review_state(plan)
+                encoded = creation_task_montage_plan_to_payload(plan)
+                prepared = TaskEvent(id=self.video_preparation_id(job,section_id),workspace_id=workspace_id,
+                    task_id=task_id,job_id=job_id,event_type='segment_video_prepared',payload={**payload,
+                        'montage':encoded,'confirmed_clip_ids':required})
+                self.repository.append_task_event(prepared,connection=conn)
+            elif prepared.payload.get('decision_digest') != decision_digest:
+                raise ValueError('原视频准备已绑定其他决定')
+            conn.execute("UPDATE job_runs SET failure_reason=NULL WHERE workspace_id=? AND id=? AND status IN ('queued','interrupted')",
+                (workspace_id,job_id))
+        request = runtime.scheduler.submit(SubmissionIntent(workspace_id,'creation_job',job.id,job.input_digest,
+            prepared.payload['unit_key'],SchedulePolicy()),actor)
+        runtime.wake()
+        return {**self.read_visual_decision(workspace_id,task_id,job_id,section_id,actor),
+            'device_request_id':request.id,'replayed':replayed}
 
     def capture_local(self, request, conn, owner):
         job = self.repository.get_job_run(request.workspace_id,request.owner_id,connection=conn)
@@ -399,6 +562,8 @@ class SegmentProductionUseCase:
         if owner.authorization_verdict(task, actor, operation, connection=connection,check_scope=connection is None) != 'ready':
             raise PermissionError('段落执行的原任务授权不可用')
         if intent.unit_key.startswith('segment_revision:'):
+            if self.visual_decision(job,event['command']['section_id'],connection=connection) is not None:
+                raise ValueError('原段落已有音频检查点，不能重新配音')
             from app.schemas import NarrationRevisionRequest
             command = NarrationRevisionRequest.model_validate(event['command'])
             self.verify_revision(task.workspace_id, task.id, actor, command, connection=connection)
@@ -422,6 +587,9 @@ class SegmentProductionUseCase:
             key = self.revision_key(job, reference)
         else:
             section_id = intent.unit_key.removeprefix('segment_video:').rpartition(':')[0]
+            prepared = self.repository.get_task_event(job.workspace_id,self.video_preparation_id(job,section_id),connection=connection)
+            if self.visual_decision(job,section_id,connection=connection) is not None:
+                self._validate_visual_decision(job,task,actor,owner,prepared.payload,connection=connection)
             key, resources = self.video_facts(job, event, task, section_id, owner, connection=connection)
         if (key != intent.unit_key or intent.input_digest != job.input_digest or intent.owner_type != 'creation_job'):
             raise ValueError('段落执行输入或实际资源版本已变化')
@@ -464,11 +632,15 @@ class SegmentProductionUseCase:
                 try:
                     self.repository.get_task_event(job.workspace_id,self.video_preparation_id(job,section.id),connection=connection)
                 except KeyError:
+                    if self.visual_decision(job,section.id,connection=connection) is not None:
+                        return None
                     if connection is not None and connection.in_transaction:
                         raise ValueError('段落视频输入须先在写事务外准备')
                     record = self.repository.get_narration_artifact(job.workspace_id,audio.audio_reference.removeprefix('narration://artifact/'))
                     prepared = self.prepare_video(job,event,task,section.id,record,owner,text=audio.text)
                     self.repository.save_segment_video_preparation(prepared)
+                    if prepared.event_type == 'segment_visual_decision_required':
+                        return None
                 key, _resources = self.video_facts(job, event, task, section.id, owner, connection=connection)
                 return SubmissionIntent(job.workspace_id, 'creation_job', job.id, job.input_digest, key, SchedulePolicy())
         return None
@@ -494,6 +666,19 @@ class SegmentProductionUseCase:
 
     def resume_request(self,workspace_id,task_id,request_id,actor,*,runtime,write_guard=None):
         result = self.read_request(workspace_id,task_id,request_id,actor)
+        job = self.repository.get_job_run(workspace_id,result['job_id'])
+        start = self.repository.get_task_event(workspace_id,f'event_{job.id}_start').payload
+        section_id = start['command']['section_id']
+        decision = self.visual_decision(job,section_id)
+        if decision is not None and job.status == 'queued':
+            view = self.read_visual_decision(workspace_id,task_id,job.id,section_id,actor)
+            if view['status'] == 'adopted':
+                self.adopt_visual_decision(workspace_id,task_id,job.id,section_id,actor,
+                    decision_digest=view['decision_digest'],confirmed_clip_ids=view['required_confirmation_ids'],
+                    runtime=runtime,write_guard=write_guard)
+            elif view['status'] == 'stale':
+                raise ValueError('原画面决定输入已变化，不能恢复')
+            return self.read_request(workspace_id,task_id,request_id,actor)
         if not result['device_requests'] and result['status']=='queued':
             job = self.repository.get_job_run(workspace_id,result['job_id'])
             runtime.scheduler.submit(SubmissionIntent(workspace_id,'creation_job',job.id,job.input_digest,
@@ -586,6 +771,8 @@ class SegmentProductionUseCase:
         def next_unit(conn,current):
             updated = self.repository.get_job_run(job.workspace_id,job.id,connection=conn)
             if command is not None:
+                if self.waiting_for_visual_decision(updated,connection=conn):
+                    return None
                 key,_ = self.video_facts(updated,event,task,command.section_id,owner,connection=conn)
                 intent = SubmissionIntent(job.workspace_id,'creation_job',job.id,job.input_digest,key,SchedulePolicy())
             else:
@@ -602,12 +789,13 @@ class SegmentProductionUseCase:
                     context.check()
                     self.verify_revision(job.workspace_id,job.task_id,actor,command,connection=conn)
                     self.repository.save_narration_artifact(audio,connection=conn)
-                    self.repository.append_task_event(video_preparation,connection=conn)
+                    self.persist_video_preparation(video_preparation,current,connection=conn)
                     self.repository.append_task_event(TaskEvent(id=f'event_{job.id}_revision_audio',workspace_id=job.workspace_id,
                         task_id=job.task_id,job_id=job.id,event_type='segment_revision_audio',payload={
                             'audio_cache_key':audio.cache_key,'segment':asdict(segment)}),connection=conn)
                     settle(conn,current)
                     return self.repository.checkpoint_segment_unit(current,status='queued',connection=conn,
+                        reason='waiting_for_user' if video_preparation.event_type == 'segment_visual_decision_required' else None,
                         payload={'audio_cache_key':audio.cache_key})
                 measure_retained()
                 scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,
