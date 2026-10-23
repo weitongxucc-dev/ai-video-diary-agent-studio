@@ -162,7 +162,7 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
   function registerRequestReader(pi: ToolRegistrar) {
     pi.registerTool({
       name: "read_typed_edit_request", label: "回读已提交编辑请求",
-      description: "用原请求身份查询真实结果；只读，不重POST，不换绑当前版本或从对话推测成功。",
+      description: "用原请求身份查询真实结果；只读，不重POST，不换绑当前版本或从对话推测成功。execution_readiness是该次保存时的授权检查：null表示无记录，not_ready不撤销已保存修改，authorization_ready不表示设备已准入或产物已生成。",
       parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}, phase:{type:"string",enum:["preview","apply"]}}, required: ["request_id"], additionalProperties: false},
       execute: async (_id: string, params: {request_id: string; phase?:"preview"|"apply"}) => {
         const phase=params.phase ?? "preview";

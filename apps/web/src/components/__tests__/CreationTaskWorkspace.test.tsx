@@ -1513,7 +1513,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
-  it("restores server line breaks, equal-length emphasis and cover fields after undo", async () => {
+  it("restores server fields and the saved authorization receipt after undo", async () => {
     const initial = workspaceWithCover();
     initial.subtitle_tracks[0].cues[0].emphasis = ["真实运行"];
     const restored = structuredClone(initial);
@@ -1523,6 +1523,9 @@ describe("CreationTaskWorkspace", () => {
     restored.cover_asset!.frame_time_seconds = 1.2;
     restored.cover_asset!.layout.title_position = "center";
     mocks.undoTimeline.mockResolvedValue({});
+    mocks.readTimelineRestore.mockImplementationOnce(async(taskId:string,requestId:string)=>({task_id:taskId,request_id:requestId,
+      action:'undo',status:'applied',operation_id:'restored',result_version_id:'restored-version',failure:null,
+      execution_readiness:{status:'not_ready',reason_code:'task_authorization_expired',device_admission:'not_checked'}}));
     mocks.getWorkspace.mockResolvedValue(restored);
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl("字幕与封面：已完成"));
@@ -1535,6 +1538,7 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(screen.getByLabelText("封面标题")).toHaveValue("恢复后的标题"));
     expect(screen.getByLabelText("封面画面时间")).toHaveValue(1.2);
     expect(within(screen.getByRole("group", { name: "封面标题位置" })).getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/本次保存时后台执行授权未就绪（原授权已过期）；修改已保留。/)).toBeVisible();
   });
 
   it.each(['not_submitted','unknown'] as const)('timeline restore %s preserves the correct retry boundary', async effect=>{

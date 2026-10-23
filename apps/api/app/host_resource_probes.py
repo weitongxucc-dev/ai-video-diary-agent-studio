@@ -886,9 +886,56 @@ AUDIO_RESOURCE_LIMITS = {"input_count": "max_input_count", "input_bytes": "max_i
               "timeout_seconds": "max_timeout_seconds"}
 
 
+PCM_ASSEMBLY_MODE = 'cpu_pcm_wav_assembly'
+PCM_METADATA_MAX_BYTES = 16 * 1024
+
+
+def pcm_assembly_fields_valid(resources, audio):
+    """The fixed PCM declaration has separate absolute and incremental caps."""
+    baseline = resources.get('pcm_assembly')
+    if not isinstance(baseline, dict) or set(baseline) != {
+            'work_path','receipt_path','file_identity','committed_pcm_bytes','committed_pcm_sha256',
+            'max_new_bytes','header_bytes_allowance','absolute_max_output_bytes'}:
+        return False
+    for key in ('committed_pcm_bytes','max_new_bytes','header_bytes_allowance','absolute_max_output_bytes'):
+        if type(baseline[key]) is not int or baseline[key] < 0:
+            return False
+    previous = baseline['committed_pcm_bytes']
+    identity = baseline['file_identity']
+    if previous % 2 or not isinstance(baseline['committed_pcm_sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',baseline['committed_pcm_sha256']):
+        return False
+    if identity is None:
+        if previous or baseline['header_bytes_allowance'] != 44 or baseline['committed_pcm_sha256'] != hashlib.sha256(b'').hexdigest():
+            return False
+    elif (not isinstance(identity,dict) or set(identity) != {'device','inode'}
+            or any(type(identity[key]) is not int or identity[key] < 0 for key in identity)
+            or not identity['inode'] or baseline['header_bytes_allowance'] != 8):
+        return False
+    if (not baseline['max_new_bytes'] or baseline['max_new_bytes'] > resources['max_output_bytes']
+            or not 44 + previous <= baseline['absolute_max_output_bytes'] <= audio.max_output_bytes
+            or baseline['absolute_max_output_bytes'] != resources['max_output_bytes']):
+        return False
+    if not all(isinstance(baseline[key],str) and Path(baseline[key]).is_absolute() for key in ('work_path','receipt_path')):
+        return False
+    work, receipt = Path(baseline['work_path']), Path(baseline['receipt_path'])
+    if work.parent != receipt.parent or len({str(work),str(receipt),str(work)+'.sealed.json'}) != 3:
+        return False
+    inputs, sources = resources.get('inputs'), resources.get('pcm_sources')
+    if (not isinstance(inputs,list) or not isinstance(sources,list) or not 1 <= len(sources) <= (2 if identity is None else 1)
+            or len(inputs) != len(sources) + (identity is not None) or len(inputs) != resources['input_count']):
+        return False
+    if any(not isinstance(item,dict) or type(item.get('size_bytes')) is not int or item['size_bytes'] <= 0
+           or item.get('sample_rate') != 24000 or item.get('channels') != 1 for item in inputs):
+        return False
+    return (sum(item['size_bytes'] for item in inputs) == resources['input_bytes']
+        and type(resources.get('merge_final')) is bool
+        and isinstance(resources.get('merge_source_digest'),str)
+        and re.fullmatch(r'[0-9a-f]{64}',resources['merge_source_digest']) is not None)
+
+
 def audio_resource_refusal(resources, audio):
     """Reuse one calibrated CPU-audio declaration check in previews and render."""
-    if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
+    if audio is None or resources.get("execution_mode") not in {"cpu_ffmpeg", PCM_ASSEMBLY_MODE}:
         return (None, "audio_budget_or_execution_mode_unavailable")
     for name, limit in AUDIO_RESOURCE_LIMITS.items():
         value = resources.get(name)
@@ -899,8 +946,11 @@ def audio_resource_refusal(resources, audio):
             return (None, "audio_resource_fields_invalid")
         if value > getattr(audio, limit):
             return (False, "declared_resources_exceed_budget")
-    if resources.get("input_policy") != "probe_then_bounded_decode" or not isinstance(resources.get("inputs"), list):
+    pcm = resources.get('execution_mode') == PCM_ASSEMBLY_MODE
+    if resources.get("input_policy") != ('fixed_pcm_header' if pcm else 'probe_then_bounded_decode') or not isinstance(resources.get("inputs"), list):
         return (None, "audio_probe_contract_missing")
+    if pcm and not pcm_assembly_fields_valid(resources,audio):
+        return (None, 'audio_resource_fields_invalid')
     if "dynamic_input_count_limit" in resources or "dynamic_input_bytes_limit" in resources:
         for name, actual, cap in (("dynamic_input_count_limit", "input_count", audio.max_input_count),
                                   ("dynamic_input_bytes_limit", "input_bytes", audio.max_input_bytes)):
@@ -1324,7 +1374,7 @@ class HostResourceProbe:
             required_disk = self.budget.min_free_disk_bytes + script.additional_disk_bytes + resources["max_output_bytes"]
         elif kind == "task_audio":
             audio = self.budget.cpu_audio
-            if audio is None or resources.get("execution_mode") != "cpu_ffmpeg":
+            if audio is None or resources.get("execution_mode") not in {"cpu_ffmpeg", PCM_ASSEMBLY_MODE}:
                 return decision(None, "audio_budget_or_execution_mode_unavailable")
             refusal = audio_resource_refusal(resources, audio)
             if refusal is not None:
@@ -1636,7 +1686,12 @@ class HostResourceProbe:
                 raise RecoveryBlocked("质检独立进程预算尚未标定或已经变化")
             return SceneRuntimeLimits(quality.max_process_rss_bytes, quality.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, quality.runtime_sample_seconds, self.memory_monitor)
-        if purpose is not None:
+        if purpose == 'task_audio':
+            if (grant.owner_type != 'creation_job' or not grant.unit_key.startswith(('narration:merge:v1:', 'narration_edit:pcm:'))
+                    or resources.get('kind') != 'task_audio' or resources.get('execution_mode') != PCM_ASSEMBLY_MODE
+                    or audio_resource_refusal(resources,self.budget.cpu_audio) is not None):
+                raise RecoveryBlocked('原PCM组装许可、单元或CPU音频预算不一致')
+        elif purpose is not None:
             if (purpose != "audio_mix" or resources.get("kind") not in {"creation_render", "creation_presenter_render"}
                     or not isinstance(resources.get("audio_mix"), dict)
                     or resources["audio_mix"].get("kind") != "task_audio"):
@@ -1731,7 +1786,7 @@ class HostResourceProbe:
         if (resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
             return True
-        if resources.get("kind") == "task_audio" and resources.get("execution_mode") == "cpu_ffmpeg":
+        if resources.get("kind") == "task_audio" and resources.get("execution_mode") in {"cpu_ffmpeg", PCM_ASSEMBLY_MODE}:
             return True
         if resources.get('kind')=='native_command' and resources.get('execution_mode')=='isolated_task_shell':
             return True

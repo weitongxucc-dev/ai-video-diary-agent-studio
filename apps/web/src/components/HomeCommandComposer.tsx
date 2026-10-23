@@ -15,6 +15,7 @@ import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQ
 import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
 import { assistantTaskTurnResult, useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
+import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 
 export type HomeCommandComposerProps = {
   assignLocation?: (url: string) => void;
@@ -292,7 +293,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       setTaskPreviewOpen(false);
       const queued = "status" in result;
       if (!queued) setTaskAwaitingRead(latestTaskFacts.current);
-      setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : null);
+      setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : '修改已保存，可撤销。'+(editExecutionReadinessMessage(result.execution_readiness) ?? ''));
       onTaskUpdated?.();
     } catch (cause) {
       if (revision === scopeRevision.current && latestTaskFacts.current?.id === task.id) {
@@ -328,6 +329,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       if (receipt.task_id!==task.id || receipt.request_id!==requestId) throw new Error('原撤销回执身份不一致');
       if (receipt.status==='applied' || receipt.status==='refused') setRestoreRequests(value=>{const next={...value};delete next[task.id];return next;});
       if (receipt.status!=='applied') setError(receipt.failure?.reason ?? '原撤销结果尚未核实，请查询原请求。');
+      else setTaskActionStatus('原修改的撤销已保存。'+(editExecutionReadinessMessage(receipt.execution_readiness) ?? ''));
       setTaskAwaitingRead(latestTaskFacts.current);
       onTaskUpdated?.();
     } catch (cause) {
@@ -353,6 +355,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       if (receipt.task_id!==task.id || receipt.request_id!==restoreRequest) throw new Error('原撤销回执身份不一致');
       if (receipt.status==='applied' || receipt.status==='refused') setRestoreRequests(value=>{const next={...value};delete next[task.id];return next;});
       if (receipt.status!=='applied') setError(receipt.failure?.reason ?? '原结果尚未核实，请继续查询原请求。');
+      else setTaskActionStatus('原修改的撤销已保存。'+(editExecutionReadinessMessage(receipt.execution_readiness) ?? ''));
       setTaskAwaitingRead(latestTaskFacts.current);onTaskUpdated?.();
     } catch(cause) {if (revision===scopeRevision.current) setError(cause instanceof Error?cause.message:'原撤销结果暂不可读取。');}
     finally {if (revision===scopeRevision.current) setPending(null);}

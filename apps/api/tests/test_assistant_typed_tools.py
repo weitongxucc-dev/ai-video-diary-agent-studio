@@ -13,6 +13,43 @@ from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS
 import app.assistant_pi as host
 
 
+@pytest.mark.parametrize('status', ['not_ready', 'authorization_ready', None])
+def test_edit_and_restore_projection_keep_the_saved_authorization_receipt(status):
+    from app.assistant.result_projection import project_business_result, timeline_restore_message
+    readiness = {'status': status, 'reason_code': 'task_authorization_expired' if status == 'not_ready' else None,
+        'device_admission': 'not_checked'} if status else None
+    applied = {'kind': 'edit_applied', 'result': {'execution_readiness': readiness}}
+    answer, result = project_business_result({'answer': '成片已经完成', 'status': 'settled', 'tool_results': [
+        {'type': 'tool_execution_end', 'toolName': 'apply_typed_edit', 'isError': False, 'result': {'details': applied}}]})
+    assert result is applied or result == applied
+    assert result['result']['execution_readiness'] == readiness
+    restored = timeline_restore_message({'receipt': {'status': 'applied', 'execution_readiness': readiness}})
+    for message in (answer, restored):
+        assert '保存' in message
+        assert '本次保存时' in message if status else '后台执行授权' not in message
+        if status == 'not_ready':
+            assert '未就绪' in message and '原授权已过期' in message
+        if status == 'authorization_ready':
+            assert '设备准入尚未检查' in message
+        assert '成片已经完成' not in message
+
+
+def test_task_business_restore_transmits_the_same_nullable_readiness_receipt():
+    from types import SimpleNamespace
+    from app.assistant.task_business import TaskBusiness
+    original = {'status': 'not_ready', 'reason_code': 'task_authorization_expired', 'device_admission': 'not_checked'}
+    result = SimpleNamespace(operation={'id': 'inverse'}, montage=None, narration=None,
+        restore_request={'execution_readiness': original}, execution_readiness=original)
+    case = object.__new__(TaskBusiness)
+    case.timeline_restores = SimpleNamespace(execute=lambda *args, **kwargs: result)
+    value = case.execute('restore_timeline', {'action': 'undo', 'payload': {
+        'request_id': '00000000-0000-4000-8000-000000000001', 'expected_timeline_version_id': 'version',
+        'expected_timeline_sequence': 1}}, None, SimpleNamespace(workspace_id='w', id='task'),
+        {'current_turn_id': 'turn'}, {}, None, None)
+    assert value['execution_readiness'] is original
+    assert value['restore_request']['execution_readiness'] is original
+
+
 def test_segment_revision_projection_retains_only_the_current_invocation_and_real_adoption():
     from app.assistant.result_projection import project_business_result
     original = {'kind': 'segment_revision', 'action': 'submit', 'request_id': 'old-request',

@@ -382,7 +382,7 @@ class TaskBusiness:
                 expected_timeline_sequence=payload.expected_timeline_sequence,write_guard=guard,
                 source={'assistant_turn_id':goal['current_turn_id'],'input_id':origin.get('input_id') or goal['current_turn_id']})
             return {'operation':result.operation,'montage':result.montage,'narration':result.narration,
-                'restore_request':result.restore_request}
+                'restore_request':result.restore_request,'execution_readiness':result.execution_readiness}
         if operation in {'read_narration_segment_context','read_narration_segment_sources','read_narration_segments','read_narration_revision','revise_narration_segment','resume_narration_revision'}:
             if self.segments is None: raise TaskBusinessRejected('局部修改业务用例尚未装配')
             if operation=='read_narration_segment_context': return self.segments.context(ws,task_id,args['segment_id'],actor)

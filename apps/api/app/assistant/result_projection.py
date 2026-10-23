@@ -70,10 +70,25 @@ def resolve_segment_revision(details: dict, *, task_id: str, input_id: str, read
     return {'kind': 'segment_revision', 'action': action, 'request_id': request_id, 'revision': revision}
 
 
+def execution_readiness_message(readiness: dict | None) -> str:
+    if readiness is None:
+        return ''
+    if readiness.get('status') == 'not_ready':
+        reason = {'task_authorization_unavailable': '原任务尚无后台执行授权',
+            'task_authorization_unverified': '原任务授权尚未核验', 'task_authorization_expired': '原授权已过期',
+            'task_authorization_revoked': '原授权已撤销', 'task_authorization_outside_scope': '修改超出原授权范围',
+            'original_execution_identity_differs': '原执行身份已变化',
+            'original_execution_identity_unverified': '原执行身份尚未核验'}.get(readiness.get('reason_code'))
+        return '本次保存时后台执行授权未就绪' + (f'（{reason}）' if reason else '') + '；修改已保留。'
+    if readiness.get('status') == 'authorization_ready':
+        return '本次保存时后台执行授权已核验；设备准入尚未检查。'
+    return ''
+
+
 def timeline_restore_message(value: dict) -> str:
     receipt = value.get('receipt') or {}
     if receipt.get('status') == 'applied':
-        return '原修改的撤销或重做已保存为新版本；实际采用和产物以当前作品为准。'
+        return '原修改的撤销或重做已保存为新版本；实际采用和产物以当前作品为准。' + execution_readiness_message(receipt.get('execution_readiness'))
     if receipt.get('status') == 'refused' or (value.get('failure') or {}).get('submission_effect') == 'rejected':
         return '原撤销或重做已被拒绝；请按具体冲突处理，保留当前作品。'
     if (value.get('failure') or {}).get('submission_effect') == 'not_submitted':
@@ -315,15 +330,16 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     if storyboard_attempted:
         raise _fail(FAILURE_TOOL_FAILED, explanation="故事板重算没有返回可核验的原请求回执，未确认完成。")
     if edit_applied is not None:
+        readiness_message = execution_readiness_message((edit_applied.get('result') or {}).get('execution_readiness'))
         # A later provider/tool failure cannot erase a committed edit. A real
         # render receipt takes precedence when the same input did both actions.
         if action_result is not None:
             action = action_result.get("action")
             return ("修改已保存，后续制作已有实际回执；完成状态以当前作业为准。" if action else
-                    "修改已保存；已读取原制作作业，本轮未新增制作请求。"), {
+                    "修改已保存；已读取原制作作业，本轮未新增制作请求。") + readiness_message, {
                 **action_result, "kind": "execution_action" if action else "execution_result", "applied_edit": edit_applied}
         return ("修改已保存，可撤销；后续制作没有取得成功提交回执。" if action_failed else
-                "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。"), edit_applied
+                "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。") + readiness_message, edit_applied
     if (action_failed and action_result is None) or topic_failed:
         if render_configuration_failed:
             raise _fail(FAILURE_TOOL_FAILED, explanation="本机渲染尚未完成配置，本轮未生成新成片；当前修改已保留。",

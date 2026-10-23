@@ -40,7 +40,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
       return {content: [{type: 'text', text: JSON.stringify(details)}], details};
     }});
   pi.registerTool({name: 'read_timeline_restore_request', label: '查询原撤销重做请求',
-    description: '仅按原UUID查询撤销或重做实际结果，不重发；404不能证明未提交，历史版本存在不代表当前恢复成功。',
+    description: '仅按原UUID查询撤销或重做实际结果，不重发；404不能证明未提交，历史版本存在不代表当前恢复成功。execution_readiness只记录该次保存时的授权检查；null无记录，not_ready不撤销保存，authorization_ready不表示设备准入或产物完成。',
     parameters: {type: 'object', properties: {request_id: {type: 'string', format: 'uuid'}}, required: ['request_id'], additionalProperties: false},
     execute: async (_id: string, params: {request_id: string}) => {
       const receipt = await request(restorePath(params.request_id));
@@ -160,7 +160,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
     pi.registerTool({
       name: action === "undo" ? "undo_last_edit" : "redo_last_edit",
       label: action === "undo" ? "撤销原修改" : "重做原修改",
-      description: `${action === "undo" ? "撤销" : "重做"}原编辑。指定较早修改先读read_edit_history并传原target_operation_id；省略才按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。`,
+      description: `${action === "undo" ? "撤销" : "重做"}原编辑。指定较早修改先读read_edit_history并传原target_operation_id；省略才按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。receipt.execution_readiness是该次保存时的授权检查；not_ready不撤销保存，authorization_ready不表示设备已准入或产物已生成，null无记录。`,
       parameters: {type: 'object', properties: {target_operation_id: {type: 'string', minLength: 1}}, additionalProperties: false},
       execute: async (callId: string, params: {target_operation_id?: string} = {}) => {
         const body = controlWriteContext();

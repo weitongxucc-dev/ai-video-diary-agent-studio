@@ -333,6 +333,27 @@ const resourceReceipt: ResourceAdmissionReceipt = {
 };
 
 describe('persisted section and restore receipts',()=>{
+  it.each(['apply','restore'])('shows saved authorization checks separately from successful %s and device admission',kind=>{
+    const saved=projectedTaskConversation('queued');
+    const response=saved.turns[0].result!.response as Record<string,unknown>;
+    response.media_job=null;response.edit_preview=null;
+    const panel=()=> <AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view=render(panel());
+    for (const status of ['not_ready','authorization_ready',null]) {
+      const readiness=status ? {status,reason_code:status==='not_ready'?'task_authorization_expired':null,device_admission:'not_checked'} : null;
+      if(kind==='apply') {
+        saved.turns[0].result!.timeline_action='apply';
+        response.timeline_action='apply';
+        response.edit_request={phase:'apply',status:'recorded',result:{execution_readiness:readiness}};
+      } else response.timeline_restore={kind:'timeline_restore_request',action:'query',request_id:'original',
+        receipt:{status:'applied',execution_readiness:readiness}};
+      view.rerender(panel());
+      if(status==='not_ready') expect(screen.getByText('本次保存时后台执行授权未就绪（原授权已过期）；修改已保留。')).toBeVisible();
+      else expect(screen.queryByText(/后台执行授权未就绪/)).not.toBeInTheDocument();
+      if(status==='authorization_ready') expect(screen.getByText('本次保存时后台执行授权已核验；设备准入尚未检查。')).toBeVisible();
+      else expect(screen.queryByText(/后台执行授权已核验/)).not.toBeInTheDocument();
+    }
+  });
   it('shows an invalidated section as history and offers original request readback for unknown restoration',()=>{
     const saved=projectedTaskConversation('queued');
     const response=saved.turns[0].result!.response as Record<string,unknown>;

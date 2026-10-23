@@ -1,7 +1,7 @@
 "use client";
 import { InputGroup, InputGroupTextarea } from "./ui/input-group";
 import { Button } from "./ui/button";
-import { segmentRevisionStatus, segmentAdoptionReason } from './creation-task/stage-labels';
+import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMessage } from './creation-task/stage-labels';
 
 import { ReferenceChips } from "./ui/reference-chips";
 
@@ -366,6 +366,10 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       : segment?.failure?.submission_effect === 'rejected' ? '本段修改已被拒绝'
         : segment ? '本段修改结果尚未知；请先查询原请求' : null;
   const restore=taskResult?.response?.timeline_restore;
+  const appliedEdit = taskResult?.response?.timeline_action === 'apply' && request?.phase === 'apply'
+    && request.status === 'recorded' ? request.result : null;
+  const readinessMessage = editExecutionReadinessMessage(restore?.receipt?.status === 'applied'
+    ? restore.receipt.execution_readiness : appliedEdit && 'execution_readiness' in appliedEdit ? appliedEdit.execution_readiness : null);
   const restoreSummary=restore?.receipt?.status==='applied'?'原修改的撤销或重做已保存为新版本'
     : restore?.receipt?.status==='refused' || restore?.failure?.submission_effect==='rejected'?'原撤销或重做已被拒绝'
       : restore?.failure?.submission_effect==='not_submitted'?'撤销或重做未提交'
@@ -428,6 +432,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
       {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}
       {segment?.revision?.adoption?.reason ? <p>{segmentAdoptionReason(segment.revision.adoption.reason)}</p> : null}
+      {readinessMessage ? <p>{readinessMessage}</p> : null}
       {restore?.failure || restore?.receipt?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:restore:diagnostic`} message={restore.failure?.reason ?? restore.receipt?.failure?.reason ?? ''}/>{restore.failure?.repair_action || restore.receipt?.failure?.repair_action ? <p>{restore.failure?.repair_action ?? restore.receipt?.failure?.repair_action}</p> : null}</div> : null}
       {storyboardFailure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:storyboard:diagnostic`} message={storyboardFailure}/></div> : null}
       {storyboard && storyboard.kind !== "storyboard_regeneration_receipt" && storyboard.failure.repair_action ? <p>{storyboard.failure.repair_action}</p> : null}

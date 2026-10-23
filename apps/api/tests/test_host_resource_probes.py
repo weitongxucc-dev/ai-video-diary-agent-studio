@@ -1680,6 +1680,148 @@ def test_invalid_script_contract_is_unknown_before_host_sampling(tmp_path, monke
     assert '隔离脚本' in str(HostResourceRefusal(decision))
 
 
+@pytest.fixture
+def pcm_runner_case(tmp_path):
+    import hashlib
+    from app.device_runtime import OwnerRegistration, OwnerRouter
+    from app.host_resource_probes import CpuAudioBudget
+    work = tmp_path / 'pcm' / 'narration.wav'
+    work.parent.mkdir(mode=0o700)
+    source = tmp_path / 'next.wav'
+    for path, frames in ((work,1000),(source,100)):
+        with wave.open(str(path),'wb') as stream:
+            stream.setnchannels(1);stream.setsampwidth(2);stream.setframerate(24000)
+            stream.writeframes(b'\0\0'*frames)
+    work.chmod(0o600)
+    info, source_info = work.stat(),source.stat()
+    receipt = work.parent / 'receipt.json'
+    baseline = {'work_path':str(work),'receipt_path':str(receipt),
+        'file_identity':{'device':info.st_dev,'inode':info.st_ino},'committed_pcm_bytes':2000,
+        'committed_pcm_sha256':hashlib.sha256(b'\0\0'*1000).hexdigest(),
+        'max_new_bytes':208,'header_bytes_allowance':8,'absolute_max_output_bytes':4096}
+    sources = [{'path':str(source),'size_bytes':source_info.st_size,'mtime_ns':source_info.st_mtime_ns,
+        'ctime_ns':source_info.st_ctime_ns,'pcm_frames':100}]
+    inputs = [{'reference':str(path),'size_bytes':path.stat().st_size,'duration_seconds':frames/24000,
+        'sample_rate':24000,'channels':1,'uses':1} for path,frames in ((work,1000),(source,100))]
+    resources = {'kind':'task_audio','execution_mode':'cpu_pcm_wav_assembly','pcm_assembly':baseline,
+        'pcm_sources':sources,'merge_final':True,'merge_source_digest':'a'*64,'input_policy':'fixed_pcm_header',
+        'inputs':inputs,'input_count':2,'input_bytes':sum(item['size_bytes'] for item in inputs),
+        'source_duration_limit_seconds':1.,'output_duration_limit_seconds':1.,'source_sample_rate_limit':24000,
+        'source_channels_limit':1,'output_sample_rate_limit':24000,'output_channels_limit':1,
+        'max_output_bytes':4096,'threads':1,'timeout_seconds':3.}
+    audio = CpuAudioBudget(2,4096,1.,1.,24000,1,4096,1,3.,256*1024*1024,16,.05,256*1024*1024,4096)
+    class Owner:
+        def verify_submission(self,intent,actor):
+            assert actor=='synthetic-member'
+            return VerifiedWork(intent.workspace_id,intent.owner_type,intent.owner_id,intent.input_digest,
+                intent.unit_key,actor,'normal_make',resources)
+        def check_current(self,request,conn): return 'ready'
+        def capture_local(self,request,conn): return lambda current:'ready'
+        def check_local(self,request,conn,observed): return observed(conn)
+        def pcm_assembly_baseline(self,request,conn): return dict(baseline)
+    database = tmp_path/'production.sqlite'
+    with sqlite3.connect(database) as conn:
+        conn.execute('CREATE TABLE material_ingestion_files (workspace_id TEXT NOT NULL,file_path TEXT NOT NULL,'
+            'size INTEGER NOT NULL,mtime_ns INTEGER NOT NULL,ctime_ns INTEGER NOT NULL DEFAULT 0,'
+            'inode INTEGER NOT NULL DEFAULT 0,observed_at REAL NOT NULL,completed_digest TEXT,attempted_digest TEXT,'
+            'state TEXT NOT NULL,PRIMARY KEY(workspace_id,file_path))')
+        apply_production_migrations(conn)
+    probe = HostResourceProbe(database,disk_paths=(tmp_path,),budget=HostBudget(100,1,2**63,1,2**63,4096,.02,cpu_audio=audio))
+    router = OwnerRouter({'creation_job':OwnerRegistration(Owner(),None)},None)
+    scheduler = DeviceScheduler(database,tmp_path/'device.lock',owners=router,resources=probe,processes=HostProcessProbe())
+    scheduler.submit(SubmissionIntent('workspace','creation_job','job','a'*64,'narration:merge:v1:'+('b'*64),SchedulePolicy()),'synthetic-member')
+    grant = scheduler.pick_and_grant()
+    assert grant is not None
+    manifest = {'version':1,'operation':'append','unit_id':f'{grant.request_id}:{grant.generation}',
+        'job_id':'job','source_digest':'a'*64,**baseline,'expected_file_identity':baseline['file_identity'],
+        'sources':sources,'final':True}
+    del manifest['file_identity'],manifest['header_bytes_allowance']
+    manifest_path = Path(str(receipt)+'.manifest.json')
+    manifest_path.write_text(json.dumps(manifest))
+    argv = [sys.executable,str(Path(__file__).resolve().parents[1]/'server.py'),'--pcm-assembly-worker','--manifest',str(manifest_path)]
+    outputs = (work,receipt,Path(str(work)+'.sealed.json'))
+    try:
+        yield scheduler,grant,argv,outputs,resources,audio
+    finally:
+        scheduler.close()
+
+
+def test_pcm_runner_executes_one_real_grant_and_preserves_committed_credit(pcm_runner_case):
+    scheduler,grant,argv,outputs,resources,_ = pcm_runner_case
+    result = run_granted_command(scheduler,grant,argv,timeout_seconds=3,max_stdout_bytes=16384,max_stderr_bytes=16384,
+        output_paths=outputs,max_output_file_bytes=4096,resource_purpose='task_audio')
+    assert result.returncode==0,result.stderr
+    receipt = json.loads(outputs[1].read_text())
+    assert receipt['unit_id']==f'{grant.request_id}:{grant.generation}'
+    assert receipt['generated_bytes']==208 and receipt['file_size']==2244
+    assert receipt['file_identity']==resources['pcm_assembly']['file_identity']
+    assert json.loads(outputs[2].read_text())==receipt
+    scheduler.complete_unit(grant,checkpoint_database_path=scheduler.database_path,checkpoint_write=lambda conn,current:'verified')
+    scheduler.assert_released(grant)
+
+
+@pytest.mark.parametrize('kind',['pcm_generated_bytes','pcm_metadata_bytes'])
+def test_pcm_runner_caps_do_not_charge_or_truncate_the_committed_prefix(pcm_runner_case,kind):
+    from app.granted_subprocess import _pcm_assembly_monitor
+    from app.host_resource_probes import PCM_METADATA_MAX_BYTES,audio_resource_refusal
+    scheduler,grant,argv,outputs,resources,audio = pcm_runner_case
+    assert audio_resource_refusal({**resources,'threads':2},audio)==(False,'declared_resources_exceed_budget')
+    assert audio_resource_refusal({**resources,'input_bytes':244},audio) is not None
+    check,_ = _pcm_assembly_monitor(scheduler,grant,argv,outputs,4096)
+    target = outputs[0] if kind=='pcm_generated_bytes' else outputs[1]
+    if kind=='pcm_generated_bytes':
+        with target.open('ab') as stream: stream.write(b'\0'*202)
+    else:
+        target.write_bytes(b'x'*(PCM_METADATA_MAX_BYTES+1))
+    length = target.stat().st_size
+    with pytest.raises(GrantedCommandOutputLimit) as failed: check()
+    assert failed.value.file_sample['budget_kind']==kind
+    assert target.stat().st_size==length  # Unknown tails and receipts are never repaired by the runner.
+
+
+def test_pcm_runner_does_not_accept_declared_credit_without_owner_proof(pcm_runner_case):
+    from app.granted_subprocess import _pcm_assembly_monitor
+    scheduler,grant,argv,outputs,resources,_ = pcm_runner_case
+    forged = json.loads(json.dumps(resources))
+    forged['pcm_assembly']['max_new_bytes']=1000
+    with scheduler._connect() as conn:
+        conn.execute('UPDATE device_work_requests SET resources_json=? WHERE id=?',(json.dumps(forged),grant.request_id))
+    with pytest.raises(RecoveryBlocked,match='基线'):
+        _pcm_assembly_monitor(scheduler,grant,argv,outputs,4096)
+    assert outputs[0].stat().st_size==2044 and not outputs[1].exists()
+
+
+def test_pcm_runner_accepts_only_the_fixed_metadata_publication_link(pcm_runner_case,monkeypatch):
+    from app.granted_subprocess import _pcm_assembly_monitor
+    scheduler,grant,argv,outputs,_,_ = pcm_runner_case
+    check,_ = _pcm_assembly_monitor(scheduler,grant,argv,outputs,4096)
+    receipt = outputs[1]
+    pending = receipt.with_name('.'+receipt.name+'.pending')
+    pending.write_text('{}')
+    os.link(pending,receipt)
+    check()  # The fixed worker is between link and unlink.
+    fstat = os.fstat
+    samples = 0
+    def unlink_between_fd_and_path_samples(fd):
+        nonlocal samples
+        info = fstat(fd)
+        if (info.st_dev,info.st_ino) == (receipt.stat().st_dev,receipt.stat().st_ino):
+            samples += 1
+            if samples == 2:
+                pending.unlink()
+        return info
+    monkeypatch.setattr(os,'fstat',unlink_between_fd_and_path_samples)
+    check()  # Unlink after after=fstat but before canonical=lstat.
+    assert samples == 3 and receipt.stat().st_nlink == 1 and not pending.exists()
+    monkeypatch.setattr(os,'fstat',fstat)
+    check()
+    alias = receipt.with_name('unrecognized-alias')
+    os.link(receipt,alias)
+    with pytest.raises(RecoveryBlocked,match='元数据'):
+        check()
+    assert alias.stat().st_ino == receipt.stat().st_ino
+
+
 def test_missing_script_budget_is_not_an_audio_or_render_permit(tmp_path):
     probe=HostResourceProbe(tmp_path/'db',disk_paths=(tmp_path,),budget=HostBudget(50,100,100,100,1000,1000))
     assert probe._sample(_script_resources()).verdict is None

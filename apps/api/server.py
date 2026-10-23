@@ -22,6 +22,14 @@ def _freeze_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent  # repo root
 
 
+def _fixed_pcm_command(arguments: list[str]) -> bool:
+    prefix = [sys.executable]
+    if not getattr(sys, 'frozen', False):
+        prefix.append(str(Path(__file__).resolve()))
+    prefix.extend(['--pcm-assembly-worker', '--manifest'])
+    return len(arguments) == len(prefix) + 1 and arguments[:len(prefix)] == prefix
+
+
 _ENV_FILE_OVERRIDE_VAR = "AI_VIDEO_DIARY_DOTENV"
 
 
@@ -145,8 +153,11 @@ def _exec_granted_command(arguments: list[str], *, cpu_mode: str | None = None, 
     try:
         # Only the fixed host worker needs the bootloader context. A target
         # executable receives its requested environment without these internals.
+        fixed_pcm = getattr(sys, 'frozen', False) and _fixed_pcm_command(arguments[1:])
         for key in tuple(os.environ):
             if key.startswith(('_PYI_','PYINSTALLER_')):
+                if fixed_pcm and key in {'_PYI_ARCHIVE_FILE','_PYI_APPLICATION_HOME_DIR','_PYI_PARENT_PROCESS_LEVEL'}:
+                    continue
                 os.environ.pop(key)
         os.execvp(arguments[1], arguments[1:])
     except OSError as exc:
@@ -155,6 +166,21 @@ def _exec_granted_command(arguments: list[str], *, cpu_mode: str | None = None, 
 
 
 def main() -> None:
+    if sys.argv[1:2] == ['--pcm-assembly-worker']:
+        if len(sys.argv) != 4 or sys.argv[2] != '--manifest':
+            raise SystemExit('PCM worker requires its fixed --manifest argument')
+        # The worker is an external packaged resource; these static imports let
+        # PyInstaller collect its stdlib dependencies without importing app.main.
+        import argparse, contextlib, fcntl, hashlib, json, stat, struct, time, uuid, wave  # noqa: F401
+        from datetime import datetime, timezone  # noqa: F401
+        import runpy
+        worker = (_freeze_root() / 'model-workers' / 'pcm_assembly.py' if getattr(sys, 'frozen', False)
+            else Path(__file__).resolve().parent / 'model_workers' / 'pcm_assembly.py')
+        if worker.is_symlink() or not worker.is_file():
+            raise SystemExit('The packaged PCM worker is unavailable')
+        sys.argv = [str(worker), '--manifest', sys.argv[3]]
+        runpy.run_path(str(worker), run_name='__main__')
+        return
     if sys.argv[1:2] == ["--grant-exec"]:
         _exec_granted_command(sys.argv[2:])
         return

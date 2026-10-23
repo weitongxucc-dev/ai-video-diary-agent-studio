@@ -7,6 +7,8 @@ import json
 import logging
 import math
 import re
+import hashlib
+import stat
 import selectors
 import signal
 import subprocess
@@ -21,7 +23,8 @@ from pathlib import Path
 import psutil
 
 from app.device_scheduler import DeviceScheduler, Grant, ProcessIdentity, RecoveryBlocked
-from app.host_resource_probes import HostProcessProbe, HostResourceProbe, SceneRuntimeLimits, HostResourceDecision, HostResourceRefusal
+from app.host_resource_probes import (HostProcessProbe, HostResourceProbe, SceneRuntimeLimits, HostResourceDecision,
+    HostResourceRefusal, PCM_ASSEMBLY_MODE, PCM_METADATA_MAX_BYTES, pcm_assembly_fields_valid)
 
 
 logger = logging.getLogger(__name__)
@@ -323,6 +326,135 @@ def _terminate_and_verify(process: subprocess.Popen[bytes], child: ProcessIdenti
         raise RecoveryBlocked("子进程组释放状态未知，设备许可须保留")
 
 
+def _pcm_assembly_monitor(scheduler, grant, argv, output_paths, absolute_limit):
+    """Only the original creation owner can attest credit for this fixed worker."""
+    if not isinstance(scheduler, DeviceScheduler) or not isinstance(grant, Grant):
+        return None
+    with scheduler._connect() as conn:
+        scheduler._assert_grant(conn, grant)
+        row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
+        request = scheduler._request(row)
+        resources = request.resources
+        if resources.get('kind') != 'task_audio' or resources.get('execution_mode') != PCM_ASSEMBLY_MODE:
+            return None
+        if (grant.owner_type != 'creation_job' or not grant.unit_key.startswith(('narration:merge:v1:', 'narration_edit:pcm:'))
+                or not isinstance(scheduler.resources, HostResourceProbe)):
+            raise RecoveryBlocked('PCM组装缺少原制作单元或真实资源许可')
+        from app.device_runtime import OwnerRouter
+        if not isinstance(scheduler.owners, OwnerRouter):
+            raise RecoveryBlocked('PCM组装缺少原制作Owner注册')
+        owner = scheduler.owners.registrations['creation_job'].owner
+        baseline = owner.pcm_assembly_baseline(request, conn)
+        if baseline != resources.get('pcm_assembly') or not pcm_assembly_fields_valid(resources,scheduler.resources.budget.cpu_audio):
+            raise RecoveryBlocked('PCM组装基线与原Job或许可不一致')
+    work, receipt = Path(baseline['work_path']), Path(baseline['receipt_path'])
+    seal, manifest_path = Path(str(work)+'.sealed.json'), Path(str(receipt)+'.manifest.json')
+    if {str(Path(path)) for path in output_paths} != {str(work),str(receipt),str(seal)} or len(output_paths) != 3:
+        raise RecoveryBlocked('PCM组装输出不属于原工作文件和单元回执')
+    if absolute_limit != baseline['absolute_max_output_bytes']:
+        raise RecoveryBlocked('PCM绝对输出上限与原许可不一致')
+    entry = [sys.executable] + ([] if getattr(sys,'frozen',False) else [str(Path(__file__).resolve().parents[1]/'server.py')])
+    if list(argv) != [*entry,'--pcm-assembly-worker','--manifest',str(manifest_path)]:
+        raise RecoveryBlocked('PCM组装只能执行固定包内worker和原单元manifest')
+    if work.parent.resolve(strict=True) != work.parent:
+        raise RecoveryBlocked('PCM工作目录不能包含符号链接')
+    def metadata(path, *, publication=False):
+        fd = os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            pending_verified = False
+            if publication and info.st_nlink == 2:
+                pending = path.with_name('.'+path.name+'.pending')
+                try:
+                    linked = pending.lstat()
+                except FileNotFoundError:
+                    # The worker may have removed its pending link after open.
+                    info = os.fstat(fd)
+                else:
+                    pending_verified = (stat.S_ISREG(linked.st_mode) and linked.st_nlink == 2
+                        and (linked.st_dev,linked.st_ino,linked.st_size) == (info.st_dev,info.st_ino,info.st_size)
+                        and linked.st_size <= PCM_METADATA_MAX_BYTES)
+            if not stat.S_ISREG(info.st_mode) or not (info.st_nlink == 1 or pending_verified):
+                raise RecoveryBlocked('PCM元数据不是有限独占普通文件')
+            if info.st_size > PCM_METADATA_MAX_BYTES:
+                raise GrantedCommandOutputLimit('PCM元数据超过有限上限',
+                    file_sample={'budget_kind':'pcm_metadata_bytes','actual_bytes':info.st_size,'maximum_bytes':PCM_METADATA_MAX_BYTES})
+            data = os.read(fd,PCM_METADATA_MAX_BYTES+1)
+            after = os.fstat(fd)
+            canonical = path.lstat()
+            if (pending_verified and after.st_nlink == 2 and canonical.st_nlink == 1
+                    and (canonical.st_dev,canonical.st_ino) == (after.st_dev,after.st_ino)):
+                # Only the verified publication unlink can cross these two
+                # samples. Take its final state once, never retry other changes.
+                after = os.fstat(fd)
+                canonical = path.lstat()
+            published = pending_verified and after.st_nlink == 1 and not pending.exists() and not pending.is_symlink()
+            if (len(data) != info.st_size or (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)
+                    != (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns)
+                    or (canonical.st_dev,canonical.st_ino,canonical.st_nlink) != (after.st_dev,after.st_ino,after.st_nlink)
+                    or after.st_nlink != info.st_nlink and not published
+                    or after.st_ctime_ns != info.st_ctime_ns and not published):
+                raise RecoveryBlocked('PCM元数据在读取时变化')
+            return data,(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+        finally:
+            os.close(fd)
+    manifest_bytes, manifest_identity = metadata(manifest_path)
+    expected = {'version':1,'operation':'append','unit_id':f'{grant.request_id}:{grant.generation}',
+        'job_id':grant.owner_id,'source_digest':resources['merge_source_digest'],
+        **baseline,'expected_file_identity':baseline['file_identity'],'sources':resources['pcm_sources'],'final':resources['merge_final']}
+    del expected['file_identity'],expected['header_bytes_allowance']
+    if json.loads(manifest_bytes) != expected:
+        raise RecoveryBlocked('PCM manifest与原许可单元、来源或预算不一致')
+    if receipt.exists() or receipt.is_symlink() or seal.exists() or seal.is_symlink():
+        raise RecoveryBlocked('原PCM单元已有回执或封口，须先对账')
+    identity = baseline['file_identity']
+    start_length = 0 if identity is None else baseline['committed_pcm_bytes']+44
+    observed_identity = identity
+    def check(*, initial=False, verify_prefix=False):
+        nonlocal observed_identity
+        try:
+            info = work.lstat()
+        except FileNotFoundError:
+            if observed_identity is not None:
+                raise RecoveryBlocked('原PCM工作文件已消失')
+            return
+        actual = {'device':info.st_dev,'inode':info.st_ino}
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or observed_identity is not None and actual != observed_identity:
+            raise RecoveryBlocked('PCM工作文件链接或身份已变化')
+        if initial and identity is None or info.st_size < start_length or initial and info.st_size != start_length:
+            raise RecoveryBlocked('PCM工作文件存在未对账尾部或长度已变化')
+        observed_identity = actual
+        generated = info.st_size-start_length+(8 if identity is not None else 0)
+        for actual_bytes,maximum,kind in ((info.st_size,absolute_limit,'pcm_absolute_bytes'),
+                (generated,baseline['max_new_bytes'],'pcm_generated_bytes')):
+            if actual_bytes > maximum:
+                raise GrantedCommandOutputLimit('PCM组装超过原许可输出上限',
+                    file_sample={'budget_kind':kind,'actual_bytes':actual_bytes,'maximum_bytes':maximum})
+        if verify_prefix and baseline['committed_pcm_bytes']:
+            fd = os.open(work,os.O_RDONLY|os.O_NOFOLLOW)
+            try:
+                digest,remaining = hashlib.sha256(),baseline['committed_pcm_bytes']
+                offset = 44
+                while remaining:
+                    data = os.pread(fd,min(65536,remaining),offset)
+                    if not data:
+                        raise RecoveryBlocked('原PCM前缀不可完整读取')
+                    digest.update(data);remaining-=len(data);offset+=len(data)
+                if digest.hexdigest() != baseline['committed_pcm_sha256']:
+                    raise RecoveryBlocked('原PCM前缀内容已变化')
+            finally:
+                os.close(fd)
+        for path in (receipt,seal):
+            try:
+                metadata(path,publication=True)
+            except FileNotFoundError:
+                pass
+        if metadata(manifest_path)[1] != manifest_identity:
+            raise RecoveryBlocked('原PCM manifest已变化')
+    check(initial=True,verify_prefix=True)
+    return check,resources
+
+
 def run_granted_command(
     scheduler: DeviceScheduler,
     grant: Grant,
@@ -358,6 +490,13 @@ def run_granted_command(
     if cancel_event is not None and cancel_event.is_set():
         raise GrantedCommandCancelled("Command cancelled before launch")
     scheduler.assert_grant(grant)
+    pcm = _pcm_assembly_monitor(scheduler,grant,argv,output_paths,max_output_file_bytes)
+    if resource_purpose == 'task_audio' and pcm is None:
+        raise RecoveryBlocked('PCM执行用途缺少原制作Owner基线')
+    if pcm is not None:
+        if max_stdout_bytes > PCM_METADATA_MAX_BYTES or max_stderr_bytes > PCM_METADATA_MAX_BYTES:
+            raise RecoveryBlocked('PCM执行回执管道超过有限元数据上限')
+        timeout_seconds = min(timeout_seconds,pcm[1]['timeout_seconds'])
     # One frozen dependency view per command. The pipe/cancel watchdog checks
     # local versions and task expiry/revocation, never rebuilds the whole film.
     running_check = (scheduler.capture_running_check(grant)
@@ -462,7 +601,9 @@ def run_granted_command(
             if isinstance(grant, Grant) and (grant.owner_type == "creation_job" or model_unit or quality_unit) and time.monotonic() >= next_permission_sample:
                 running_check()
                 next_permission_sample = time.monotonic() + _PERMISSION_SAMPLE_SECONDS
-            if max_output_file_bytes is not None:
+            if pcm is not None:
+                pcm[0]()
+            elif max_output_file_bytes is not None:
                 output_size = 0
                 output_count = 0
                 for root_index,target in enumerate(output_paths):
@@ -535,6 +676,8 @@ def run_granted_command(
             _terminate_and_verify(process, child, probe, release_observations)
             raise GrantedCommandError("Command left a live process-group descendant")
         check_running_unit()
+        if pcm is not None:
+            pcm[0](verify_prefix=True)
         _record_command_diagnostics(grant, child, {
             **{name: bytes(value) for name, value in outputs.items()},
             "stdout_truncated": False, "stderr_truncated": False,

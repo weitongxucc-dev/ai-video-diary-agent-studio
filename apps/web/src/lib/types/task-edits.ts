@@ -265,10 +265,16 @@ export type CreationTaskEditOperation = {
     created_at: string;
     applied_at: string | null;
 };
+export type EditExecutionReadiness = {
+    status: "authorization_ready" | "not_ready";
+    reason_code: string | null;
+    device_admission: "not_checked";
+};
 export type CreationTaskEditConfirmResponse = {
     operation: CreationTaskEditOperation;
     montage: CreationTaskMontage | null;
     narration?: CreationTaskNarration | null;
+    execution_readiness?: EditExecutionReadiness | null;
 };
 export type CreationTaskEditQueuedResponse = {
     status: "queued";

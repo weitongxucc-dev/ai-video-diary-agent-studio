@@ -1,4 +1,5 @@
 import type { CreationTaskSubtitleTrack, CreationTaskCoverAsset } from './creation-tasks';
+import type { EditExecutionReadiness } from './task-edits';
 export type CreationTaskTimelineVersionSummary = {
     id: string;
     sequence: number;
@@ -29,6 +30,7 @@ export type TimelineRestoreReceipt = {
     status: "applied" | "refused" | "result_unknown";
     operation_id: string | null;
     result_version_id: string | null;
+    execution_readiness?: EditExecutionReadiness | null;
     failure: {reason: string; impact?: string; repair_action?: string; submission_effect?: string} | null;
 };
 export type CreationTaskTimelineVersionShot = {

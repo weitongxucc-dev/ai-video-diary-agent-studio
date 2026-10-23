@@ -1,5 +1,18 @@
 import type { CreationTaskNarrationSegment, CreationTaskPersonRender } from "@/lib/types";
 import type { CreationTaskSegmentRevision } from "@/lib/types/creation-tasks";
+export function editExecutionReadinessMessage(readiness: unknown) {
+    if (!readiness || typeof readiness !== 'object' || !('status' in readiness)) return null;
+    if (readiness.status === 'not_ready') {
+        const reasons: Record<string,string> = {task_authorization_unavailable:'原任务尚无后台执行授权',
+            task_authorization_unverified:'原任务授权尚未核验',task_authorization_expired:'原授权已过期',
+            task_authorization_revoked:'原授权已撤销',task_authorization_outside_scope:'修改超出原授权范围',
+            original_execution_identity_differs:'原执行身份已变化',original_execution_identity_unverified:'原执行身份尚未核验'};
+        const reason = 'reason_code' in readiness && typeof readiness.reason_code === 'string' ? reasons[readiness.reason_code] : null;
+        return '本次保存时后台执行授权未就绪'+(reason ? `（${reason}）` : '')+'；修改已保留。';
+    }
+    if (readiness.status === 'authorization_ready') return '本次保存时后台执行授权已核验；设备准入尚未检查。';
+    return null;
+}
 export function segmentRevisionStatus(receipt: CreationTaskSegmentRevision) {
     const adoption = receipt.adoption?.status;
     if (adoption === 'current') return '本段结果已被当前作品采用；整片输出仍须核对';

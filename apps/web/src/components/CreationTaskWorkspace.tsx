@@ -5,6 +5,7 @@ import { readAssistantLocateReference, referenceAssistantSelection, type Selecte
 import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
 import type { AssistantTimelineReference } from "@/lib/types/assistant";
 import { canOpenStage } from "./creation-task/stage-navigation";
+import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
@@ -1028,6 +1029,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           setPendingLocalEdit({ taskId: task.id, jobId: result.job_id,
             operationType: proposal.operation.operation_type, targetRefs: [...proposal.target_refs] });
           setNotice(queuedEditNotice(proposal.operation.operation_type));
+        } else {
+          setNotice('修改已保存，可撤销。' + (editExecutionReadinessMessage(result.execution_readiness) ?? ''));
         }
         invalidateEditPreview();
         if (consumesInput) setEditCommand("");
@@ -1218,6 +1221,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           return false;
         }
         saved = true;
+        setNotice('修改已保存，可撤销。' + (editExecutionReadinessMessage(result.execution_readiness) ?? ''));
         setClipDrafts(current => {
           const next = { ...current };
           if (selectedClipId) delete next[`${task.id}:${selectedClipId}`];
@@ -1244,7 +1248,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (!owns()) return;
       if (receipt.task_id!==pending.taskId || receipt.request_id!==pending.requestId) throw new Error('撤销重做回执身份不一致');
       if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
-      setNotice(receipt.status==='applied'?'原修改的撤销或重做已保存。':receipt.status==='refused'?(receipt.failure?.reason ?? '原操作因冲突被拒绝。'):'原结果尚未核实，请继续查询原请求。');
+      setNotice(receipt.status==='applied'?'原修改的撤销或重做已保存。'+(editExecutionReadinessMessage(receipt.execution_readiness) ?? ''):receipt.status==='refused'?(receipt.failure?.reason ?? '原操作因冲突被拒绝。'):'原结果尚未核实，请继续查询原请求。');
       await refresh(true);
     } catch(cause) {if (owns()) setError(errorDetails(cause));}
     finally {if (owns()) setBusy(null);}
@@ -1276,6 +1280,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         await refresh(true);return;
       }
       setClipDrafts({});
+      setNotice('原修改的撤销或重做已保存。' + (editExecutionReadinessMessage(receipt.execution_readiness) ?? ''));
       setSelectedCueId(null);
       setSelectedNarrationSegmentId(null);
       setSelectedCover(false);
