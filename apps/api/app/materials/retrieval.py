@@ -6,6 +6,7 @@ one idempotent device unit. The queue is the only execution-state owner.
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -21,7 +22,7 @@ from app.host_resource_probes import HostResourceRefusal, material_visual_query_
 from app.materials.analysis import visual_cosine_similarity
 from app.materials.contracts import (
     MaterialAsset, MaterialSegment, MaterialSearchResult, MaterialSegmentMatch,
-    material_allows_automation, material_allows_footage, selectable_segment_usage_role,
+    material_usage_eligibility, selectable_segment_usage_role,
 )
 from app.material_speech import speech_text_for_range
 from app.visual_understanding import searchable_ocr_text
@@ -161,6 +162,7 @@ class MaterialRetrievalService:
             if viewer_user_id != (actor.user_id or actor.member_id):
                 raise PermissionError("素材读取身份与设备查询身份不一致")
 
+        qualification_counts = Counter()
         def candidates():
             selected = set(asset_ids) if asset_ids is not None else None
             available = self.assets.list_assets(workspace_id, include_private=False,
@@ -169,13 +171,18 @@ class MaterialRetrievalService:
             for asset in available:
                 if selected is not None and asset.id not in selected:
                     continue
-                allowed = material_allows_automation(asset) if automatic_selection else material_allows_footage(asset)
-                if asset.analysis_status != "ready" or asset.review_status != "approved" or not allowed or asset.usage_role == "exclude":
+                purpose = "automatic" if automatic_selection else "manual"
+                qualification = material_usage_eligibility(asset, purpose=purpose)
+                if not qualification.eligible:
+                    qualification_counts[qualification.status] += 1
                     continue
                 for segment in asset.segments:
                     role = selectable_segment_usage_role(asset, segment)
-                    if (segment.review_status != "approved" or role == "exclude"
-                            or (roles and role not in roles)
+                    qualification = material_usage_eligibility(asset, segment, purpose=purpose)
+                    if not qualification.eligible:
+                        qualification_counts[qualification.status] += 1
+                        continue
+                    if ((roles and role not in roles)
                             or (eligible_segment_refs is not None and (asset.id, segment.id) not in eligible_segment_refs)):
                         continue
                     duration = segment.end_seconds - segment.start_seconds
@@ -186,10 +193,14 @@ class MaterialRetrievalService:
                     result.append((asset, segment))
             return result
 
-        eligible = candidates()  # permission, approval and use-state precede even cache reads
+        eligible = candidates()  # Identity and use qualification precede even cache reads.
         status, message, request_id, vector, features = "not_requested", "未请求画面语义", None, None, {}
-        if normalized and not eligible:
-            message = "当前没有满足权限、审核和筛选条件的片段，未提交画面推理"
+        if not eligible:
+            reasons = [f"{count}项{label}" for status, label in
+                [("processing", "分析尚未就绪"), ("restricted", "受当前用途限制"), ("input_changed", "输入版本已变化")]
+                if (count := qualification_counts[status])]
+            message = ("当前身份可读取且符合指定范围的素材中，" + "、".join(reasons) + "；其余片段未匹配筛选条件。"
+                if reasons else "当前可读取范围内没有匹配筛选条件的片段；不代表范围外对象不存在。") + "未提交画面推理。"
         if normalized and eligible:
             status, message = "unavailable", "画面语义不可用；当前仅按文字与结构条件检索"
             try:

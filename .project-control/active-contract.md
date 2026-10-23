@@ -46,7 +46,7 @@ B已明确交接并停止写入 `apps/api/app/creation/section_timeline.py`，�
 
 用户批准沿现有闭环先修事实口径、错误回执和版本依赖。基线为main `7e4ee736`；保留实现已保存于 `codex/pi-native-integration-wip-20261023` 的 `b09f190e`，不把它视为已验收。此前A/B实现冻结仅按本节重绑定后解除，已有diff保留。稳定规则见领域§2.4/§6.2、架构§3.15.3；接受路径复用计划§1.1.1a，不改变原中英30秒目标。
 
-- A：接回已完成Pi1.4升级的四个临时主控文件；除原A范围，新增独占 `apps/api/app/materials/contracts.py`、`materials/retrieval.py`、`topics.py` 及各自直接相关既有测试。先收敛素材资格公共判定与检索、核查错误的原始原因/下一步透传及Pi/UI读取，不新增通用对象数据库或万能寻址层。不得写B的production/main；公共素材判定的入参/返回与B明确后由B接入这些消费者。
+- A：接回已完成Pi1.4升级的四个临时主控文件；除原A范围，新增独占 `apps/api/app/materials/contracts.py`、`materials/retrieval.py`、`topics.py`、`apps/web/src/lib/api/creation-transport.ts` 及各自直接相关既有测试。先收敛素材资格公共判定与检索、核查错误的原始原因/下一步透传及Pi/UI读取，不新增通用对象数据库或万能寻址层。不得写B的production/main；公共素材判定的入参/返回与B明确后由B接入这些消费者。
 - B：保留原范围，收敛production/main中的素材判定消费者并保持实际文件/身份检查；完成目标/真实依赖版本、正文音画字幕联动与指定修改撤销，慢工作移出写事务。`section_timeline.py` 继续归A，B需要变动时提出精确接口需求，不越界写入。
 - G：只读审核本批明确diff，优先资格一致性、协议/内容/未知结果区分、版本冲突与撤销、事务边界；不全仓复审，不运行媒体或扩大测试。
 - C：先只读准备原任务/材料/运行入口，收到主控固定候选和独占窗口后串行验收；不自行启动旧候选，不人工补业务步骤。每次停点保留原请求、当前要求、版本、实际回执与产物定位。

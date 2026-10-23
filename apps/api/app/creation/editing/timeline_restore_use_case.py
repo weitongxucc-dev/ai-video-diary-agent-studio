@@ -38,6 +38,8 @@ class PreparedTimelineRestore:
     subtitle_cover_undo: bool
     operation_type: str
     action_label: str
+    section_history: dict | None = None
+    section_dependencies: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,26 @@ class TimelineRestoreUseCase:
             )
         except KeyError as exc:
             raise EditConflict("timeline undo operation is unavailable") from exc
+        history = changed_operation.payload if changed_operation.operation_type == 'ReviseScriptSection' else changed_operation.payload.get('section_history')
+        if isinstance(history,dict) and 'before_publication' in history:
+            expected = (history['before_dependencies'] if command.redo else self.repository.get_task_event(
+                workspace_id,f'event_{history["operation_id"]}_dependencies').payload['dependencies'])
+            # A prior scoped control version records the exact composed dependencies it created.
+            cursor = task.current_timeline_version_id
+            while cursor:
+                recent = self.repository.get_timeline_version(workspace_id,cursor)
+                if recent.created_by_operation_id:
+                    control = self.repository.get_edit_operation(workspace_id,recent.created_by_operation_id)
+                    if (control.payload.get('section_history',{}).get('after_publication') == history['after_publication']
+                            and control.payload.get('section_restore_side') == ('before' if command.redo else 'after')):
+                        expected = self.repository.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
+                        break
+                    if control.operation_type == 'ReviseScriptSection':
+                        break
+                cursor = recent.parent_version_id
+            return PreparedTimelineRestore(command,changed_version,target_version,None,None,None,None,False,
+                operation_type,action_label,history,expected)
+        self.repository.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id)
         subtitle_cover_undo = command.redo or changed_operation.operation_type in {
             "RedoTimelineVersion",
             "ConfigureSubtitleTrack",
@@ -128,7 +150,48 @@ class TimelineRestoreUseCase:
         command = prepared.command
         workspace_id, task = command.workspace_id, command.task
         task_id = task.id
+        if prepared.section_history is not None:
+            from app.creation.section_change_use_case import SectionTimelineChange,SectionPreparationStale
+            from app.creation.contracts import JobRun,NarrationSegment
+            from datetime import datetime
+            import hashlib
+            import json
+            history = prepared.section_history
+            side = 'after' if command.redo else 'before'
+            values = dict(history[f'{side}_segment'])
+            for key in ('created_at','updated_at'):
+                values[key] = datetime.fromisoformat(values[key])
+            segment = NarrationSegment(**values)
+            desired_version = self.repository.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
+            publication = self.repository.get_task_event(workspace_id,history[f'{side}_publication'])
+            job = self.repository.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
+                kind='section_timeline_restore',idempotency_key=f'section_restore:{uuid4().hex}',
+                input_digest=hashlib.sha256(json.dumps([history,command.redo,prepared.section_dependencies],sort_keys=True).encode()).hexdigest()))
+            self.repository.claim_job_run(workspace_id,job.id)
+            change = SectionTimelineChange(self.repository,self.montage_edits.artifact_store)
+            try:
+                for attempt in range(2):
+                    change.prepare_current(workspace_id,task_id,history['section_id'],publication.payload['montage'],segment,job,
+                        desired_version=desired_version)
+                    try:
+                        operation,payload,current = self.repository.restore_script_section(workspace_id,task_id,
+                            history=history,expected_dependencies=prepared.section_dependencies,redo=command.redo,
+                            changed_version_id=prepared.changed_version.id,restore_version_id=prepared.target_version.id,
+                            timeline_change=change,job=job)
+                        break
+                    except SectionPreparationStale:
+                        if attempt:
+                            raise
+            except Exception as exc:
+                if self.repository.get_job_run(workspace_id,job.id).status=='running':
+                    self.repository.finish_job_run(workspace_id,job.id,status='failed',failure_reason=str(exc),
+                        impact='原时间线与已采用成果保留',repair_action='读取当前目标段及原恢复请求后核对冲突')
+                raise
+            plan = creation_task_montage_plan_from_payload(payload) if payload is not None else None
+            return MetadataEditResult(operation,plan,current,None)
         changed_version, target_version = prepared.changed_version, prepared.target_version
+        def verify_restore(connection):
+            self.repository.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id,connection=connection)
         current_plan, restored_plan = prepared.current_plan, prepared.restored_plan
         restored_segments, restored_narration = prepared.restored_segments, prepared.restored_narration
         subtitle_cover_undo = prepared.subtitle_cover_undo
@@ -253,6 +316,7 @@ class TimelineRestoreUseCase:
                 snapshot_source=target_version.snapshot,
                 narration_segments=restored_segments,
                 narration_artifact=restored_narration,
+                verify_sources=verify_restore,
             )
         return self.montage_edits.persist_montage_edit(
             workspace_id=workspace_id,
@@ -265,4 +329,5 @@ class TimelineRestoreUseCase:
             narration_segments=restored_segments,
             narration_artifact=restored_narration,
             subtitle_source_version=target_version,
+            verify_sources=verify_restore,
         )

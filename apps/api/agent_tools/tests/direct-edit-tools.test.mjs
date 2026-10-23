@@ -78,3 +78,41 @@ test('add without an ID and another declared edit retain their original submissi
     assert.equal(state.calls.filter(call => call.method === 'POST').length, 1);
   }
 });
+
+// The creative path submits actual text and its evidence, rather than deriving
+// a fixed speed adjustment from a phrase such as “紧凑一点”.
+test('local rewrite binds complete section, input and semantic comparison to the original request', async () => {
+  const {createTypedEditTools}=await import('../diary/typed-edit-tools.ts');
+  const {createHash}=await import('node:crypto');
+  const tools={}, calls=[];
+  const before='适用于干燥地面，最高可达每分钟30米。多余的重复说明。';
+  const after='适用于干燥地面，最高可达每分钟30米。';
+  const request=async (path,init)=>{
+    const body=init?.body?JSON.parse(init.body):null; calls.push({path,body});
+    if (path.endsWith('/context')) return {script_id:'script',base_version_id:'v1',dependency_digest:'dependencies',section_id:'section',segment_version:'s1',text:before,adjacent_sections:[]};
+    if (path.endsWith('/narration-semantic-review')) return {semantic_review_ref:'review'};
+    return {request_id:'request',status:'queued',job:{id:'real-job'}};
+  };
+  const typed=createTypedEditTools({request,taskId:'task',selectedTaskVersion:{timeline_version_id:'v1',timeline_sequence:1},
+    isTaskRead:()=>true,readActionSource:()=>({turnId:'turn',inputId:'input',userInstruction:'第1段紧凑一点但保留卖点'}),
+    typedRequestId:()=> 'request',getEditCapabilities:()=>null,hasCreationAction:()=>false,hasEditControlWrite:()=>false,markPreview:()=>{}});
+  typed.registerNarrationRevision({registerTool:tool=>{tools[tool.name]=tool;}});
+  const params={segment_id:'section',replacement_text:after,protected_rules:[{id:'claim',kind:'qualified_claim',
+    source_text:before,required_text:'适用于干燥地面，最高可达每分钟30米',source_reference:'source:claim'}],
+    conclusion:'preserved',findings:[{rule_id:'claim',before:'适用于干燥地面，最高可达每分钟30米',
+      after:'适用于干燥地面，最高可达每分钟30米',assessment:'preserved',reason:'适用条件、上限限定和数值都保留'}],adoption_mode:'apply'};
+  await assert.rejects(tools.revise_narration_segment.execute('call',params),/完整上下文/);
+  await tools.read_narration_segment_context.execute('read',{segment_id:'section'});
+  const result=await tools.revise_narration_segment.execute('call',params);
+  assert.equal(result.details.revision.job.id,'real-job');
+  const review=calls[3].body,revision=calls[4].body;
+  assert.equal(review.source_text_sha256,createHash('sha256').update(before).digest('hex'));
+  assert.equal(review.replacement_text_sha256,createHash('sha256').update(after).digest('hex'));
+  assert.equal(review.conclusion,'preserved');
+  assert.deepEqual(review.findings,params.findings);
+  assert.equal(revision.section_id,'section'); assert.equal(revision.input_id,'input');
+  assert.equal(revision.replacement_text,after); assert.equal(revision.semantic_review_ref,'review');
+  assert.equal(review.dependency_digest,'dependencies'); assert.equal(revision.dependency_digest,review.dependency_digest);
+  await assert.rejects(tools.revise_narration_segment.execute('call',params),/原修改已尝试提交/);
+  assert.equal(calls.length,5);
+});

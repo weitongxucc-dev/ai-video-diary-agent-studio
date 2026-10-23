@@ -117,7 +117,8 @@ if (input.factMode) {
 } else {
 let rebindTools;
 const inputExtension = creationInputExtension({ ask, getSession: () => session, rebind: environment => rebindTools({ ...process.env, ...environment }) });
-({ session, rebindTools } = await openCreationSession({ ...input, businessCall, extensionFactories: input.inputEnabled ? [inputExtension] : [] }));
+({ session, rebindTools } = await openCreationSession({ ...input, businessCall,
+  nativeCall:input.nativeEnabled?callBusiness:undefined,extensionFactories: input.inputEnabled ? [inputExtension] : [] }));
 const result = createSessionResult(input.sessionId);
 session.subscribe(event => { result.observe(event); emit(event); });
 try {

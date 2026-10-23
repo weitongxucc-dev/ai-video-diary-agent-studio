@@ -631,7 +631,7 @@ class CreationJobOwnerVerifier:
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
                  presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
-                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None) -> None:
+                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -647,6 +647,8 @@ class CreationJobOwnerVerifier:
         self.audio_mix_facts = audio_mix_facts
         self.cover = cover
         self.task_authorizations = task_authorizations
+        self.segments = segments
+        self.native_case = native_case
 
     def authorization_verdict(self, task, actor, stage, *, connection=None, check_scope=True):
         if self.task_authorizations is None:
@@ -763,6 +765,7 @@ class CreationJobOwnerVerifier:
     def narration_unit_facts(self, conn, job, task, script, plan, *, request=None):
         from app.creation.narration_stage_use_case import NarrationStageUseCase
         from app.narration import _pronunciation_dictionary, _pronunciation_version
+        script = self.repository.effective_creation_script(task.workspace_id, task.id, connection=conn)
         budget = self.narration_budget
         if budget is None or budget.input_scope != 'single_call_experiment_v1':
             raise ValueError('配音单次输入尚无明确执行范围；原总量374不能默认作为生产单段标定')
@@ -785,7 +788,7 @@ class CreationJobOwnerVerifier:
         reference_input = self.repository.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
         reference = Path(reference_input.source_path)
         stat = reference.stat()
-        manifest = {'script': asdict(script), 'voice': asdict(inputs.voice), 'pronunciation_version': pronunciation,
+        manifest = {'script_id': script.id, 'language': script.language, 'voice': asdict(inputs.voice), 'pronunciation_version': pronunciation,
             'reference_input': asdict(reference_input),
             'reference': [str(reference), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]}
         segments = self.repository.list_narration_segments(task.workspace_id, task.id, script.id, connection=conn)
@@ -826,6 +829,7 @@ class CreationJobOwnerVerifier:
             'parent_max_output_bytes': limits['parent_max_output_bytes']}
         if missing is not None:
             ordinal, section = missing
+            manifest['section'] = asdict(section)
             resources = {**common, 'kind': 'creation_narration', 'execution_mode': 'isolated_qwen3_tts',
                 'narration_phase': 'segment', 'section_id': section.id, 'ordinal': ordinal,
                 'segment_id': NarrationStageUseCase.segment_id(task.id, script.id, section.id),
@@ -940,6 +944,10 @@ class CreationJobOwnerVerifier:
         return job, task, event, script, plan
 
     def verify_submission(self, intent: SubmissionIntent, actor: object, *, connection=None) -> VerifiedWork:
+        if intent.unit_key.startswith('native_command:') and self.native_case is not None:
+            return self.native_case.verify_submission(intent,actor,self,connection=connection)
+        if intent.unit_key.startswith(('segment_video:', 'segment_revision:')) and self.segments is not None:
+            return self.segments.verify_submission(intent,actor,self,connection=connection)
         if intent.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.verify_submission(intent, actor)
         if intent.unit_key.startswith("task_media:") and self.task_media is not None:
@@ -1050,6 +1058,10 @@ class CreationJobOwnerVerifier:
         return "ready"
 
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
+        if request.unit_key.startswith('native_command:') and self.native_case is not None:
+            return self.native_case.check_current(request,conn,self)
+        if request.unit_key.startswith(('segment_video:', 'segment_revision:')) and self.segments is not None:
+            return self.segments.check_current(request,conn,self)
         if request.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.check_current(request, conn)
         if request.unit_key.startswith("task_media:") and self.task_media is not None:
@@ -1107,6 +1119,10 @@ class CreationJobOwnerVerifier:
                 and self._check_facts(job, task, event, script, plan, stage, event.get("member_id")) == "ready")
 
     def capture_local(self, request, conn):
+        if request.unit_key.startswith('native_command:') and self.native_case is not None:
+            return self.native_case.capture_local(request,conn,self)
+        if request.unit_key.startswith(('segment_video:', 'segment_revision:')) and self.segments is not None:
+            return self.segments.capture_local(request,conn,self)
         if request.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.capture_local(request, conn)
         if request.unit_key.startswith("task_media:") and self.task_media is not None:
@@ -1344,14 +1360,17 @@ def resume_original_narration(repository, scheduler, job, actor, *, write_guard=
     with repository._connect() as conn:
         rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
             "AND owner_id=? AND state IN ('failed','cancelled') AND (unit_key LIKE 'narration:segment:v1:%' "
-            "OR unit_key LIKE 'narration:merge:v1:%') ORDER BY updated_at DESC LIMIT 2", (job.workspace_id, job.id)).fetchall()
+            "OR unit_key LIKE 'narration:merge:v1:%' OR unit_key LIKE 'segment_video:%') ORDER BY updated_at DESC LIMIT 2", (job.workspace_id, job.id)).fetchall()
     if len(rows) != 1:
         raise RecoveryBlocked('原配音没有唯一可继续单元；保留累计预算，先核对原作业')
     owner = scheduler.owners
     if hasattr(owner, 'registrations'):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-    scheduler.resume_creation_narration(rows[0]['id'],
-        resume_write=lambda conn, request: owner.resume_narration_request(conn, request, actor, write_guard=write_guard))
+    def resume(conn,request):
+        if request.unit_key.startswith('segment_video:') and owner.segments is not None:
+            return owner.segments.resume_unit(conn,request,actor,owner,write_guard=write_guard)
+        return owner.resume_narration_request(conn,request,actor,write_guard=write_guard)
+    scheduler.resume_creation_narration(rows[0]['id'],resume_write=resume)
     return True
 
 
@@ -1361,6 +1380,10 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
     with nullcontext(connection) if connection is not None else repository._connect() as conn:
         job, task, event, script, plan = owner._facts(conn, job.workspace_id, job.id)
+    if owner.segments is not None and job.kind == KIND and not event.get('operation'):
+        intent = owner.segments.next_initial(job,owner,connection=connection)
+        if intent is not None:
+            return intent
     regenerate = event.get("operation") == "regenerate_storyboard"
     if plan.presenter_share_target and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None):
         raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
@@ -1400,7 +1423,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None, on_render_completed=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None, on_render_completed=None, segments=None, native_case=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
@@ -1410,6 +1433,8 @@ class CreationJobUnitExecutor:
         self.cover = cover
         self.narration_stage = narration_stage
         self.person_stage = person_stage
+        self.segments = segments
+        self.native_case = native_case
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
         self._application_quit = threading.Event()
@@ -1466,6 +1491,10 @@ class CreationJobUnitExecutor:
             connection=conn)
 
     def record_stopped(self, grant, scheduler, exc):
+        if grant.unit_key.startswith('native_command:') and self.native_case is not None:
+            return self.native_case.record_stopped(grant,scheduler,exc)
+        if grant.unit_key.startswith(('segment_video:', 'segment_revision:')) and self.segments is not None:
+            return self.segments.record_stopped(grant,scheduler,exc)
         reason = str(exc) if isinstance(exc, RecoveryBlocked) else f"制作执行已停止（{type(exc).__name__}），须核查本次许可。"
         scheduler.record_owner_stop(grant, owner_database_path=self.repository.database_path,
             owner_write=lambda conn, current: self._write_interrupted(conn, current,
@@ -1635,6 +1664,8 @@ class CreationJobUnitExecutor:
                 artifact, result_bytes = self.narration_stage.prepare_merge(job.workspace_id, job.task_id,
                     script_id=resources['script_id'], grant_context=context)
                 segment = None
+            video_preparation = (self.segments.prepare_video(job,event.payload,task,segment.source_section_id,
+                artifact,owner,text=segment.text) if self.segments is not None and segment is not None else None)
             try:
                 output_stat = Path(artifact.audio_path).stat()
             except OSError as exc:
@@ -1654,6 +1685,8 @@ class CreationJobUnitExecutor:
                         resources['script_id'], connection=conn)
                     self.repository.complete_creation_task_narration(artifact, segments, connection=conn)
                     return self._checkpoint(conn, current, status='queued', output=artifact.cache_key, stage='narration')
+                if video_preparation is not None:
+                    self.repository.append_task_event(video_preparation,connection=conn)
                 return self.repository.checkpoint_creation_narration_segment(current, artifact, segment, resources['ordinal'], connection=conn)
 
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
@@ -1962,6 +1995,10 @@ class CreationJobUnitExecutor:
                 self._cancellations.pop(grant.request_id, None)
 
     def execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
+        if grant.unit_key.startswith('native_command:') and self.native_case is not None:
+            return self.native_case.execute(grant,scheduler,self)
+        if grant.unit_key.startswith(('segment_video:', 'segment_revision:')) and self.segments is not None:
+            return self.segments.execute(grant,scheduler,self)
         if self._pause_for_quit(grant, scheduler):
             return
         try:

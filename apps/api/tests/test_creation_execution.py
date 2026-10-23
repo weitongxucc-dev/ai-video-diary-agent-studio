@@ -1844,6 +1844,109 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     assert repo.get_asset("local", assets[0].id).user_tags == ["产品"]
 
 
+def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
+    from app.creation.contracts import EditIntent,EditProposal
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase,TimelineRestoreCommand,TimelineOutputQualification
+    repo,task_id,script_id,_=_seed(tmp_path,workspace_id='local')
+    with repo._connect() as conn:
+        row=conn.execute('SELECT payload FROM creation_tasks WHERE id=?',(task_id,)).fetchone()
+        task=json.loads(row[0]);task['stage']='montage'
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(task),task_id))
+    plan=CreationTaskMontagePlan('legacy','local',task_id,script_id,'legacy','ready',
+        [NarrationCue('cue','section_1','original',1)],
+        [MontageClip('clip','cue','asset','segment','workspace://original.mp4',0,1,0,1,1,[],False)],1,0)
+    payload=creation_task_montage_plan_to_payload(plan)
+    repo.save_creation_task_montage_plan('local',task_id,plan.id,payload)
+    base=repo.create_timeline_version(TimelineVersion('base','local',task_id,None,1,{'montage':payload},None))
+    edits=MetadataEditUseCase(repo,ArtifactStore(tmp_path/'artifacts'),output_root=tmp_path/'restore',audio_service=None)
+    intent=repo.create_edit_intent(EditIntent('crop-intent','local',task_id,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
+    proposal=repo.create_edit_proposal(EditProposal('crop-proposal','local',task_id,intent.id,'crop',['clip:clip'],
+        {'operation_type':'ChangeCrop','payload':{}},[],{},[]))
+    edited=edits.persist_montage_edit(workspace_id='local',task=repo.get_creation_task('local',task_id),proposal=proposal,
+        base_version=base,updated_plan=replace(plan,clips=[replace(plan.clips[0],crop_x=.2)]),
+        operation_type='ChangeCrop',operation_payload={'clip_id':'clip','crop_x':.2})
+    restore=TimelineRestoreUseCase(repo,edits)
+    prepared=restore.prepare_restore(TimelineRestoreCommand('local',edited.task,False))
+    # A successful no-op production version leaves the complete edit result unchanged.
+    changed=repo.get_timeline_version('local',edited.task.current_timeline_version_id)
+    snapshot=json.loads(json.dumps(changed.snapshot,default=str))
+    snapshot['stage_segments']={'section_2':'later-real-publication'}
+    later=TimelineVersion('later-production','local',task_id,changed.id,changed.sequence+1,snapshot,None)
+    repo.create_timeline_version(later,expected_current_version_id=changed.id)
+    with pytest.raises(ValueError,match='后来成果'):
+        restore.prepare_restore(TimelineRestoreCommand('local',repo.get_creation_task('local',task_id),False))
+    # A preparation made before the later result must also be fenced at commit.
+    with pytest.raises(ValueError):
+        restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
+    assert repo.get_creation_task('local',task_id).current_timeline_version_id==later.id
+    assert repo.get_creation_task_montage_plan('local',task_id)['clips'][0]['crop_x']==.2
+    assert len(repo.list_edit_operations('local',task_id))==1
+    # The refused production result is retained above. A separate task checks
+    # A/B -> undo B -> undo A without unrelated production facts.
+    clean_root=tmp_path/'continuous';clean_root.mkdir()
+    clean_repo,clean_task,clean_script,_=_seed(clean_root,workspace_id='local')
+    with clean_repo._connect() as conn:
+        row=conn.execute('SELECT payload FROM creation_tasks WHERE id=?',(clean_task,)).fetchone()
+        value=json.loads(row[0]);value['stage']='montage'
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(value),clean_task))
+    clean_plan=replace(plan,task_id=clean_task,script_id=clean_script)
+    clean_payload=creation_task_montage_plan_to_payload(clean_plan)
+    clean_repo.save_creation_task_montage_plan('local',clean_task,clean_plan.id,clean_payload)
+    clean_base=clean_repo.create_timeline_version(TimelineVersion('clean-base','local',clean_task,None,1,{'montage':clean_payload},None))
+    clean_edits=MetadataEditUseCase(clean_repo,ArtifactStore(clean_root/'artifacts'),output_root=clean_root/'restore',audio_service=None)
+    for name,position in [('A',.2),('B',.3)]:
+        intent=clean_repo.create_edit_intent(EditIntent(f'intent-{name}','local',clean_task,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
+        proposal=clean_repo.create_edit_proposal(EditProposal(f'proposal-{name}','local',clean_task,intent.id,'crop',['clip:clip'],
+            {'operation_type':'ChangeCrop','payload':{}},[],{},[]))
+        outcome=clean_edits.persist_montage_edit(workspace_id='local',task=clean_repo.get_creation_task('local',clean_task),
+            proposal=proposal,base_version=clean_base,updated_plan=replace(clean_plan,clips=[replace(clean_plan.clips[0],crop_x=position)]),
+            operation_type='ChangeCrop',operation_payload={'clip_id':'clip','crop_x':position})
+        clean_base=clean_repo.get_timeline_version('local',outcome.task.current_timeline_version_id)
+    clean_restore=TimelineRestoreUseCase(clean_repo,clean_edits)
+    for position in (.2,.5):
+        command=TimelineRestoreCommand('local',clean_repo.get_creation_task('local',clean_task),False)
+        prepared=clean_restore.prepare_restore(command)
+        restored=clean_restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
+        assert restored.montage.clips[0].crop_x==position
+
+
+def test_raw_material_qualification_agrees_for_search_preflight_and_edit(tmp_path,monkeypatch):
+    from app.production import material_segment_eligible
+    repo,task_id,_script,_=_seed(tmp_path,workspace_id='local')
+    asset,reference=register_synthetic_video_asset(repo,workspace_id='local',member_id='owner',
+        path=tmp_path/'library/raw.mp4',asset_id='raw_material',seconds=2)
+    asset=repo.update_asset_review('local',asset.id,review_status='raw',usage_role='b_roll')
+    original=asset.segments[0]
+    repo.update_segment('local',asset.id,original.id,description=original.description,transcript=original.transcript,
+        review_status='raw',usage_role='b_roll')
+    def matches():
+        return repo.search_material_segments('local',asset_ids=[asset.id],usage_roles=['b_roll'],viewer_user_id='owner')
+    asset=repo.get_asset('local',asset.id);segment=asset.segments[0]
+    assert matches() and repo.automatic_material_segments('local',viewer_user_id='owner')
+    assert material_segment_eligible(asset,segment,'local')
+    clip=MontageClip('manual','cue',asset.id,segment.id,reference,0,1,0,1,1,[],False)
+    assert repo.resolve_edit_clip_source('local',task_id,clip,{},user_id='owner',local_diagnostic=False).asset_id==asset.id
+    assert repo.get_asset('local',asset.id).review_status=='raw'
+    repo.update_asset_use_state('local',asset.id,'not_for_automation')
+    assert matches() and not repo.automatic_material_segments('local',viewer_user_id='owner')
+    monkeypatch.setattr(main_module,'production_repo',repo)
+    monkeypatch.setattr(main_module,'current_workspace_id',lambda request:'local')
+    monkeypatch.setattr(main_module,'_content_reader',lambda request,workspace_id:('owner',False))
+    client=TestClient(main_module.app)
+    automatic=client.get('/api/production/materials/search',params={'purpose':'automatic','include_eligibility':True})
+    assert automatic.status_code==200,automatic.text
+    receipt=automatic.json()
+    assert receipt['matches']==[] and receipt['qualification_message'] and receipt['total_count']==0 and not receipt['truncated']
+    manual=client.get('/api/production/materials/search')
+    assert manual.status_code==200 and isinstance(manual.json(),list) and manual.json()[0]['asset_ref']==f'asset:{asset.id}'
+    assert repo.resolve_edit_clip_source('local',task_id,clip,{},user_id='owner',local_diagnostic=False).asset_id==asset.id
+    with pytest.raises(PermissionError):
+        repo.resolve_edit_clip_source('local',task_id,clip,{},user_id='stranger',local_diagnostic=False)
+    Path(asset.path).unlink()
+    assert not matches() and not repo.automatic_material_segments('local',viewer_user_id='owner')
+
+
 @pytest.mark.parametrize("after_wait", ["recover", "io_gap", "revoked", "cancelled", "unknown", "unreleased", "write_failure", "model_error", "checkpoint_pressure", "ordinary_error", "user_cancel", "application_quit"])
 def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tmp_path, monkeypatch, after_wait):
     """Real roster/permit/driver; explicit resource-pressure fixture, no model."""
@@ -2732,6 +2835,8 @@ def _narration_units_case(tmp_path):
             generated.append((context.grant.request_id, kwargs['segment_id'], context.max_output_bytes,
                 context.deadline_monotonic-context.started_monotonic))
             key = hashlib.sha256(kwargs['segment_id'].encode()).hexdigest()
+            if kwargs.get('generation_identity'):
+                key = hashlib.sha256((key+kwargs['generation_identity']).encode()).hexdigest()
             path = tmp_path/f'{key}.wav'
             if not path.exists():
                 path.write_bytes(synthetic_wav_bytes(seconds=1))
@@ -2753,6 +2858,378 @@ def _narration_units_case(tmp_path):
     return SimpleNamespace(repo=repo, task_id=task_id, script_id=script_id, job=job, actor=actor, owner=owner,
         execution=execution, scheduler=scheduler, executor=executor, resources=resources, stage=stage,
         generated=generated, releases=releases)
+
+
+def _segment_units_case(tmp_path, monkeypatch):
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    case = _narration_units_case(tmp_path)
+    asset, reference = register_synthetic_video_asset(case.repo,workspace_id='local',member_id=case.actor.member_id,
+        path=tmp_path/'library/section.mp4',asset_id='section_video',seconds=2)
+    class Renderer:
+        def render(self, plan, audio_path, **kwargs):
+            assert kwargs['scheduler']._get(kwargs['grant'].request_id).resources['kind']=='creation_render'
+            assert Path(audio_path).is_file()
+            target = Path(kwargs['job_staging_path']); target.mkdir(parents=True,exist_ok=True)
+            (target/'preview.mp4').write_bytes(b'controlled-render-port')
+            (target/'subtitles.srt').write_text(plan.cues[0].text)
+            return plan
+    service = SegmentProductionUseCase(case.repo,narration_stage=case.stage,renderer=Renderer(),
+        artifact_store=ArtifactStore(tmp_path/'artifacts'),output_root=tmp_path/'temporary')
+    def section_plan(task,section_id,audio,owner,*,connection=None,text=None):
+        assert connection is None or not connection.in_transaction
+        text = text or '原文'
+        plan = CreationTaskMontagePlan(id=f'stage_{section_id}',workspace_id='local',task_id=task.id,
+            script_id=case.script_id,script_title='section',status='ready',
+            cues=[NarrationCue(f'cue_{section_id}',section_id,text,audio.duration_seconds,
+                narration_segment_id=case.stage.segment_id(task.id,case.script_id,section_id))],
+            clips=[MontageClip(f'clip_{section_id}',f'cue_{section_id}',asset.id,asset.segments[0].id,reference,0,audio.duration_seconds,
+                0,audio.duration_seconds,1,['controlled port'],False)],duration_seconds=audio.duration_seconds,
+            low_confidence_clip_count=0,created_at=task.created_at,updated_at=task.created_at,
+            narration_audio_path=case.repo.narration_artifact_reference(audio.cache_key))
+        paths = [Path(audio.audio_path),Path(asset.path)]
+        sources = [{'path':str(path),'size':path.stat().st_size,'mtime_ns':path.stat().st_mtime_ns,
+            'ctime_ns':path.stat().st_ctime_ns} for path in paths]
+        return plan,sources,creation_task_montage_plan_to_payload(plan)
+    monkeypatch.setattr(service,'section_plan',section_plan)
+    case.owner.cpu_render_limits = CpuRenderLimits(1_000_000,1,30)
+    case.owner.segments = case.executor.segments = service
+    case.segments = service
+    return case
+
+
+def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_version(tmp_path,monkeypatch):
+    case = _segment_units_case(tmp_path,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    first = case.scheduler.pick_and_grant()
+    case.executor.execute(first,case.scheduler)
+    second = case.scheduler.pick_and_grant()
+    assert second.unit_key.startswith('segment_video:section_1:')
+    case.executor.execute(second,case.scheduler)
+    context = case.segments.context('local',case.task_id,'section_1',case.actor)
+    assert context['video']['kind']=='video'
+    assert case.segments.video_path('local',case.task_id,'section_1',context['segment_version'],case.actor).is_file()
+    segments = case.repo.list_narration_segments('local',case.task_id,case.script_id)
+    assert [item.status for item in segments]==['ready','pending']
+    assert case.repo.get_creation_task('local',case.task_id).narration_cache_key is None
+    third = case.scheduler.pick_and_grant()
+    assert third.unit_key.startswith('narration:segment:v1:section_2:')
+    case.executor.execute(third,case.scheduler)
+    assert case.segments.context('local',case.task_id,'section_1',case.actor)['video']==context['video']
+    assert case.repo.task_budget_projection('local',case.task_id)['actual_cost']['amount'] is None
+
+
+def _submit_section_revision(case):
+    from app.schemas import NarrationRevisionRequest
+    from app.creation.contracts import TaskEvent
+    current = case.segments.context('local',case.task_id,'section_1',case.actor)
+    text = '原文更紧凑'
+    payload = {'request_id':'revision_1','input_id':'turn_revision','section_id':'section_1','script_id':case.script_id,
+        'expected_segment_version':current['segment_version'],'base_version_id':current['base_version_id'],
+        'dependency_digest':current['dependency_digest'],
+        'source_text_sha256':current['source_text_sha256'],'replacement_text_sha256':hashlib.sha256(text.encode()).hexdigest(),
+        'replacement_text':text,'protected_rules':[{'id':'selling_point','kind':'exact_text','source_text':'原文',
+            'required_text':'原文','source_reference':'source_1'}], 'semantic_review_ref':'review_revision','adoption_mode':'apply'}
+    review = {key:value for key,value in payload.items() if key not in {'replacement_text','semantic_review_ref','adoption_mode'}}
+    review.update(conclusion='preserved',findings=[{'rule_id':'selling_point','before':'原文','after':'原文',
+        'assessment':'preserved','reason':'controlled Pi comparison receipt'}],authorized_locked_section_ids=[],
+        source={'assistant_turn_id':'turn_revision','input_id':'turn_revision'},evidence_kind='pi_semantic_comparison')
+    case.repo.save_semantic_review(TaskEvent('review_revision','local',case.task_id,None,'narration_semantic_review',review),write_guard=lambda conn:None)
+    runtime = SimpleNamespace(scheduler=case.scheduler,wake=lambda:None,registrations={'creation_job':SimpleNamespace(owner=case.owner)})
+    result = case.segments.submit_revision('local',case.task_id,case.actor,NarrationRevisionRequest.model_validate(payload),runtime=runtime)
+    return current,result,runtime
+
+
+def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_path,monkeypatch):
+    case = _segment_units_case(tmp_path,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    before,request,runtime = _submit_section_revision(case)
+    audio = case.scheduler.pick_and_grant()
+    assert audio.unit_key.startswith('segment_revision:')
+    case.executor.execute(audio,case.scheduler)
+    video = case.scheduler.pick_and_grant()
+    assert video.unit_key.startswith('segment_video:section_1:')
+    case.executor.execute(video,case.scheduler)
+    receipt = case.segments.read_request('local',case.task_id,'revision_1',case.actor)
+    assert receipt['job_id']==request['job_id'] and receipt['status']=='succeeded', case.repo.get_job_run('local',request['job_id']).failure_reason
+    current = case.segments.context('local',case.task_id,'section_1',case.actor)
+    assert current['text']=='原文更紧凑' and current['segment_version']!=before['segment_version']
+    assert case.repo.get_creation_task_script('local',case.script_id).sections[0].content=='原文'*130
+    assert case.repo.list_narration_segments('local',case.task_id,case.script_id)[1].status=='pending'
+    assert case.segments.video_path('local',case.task_id,'section_1',before['segment_version'],case.actor).is_file()
+    assert case.segments.list_segments('local',case.task_id,case.actor)['revision_requests']['items'][0]['status']=='succeeded'
+    for prefix in ('narration:segment:v1:section_2:','segment_video:section_2:','narration:merge:v1:'):
+        grant = case.scheduler.pick_and_grant()
+        assert grant.unit_key.startswith(prefix)
+        case.executor.execute(grant,case.scheduler)
+    assert case.repo.get_creation_task('local',case.task_id).narration_cache_key=='combined'
+    assert case.repo.effective_creation_script('local',case.task_id).sections[0].content=='原文更紧凑'
+
+
+def test_segment_video_failure_resumes_same_unit_without_regenerating_audio(tmp_path,monkeypatch):
+    case = _segment_units_case(tmp_path,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    before,request,runtime = _submit_section_revision(case)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    original = case.segments.renderer.render
+    def fail(*args,**kwargs): raise ValueError('controlled render failure')
+    monkeypatch.setattr(case.segments.renderer,'render',fail)
+    video = case.scheduler.pick_and_grant()
+    case.executor.execute(video,case.scheduler)
+    assert case.segments.read_request('local',case.task_id,'revision_1',case.actor)['status']=='failed'
+    assert case.segments.context('local',case.task_id,'section_1',case.actor)['segment_version']==before['segment_version']
+    generated = list(case.generated)
+    monkeypatch.setattr(case.segments.renderer,'render',original)
+    resumed = case.segments.resume_request('local',case.task_id,'revision_1',case.actor,runtime=runtime)
+    assert resumed['job_id']==request['job_id']
+    grant = case.scheduler.pick_and_grant()
+    assert grant.request_id==video.request_id
+    case.executor.execute(grant,case.scheduler)
+    assert case.generated==generated
+    assert case.segments.read_request('local',case.task_id,'revision_1',case.actor)['status']=='succeeded'
+
+
+@pytest.mark.parametrize('full_timeline',[False,True])
+def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,monkeypatch,full_timeline):
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase,TimelineRestoreCommand,TimelineOutputQualification
+    from app.creation.montage_stage_use_case import MontageStageUseCase
+    from app.montage import creation_task_montage_plan_from_payload
+    case = _segment_units_case(tmp_path,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    before,request,_runtime = _submit_section_revision(case)
+    for _ in range(5): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    later = case.repo.stage_segment_state('local',case.task_id,'section_2')
+    later_audio = case.repo.list_narration_segments('local',case.task_id,case.script_id)[1]
+    edits = MetadataEditUseCase(case.repo,case.segments.artifact_store,output_root=tmp_path/'restore',audio_service=None)
+    if full_timeline:
+        task = case.repo.get_creation_task('local',case.task_id)
+        template = creation_task_montage_plan_from_payload(case.repo.stage_segment_state('local',case.task_id,'section_1')['montage'])
+        full = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
+            replace(template,id='full_montage',narration_audio_path='narration://artifact/combined'))
+        assert {cue.source_section_id for cue in full.cues}=={'section_1','section_2'}
+        case.repo.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
+        edits.ensure_montage_base('local',case.repo.get_creation_task('local',case.task_id),full)
+    restore = TimelineRestoreUseCase(case.repo,edits)
+    for redo,text in [(False,'原文'*130),(True,'原文更紧凑')]:
+        task = case.repo.get_creation_task('local',case.task_id)
+        prepared = restore.prepare_restore(TimelineRestoreCommand('local',task,redo))
+        actual=case.repo.section_dependency_snapshot('local',case.task_id,'section_1')
+        if json.dumps(actual,sort_keys=True,default=str)!=json.dumps(prepared.section_dependencies,sort_keys=True,default=str):
+            pytest.fail(str({'redo':redo,'audio_actual':actual['timeline'].get('audio_timeline'),
+                'audio_expected':prepared.section_dependencies['timeline'].get('audio_timeline')}))
+        result = restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
+        assert (result.montage is not None)==full_timeline
+        assert case.repo.effective_creation_script('local',case.task_id).sections[0].content==text
+        assert case.repo.stage_segment_state('local',case.task_id,'section_2')==later
+        assert case.repo.list_narration_segments('local',case.task_id,case.script_id)[1]==later_audio
+        assert result.task.output_ready is False and result.task.narration_cache_key is None
+        if full_timeline:
+            assert {cue.source_section_id for cue in result.montage.cues}=={'section_1','section_2'}
+            voices=result.montage.audio_timeline.tracks[0].clips
+            assert voices[1].source_ref==later_audio.audio_reference
+    assert case.segments.video_path('local',case.task_id,'section_1',before['segment_version'],case.actor).is_file()
+
+
+def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_lock_io(tmp_path,monkeypatch):
+    from app.creation.contracts import SubtitleTrack,SubtitleCue
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase,default_subtitle_style,execution_subtitle_track
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase,TimelineRestoreCommand,TimelineOutputQualification
+    from app.creation.montage_stage_use_case import MontageStageUseCase
+    from app.montage import creation_task_montage_plan_from_payload
+    from app.subtitle_tracks import render_srt
+    case=_segment_units_case(tmp_path,monkeypatch)
+    publish=case.segments.artifact_store.publish_bytes
+    prepared_files=[]
+    def no_writer():
+        with sqlite3.connect(case.repo.database_path,timeout=.02) as conn:
+            conn.execute('BEGIN IMMEDIATE');conn.rollback()
+    def checked_publish(reference,content):
+        no_writer();prepared_files.append(reference)
+        return publish(reference,content)
+    monkeypatch.setattr(case.segments.artifact_store,'publish_bytes',checked_publish)
+    original_scan=Path.rglob
+    def checked_scan(path,pattern):
+        if 'segment-staging' in path.parts: no_writer()
+        return original_scan(path,pattern)
+    monkeypatch.setattr(Path,'rglob',checked_scan)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    for _ in range(5): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    for row in case.repo.list_creation_job_request_states('local',case.job.id):
+        if row['state'] in {'waiting','blocked'}: case.scheduler.cancel(row['id'],case.actor)
+    edits=MetadataEditUseCase(case.repo,case.segments.artifact_store,output_root=tmp_path/'restore',audio_service=None)
+    task=case.repo.get_creation_task('local',case.task_id)
+    template=creation_task_montage_plan_from_payload(case.repo.stage_segment_state('local',case.task_id,'section_1')['montage'])
+    full=MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
+        replace(template,id='full_before',narration_audio_path='narration://artifact/combined'))
+    full.clips[0].crop_x=.23
+    case.repo.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
+    base=edits.ensure_montage_base('local',case.repo.get_creation_task('local',case.task_id),full)
+    track=SubtitleTrack('before_source','local',case.task_id,base.id,'zh-CN',None,default_subtitle_style(),
+        [SubtitleCue(full.cues[0].id,None,'修订前人工字幕',.1,.85),SubtitleCue(full.cues[1].id,None,'第二段原字幕',1,2)],
+        'timeline',None,None,None,'unavailable')
+    reference,transform=edits.publish_subtitle_text(workspace_id='local',task_id=case.task_id,proposal_id='before_subtitle',
+        kind='subtitle_cue_update',input_refs=[f'timeline:{base.id}'],content=render_srt(execution_subtitle_track(track)),
+        engine='subtitle-srt/v1',parameters={})
+    case.repo.create_subtitle_track(replace(track,artifact_ref=reference,transform_id=transform,status='valid'))
+    translation=replace(track,id='before_translation',language='en-US',source_language='zh-CN',generation_method='translation',
+        cues=[SubtitleCue('en_first',full.cues[0].id,'Original first',.1,.85),
+            SubtitleCue('en_second',full.cues[1].id,'Original second',1,2)])
+    translated_ref,translated_transform=edits.publish_subtitle_text(workspace_id='local',task_id=case.task_id,
+        proposal_id='before_translation',kind='subtitle_cue_update',input_refs=[f'timeline:{base.id}'],
+        content=render_srt(execution_subtitle_track(translation)),engine='subtitle-srt/v1',parameters={})
+    case.repo.create_subtitle_track(replace(translation,artifact_ref=translated_ref,transform_id=translated_transform,status='valid'))
+    before,request,_runtime=_submit_section_revision(case)
+    for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    assert case.repo.get_job_run('local',request['job_id']).status=='succeeded'
+    current=case.repo.get_creation_task('local',case.task_id)
+    revised=case.repo.get_timeline_version('local',current.current_timeline_version_id)
+    assert next(item for item in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
+        if item.language=='zh-CN').cues[0].text=='原文更紧凑'
+    payload=json.loads(json.dumps(revised.snapshot,default=str))
+    payload['montage']['clips'][1]['crop_y']=.31
+    later=TimelineVersion('later_other_section','local',case.task_id,revised.id,revised.sequence+1,payload,None)
+    case.repo.create_timeline_version(later,expected_current_version_id=revised.id)
+    rows=case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
+    source_track=next(item for item in rows if item.language=='zh-CN')
+    later_track=replace(source_track,id='later_source',timeline_version_id=later.id,
+        cues=[replace(cue,text='第二段后来字幕') if cue.id==full.cues[1].id else cue for cue in source_track.cues])
+    case.repo.create_subtitle_track(later_track)
+    invalid_translation=replace(next(item for item in rows if item.language=='en-US'),id='later_translation',
+        timeline_version_id=later.id,status='unavailable',artifact_ref=None,transform_id=None,
+        failure_reason='第二段译文尚待复核',impact='后续片段没有通过语义检查',repair_action='只复核第二段译文后再生成字幕')
+    case.repo.create_subtitle_track(invalid_translation)
+    restore=TimelineRestoreUseCase(case.repo,edits)
+    for redo in (False,True):
+        prepared=restore.prepare_restore(TimelineRestoreCommand('local',case.repo.get_creation_task('local',case.task_id),redo))
+        actual=case.repo.section_dependency_snapshot('local',case.task_id,'section_1')
+        assert json.dumps(actual,sort_keys=True,default=str)==json.dumps(prepared.section_dependencies,sort_keys=True,default=str), (
+            redo,actual['subtitles'],prepared.section_dependencies['subtitles'])
+        outcome=restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
+        assert outcome.montage.clips[0].crop_x==(.5 if redo else .23)
+        assert outcome.montage.clips[1].crop_y==.31
+        tracks=case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=outcome.task.current_timeline_version_id)
+        source_track=next(item for item in tracks if item.language=='zh-CN')
+        assert source_track.cues[0].text==('原文更紧凑' if redo else '修订前人工字幕')
+        assert source_track.cues[1].text=='第二段后来字幕'
+        assert source_track.status=='valid' and case.segments.artifact_store.resolve_file(source_track.artifact_ref).is_file()
+        translated=next(item for item in tracks if item.language=='en-US')
+        assert translated.status=='unavailable' and translated.artifact_ref is None and translated.transform_id is None
+        assert (translated.failure_reason,translated.impact,translated.repair_action)==(
+            invalid_translation.failure_reason,invalid_translation.impact,invalid_translation.repair_action)
+    assert prepared_files
+
+
+@pytest.mark.parametrize('changed',['unrelated_timeline','target_audio','input'])
+def test_segment_revision_checks_actual_target_dependencies_and_semantic_input(tmp_path,monkeypatch,changed):
+    from app.creation.contracts import TaskEvent
+    from app.schemas import NarrationRevisionRequest
+    case = _segment_units_case(tmp_path,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    _before,request,_runtime = _submit_section_revision(case)
+    event = case.repo.get_task_event('local',f'event_{request["job_id"]}_start')
+    command = NarrationRevisionRequest.model_validate(event.payload['command'])
+    queued=case.repo.list_creation_job_request_states('local',request['job_id'])[0]
+    with case.repo._connect() as conn:
+        running_check=case.segments.capture_local(case.scheduler._get(queued['id']),conn,case.owner)
+    if changed=='unrelated_timeline':
+        current = case.repo.get_creation_task('local',case.task_id)
+        base = case.repo.get_timeline_version('local',current.current_timeline_version_id)
+        case.repo.create_timeline_version(TimelineVersion('unrelated_version','local',case.task_id,base.id,
+            base.sequence+1,base.snapshot,None),expected_current_version_id=base.id)
+    elif changed=='target_audio':
+        segments=case.repo.list_narration_segments('local',case.task_id,case.script_id)
+        case.repo.save_narration_segments('local',case.task_id,case.script_id,
+            [replace(row,pronunciation_version='changed') if row.source_section_id=='section_1' else row for row in segments])
+    else:
+        review = case.repo.get_task_event('local','review_revision')
+        case.repo.save_semantic_review(TaskEvent('different_input','local',case.task_id,None,'narration_semantic_review',
+            {**review.payload,'input_id':'another_input'}),write_guard=lambda conn:None)
+        command = command.model_copy(update={'semantic_review_ref':'different_input'})
+    if changed=='unrelated_timeline':
+        case.segments.verify_revision('local',case.task_id,case.actor,command)
+        with case.repo._connect() as conn:
+            assert running_check(conn)=='ready'
+    else:
+        with pytest.raises(ValueError):
+            case.segments.verify_revision('local',case.task_id,case.actor,command)
+        if changed=='target_audio':
+            with case.repo._connect() as conn:
+                assert running_check(conn)=='stale'
+
+
+@pytest.mark.parametrize('original,replacement,expected',[
+    ('售价120元','售价20元','rejected'),('售价20元','售价120元','rejected'),('售价20元','仍为20元','passed')])
+def test_revision_number_rule_binds_whole_original_value(original,replacement,expected):
+    from app.creation.editing.narration_preview_use_case import inspect_narration_revision
+    from app.schemas import NarrationProtectedRule
+    rule = NarrationProtectedRule(id='price',kind='number',source_text=original,required_text='20',source_reference='price')
+    assert inspect_narration_revision(original,replacement,[rule])['status']==expected
+
+
+def test_segment_revision_http_adapter_checks_trusted_source_before_atomic_effect(tmp_path,monkeypatch):
+    from starlette.requests import Request
+    from app.creation.contracts import TaskEvent
+    case = _segment_units_case(tmp_path,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    _before,original,runtime = _submit_section_revision(case)
+    command = case.repo.get_task_event('local',f'event_{original["job_id"]}_start').payload['command']
+    review = case.repo.get_task_event('local','review_revision')
+    origin = {'conversation_id':'conversation_revision','input_id':None}
+    source = {**review.payload['source'],'conversation_id':origin['conversation_id']}
+    case.repo.save_semantic_review(TaskEvent('http_review','local',case.task_id,None,'narration_semantic_review',
+        {**review.payload,'source':source}),write_guard=lambda conn:None)
+    payload = {**command,'request_id':'http_revision','semantic_review_ref':'http_review','assistant_turn_id':'turn_revision'}
+    checks,effects = [],[]
+    current_origin = dict(origin)
+    def current(conn,turn_id,ws,member_id,task_id):
+        assert conn.in_transaction and (turn_id,ws,member_id,task_id)==('turn_revision','local',case.actor.member_id,case.task_id)
+        checks.append(('source',id(conn)))
+        return current_origin
+    verify = case.segments.verify_revision
+    def verified(*args,**kwargs):
+        result = verify(*args,**kwargs)
+        if kwargs.get('connection') is not None:
+            checks.append(('version',id(kwargs['connection'])))
+        return result
+    def effect(*args,connection,**kwargs):
+        assert checks[-2:]==[('source',id(connection)),('version',id(connection))]
+        assert connection.in_transaction
+        effects.append(kwargs['request_id'])
+    monkeypatch.setattr(main_module,'production_repo',case.repo)
+    monkeypatch.setattr(main_module,'conversation_repo',SimpleNamespace(_task_turn_source=current,record_input_business_effect=effect))
+    monkeypatch.setattr(main_module,'current_workspace_id',lambda _request:'local')
+    monkeypatch.setattr(main_module,'_require_automation_task_open',lambda *_args:None)
+    monkeypatch.setattr(main_module,'_require_permit_actor',lambda *_args:case.actor)
+    monkeypatch.setattr(main_module,'_assistant_creation_adoption_scope',lambda *_args,**_kwargs:origin)
+    monkeypatch.setattr(main_module,'_segment_production_use_case',lambda:case.segments)
+    monkeypatch.setattr(main_module,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(case.segments,'verify_revision',verified)
+    request = Request({'type':'http','method':'POST','path':'/','headers':[]})
+    result = main_module.revise_creation_task_segment(case.task_id,'section_1',payload,request)
+    assert result['request_id']=='http_revision' and effects==['http_revision']
+    with pytest.raises(main_module.HTTPException) as extra:
+        main_module.revise_creation_task_segment(case.task_id,'section_1',{**payload,'request_id':'extra','untrusted':True},request)
+    assert extra.value.status_code==409
+    case.repo.save_semantic_review(TaskEvent('other_turn_review','local',case.task_id,None,'narration_semantic_review',
+        {**review.payload,'source':{**source,'assistant_turn_id':'other_turn'}}),write_guard=lambda conn:None)
+    with pytest.raises(main_module.HTTPException) as mismatched:
+        main_module.revise_creation_task_segment(case.task_id,'section_1',
+            {**payload,'request_id':'other_source','semantic_review_ref':'other_turn_review'},request)
+    assert mismatched.value.status_code==409
+    current_origin['input_id']='new_input'
+    with pytest.raises(main_module.HTTPException) as stale:
+        main_module.revise_creation_task_segment(case.task_id,'section_1',{**payload,'request_id':'stale_input'},request)
+    assert stale.value.status_code==409 and effects==['http_revision']
+    assert case.repo.find_segment_revision_request('local',case.task_id,case.actor.member_id,'stale_input') is None
 
 
 def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_path):
@@ -2983,3 +3460,81 @@ def test_narration_real_memory_pressure_settles_known_usage_and_retains_unknown(
         assert case.scheduler._get(request_id).state == 'done'
     assert len(case.execution.jobs('local', case.task_id)) == 1
     case.scheduler.close()
+
+
+def _native_operations_case(tmp_path):
+    from app.creation.native_task_operations import NativeTaskOperations
+    from app.host_resource_probes import NativeCommandBudget
+    case = _narration_units_case(tmp_path)
+    budget = NativeCommandBudget(1024*1024,1024*1024,32,65536,65536,1,5,128*1024*1024,16,.1,128*1024*1024,1024*1024)
+    case.native = NativeTaskOperations(case.repo,ArtifactStore(tmp_path/'native-artifacts'),tmp_path/'native-work',budget=budget)
+    case.owner.native_case = case.executor.native_case = case.native
+    case.runtime = SimpleNamespace(scheduler=case.scheduler,wake=lambda:None,
+        registrations={'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)})
+    case.origin = {'task_id':case.task_id,'conversation_id':'conversation_native','assistant_turn_id':'turn_native',
+        'input_id':'input_native','session_id':'session_native','sdk_round':1}
+    def call(operation,arguments,call_id='file_1'):
+        return case.native.dispatch(operation,arguments,actor=case.actor,origin=case.origin,write_guard=lambda conn:None,
+            runtime=case.runtime,call_id=call_id)
+    case.call = call
+    return case
+
+
+def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
+    import base64
+    from app.device_scheduler import RecoveryBlocked
+    case = _native_operations_case(tmp_path)
+    path = '/task/work/note.json'
+    args = {'action':'write','path':path,'expected_sha256':None,'content_base64':base64.b64encode(b'{"v":1}').decode()}
+    first = case.call('native_task_file',args)
+    assert case.call('native_task_file',args)==first
+    with pytest.raises(ValueError,match='变化'):
+        case.call('native_task_file',{**args,'expected_sha256':'0'*64},'bad_cas')
+    bad = case.repo.get_job_run_by_idempotency_key('local',f'native:{case.task_id}:{case.actor.member_id}:bad_cas')
+    assert bad.status=='failed' and case.repo.native_operation_result('local',bad.id)['submission_effect']=='not_submitted'
+    root = case.native.task_root(case.actor,case.task_id)
+    (root/'work'/'image.txt').write_bytes(b'\x89PNG\r\n\x1a\n'+b'\x00'*30)
+    with pytest.raises(PermissionError,match='媒体'):
+        case.call('native_task_file',{'action':'read','path':'/task/work/image.txt'})
+    changed = case.call('native_task_file',{**args,'expected_sha256':first['sha256'],
+        'content_base64':base64.b64encode(b'{"v":2}').decode()},'file_2')
+    stale = case.call('register_task_artifacts',{'request_id':'register_stale','execution_job_id':first['job_id'],
+        'files':[{'path':path,'role':'notes','expected_sha256':changed['sha256']}]})
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    assert case.repo.get_job_run('local',stale['job_id']).status=='failed'
+    registered = case.call('register_task_artifacts',{'request_id':'register_current','execution_job_id':changed['job_id'],
+        'files':[{'path':path,'role':'notes','expected_sha256':changed['sha256']}]})
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    result = case.call('read_task_command',{'job_id':registered['job_id']})
+    assert result['status']=='succeeded' and result['release_state']=='released',result
+    artifact = result['artifacts'][0]
+    assert artifact['sha256']==changed['sha256'] and artifact['adopted'] is False
+    assert case.native.artifact_path(case.actor,case.task_id,artifact['artifact_id']).read_bytes()==b'{"v":2}'
+    # A started operation with no result cannot mutate again on a repeated request.
+    pending,_ = case.repo.create_native_operation(case.actor,case.origin,'unknown_write','native_task_file',
+        {**args,'path':'/task/work/unknown'}, {},write_guard=lambda conn:None)
+    case.repo.claim_job_run('local',pending.id)
+    with pytest.raises(RecoveryBlocked):
+        case.call('native_task_file',{**args,'path':'/task/work/unknown'},'unknown_write')
+    assert not (root/'work'/'unknown').exists()
+
+
+def test_native_queued_script_change_never_launches_and_origin_cancel_drains_all(tmp_path,monkeypatch):
+    import base64
+    case = _native_operations_case(tmp_path)
+    case.call('native_task_file',{'action':'write','path':'/task/work/run.py','expected_sha256':None,
+        'content_base64':base64.b64encode(b'print(1)').decode()})
+    submitted = case.call('submit_task_command',{'request_id':'changed_script','command':'python run.py'})
+    root = case.native.task_root(case.actor,case.task_id)
+    (root/'work'/'run.py').write_text('print(2)')
+    def unexpected(*args,**kwargs): raise AssertionError('changed queued content must not launch')
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command',unexpected)
+    case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+    result = case.call('read_task_command',{'job_id':submitted['job_id']})
+    assert result['status']=='failed' and result['process_state']=='not_started' and result['release_state']=='released'
+    for index in range(105):
+        case.repo.create_native_operation(case.actor,case.origin,f'cancel_{index}','submit_task_command',
+            {'request_id':f'cancel_{index}','command':'not launched'}, {},write_guard=lambda conn:None)
+    settled=case.native.cancel_origin(case.actor,{'task_id':case.task_id,'turn_id':'turn_native','session_id':'session_native'},
+        case.runtime,deadline_monotonic=time.monotonic()+10)
+    assert settled['cancellation_complete'] and settled['processed_count']==105 and settled['total_count']==0,settled

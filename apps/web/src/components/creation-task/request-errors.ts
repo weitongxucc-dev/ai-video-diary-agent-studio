@@ -2,7 +2,7 @@ import { CreationPlanApiError } from "@/lib/api";
 export function errorDetails(cause: unknown) {
     if (cause instanceof CreationPlanApiError) {
         return {
-            message: cause.message,
+            message: cause.reason || cause.message,
             impact: cause.impact,
             repairAction: cause.repairAction,
             code: cause.code,

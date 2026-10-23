@@ -441,6 +441,22 @@ def cpu_audio_budget_from_env(env: Mapping[str, str] | None = None):
         raise HostBudgetUncalibrated(str(exc)) from None
 
 
+def native_command_budget_from_env(env: Mapping[str,str] | None=None):
+    from app.host_resource_probes import NativeCommandBudget
+    environment = os.environ if env is None else env
+    names = {item.name:'DEVICE_NATIVE_COMMAND_'+item.name.upper() for item in fields(NativeCommandBudget)}
+    if not any(environment.get(name,'').strip() for name in names.values()):
+        return None
+    missing = [name for name in names.values() if not environment.get(name,'').strip()]
+    if missing:
+        raise HostBudgetUncalibrated('通用进程预算尚未校准：缺少 '+ '、'.join(missing))
+    try:
+        return NativeCommandBudget(**{field:float(environment[name]) if field.endswith('seconds') else int(environment[name])
+            for field,name in names.items()})
+    except ValueError as exc:
+        raise HostBudgetUncalibrated(str(exc)) from None
+
+
 def media_script_budget_from_env(env: Mapping[str, str] | None = None) -> MediaScriptBudget | None:
     environment = os.environ if env is None else env
     names = {item.name: "DEVICE_MEDIA_SCRIPT_" + item.name.upper() for item in fields(MediaScriptBudget)}

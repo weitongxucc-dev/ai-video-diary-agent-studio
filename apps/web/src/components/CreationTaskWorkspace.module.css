@@ -577,3 +577,17 @@
 .viewNavigation { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:40px; flex-shrink:0; padding:4px 12px; border-bottom:1px solid var(--border-1); background:var(--surface-1); }
 .viewNavigation > [data-slot="tabs-list"] { min-width:0; overflow:auto; }
 .viewNavigation > button { flex-shrink:0; }
+
+.segmentVideoPreview { display:grid; gap:8px; margin-top:16px; }
+.segmentVideoPreview video { display:block; width:100%; max-height:440px; background:var(--surface-2); border:1px solid var(--border-1); border-radius:8px; }
+.segmentVideoPreview p, .segmentProductionList p, .segmentUsage p { margin:0; color:var(--text-2); font-size:13px; line-height:var(--line-body); }
+.segmentProductionList { display:grid; gap:12px; margin-top:16px; }
+.segmentProductionList > article { display:grid; gap:8px; padding:12px; border:1px solid var(--border-1); border-radius:8px; }
+.segmentProductionList > article > div:first-child { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px; }
+.segmentProductionList strong { font-weight:500; font-size:13px; }
+.segmentProductionList span, .segmentRevisionReceipt small { color:var(--text-3); font-size:12px; overflow-wrap:anywhere; }
+.segmentProductionList button { justify-self:start; }
+.segmentRevisionReceipt { display:grid; gap:4px; border-top:1px solid var(--border-1); padding-top:8px; }
+.segmentUsage { margin-top:16px; border-top:1px solid var(--border-1); padding-top:12px; }
+.segmentUsage summary { cursor:pointer; font-size:13px; font-weight:500; }
+.segmentUsage p { margin-top:8px; }

@@ -308,6 +308,30 @@ class CpuAudioBudget:
 
 
 @dataclass(frozen=True)
+class NativeCommandBudget:
+    """Explicitly configured finite task process envelope; no borrowed defaults."""
+    max_input_bytes: int
+    max_output_bytes: int
+    max_file_count: int
+    max_stdout_bytes: int
+    max_stderr_bytes: int
+    max_threads: int
+    max_timeout_seconds: float
+    max_process_rss_bytes: int
+    max_process_threads: int
+    runtime_sample_seconds: float
+    additional_memory_bytes: int
+    additional_disk_bytes: int
+
+    def __post_init__(self):
+        for name,value in vars(self).items():
+            if type(value) not in ({int,float} if name.endswith('seconds') else {int}) or not math.isfinite(value) or value<=0:
+                raise ValueError('Native command limits require positive configured values')
+        if self.additional_memory_bytes<self.max_process_rss_bytes or self.runtime_sample_seconds>.25:
+            raise ValueError('Native command process monitoring needs reserved memory and bounded sampling')
+
+
+@dataclass(frozen=True)
 class MediaScriptBudget:
     """Device-calibrated single-process Python/Pillow envelope; no defaults."""
 
@@ -465,6 +489,7 @@ class HostBudget:
     presenter_cpu_render: CpuRenderBudget | None = None
     cpu_audio: CpuAudioBudget | None = None
     media_script: MediaScriptBudget | None = None
+    native_command: NativeCommandBudget | None = None
     observation: ObservationBudget | None = None
     clip_preview: CpuRenderBudget | None = None
     quality: QualityBudget | None = None
@@ -1257,6 +1282,21 @@ class HostResourceProbe:
             checks["observation_budget"] = {"limits": asdict(observation)}
             required_memory = self.budget.min_available_memory_bytes + observation.additional_memory_bytes
             required_disk = self.budget.min_free_disk_bytes + observation.additional_disk_bytes + resources["max_output_bytes"]
+        elif kind == 'native_command':
+            native = self.budget.native_command
+            if native is None or resources.get('execution_mode')!='isolated_task_shell':
+                return decision(None,'native_command_budget_or_execution_mode_unavailable')
+            bounds = {'input_bytes':'max_input_bytes','file_count':'max_file_count','max_output_bytes':'max_output_bytes',
+                'max_stdout_bytes':'max_stdout_bytes','max_stderr_bytes':'max_stderr_bytes','threads':'max_threads','timeout_seconds':'max_timeout_seconds'}
+            for name,maximum in bounds.items():
+                value = resources.get(name)
+                if type(value) not in ({int,float} if name=='timeout_seconds' else {int}) or not math.isfinite(value) or value<0 or name not in {'input_bytes','file_count'} and value==0:
+                    return decision(None,'native_command_resource_fields_invalid')
+                if value>getattr(native,maximum):
+                    return decision(False,'declared_resources_exceed_budget')
+            checks['native_command_budget']={'limits':asdict(native)}
+            required_memory = self.budget.min_available_memory_bytes+native.additional_memory_bytes
+            required_disk = self.budget.min_free_disk_bytes+native.additional_disk_bytes+resources['max_output_bytes']
         elif kind == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":
@@ -1415,7 +1455,7 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "quality_check", "cover_generation", "material_visual_query"}
+            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query"}
             with self._io_lock:
                 history = self._running_io if running_io else self._admission_io
                 before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
@@ -1613,6 +1653,12 @@ class HostResourceProbe:
             return SceneRuntimeLimits(render.additional_memory_bytes, render.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes, self.budget.sample_seconds, self.memory_monitor,
                 collect_cpu=cpu_policy is not None, cpu_policy=cpu_policy)
+        if resources.get('kind')=='native_command':
+            native = self.budget.native_command
+            if native is None or resources.get('execution_mode')!='isolated_task_shell':
+                raise RecoveryBlocked('原生进程资源策略尚未校准')
+            return SceneRuntimeLimits(native.max_process_rss_bytes,native.max_process_threads,
+                self.budget.min_available_memory_bytes,self.budget.max_swap_used_bytes,native.runtime_sample_seconds,self.memory_monitor)
         if resources.get("kind") == "media_script":
             script = self.budget.media_script
             if script is None or resources.get("execution_mode") != "isolated_python_pillow":
@@ -1686,6 +1732,8 @@ class HostResourceProbe:
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
             return True
         if resources.get("kind") == "task_audio" and resources.get("execution_mode") == "cpu_ffmpeg":
+            return True
+        if resources.get('kind')=='native_command' and resources.get('execution_mode')=='isolated_task_shell':
             return True
         if resources.get("kind") == "media_script" and resources.get("execution_mode") == "isolated_python_pillow":
             return True  # Existing scheduler first proves the registered single-process group exited.

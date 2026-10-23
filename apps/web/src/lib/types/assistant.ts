@@ -124,6 +124,8 @@ export type AssistantGoalContinuation = {
     };
 };
 export type AssistantToolFailure = {
+    impact?: string;
+    failure_category?: string;
     reason: string;
     repair_action?: string;
 };
@@ -181,6 +183,12 @@ export type AssistantInputReceipt = {
     message: string;
     mode: "steer" | "follow_up";
     status: "accepted" | "consumed" | "completed" | "withdrawn" | "rejected" | "interrupted";
+    understanding?: {
+        kind: "query" | "clarification" | "candidate" | "effective_modification" | "adoption" | "independent_goal";
+        summary: string;
+        target_refs: string[];
+    } | null;
+    business_effect?: { request_id: string; status: string } | null;
     reason: string | null;
     created_at: string;
     updated_at: string;

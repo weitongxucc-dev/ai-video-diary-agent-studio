@@ -978,6 +978,13 @@ class MaterialSegmentMatchResponse(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class MaterialSegmentSearchResponse(BaseModel):
+    matches: list[MaterialSegmentMatchResponse]
+    qualification_message: str
+    total_count: int
+    truncated: bool
+
+
 class CreationTaskResponse(BaseModel):
     id: str
     workspace_id: str
@@ -1236,6 +1243,124 @@ class CreationTaskScriptsResponse(BaseModel):
     scripts: list[CreationTaskScriptResponse]
     latest_run: CreationTaskScriptGenerationRunResponse | None
     route_preflight: TopicRouteSnapshotResponse
+
+
+class NativeInputReference(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1)
+    source_ref: str = Field(min_length=1)
+
+
+class NativeWorkingContextRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    input_refs: list[NativeInputReference] = Field(default_factory=list,max_length=30)
+    available_offset: int = Field(default=0,ge=0)
+    available_limit: int = Field(default=30,ge=1,le=100)
+
+
+class NativeFileRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: Literal['read','access','write','mkdir']
+    path: str = Field(min_length=1)
+    offset: int = Field(default=0,ge=0)
+    limit: int = Field(default=65536,ge=1,le=65536)
+    line_offset: int = Field(default=1,ge=1)
+    line_limit: int | None = Field(default=None,ge=1)
+    content_base64: str | None = Field(default=None,max_length=349528)
+    expected_sha256: str | None = Field(default=None,pattern=r'^[0-9a-f]{64}$')
+
+
+class NativeCommandRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: str = Field(min_length=1)
+    command: str = Field(min_length=1,max_length=262144)
+    cwd: str = '/task/work'
+    timeout_seconds: float | None = Field(default=None,gt=0,allow_inf_nan=False)
+    declared_outputs: list[dict[str,str]] = Field(default_factory=list,max_length=30)
+
+
+class NativeCommandReadRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: str | None = None
+    job_id: str | None = None
+    offset: int = Field(default=0,ge=0)
+    limit: int = Field(default=65536,ge=1,le=65536)
+
+
+class NativeArtifactFile(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    path: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    expected_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class NativeArtifactRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: str = Field(min_length=1)
+    execution_job_id: str = Field(min_length=1)
+    files: list[NativeArtifactFile] = Field(min_length=1,max_length=30)
+
+
+class NarrationProtectedRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    kind: Literal["exact_text", "number", "qualified_claim"]
+    source_text: str = Field(min_length=1)
+    required_text: str = Field(min_length=1)
+    source_reference: str = Field(min_length=1)
+
+
+class NarrationRevisionRequest(BaseModel):
+    """A concrete rewrite chosen by Pi; a semantic receipt is resolved by the trusted host."""
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(min_length=1)
+    input_id: str = Field(min_length=1)
+    section_id: str = Field(min_length=1)
+    script_id: str = Field(min_length=1)
+    expected_segment_version: str = Field(min_length=1)
+    dependency_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    base_version_id: str | None = None
+    source_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    replacement_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    replacement_text: str = Field(min_length=1)
+    protected_rules: list[NarrationProtectedRule]
+    semantic_review_ref: str = Field(min_length=1)
+    adoption_mode: Literal["apply", "candidate"]
+
+
+class TaskBudgetResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(min_length=1)
+    expected_job_id: str = Field(min_length=1)
+
+
+class NarrationSemanticFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rule_id: str = Field(min_length=1)
+    before: str = Field(min_length=1)
+    after: str = Field(min_length=1)
+    assessment: Literal["preserved", "uncertain", "conflict"]
+    reason: str = Field(min_length=1)
+
+
+class NarrationSemanticReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(min_length=1)
+    input_id: str | None = Field(default=None, min_length=1)
+    section_id: str = Field(min_length=1)
+    script_id: str = Field(min_length=1)
+    expected_segment_version: str = Field(min_length=1)
+    dependency_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    base_version_id: str | None = None
+    source_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    replacement_text_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    protected_rules: list[NarrationProtectedRule]
+    conclusion: Literal["preserved", "uncertain", "conflict"]
+    findings: list[NarrationSemanticFinding] = Field(min_length=1)
+    authorized_locked_section_ids: list[str] = Field(default_factory=list)
 
 
 class CreationTaskNarrationSegmentResponse(BaseModel):
@@ -2400,6 +2525,7 @@ class EditOperationResponse(BaseModel):
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
+        "ReviseScriptSection",
         "UpdateSubtitleCue",
         "AlignSubtitleTiming",
         "ReplaceSubtitleText",
@@ -2424,7 +2550,7 @@ class EditOperationResponse(BaseModel):
 
 class CreationTaskEditConfirmResponse(BaseModel):
     operation: EditOperationResponse
-    montage: CreationTaskMontagePlanResponse
+    montage: CreationTaskMontagePlanResponse | None
     narration: CreationTaskNarrationResponse | None = None
 
 

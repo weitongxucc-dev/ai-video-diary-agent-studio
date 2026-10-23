@@ -119,13 +119,15 @@ for (const [returned, total] of [[0, 0], [8, 8], [19, 19], [3, 50]]) {
 test('content candidates preserve missing evidence rather than inventing it from system tags', async () => {
   const tools = workspaceReader(async path => {
     assert.ok(path.startsWith('/api/production/materials/search?'));
-    return [{asset_ref: 'asset:real', segment_ref: 'segment:real', score: .1, reasons: ['仅用途符合'],
+    assert.match(path, /purpose=automatic&include_eligibility=true/);
+    return {qualification_message: '当前身份可读取的素材中有1项受自动用途限制。', total_count: 1, truncated: false, matches: [{asset_ref: 'asset:real', segment_ref: 'segment:real', score: .1, reasons: ['仅用途符合'],
       match_tier: 'structural', evidence_excerpt: '', needs_confirmation: true,
-      system_tags: ['未经人工核实的机器描述'], start_seconds: 0, end_seconds: 5, duration_seconds: 5, time_range: '0–5'}];
+      system_tags: ['未经人工核实的机器描述'], start_seconds: 0, end_seconds: 5, duration_seconds: 5, time_range: '0–5'}]};
   });
   const result = await tools.find_materials.execute('find', {query: '现场操作'});
   assert.equal(result.details.matches[0].evidence_excerpt, '');
   assert.equal(result.details.matches[0].needs_confirmation, true);
+  assert.match(result.content[0].text, /受自动用途限制/);
   assert.equal(JSON.stringify(result).includes('未经人工核实的机器描述'), false);
   assert.match(tools.find_materials.description, /find_knowledge/);
 });

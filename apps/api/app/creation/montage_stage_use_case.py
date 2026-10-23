@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from app.creation_execution import CreationStageGrantContext, current_presenter_render, presenter_inputs
-from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_to_payload, select_presenter_sections
+from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.production import CreationPlan, CreationTask, MediaAuthorityError
 from app.visual_effects import reusable_color_settings
 
@@ -52,6 +53,8 @@ class MontageStageUseCase:
             ) from exc
         try:
             montage = self._build_candidate(task, creation_plan, grant_context)
+            if task.montage_plan_id is None:
+                montage = self.include_adopted_sections(task,montage)
             task, _ = self.repository.save_creation_task_montage_plan(
                 workspace_id,
                 task.id,
@@ -87,13 +90,12 @@ class MontageStageUseCase:
         creation_plan = self.plan_for_task_or_missing(workspace_id, task)
         if task.confirmed_script_id is None or task.narration_cache_key is None:
             raise ValueError("confirmed script or narration missing")
-        return self._build_candidate(task, creation_plan, grant_context)
+        montage = self._build_candidate(task, creation_plan, grant_context)
+        return self.include_adopted_sections(task,montage) if task.montage_plan_id is None else montage
 
     def _build_candidate(self, task, creation_plan, grant_context):
         workspace_id = task.workspace_id
-        script = self.repository.get_creation_task_script(
-            workspace_id, task.confirmed_script_id
-        )
+        script = self.repository.effective_creation_script(workspace_id, task.id)
         narration = self.repository.get_narration_artifact(
             workspace_id, task.narration_cache_key
         )
@@ -191,6 +193,50 @@ class MontageStageUseCase:
             if len(json.dumps(creation_task_montage_plan_to_payload(montage)).encode()) > grant_context.max_output_bytes:
                 raise ValueError("故事板输出超过阶段预算")
         return montage
+
+    def include_adopted_sections(self,task,montage):
+        from app.audio_timeline import AudioTimeline,narration_audio_timeline
+        script = self.repository.effective_creation_script(task.workspace_id,task.id)
+        audio = {item.source_section_id:item for item in self.repository.list_narration_segments(task.workspace_id,task.id,script.id)}
+        cues,clips,cursor = [],[],0.0
+        for section in script.sections:
+            state = self.repository.stage_segment_state(task.workspace_id,task.id,section.id)
+            if state is not None:
+                if state['narration_reference'] != audio[section.id].audio_reference:
+                    raise ValueError('已采用段画面与当前配音不一致，须先恢复该段依赖')
+                local = creation_task_montage_plan_from_payload(state['montage'])
+                section_cues,section_clips,duration = local.cues,local.clips,local.duration_seconds
+                origin = 0.0
+            else:
+                section_cues = [cue for cue in montage.cues if cue.source_section_id==section.id]
+                cue_ids = {cue.id for cue in section_cues}
+                section_clips = [clip for clip in montage.clips if clip.cue_id in cue_ids]
+                origin = min((clip.timeline_start_seconds for clip in section_clips),default=cursor)
+                duration = float(audio[section.id].duration_seconds)
+            if not section_cues or not section_clips:
+                raise ValueError('完整故事板缺少实际段落镜头，未发布半条作品')
+            cues.extend(section_cues)
+            clips.extend(replace(clip,timeline_start_seconds=clip.timeline_start_seconds-origin+cursor,
+                timeline_end_seconds=clip.timeline_end_seconds-origin+cursor) for clip in section_clips)
+            cursor += duration
+        timeline = montage.audio_timeline
+        created_graph = montage.narration_linkage_created_audio_timeline
+        if timeline is None or not any(track.role=='narration' for track in timeline.tracks):
+            voice = narration_audio_timeline(audio[script.sections[0].id].audio_reference,
+                float(audio[script.sections[0].id].duration_seconds)).tracks[0]
+            voice.clips = []
+            at = 0
+            for section in script.sections:
+                segment = audio[section.id]
+                clip = narration_audio_timeline(segment.audio_reference,float(segment.duration_seconds)).tracks[0].clips[0]
+                voice.clips.append(clip.model_copy(update={'id':f'audio-narration-{segment.id}','timeline_start_ms':at}))
+                at += clip.duration_ms
+            other_tracks = [track.model_copy(deep=True) for track in timeline.tracks] if timeline else []
+            timeline,created_graph = AudioTimeline(tracks=[voice,*other_tracks]),True
+        return replace(montage,cues=cues,clips=clips,duration_seconds=round(cursor,3),
+            audio_timeline=timeline,narration_linkage_created_audio_timeline=created_graph,
+            low_confidence_clip_count=sum(clip.needs_confirmation for clip in clips),
+            status='waiting_for_user' if any(clip.needs_confirmation for clip in clips) else 'ready')
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:

@@ -51,7 +51,7 @@ import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
 import { ConfirmedTopicView } from './creation-task/TopicStage';
 import { ReadonlyScriptsView, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
-import { NarrationResultView } from './creation-task/NarrationStage';
+import { NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
 import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
 import { EditPreviewCard } from './creation-task/EditPreviewCard';
@@ -59,7 +59,7 @@ import { ContextCommandBar } from './creation-task/TaskConversation';
 import { PrepareMaterialsView } from './creation-task/PrepareMaterialsView';
 import { PublishStageView } from './creation-task/PublishStageView';
 import { FinalVideoQualityCheck } from './creation-task/FinalVideoQualityCheck';
-import { JobProgressPanel } from './creation-task/TaskJobProgress';
+import { JobProgressPanel, NativeOperationsPanel } from './creation-task/TaskJobProgress';
 
 export type Props = {
   initialWorkspace: WorkspaceState;
@@ -1378,6 +1378,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">重新核对文案和制作要求</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
+        <NativeOperationsPanel key={`native-${task.id}`} taskId={task.id}
+          adoptedRefs={(workspace.montage?.graphic_overlays ?? []).flatMap(overlay=>overlay.kind==='image'?[overlay.source_ref]:[])}
+          canPrepare={busy===null && Boolean(task.current_timeline_version_id && workspace.montage && workspace.montage.duration_seconds>0)}
+          onPreviewImage={artifact=>void previewExactEdit({operation_type:'EditGraphicOverlay',overlay_action:'add',graphic_overlay:{kind:'image',
+            id:`native-${crypto.randomUUID()}`,source_ref:artifact.source_ref,name:'工作图片',start_seconds:0,
+            end_seconds:Math.min(3,workspace.montage?.duration_seconds ?? 0),x:0.5,y:0.5,width:0.4,opacity:1}})}/>
+        {task.confirmed_script_id && ["narration", "montage", "review"].includes(activeView) ? <SegmentProductionPanel key={task.id} taskId={task.id}/> : null}
         {activeView === "review" ? <div className={styles.reviewTabs} role="tablist" aria-label="成片工作区">
           {([ ["prepare", "制作准备"], ["result", "成片检查"] ] as const).map(([pane, label]) => <button key={pane} id={`review-${pane}-${task.id}`} role="tab" disabled={pane === "result" && !hasReviewOutput} aria-selected={reviewPane === pane} aria-controls={`review-panel-${pane}-${task.id}`} tabIndex={reviewPane === pane ? 0 : -1} onKeyDown={reviewTabKey} onClick={() => setReviewChoice({ taskId: task.id, pane })} type="button">{label}</button>)}
         </div> : null}

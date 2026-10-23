@@ -34,6 +34,7 @@ class _OwnedGroup:
 class _OwnedCallback:
     thread: threading.Thread
     cancel: Callable[[], None]
+    verify_release: Callable[[float], None] | None = None
 
 
 _groups: WeakKeyDictionary = WeakKeyDictionary()
@@ -149,13 +150,13 @@ class TurnControl:
         self._callbacks: dict[str, _OwnedCallback] = {}
         self._stop_deadlines: dict[str, float] = {}
 
-    def launch_callback(self, turn_id: str, thread: threading.Thread, cancel: Callable[[], None]) -> None:
+    def launch_callback(self, turn_id: str, thread: threading.Thread, cancel: Callable[[], None], *, verify_release=None) -> None:
         with self._guard:
             if self._shutdown_requested or self._events[turn_id].is_set():
                 raise AssistantStopped("助手回合已停止，未启动宿主业务回调。")
             if turn_id in self._callbacks:
                 raise AssistantProcessReleaseError("本轮宿主业务回调尚未确认释放。")
-            self._callbacks[turn_id] = _OwnedCallback(thread, cancel)
+            self._callbacks[turn_id] = _OwnedCallback(thread, cancel,verify_release)
             thread.start()
 
     def _wait_callbacks(self, callbacks, deadline: float) -> None:
@@ -165,6 +166,8 @@ class TurnControl:
             if owned.thread.is_alive():
                 pending = True
             else:
+                if owned.verify_release is not None:
+                    owned.verify_release(deadline)
                 with self._guard:
                     if self._callbacks.get(turn_id) is owned:
                         self._callbacks.pop(turn_id)

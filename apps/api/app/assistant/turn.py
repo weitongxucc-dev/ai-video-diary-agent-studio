@@ -47,6 +47,7 @@ def run_turn(
     selected_references: list[dict] | None = None,
     input_handler=None,
     business_handler=None,
+    native_handler=None,
     source_binding=None,
 ) -> tuple[str, dict | None]:
     checks = check_runtime()
@@ -153,11 +154,14 @@ def run_turn(
             "tools": tool_names.split(","), "message": model_message, "inputEnabled": input_handler is not None,
             "controlEnabled": True,
             "businessEnabled": business_handler is not None,
+            "nativeEnabled": native_handler is not None,
         }, ensure_ascii=False) + "\n"
         result = run_process(
             cmd, message=model_message, env=env, cwd=runtime_root,
             timeout_seconds=180, on_event=observe_event, turn_id=turn_id,
-            keep_turn_control=keep_turn_control, input_handler=input_handler, **business_options,
+            keep_turn_control=keep_turn_control, input_handler=input_handler,
+            native_handler=native_handler, **({**business_options,"source_binding":{**(source_binding or {}),"session_id":str(session_id),"node_executable":str(Path(node).resolve())}}
+                if native_handler is not None else business_options),
         )
     except subprocess.TimeoutExpired as exc:
         # A host phase deadline is not evidence that the provider timed out.

@@ -1078,3 +1078,42 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     else:
         assert outcome['status']=='waiting_unknown' and outcome['reason']=='原观察输入被拒绝' and reads==[]
         assert outcome['original_request']['result']==receipt
+
+
+def test_slow_pending_input_does_not_block_other_goal_receipt_reconciliation(repo):
+    chat, turn, _, context = original(repo)
+    current=repo.get(chat['id'],'workspace','member')
+    draft=repo.save_draft(chat['id'],'workspace','member','只查进度',current['draft_version'])
+    repo.enqueue_input(chat['id'],'workspace','member',target_turn_id=turn['id'],client_request_id='query',
+        message='只查进度',mode='steer',expected_draft_version=draft['draft_version'],expected_reference_version=0,
+        request_context={**context,'selected_reference':None})
+    _,later,_,_=original(repo)
+    entered,release=threading.Event(),threading.Event()
+    business=SimpleNamespace(claim_pending_input=lambda candidate:repo.claim_pending_goal_input(candidate,
+        validate=lambda conn,item,goal:item['request_context'],seal=lambda *args:None))
+    def run(claim,fresh):
+        entered.set()
+        assert release.wait(2)
+        repo.finish_turn(claim['turn_id'],'completed')
+    svc=GoalContinuationService(repo,verify_current_goal=lambda *_:{'status':'ready','business':business},run_goal_turn=run)
+    svc.start()
+    try:
+        svc.tick();assert entered.wait(1)
+        same_goal_event=emit(repo,turn,status='queued',result_kind='edit_preview')
+        event=emit(repo,later,status='queued',result_kind='edit_preview')
+        svc.tick()
+        deadline=time.monotonic()+1
+        while event['event_id'] not in repo.get_task_goal(later['id'])['handled_event_ids'] and time.monotonic()<deadline:
+            time.sleep(.005)
+        assert event['event_id'] in repo.get_task_goal(later['id'])['handled_event_ids']
+        assert repo.get_task_goal(later['id'])['round_count']==0
+        current_goal=repo.get_task_goal(turn['id'])
+        assert current_goal['status']=='running'
+        assert same_goal_event['event_id'] not in current_goal['handled_event_ids']
+        assert repo.task_turn_source(current_goal['current_turn_id'],'workspace','member','task')['raw_command']=='只查进度'
+        assert svc.stop(deadline_monotonic=time.monotonic()) is False
+        release.set();assert svc.stop(deadline_monotonic=time.monotonic()+1)
+        assert repo.list_inputs(chat['id'],'workspace','member')[0]['status']=='completed'
+        assert repo.get_task_goal(turn['id'])['original_instruction']==turn['user_message']
+    finally:
+        release.set();svc.stop(deadline_monotonic=time.monotonic()+1)

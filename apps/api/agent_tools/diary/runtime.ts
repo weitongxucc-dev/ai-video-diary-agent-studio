@@ -107,6 +107,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
       registerObservationTools(pi, {request, taskId, verifyTaskVersion, readActionSource, typedRequestId});
       registerPreviewJobReader(pi, {request, taskId, getSignal, onPreviewJobObserved: typedEdits.onPreviewJobObserved});
       typedEdits.registerRequestReader(pi);
+      typedEdits.registerNarrationRevision(pi);
       registerMediaScriptTools(pi, {request, taskId, selectedTaskVersion, readMediaScriptCapabilities,
         getMediaScriptCapabilities, getDeclaredCapabilities: () => declarations.initialMediaScriptCapabilities, isTaskRead, readActionSource, typedRequestId, hasCreationAction, hasEditControlWrite, markPreview});
       typedEdits.registerPreview(pi);

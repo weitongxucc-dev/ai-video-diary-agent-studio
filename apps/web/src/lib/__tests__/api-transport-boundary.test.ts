@@ -70,6 +70,17 @@ it.each(['JSON', 'stream', 'SSE error'])('preserves the typed task-version confl
   expect(fetchMock).toHaveBeenCalledOnce();
 });
 
+it('preserves the original protocol failure reason and recovery in JSON and stream rejection consumers', async () => {
+  const detail = {error:'script_review_invalid', reason:'核查报告的段落数量与实际送审稿不一致，尚不能判定正文是否通过。',
+    impact:'送审稿未保存，原有草稿和采用内容保留。', repair_action:'核对原报告，修复段落数量后再核查。'};
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({detail}), {status:502})));
+  const {creationPlanRequest, assistantStreamRequest} = await import('../api/creation-transport');
+  for (const request of [()=>creationPlanRequest('/api/review'), ()=>assistantStreamRequest('/api/review',{},vi.fn())]) {
+    await expect(request()).rejects.toMatchObject({code:detail.error, message:detail.reason,
+      reason:detail.reason, impact:detail.impact, repairAction:detail.repair_action});
+  }
+});
+
 it.each([null, 'another_conflict'])('leaves an ordinary SSE error unchanged for failure code %s', async code => {
   const fetchMock = vi.fn(async () => new Response(`data: ${JSON.stringify({
     type: 'error', status: 409, message: '原错误提示', ...(code ? {failure: {code}} : {}),

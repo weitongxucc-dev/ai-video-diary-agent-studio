@@ -1416,9 +1416,20 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         section_index = diagnostics.get("section_index")
         section = f"第{section_index}段" if type(section_index) is int and 1 <= section_index <= 20 else ""
         section_index = section_index if section else None
-        reason = (f"{section}核查报告的片段引用无效，尚不能判定文案是否通过。"
-            if reason_code in {"support_quote", "issue_quote", "source_quote", "support_reference", "issue_reference"}
-            else f"{section}核查报告不符合完整核查要求，尚不能判定文案是否通过。")
+        issue = {
+            "envelope": "响应结构无法解析", "length": "响应在完整报告前已截断",
+            "tool_finish": "未以核查报告工具完成响应", "tool_call_count": "核查报告工具调用数量不正确",
+            "tool_type": "核查报告工具类型不正确", "tool_name": "核查报告工具名称不正确",
+            "tool_arguments": "工具参数不是有效JSON", "tool_arguments_shape": "工具参数不是报告对象",
+            "section_count": "返回的段落数量与实际送审段落不一致", "section_shape": "段落报告结构无效",
+            "index": "段落编号缺失、重复或不在送审范围", "bool": "核查结论类型无效",
+            "support_shape": "支持依据结构无效", "support_quote": "支持依据引用与送审片段不一致",
+            "source_quote": "资料引用与固定来源不一致", "support_reference": "支持依据的来源关联无效",
+            "issue_shape": "问题报告结构无效", "issue_quote": "问题引用与送审片段不一致",
+            "issue_reference": "问题报告的来源关联无效", "issue_flags": "问题标记与报告结论不一致",
+            "issue_count": "问题报告数量不符合协议",
+        }[reason_code]
+        reason = f"{section}核查报告无效：{issue}；尚不能判定文案是否通过。"
         return self._failure(code="script_review_invalid", reason=reason,
             impact="未保存未经核查的新草稿，已有草稿保持原样。",
             repair_action="本轮停止提交并保留原稿；先核对文字服务的核查报告格式与引用，不要据此改写正文或原样重试。",

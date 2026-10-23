@@ -48,11 +48,11 @@ def pi_runtime_checks() -> list[dict]:
     return runtime_checks(_extension_path(), _pi_executable)
 
 def _run_pi_streaming(cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
-    timeout_seconds: int, on_event, turn_id: str | None = None, keep_turn_control: bool = False, input_handler=None, business_handler=None, source_binding=None,
+    timeout_seconds: int, on_event, turn_id: str | None = None, keep_turn_control: bool = False, input_handler=None, business_handler=None, native_handler=None, source_binding=None,
 ) -> subprocess.CompletedProcess[str]:
     return run_pi_streaming(cmd, message=message, env=env, cwd=cwd, timeout_seconds=timeout_seconds,
         on_event=on_event, turn_id=turn_id, keep_turn_control=keep_turn_control, control=_turn_control,
-        terminate=_terminate_process_group, projector_factory=_PiStreamProjector, business_event_lines=_business_event_lines, input_handler=input_handler, business_handler=business_handler, source_binding=source_binding)
+        terminate=_terminate_process_group, projector_factory=_PiStreamProjector, business_event_lines=_business_event_lines, input_handler=input_handler, business_handler=business_handler,native_handler=native_handler,source_binding=source_binding)
 
 def _read_task_before_pi(extension: Path, env: dict[str, str], cwd: Path, *, business_handler=None, source_binding=None) -> dict:
     return read_task_before_pi(extension, env, cwd, run_process=_run_pi_streaming,
@@ -97,7 +97,7 @@ def run_task_turn(
     continuation_context: dict[str, object] | None = None,
     selected_references: list[dict] | None = None,
     input_handler=None,
-    business_handler=None, source_binding=None,
+    business_handler=None, native_handler=None, source_binding=None,
 ) -> tuple[str, dict | None]:
     script_turn = stage == "script"
     topic_turn = stage == "topic"
@@ -117,7 +117,7 @@ def run_task_turn(
                      if conversation_id else f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}"),
         turn_id=turn_id, profile_reference=profile_reference, knowledge_reference=knowledge_reference, task_version=task_version,
         material_selection=_material_tool_selection(material_selection),
-        continuation_context=continuation_context, selected_references=selected_references, input_handler=input_handler, business_handler=business_handler,source_binding=source_binding,
+        continuation_context=continuation_context, selected_references=selected_references, input_handler=input_handler, business_handler=business_handler,native_handler=native_handler,source_binding=source_binding,
     )
 
 
@@ -213,7 +213,7 @@ def _run_turn(
     continuation_context: dict[str, object] | None = None,
     selected_references: list[dict] | None = None,
     input_handler=None,
-    business_handler=None, source_binding=None,
+    business_handler=None, native_handler=None, source_binding=None,
 ) -> tuple[str, dict | None]:
     return run_turn(settings, check_runtime=pi_runtime_checks, find_pi=_pi_executable,
         extension=_extension_path(), configure_model=_configured_model, agent_root=_agent_root,
@@ -226,4 +226,4 @@ def _run_turn(
         session_key=session_key, on_event=on_event, material_selection=material_selection,
         profile_reference=profile_reference, knowledge_reference=knowledge_reference, task_version=task_version,
         creation_request=creation_request, keep_turn_control=keep_turn_control, turn_id=turn_id,
-        continuation_context=continuation_context, selected_references=selected_references, input_handler=input_handler,business_handler=business_handler,source_binding=source_binding)
+        continuation_context=continuation_context, selected_references=selected_references, input_handler=input_handler,business_handler=business_handler,native_handler=native_handler,source_binding=source_binding)

@@ -547,7 +547,7 @@ class DeviceScheduler:
         return self._request(row)
 
     def resume_creation_narration(self, request_id, *, resume_write):
-        """Explicit continuation keeps the released unit and original parent allowance."""
+        """Explicit continuation keeps the released unit, identity and original allowance."""
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (request_id,)).fetchone()
@@ -555,7 +555,7 @@ class DeviceScheduler:
                 raise KeyError(request_id)
             request = self._request(row)
             if (request.owner_type != 'creation_job' or request.state not in {'failed', 'cancelled'}
-                    or not request.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:'))):
+                    or not request.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:', 'segment_video:', 'segment_revision:'))):
                 raise ValueError('只能显式继续原已结束的配音单元')
             permit = conn.execute('SELECT request_id FROM device_permit WHERE id=1').fetchone()
             if permit is None or permit['request_id'] == request_id or conn.execute(

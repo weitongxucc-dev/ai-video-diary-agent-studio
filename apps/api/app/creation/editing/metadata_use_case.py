@@ -294,7 +294,9 @@ class MetadataEditUseCase:
         if not task.confirmed_script_id:
             return {}
         segments = self.repository.list_narration_segments(workspace_id, task.id, task.confirmed_script_id)
-        return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False, default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value))) for segment in segments], 'narration_cache_key': task.narration_cache_key}
+        version = self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
+        return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False, default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value))) for segment in segments], 'narration_cache_key': task.narration_cache_key,
+            **({'stage_segments':version.snapshot['stage_segments']} if version and 'stage_segments' in version.snapshot else {})}
 
     @staticmethod
     def narration_segments_from_snapshot(
@@ -319,7 +321,14 @@ class MetadataEditUseCase:
 
     def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan) -> TimelineVersion:
         if task.current_timeline_version_id is not None:
-            return self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            current = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            if isinstance(current.snapshot.get('montage'),dict):
+                return current
+            version = TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=workspace_id,task_id=task.id,
+                parent_version_id=current.id,sequence=current.sequence+1,
+                snapshot={**current.snapshot,'montage':creation_task_montage_plan_to_payload(plan),
+                    **self.current_narration_snapshot(workspace_id,task)},created_by_operation_id=None)
+            return self.repository.create_timeline_version(version,expected_current_version_id=current.id)
         versions = self.repository.list_timeline_versions(workspace_id, task.id)
         if versions:
             return versions[-1]
@@ -546,7 +555,7 @@ class MetadataEditUseCase:
     def persist_subtitle_edit(self, *, workspace_id: str, task, proposal, base_version,
             result_version_id: str, operation_type: str, operation_payload: dict, subtitle_tracks,
             cover_asset=None, updated_plan=None, snapshot_source=None, narration_segments=None,
-            narration_artifact=None) -> MetadataEditResult:
+            narration_artifact=None, verify_sources=None) -> MetadataEditResult:
         montage_payload = creation_task_montage_plan_to_payload(updated_plan) if updated_plan is not None else None
         change = prepare_change_set(proposal=proposal, base_version=base_version,
             operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id,
@@ -554,7 +563,7 @@ class MetadataEditUseCase:
             subtitle_tracks=subtitle_tracks, cover_asset=cover_asset, snapshot_source=snapshot_source,
             narration_segments=narration_segments, narration_artifact=narration_artifact)
         try:
-            _proposal, persisted_operation, _version, current_task = commit_change_set(self.repository, change)
+            _proposal, persisted_operation, _version, current_task = commit_change_set(self.repository, change,verify_sources=verify_sources)
         except ValueError as exc:
             raise EditConflict(str(exc)) from exc
         persisted_plan = creation_task_montage_plan_from_payload(
@@ -567,7 +576,7 @@ class MetadataEditUseCase:
         )
         return MetadataEditResult(persisted_operation, persisted_plan, current_task, narration)
 
-    def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None):
+    def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None, verify_sources=None):
         try:
             dissolve_frames(updated_plan.clips)
             validate_overlays(updated_plan.graphic_overlays, updated_plan.duration_seconds)
@@ -599,7 +608,7 @@ class MetadataEditUseCase:
         carried_cover = clone_cover_asset(source_cover, timeline_version_id=result_version_id) if source_cover is not None else None
         change = prepare_change_set(proposal=proposal, base_version=base_version, operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id, montage_plan_id=updated_plan.id, montage_payload=montage_payload, subtitle_tracks=carried_tracks, cover_asset=carried_cover, snapshot_source=source_version.snapshot, narration_segments=narration_segments, narration_artifact=narration_artifact, include_track_ids=edited_subtitle_tracks is not None or bool(carried_tracks) or 'subtitle_track_ids' in source_version.snapshot, absent_cover_value=True)
         try:
-            _confirmed, persisted_operation, _version, _task = commit_direct_change(self.repository, direct_command, direct_intent, proposal, change, verify_sources=lambda command, conn: direct_source_verifier.verify_change(command, change.montage_payload, conn), connection=connection) if direct_intent is not None else commit_change_set(self.repository, change, connection=connection, verify_sources=(lambda conn: proposal_source_verifier.verify_change(proposal_source_command, change.montage_payload, conn)) if proposal_source_verifier is not None else None)
+            _confirmed, persisted_operation, _version, _task = commit_direct_change(self.repository, direct_command, direct_intent, proposal, change, verify_sources=lambda command, conn: direct_source_verifier.verify_change(command, change.montage_payload, conn), connection=connection) if direct_intent is not None else commit_change_set(self.repository, change, connection=connection, verify_sources=(lambda conn: proposal_source_verifier.verify_change(proposal_source_command, change.montage_payload, conn)) if proposal_source_verifier is not None else verify_sources)
         except PermissionError as exc:
             raise PermissionError(str(exc)) from exc
         except OSError as exc:

@@ -715,7 +715,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     const current=conversationRef.current;
     const pending=current ? pendingInputs.current.get(current.id) : undefined;
     const target=pending ? current?.turns.find(turn=>turn.id===pending.target_turn_id) : current?.turns.at(-1);
-    if (!current || !target || (!pending && (target.status!=="running" || target.id.startsWith("pending-")))) throw new Error("正在确认本轮身份，请稍后发送；草稿仍保留。");
+    if (!current || !target || (!pending && target.id.startsWith("pending-"))) throw new Error("正在确认本轮身份，请稍后发送；草稿仍保留。");
     if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current=null; }
     const draftRevision=draftRevisionFor(draftRevisionByConversation.current,current.id);
     let payload=pendingInputs.current.get(current.id);
@@ -760,8 +760,9 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
       assistantTurnGoalRefreshState(turn)?.current_turn_id, assistantTaskTurnResult(turn)?.continuation?.status,
       assistantTaskTurnResult(turn)?.response?.media_job?.status, assistantTaskTurnResult(turn)?.response?.edit_request?.status,
       assistantTaskTurnResult(turn)?.response?.execution_status?.job?.status]);
-  const pendingKey = JSON.stringify(pendingResults);
-  const hasPendingResults = pendingResults.length > 0;
+  const waitingInputs=conversation?.turns.flatMap(turn=>turn.events.filter(event=>event.type==="assistant_input" && ["accepted","consumed"].includes(event.status))) ?? [];
+  const pendingKey = JSON.stringify([pendingResults,waitingInputs]);
+  const hasPendingResults = pendingResults.length > 0 || waitingInputs.length > 0;
   useEffect(() => {
     setBusinessRefreshPaused(false);
     if ((!running && !hasPendingResults) || loading) return;

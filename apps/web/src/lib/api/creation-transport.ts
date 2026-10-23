@@ -60,7 +60,7 @@ export async function creationPlanRequest<T>(path: string, init?: RequestInit): 
         const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
         const code = typeof details.error === "string" ? details.error : null;
         const reason = typeof details.reason === "string" ? details.reason : null;
-        throw new CreationPlanApiError(response.status, code, code && creationPlanErrorTitles[code]
+        throw new CreationPlanApiError(response.status, code, reason ?? (code && creationPlanErrorTitles[code]
             ? creationPlanErrorTitles[code]
             : typeof detail === "string"
                 ? detail
@@ -70,7 +70,7 @@ export async function creationPlanRequest<T>(path: string, init?: RequestInit): 
                         ? details.message
                         : typeof payload === "string"
                             ? payload
-                            : `请求失败：${response.status}`, typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, reason);
+                            : `请求失败：${response.status}`), typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, reason);
     }
     return payload as T;
 }
@@ -102,7 +102,7 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
             }).detail
             : payload;
         const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
-        throw new CreationPlanApiError(response.status, typeof details.error === "string" ? details.error : null, typeof detail === "string" ? detail
+        throw new CreationPlanApiError(response.status, typeof details.error === "string" ? details.error : null, typeof details.reason === "string" ? details.reason : typeof detail === "string" ? detail
             : typeof details.detail === "string" ? details.detail
                 : details.error === "creation_task_timeline_version_conflict" && typeof details.message === "string" ? details.message
                 : `请求失败：${response.status}`, typeof details.impact === "string" ? details.impact : null, typeof details.repair_action === "string" ? details.repair_action : null, typeof details.reason === "string" ? details.reason : null);
@@ -155,6 +155,7 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
                 ? value.failure as Record<string, unknown> : null;
             onEvent({ type: "tool_end", tool_id: value.tool_id, label: value.label, ok: value.ok, summary: value.summary,
                 ...(value.ok === false && typeof failure?.reason === "string" ? { failure: { reason: failure.reason,
+                        ...(typeof failure.impact === "string" ? { impact: failure.impact } : {}),
                         ...(typeof failure.repair_action === "string" ? { repair_action: failure.repair_action } : {}) } } : {}) });
         }
     };

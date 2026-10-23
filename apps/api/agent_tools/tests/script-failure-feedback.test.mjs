@@ -27,18 +27,21 @@ const draft = {title: '设备介绍', sections: [{title: '现场', content: '多
 
 test('invalid review exposes only safe metadata and stops the same input from submitting again', async () => {
   const secret = 'private-external-error-source-or-credential';
+  const reason = '第3段核查报告的片段引用无效，尚不能判定正文是否通过。';
+  const repair = '保留原稿，核对核查报告引用后再处理。';
   const state = rejectedTool({error: 'script_review_invalid', reason_code: 'issue_reference', section_index: 3,
-    retryable: false, reason: secret, repair_action: secret, response: secret});
+    retryable: false, reason, repair_action: repair, impact: '本次送审稿未保存，原采用内容保持原样。', response: secret});
   const result = await state.tool.execute('first', draft);
   assert.equal(result.isError, true);
-  assert.deepEqual({...result.details.failure, reason: undefined, repair_action: undefined}, {
-    error: 'script_review_invalid', reason_code: 'issue_reference', section_index: 3, retryable: false,
-    reason: undefined, repair_action: undefined});
-  assert.match(result.content[0].text, /尚不能判定正文/);
-  assert.match(result.content[0].text, /不得建议等待后重交/);
-  assert.match(result.content[0].text, /草稿未保存/);
+  assert.equal(result.details.failure.failure_category, 'protocol_invalid');
+  assert.equal(result.details.failure.reason_code, 'issue_reference');
+  assert.equal(result.details.failure.reason, reason);
+  assert.equal(result.details.failure.repair_action, repair);
+  assert.equal(result.details.failure.submission_effect, 'rejected');
+  assert.equal(result.details.failure.impact, '本次送审稿未保存，原采用内容保持原样。');
   assert.equal(JSON.stringify(result).includes(secret), false);
-  await state.tool.execute('again', draft);
+  const again = await state.tool.execute('again', draft);
+  assert.equal(again.details.failure.reason, reason);
   assert.equal(state.calls.filter(call => call.url.endsWith('/script-draft')).length, 1);
   state.source.inputId = 'new-consumed-input';
   await state.tool.execute('new-input', draft);

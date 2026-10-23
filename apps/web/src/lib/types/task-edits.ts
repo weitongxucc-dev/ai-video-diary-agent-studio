@@ -267,7 +267,7 @@ export type CreationTaskEditOperation = {
 };
 export type CreationTaskEditConfirmResponse = {
     operation: CreationTaskEditOperation;
-    montage: CreationTaskMontage;
+    montage: CreationTaskMontage | null;
     narration?: CreationTaskNarration | null;
 };
 export type CreationTaskEditQueuedResponse = {

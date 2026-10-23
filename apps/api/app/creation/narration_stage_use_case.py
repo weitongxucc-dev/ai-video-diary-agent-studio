@@ -131,6 +131,38 @@ class NarrationStageUseCase:
             created_at=previous.created_at if previous is not None else now, updated_at=now)
         return record, segment, output_bytes
 
+    def prepare_revision(self, task, command, *, grant_context):
+        """Prepare one unadopted rewrite under its own original device grant."""
+        grant_context.check()
+        grant = grant_context.grant
+        job = self.repository.get_job_run(task.workspace_id, grant.owner_id)
+        if (job.task_id != task.id or job.kind != 'creation_task_segment_revision'
+                or grant.unit_key != f'segment_revision:{job.input_digest}'):
+            raise PermissionError('局部改写配音许可与原作业不一致')
+        plan = self.repository.get_creation_plan(task.workspace_id,task.plan_id)
+        script = self.repository.effective_creation_script(task.workspace_id,task.id)
+        inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
+            task_id=task.id,voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
+        previous = self.repository.get_narration_segment(task.workspace_id,task.id,
+            self.segment_id(task.id,script.id,command.section_id))
+        if previous.status!='ready' or (previous.voice_profile_id,previous.voice_version)!=(inputs.voice.id,inputs.voice.version):
+            raise ValueError('原段落配音或声音版本已变化，尚未重生成局部改写')
+        artifact = self.generator.generate_for_creation_task(workspace_id=task.workspace_id,task_id=task.id,
+            script_id=script.id,narration_text=command.replacement_text,
+            max_duration_seconds=plan.duration_target_seconds,voice_identity=inputs.voice,
+            pronunciation_entries=inputs.pronunciation_entries,
+            resolved_reference_audio_path=self.repository.resolve_workspace_media_reference(
+                task.workspace_id,inputs.voice.reference_audio_path,require_registered=True),
+            repository=self.repository,viewer_user_id=task.owner_user_id,
+            segment_id=self.segment_id(task.id,script.id,command.section_id),generation_identity=job.input_digest,
+            language={'zh-CN':'zh','en-US':'en','zh-CN/en-US':'zh-en'}[script.language],grant_context=grant_context)
+        record, size = self._prepared_artifact(task.workspace_id,task,script,artifact,grant_context)
+        segment = replace(previous,text=command.replacement_text,
+            audio_reference=self.repository.narration_artifact_reference(record.cache_key),
+            duration_seconds=record.duration_seconds,sample_rate=record.sample_rate,model_id=record.model_id,
+            pronunciation_version=record.pronunciation_version,status='ready',updated_at=utc_now())
+        return record, segment, size
+
     def prepare_merge(self, workspace_id: str, task_id: str, *, script_id: str,
                       grant_context: CreationStageGrantContext) -> tuple[NarrationArtifactRecord, int]:
         """Combine the complete saved section set without publishing the stage."""
@@ -196,7 +228,7 @@ class NarrationStageUseCase:
         if task.stage != 'narration' or task.confirmed_script_id != script_id:
             raise ValueError('配音单元不匹配当前任务阶段或确认文案')
         plan = self.plan_for_task(workspace_id, task)
-        script = self.repository.get_creation_task_script(workspace_id, script_id)
+        script = self.repository.effective_creation_script(workspace_id, task_id)
         if script.selection_status != 'confirmed':
             raise ValueError('配音单元只能使用已确认文案')
         if plan.selected_voice is None:

@@ -4480,3 +4480,93 @@ it.each([false, true])("refreshes the saved task after actual adoption and wakes
   }
   view.unmount();
 });
+
+const segmentApi=vi.hoisted(()=>({read:vi.fn(()=>new Promise(()=>{})),budget:vi.fn(()=>new Promise(()=>{})),native:vi.fn(()=>new Promise(()=>{})),content:vi.fn()}));
+vi.mock('@/lib/api/task-media',async importOriginal=>({
+  ...await importOriginal<typeof import('@/lib/api/task-media')>(),readCreationTaskSegments:segmentApi.read,readCreationTaskBudget:segmentApi.budget,readCreationTaskNativeOperations:segmentApi.native,readCreationTaskNativeArtifact:segmentApi.content,
+}));
+
+it('segment preview keeps the playing version and presents unknown cost as pending',async()=>{
+  const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');
+  const segment={task_id:'task',section_id:'first',ordinal:1,script_id:'script',base_version_id:'base',segment_version:'v1',
+    title:'卖点',text:'适用于干燥地面，最高可达30米',source_text_sha256:'digest',source_references:[],locked_body_digest:null,
+    adjacent_sections:[],narration_segment_id:'audio',audio:{kind:'audio',artifact_ref:'audio',status:'ready',duration_seconds:5},
+    video:{kind:'video',artifact_ref:'video',sha256:'digest',segment_version:'v1',duration_seconds:5,url:'/segments/v1/video'},adopted:true};
+  const pending={...segment,section_id:'second',ordinal:2,title:'后续段',text:'后续段正在制作',
+    narration_segment_id:null,audio:null,video:null,adopted:false};
+  const initial={task_id:'task',total_count:2,available_video_count:1,segments:[segment,pending],offset:0,truncated:false,revision_requests:{items:[],total_count:0,truncated:false}};
+  segmentApi.read.mockResolvedValue(initial as never);
+  segmentApi.budget.mockResolvedValue({task_id:'task',status:'local_work_authorized',waiting_reason:null,
+    resources:{settled_execution_seconds:2,settled_generated_bytes:1024,total_execution_seconds:null,total_generated_bytes:null,coverage:'partial',receipt_count:1},
+    actual_cost:{status:'pending_verification',amount:null,currency:null,supplier_usage_refs:[],pricing_or_invoice_refs:[]},estimates:{eta_seconds:null,cost:null}} as never);
+  render(<SegmentProductionPanel taskId="task"/>);
+  await screen.findByText('1 / 2 段有声视频可播放');
+  fireEvent.click(screen.getByRole('button',{name:'播放本段'}));
+  const video=screen.getByLabelText('第 1 段有声预览');
+  expect(video.getAttribute('src')).toContain('/segments/v1/video');
+  segmentApi.read.mockResolvedValue({...initial,segments:[{...segment,segment_version:'v2',video:{...segment.video,segment_version:'v2',url:'/segments/v2/video'}},pending]} as never);
+  fireEvent.click(screen.getByRole('button',{name:'刷新状态'}));
+  await screen.findByText('本段已有新版本，当前预览保持原版本。');
+  expect(video.getAttribute('src')).toContain('/segments/v1/video');
+  fireEvent.click(screen.getByRole('button',{name:'查看新版本'}));
+  expect(screen.getByLabelText('第 1 段有声预览').getAttribute('src')).toContain('/segments/v2/video');
+  expect(screen.getByText('实际费用：待核对供应商用量或账单')).toBeTruthy();
+  expect(screen.getByText('用量记录尚待核对，当前数字为已记录部分')).toBeTruthy();
+});
+
+
+it('native registration waits for real artifacts and previews candidates before the existing image adoption path',async()=>{
+  const {NativeOperationsPanel}=await import('../creation-task/TaskJobProgress');
+  const create=vi.fn().mockReturnValue('blob:native-candidate'),revoke=vi.fn();
+  vi.stubGlobal('URL',class extends URL {static createObjectURL=create;static revokeObjectURL=revoke;});
+  const artifact={artifact_id:'image-id',source_ref:'artifact:real-image',logical_ref:'artifact:real-image',sha256:'image-sha',
+    size_bytes:128,media_type:'image/png',role:'image',preview_url:'/native-artifacts/image-id/content',adopted:false};
+  const job={job_id:'register-job',request_id:'register-request',operation:'register_task_artifacts',status:'queued',
+    process_state:'not_started',release_state:'not_acquired',artifacts:[],failure_reason:null,
+    waiting_reason:'当前设备正在完成其他制作任务',repair_action:'等待当前执行释放资源后继续'};
+  const page={task_id:'task',items:[job],total_count:1,offset:0,truncated:false};
+  segmentApi.native.mockResolvedValue(page as never);segmentApi.content.mockResolvedValue(new Blob(['fixture']));
+  const preview=vi.fn();
+  const view=render(<NativeOperationsPanel taskId="task" adoptedRefs={[]} onPreviewImage={preview} canPrepare/>);
+  await screen.findByText('产物登记 · 等待执行');
+  expect(screen.getByText('等待原因：当前设备正在完成其他制作任务')).toBeTruthy();
+  expect(screen.getByText('恢复方式：等待当前执行释放资源后继续')).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'预览候选'})).toBeNull();
+  segmentApi.native.mockResolvedValue({...page,items:[{...job,status:'failed',waiting_reason:null,
+    failure_reason:'输出文件内容与登记摘要不一致',repair_action:'核对原输出文件后重新提交登记'}]} as never);
+  fireEvent.click(screen.getByRole('button',{name:'刷新产物'}));
+  await screen.findByText('失败原因：输出文件内容与登记摘要不一致');
+  expect(screen.getByText('恢复方式：核对原输出文件后重新提交登记')).toBeTruthy();
+  segmentApi.native.mockResolvedValue({...page,items:[{...job,status:'succeeded',waiting_reason:null,repair_action:null,
+    process_state:'exited',release_state:'released',artifacts:[artifact]}]} as never);
+  fireEvent.click(screen.getByRole('button',{name:'刷新产物'}));
+  await screen.findByRole('button',{name:'预览候选'});
+  expect(preview).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'预览候选'}));
+  await screen.findByAltText('实际登记的工作产物候选');
+  expect(segmentApi.content).toHaveBeenCalledWith('task','image-id',expect.any(AbortSignal));
+  fireEvent.click(screen.getByRole('button',{name:'准备图片图层'}));expect(preview).toHaveBeenCalledWith(artifact);
+  view.rerender(<NativeOperationsPanel taskId="task" adoptedRefs={[artifact.source_ref]} onPreviewImage={preview} canPrepare/>);
+  expect(screen.getByText('已在当前时间线使用；最终合成状态另行核对')).toBeTruthy();
+  for (const [type,label] of [['video/mp4','实际登记的视频候选'],['audio/wav','实际登记的音频候选']]) {
+    segmentApi.native.mockResolvedValue({...page,items:[{...job,status:'succeeded',artifacts:[{...artifact,artifact_id:type,media_type:type}]}]} as never);
+    fireEvent.click(screen.getByRole('button',{name:'刷新产物'}));
+    await waitFor(()=>expect(screen.queryByRole('button',{name:'准备图片图层'})).toBeNull());
+    fireEvent.click(screen.getByRole('button',{name:'预览候选'}));
+    await screen.findByLabelText(label);
+  }
+  view.unmount();vi.unstubAllGlobals();
+});
+
+it('shows the actual review protocol failure and recovery without hiding them as generation failure', async()=>{
+  const {TaskIssue}=await import('../creation-task/TaskIssue');
+  const reason='核查报告工具参数不是有效JSON；尚不能判定正文是否通过。';
+  const impact='本次送审稿未保存，原采用内容保留。';
+  const repair='核对原报告格式后重新核查，不能改写正文试探。';
+  render(<TaskIssue stage="script" code="script_review_invalid" reason={reason} impact={impact} repair={repair}/>);
+  const alert=screen.getByRole('alert');
+  for (const text of [reason,impact,repair]) {
+    const visible=within(alert).getByText(text);
+    expect(visible.closest('details')).toBeNull();
+  }
+});

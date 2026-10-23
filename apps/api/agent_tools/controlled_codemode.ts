@@ -2,14 +2,15 @@ export async function registerControlledCodemode(agent: any) {
   const module = process.env.AI_VIDEO_DIARY_AGENT_PI_MODULE;
   if (!module) return;
   const { createCodemodeExtension } = await import(module);
-  const allowed = new Set((process.env.AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS || "").split(",").filter(name => name && name !== "codemode"));
+  const allowed = new Set([process.env.AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS,process.env.AI_VIDEO_DIARY_AGENT_NATIVE_TOOLS]
+    .filter(Boolean).join(',').split(",").filter(name => name && name !== "codemode"));
   const proxy = new Proxy(agent, { get(target, property) {
     if (property !== "registerTool") {
       const value = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
     }
     return (tool: any) => target.registerTool({...tool,
-      description: "在 QuickJS 中组合本轮受控业务工具。没有 models、文件、Shell、网络或计时器接口。必须 await 每个调用；最多8次、30秒、2048输出token。脚本失败不撤销已经返回的业务回执，不盲重放未知结果。",
+      description: "在 QuickJS 中组合本轮已接通的业务及原生工具。QuickJS本身没有 models、宿主文件、Shell、网络或计时器接口；文件和程序操作只能调用当前任务的真实工具。必须 await 每个调用；最多8次、30秒、2048输出token。脚本失败不撤销已返回回执，不盲重放未知结果。",
       parameters: {...tool.parameters, properties: {code: {type: "string", maxLength: 16000}}},
       execute: async (id: string, input: {code: string}, signal: AbortSignal | undefined, onUpdate: any, ctx: any) => {
         if (typeof input.code !== "string" || input.code.length > 16000) throw new Error("编排代码超过本轮允许范围");

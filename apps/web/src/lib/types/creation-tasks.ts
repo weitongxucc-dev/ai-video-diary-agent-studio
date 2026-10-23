@@ -475,3 +475,85 @@ export type TaskJobProgress = {
     items: JobProgress[];
     total_count: number;
 };
+
+export type CreationTaskSegment = {
+    task_id: string;
+    section_id: string;
+    ordinal: number;
+    script_id: string;
+    base_version_id: string | null;
+    segment_version: string;
+    title: string;
+    text: string;
+    source_text_sha256: string;
+    source_references: string[];
+    locked_body_digest: string | null;
+    adjacent_sections: { id: string; title: string; content: string }[];
+    narration_segment_id: string | null;
+    audio: { kind: "audio"; artifact_ref: string | null; status: string; duration_seconds: number | null } | null;
+    video: { kind: "video"; artifact_ref: string; sha256: string; segment_version: string; duration_seconds: number; url: string } | null;
+    adopted: boolean;
+};
+export type CreationTaskSegmentRevision = {
+    task_id: string;
+    request_id: string;
+    input_id: string;
+    section_id: string;
+    job_id: string;
+    status: string;
+    queue_state: string;
+    waiting_reason: string | null;
+    semantic_review_ref: string;
+    rules_check: { status: string };
+    result: Record<string, unknown> | null;
+    usage_source: string;
+};
+export type CreationTaskSegments = {
+    task_id: string;
+    total_count: number;
+    available_video_count: number;
+    segments: CreationTaskSegment[];
+    offset: number;
+    truncated: boolean;
+    revision_requests: {
+        items: Pick<CreationTaskSegmentRevision, "request_id" | "input_id" | "section_id" | "job_id" | "status" | "result" | "waiting_reason">[];
+        total_count: number;
+        truncated: boolean;
+    };
+};
+export type CreationTaskBudget = {
+    task_id: string;
+    status: string;
+    waiting_reason: string | null;
+    resources: {
+        settled_execution_seconds: number;
+        settled_generated_bytes: number;
+        total_execution_seconds: number | null;
+        total_generated_bytes: number | null;
+        coverage: string;
+        receipt_count: number;
+    };
+    actual_cost: { status: string; amount: number | null; currency: string | null; supplier_usage_refs: string[]; pricing_or_invoice_refs: string[] };
+    estimates: { eta_seconds: number | null; cost: number | null };
+};
+
+export type CreationTaskNativeArtifact = {
+    artifact_id: string;
+    source_ref: string;
+    logical_ref: string;
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    role: string;
+    preview_url: string;
+    adopted: boolean;
+};
+export type CreationTaskNativeOperations = {
+    task_id: string;
+    items: { job_id: string; request_id: string; operation: string; status: string;
+        process_state: string; release_state: string; artifacts: CreationTaskNativeArtifact[];
+        failure_reason: string | null; waiting_reason: string | null; repair_action: string | null }[];
+    total_count: number;
+    truncated: boolean;
+    offset: number;
+};

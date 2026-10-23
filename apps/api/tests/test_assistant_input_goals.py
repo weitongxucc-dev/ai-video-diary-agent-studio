@@ -26,6 +26,8 @@ def consume(repo,chat,target,*,message,mode="steer",version="v1",sequence=1):
     repo.enqueue_input(chat["id"],"w","m",target_turn_id=target["id"],client_request_id=input_id,
         message=message,mode=mode,expected_draft_version=draft["draft_version"],expected_reference_version=0,request_context=context)
     repo.transition_input(chat["id"],"w","m",input_id,"consumed")
+    repo.record_input_understanding(chat["id"],"w","m",target["id"],input_id,
+        kind="effective_modification",summary="按用户明确要求修改当前作品",target_refs=[])
     return input_id
 
 
@@ -47,7 +49,7 @@ def test_consumed_steering_creates_revision_and_only_its_event_resumes(tmp_path)
     repo=ConversationRepository(tmp_path/"revisions.sqlite")
     chat,turn=started(repo)
     input_id=consume(repo,chat,turn,message="字幕用蓝色，仍按原要求生成")
-    assert repo.get_task_goal(turn["id"])["status"] == "invalidated"
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
     result(repo,turn,input_id,"input-job")
     goal=repo.get_task_goal(turn["id"])
     assert goal["revision"] == 1 and goal["source_input_id"] == input_id
@@ -186,5 +188,5 @@ def test_interrupted_latest_input_never_restores_previous_execution_response(tmp
     old={"type":"business_result","event_id":"late-first","task_id":"t","status":"succeeded","input_id":first}
     repo.project_business_result(turn["id"],"w","m",old,response_patch={"execution_status":{"job":{"id":"old-job"}}},message="旧作业成功")
     assert repo.get_turn(turn["id"])["result"].get("response",{}).get("execution_status") is None
-    assert repo.get_task_goal(turn["id"])["status"] == "invalidated"
+    assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
     assert repo.register_task_goal(turn["id"],running_execution=True) is None

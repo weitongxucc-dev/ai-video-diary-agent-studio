@@ -34,6 +34,8 @@ class GoalContinuationService:
         self._reconcile_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._thread = None
+        self._worker = None
+        self._worker_lock = threading.Lock()
         self._scan_limit = 8
 
     def start(self) -> None:
@@ -66,11 +68,17 @@ class GoalContinuationService:
                 logging.getLogger(__name__).exception("目标接续中断；原认领及业务回执保留，未重放操作")
 
     def pause(self, timeout_seconds: float) -> bool:
+        deadline=time.monotonic()+max(0,timeout_seconds)
         self._paused.set()
         if not self._reconcile_lock.acquire(timeout=max(0, timeout_seconds)):
             self._paused.clear()
             return False
         self._reconcile_lock.release()
+        if self._worker is not None:
+            self._worker.join(timeout=max(0,deadline-time.monotonic()))
+            if self._worker.is_alive():
+                self._paused.clear()
+                return False
         return True
 
     def resume(self) -> None:
@@ -87,8 +95,40 @@ class GoalContinuationService:
         self.request_stop()
         if self._thread is not None:
             self._thread.join(timeout=max(0, deadline_monotonic - time.monotonic()))
-            return not self._thread.is_alive()
-        return True
+        if self._worker is not None:
+            self._worker.join(timeout=max(0,deadline_monotonic-time.monotonic()))
+        return not any(thread is not None and thread.is_alive() for thread in (self._thread,self._worker))
+
+    def _execution_available(self):
+        # Keep the existing one-model-call limit. Discovery and projection do
+        # not wait for that call; unclaimed work remains in the original log.
+        return self._worker is None or not self._worker.is_alive()
+
+    def _execute_claim(self, claim, fresh):
+        try:
+            self.run_goal_turn(claim,fresh)
+        except Exception:
+            self.repo.finish_turn(claim['turn_id'],'failed',result={'reason':'goal_runner_interrupted'})
+            if claim['event'].get('phase')=='input': self.repo.settle_input_round(claim)
+            else: self.repo.settle_goal_round(claim)
+            raise
+        if claim['event'].get('phase')=='input': self.repo.settle_input_round(claim)
+        else: self.repo.settle_goal_round(claim)
+
+    def _dispatch_claim(self, claim, fresh):
+        if self._thread is None:
+            # Explicit, caller-driven reconciliation retains its synchronous
+            # contract. The running service always uses its single worker.
+            self._execute_claim(claim,fresh)
+            return
+        def run():
+            try: self._execute_claim(claim,fresh)
+            except Exception: logging.getLogger(__name__).exception('原目标回合中断，持久回执已保留')
+            finally: self._wake.set()
+        with self._worker_lock:
+            if not self._execution_available(): raise RuntimeError('已有原目标回合占用唯一执行位')
+            self._worker=threading.Thread(target=run,name='assistant-goal-turn',daemon=True)
+            self._worker.start()
 
     def register_turn(self, turn_id: str) -> dict | None:
         # Called only at the live, verified task-response boundary. Startup
@@ -282,6 +322,19 @@ class GoalContinuationService:
 
     def _reconcile(self, *, limit: int) -> int:
         advanced = 0
+        for candidate in self.repo.pending_input_candidates(limit=limit):
+            if self.stop_event.is_set() or self._paused.is_set(): break
+            if not self._execution_available() and not candidate.get('reconcile_only'): continue
+            fresh=self.verify_current_goal(candidate['root']['goal'],candidate['event'])
+            if fresh['status']!='ready': continue
+            if candidate.get('reconcile_only'):
+                receipt=fresh['business'].read_input_submission(candidate)
+                self.repo.reconcile_input_submission(candidate,receipt)
+                continue
+            claim=fresh['business'].claim_pending_input(candidate)
+            if claim is None: continue
+            self._dispatch_claim(claim,fresh)
+            advanced+=1
         for candidate in self.repo.goal_event_candidates(limit=limit):
             if self.stop_event.is_set() or self._paused.is_set():
                 break
@@ -352,20 +405,12 @@ class GoalContinuationService:
                 next_checkpoint=checkpoint, expected_goal=goal)
             if self.stop_event.is_set() or self._paused.is_set():
                 break
+            if not self._execution_available(): continue
             claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds,
                 selection_context=fresh.get("selection_context"))
             if claim is None:
                 continue
-            try:
-                self.run_goal_turn(claim, fresh)
-            except Exception:
-                # The event has already been consumed. Persist uncertainty,
-                # never replay a potentially committed model/HTTP effect.
-                self.repo.finish_turn(claim["turn_id"], "failed", "自动接续中断；先核对原操作结果。",
-                    result={"reason": "goal_runner_interrupted"})
-                self.repo.settle_goal_round(claim)
-                raise
-            self.repo.settle_goal_round(claim)
+            self._dispatch_claim(claim,fresh)
             advanced += 1
         return advanced
 
@@ -614,8 +659,9 @@ class GoalResultProjection:
     def source_belongs_to_goal(self, goal, source):
         bound = self.conversations.get_task_goal(source["assistant_turn_id"])
         return bool(bound and bound["original_turn_id"] == goal["original_turn_id"]
-            and source.get("input_id") == goal.get("source_input_id")
-            and source.get("input_turn_id") == goal.get("source_input_turn_id"))
+            and ({'input_id':source.get('input_id'),'input_turn_id':source.get('input_turn_id')} in
+                [{'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')},
+                    *goal.get('retained_business_sources',[])]))
 
     def script_source_slot(self, goal, job_id, actor, artifact_store, outputs):
         from app.creation_execution import CreationExecutionActor

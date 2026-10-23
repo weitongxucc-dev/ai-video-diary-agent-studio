@@ -394,3 +394,62 @@ def test_unsupported_group_platform_refuses_before_popen(tmp_path, monkeypatch):
     with pytest.raises(AssistantProcessReleaseError, match="未启动新的助手子进程"):
         host._run_pi_streaming(["synthetic"], message="", env={}, cwd=tmp_path,
             timeout_seconds=1, on_event=lambda _event: None)
+
+
+def test_native_release_proof_runs_after_host_worker_drains_and_keeps_unreleased_stop_marker(tmp_path):
+    control=TurnControl(terminate=host._terminate_process_group)
+    control.begin('native-release')
+    active,finish,drained=threading.Event(),threading.Event(),threading.Event()
+    native_released={'value':False};proofs=[]
+    def worker():
+        active.set();assert finish.wait(1);drained.set()
+    def verify(deadline):
+        assert drained.is_set()
+        proofs.append(deadline)
+        if not native_released['value']:
+            raise AssistantProcessReleaseError('native release remains unknown')
+    control.launch_callback('native-release',threading.Thread(target=worker),finish.set,verify_release=verify)
+    assert active.wait(1)
+    with pytest.raises(AssistantProcessReleaseError,match='native release remains unknown'):
+        control.request_stop('native-release')
+    assert control.is_stopped('native-release') and 'native-release' in control._callbacks
+    native_released['value']=True
+    assert control.request_stop('native-release')
+    assert len(proofs)==2 and 'native-release' not in control._callbacks
+    control.forget('native-release')
+    # An admitted job can own no process yet and still be scheduled later.
+    # Exercise the real host stop consumer with that original queued receipt.
+    class NativeOwner:
+        complete = False
+        def __call__(self, *args, **kwargs):
+            pytest.fail('this stop fixture submits no native operation')
+        def cancel(self, **kwargs):
+            return {'jobs': [] if self.complete else [{'status':'queued','process_state':'not_started','release_state':'not_acquired'}],
+                    'total_count':0 if self.complete else 1,'truncated':False,'cancellation_complete':self.complete}
+    owner=NativeOwner();entered=threading.Event();failures=[]
+    turn_id='native-queued-cancellation'
+    host.register_turn_control(turn_id)
+    def run_host():
+        try:
+            host._run_pi_streaming([sys.executable,'-u','-c',
+                "import json,time; print(json.dumps({'type':'tool_execution_start','toolName':'read_current_task','toolCallId':'probe'}),flush=True); time.sleep(30)"],
+                message='',env={'PATH':os.environ['PATH']},cwd=tmp_path,timeout_seconds=5,
+                on_event=lambda event:entered.set(),turn_id=turn_id,native_handler=owner,
+                source_binding={'turn_id':turn_id,'task_id':'task','conversation_id':'conversation','input_id':'input'})
+        except BaseException as error:
+            failures.append(error)
+    worker=threading.Thread(target=run_host);worker.start()
+    try:
+        assert entered.wait(3)
+        with pytest.raises(AssistantProcessReleaseError):
+            host.request_stop_turn(turn_id)
+        assert turn_id in host._turn_control._callbacks
+        owner.complete=True
+        assert host.request_stop_turn(turn_id)
+        worker.join(3)
+        assert not worker.is_alive() and turn_id not in host._turn_control._callbacks
+    finally:
+        owner.complete=True
+        host.request_stop_turn(turn_id)
+        worker.join(3)
+        host.forget_turn_control(turn_id)

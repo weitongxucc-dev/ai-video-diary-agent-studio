@@ -192,3 +192,23 @@ export function taskMediaJobMatchesContext(job: TaskMediaJob, baseVersionId: str
         || (job.operation === "audio_listen" && job.result_kind === "audio_listen")
         || (["audio_waveform", "narration_waveform"].includes(job.operation) && job.result_kind === "waveform");
 }
+
+export function readCreationTaskSegments(taskId: string, offset = 0): Promise<import('../types/creation-tasks').CreationTaskSegments> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/segments?offset=${offset}&limit=30`);
+}
+export function readCreationTaskBudget(taskId: string): Promise<import('../types/creation-tasks').CreationTaskBudget> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/budget`);
+}
+
+export function readCreationTaskSegmentRevision(taskId: string, requestId: string): Promise<import('../types/creation-tasks').CreationTaskSegmentRevision> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/segment-requests/${encodeURIComponent(requestId)}`);
+}
+
+export function readCreationTaskNativeOperations(taskId: string, offset = 0, signal?: AbortSignal): Promise<import('../types/creation-tasks').CreationTaskNativeOperations> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/native-operations?offset=${offset}&limit=30`, { signal });
+}
+export async function readCreationTaskNativeArtifact(taskId: string, artifactId: string, signal?: AbortSignal): Promise<Blob> {
+    const response=await authorizedFetch(apiUrl(`/api/creation-tasks/${encodeURIComponent(taskId)}/native-artifacts/${encodeURIComponent(artifactId)}/content`),{ signal });
+    if (!response.ok) throw new Error('工作产物预览读取失败，请按原产物重试。');
+    return response.blob();
+}

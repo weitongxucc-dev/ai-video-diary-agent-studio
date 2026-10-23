@@ -235,3 +235,122 @@ test("stdin abort reaches actual SDK signal and retains an unknown write receipt
     assert.equal(lines.filter(event=>event.type==="diary_business_request").length,2);
   } finally {if(child?.exitCode===null)child.kill("SIGKILL");await rm(options.cwd,{recursive:true,force:true});}
 });
+
+
+test('native SDK file operations use host windows and CAS without local-file or media-upload fallback',async()=>{
+  const {createNativeTaskTools}=await import('../native-tools.mjs');
+  const {createHash}=await import('node:crypto');
+  const sdk=await import(pathToFileURL(modulePath).href), calls=[];
+  const files=new Map([['/task/work/notes.txt','first\nsecond\nthird\n'],['/task/inputs/frame.png','binary']]);
+  let lostFileRequest,queryUnavailable=true;
+  const digest=value=>createHash('sha256').update(value).digest('hex');
+  const callNative=async(operation,args,options)=>{
+    calls.push({operation,args,...options});
+    if (operation==='open_task_working_context') return {ok:true,value:{task_id:'task',capabilities:{max_read_bytes:65536,max_log_page_bytes:65536,max_editable_file_bytes:262144}}};
+    if (operation==='read_task_command') {
+      if (queryUnavailable) {queryUnavailable=false;return {ok:false,failure:{reason:'lookup unavailable',submission_effect:'not_submitted'}};}
+      return {ok:true,value:{request_id:args.request_id,status:'succeeded',
+        process_state:'not_started',release_state:'not_acquired',work_outputs:[{path:'/task/work/lost.txt'}]}};
+    }
+    if (!args.path.startsWith('/task/')) return {ok:false,failure:{reason:'outside task',submission_effect:'not_submitted'}};
+    const text=files.get(args.path),sha=text===undefined?null:digest(text);
+    if (args.action==='access') return {ok:true,value:{exists:files.has(args.path),readable:files.has(args.path),
+      writable:args.path.startsWith('/task/work/'),sha256:sha,size_bytes:Buffer.byteLength(text??''),mime_type:args.path.endsWith('.png')?'image/png':'text/plain'}};
+    if (args.action==='mkdir') return {ok:true,value:{path:args.path}};
+    if (args.action==='write') {
+      assert.equal(args.expected_sha256,sha);files.set(args.path,Buffer.from(args.content_base64,'base64').toString());
+      if (args.path==='/task/work/lost.txt' && !lostFileRequest) {
+        lostFileRequest=options.callId;return {ok:false,failure:{reason:'file receipt lost',submission_effect:'unknown'}};
+      }
+      return {ok:true,value:{sha256:digest(files.get(args.path))}};
+    }
+    const content=args.line_offset?text.split('\n').slice(args.line_offset-1,args.line_offset-1+args.line_limit).join('\n'):text.slice(args.offset,args.offset+args.limit);
+    return {ok:true,value:{content_base64:Buffer.from(content).toString('base64'),sha256:sha,size_bytes:Buffer.byteLength(text),
+      offset:args.offset??0,next_offset:args.offset===undefined?content.length:args.offset+content.length,
+      actual_line_offset:args.line_offset,next_line_offset:args.line_offset===undefined?null:args.line_offset+args.line_limit,
+      truncated:content!==text,file_revision:{version:sha}}};
+  };
+  const native=createNativeTaskTools({sdk,turnId:'turn',inputId:'input',callNative});
+  const tools=Object.fromEntries(native.tools.map(tool=>[tool.name,tool]));
+  assert.equal((await tools.write.execute('write',{path:'program.py',content:"print('one')"})).isError,undefined);
+  assert.equal((await tools.edit.execute('edit',{path:'program.py',edits:[{oldText:"print('one')",newText:"print('two')"}]})).isError,undefined);
+  assert.equal(files.get('/task/work/program.py'),"print('two')");
+  const lost=await tools.write.execute('lost-write',{path:'lost.txt',content:'saved once'});
+  assert.equal(lost.isError,true);assert.equal(lost.details.native_execution.request_id,lostFileRequest);
+  native.beginRound();
+  const unavailable=await tools.write.execute('query-write',{path:'lost.txt',content:'saved once'});
+  assert.equal(unavailable.details.failure.submission_effect,'unknown');
+  assert.equal(unavailable.details.native_execution.request_id,lostFileRequest);
+  native.beginRound();
+  const recovered=await tools.write.execute('retry-write',{path:'lost.txt',content:'saved once'});
+  assert.equal(recovered.isError,false);assert.equal(recovered.details.native_execution.request_id,lostFileRequest);
+  assert.equal(calls.filter(call=>call.args.action==='write' && call.args.path==='/task/work/lost.txt').length,1);
+  assert.equal(calls.findLast(call=>call.operation==='read_task_command').args.request_id,lostFileRequest);
+  const read=await tools.read.execute('read',{path:'notes.txt',offset:2,limit:1});
+  assert.match(read.content[0].text,/second/);assert.equal(read.details.read_window.actual_line_offset,2);
+  const request=calls.findLast(call=>call.args.action==='read');assert.equal(request.args.line_offset,2);assert.equal(request.args.line_limit,1);
+  const image=await tools.read.execute('image',{path:'/task/inputs/frame.png'});
+  assert.equal(image.isError,true);assert(!image.content.some(item=>item.type==='image'));
+  assert(!calls.some(call=>call.args.path==='/task/inputs/frame.png' && call.args.action==='read'));
+  const outside=await tools.read.execute('outside',{path:'/private/unrelated.txt'});
+  assert.equal(outside.isError,true);assert.match(outside.content[0].text,/outside task/);
+  await tools.open_task_working_context.execute('map-input',{input_refs:[{name:'sample.mp4',source_ref:'registered:sample'}]});
+  assert.deepEqual(calls.findLast(call=>call.operation==='open_task_working_context').args.input_refs,[{name:'sample.mp4',source_ref:'registered:sample'}]);
+  const options=await fixture(),previousTurn=process.env.AI_VIDEO_DIARY_AGENT_TURN_ID;
+  process.env.AI_VIDEO_DIARY_AGENT_TURN_ID='native-sdk-session';let current;
+  try {
+    current=await openCreationSession({...options,tools:[],nativeEnabled:true,nativeCall:callNative});
+    let modelCalls=0;
+    current.session.agent.streamFunction=()=>{
+      const stream=new AssistantMessageEventStream();
+      const answer=message(modelCalls++===0?[{type:'toolCall',id:'native-write',name:'write',arguments:{path:'from-session.txt',content:'SDK host operation'}}]:[{type:'text',text:'done'}]);
+      queueMicrotask(()=>{stream.push({type:'done',reason:answer.stopReason,message:answer});stream.end(answer);});return stream;
+    };
+    await current.session.prompt('Run only the synthetic native write.',{source:'rpc'});
+    assert.equal(files.get('/task/work/from-session.txt'),'SDK host operation');
+  } finally {
+    current?.session.dispose();await rm(options.cwd,{recursive:true,force:true});
+    if(previousTurn===undefined)delete process.env.AI_VIDEO_DIARY_AGENT_TURN_ID;else process.env.AI_VIDEO_DIARY_AGENT_TURN_ID=previousTurn;
+  }
+});
+
+test('native command identity follows input and SDK round while unknown commands query the original request',async()=>{
+  const {createNativeTaskTools}=await import('../native-tools.mjs');
+  const sdk=await import(pathToFileURL(modulePath).href),calls=[];
+  let lost=true,queryUnavailable=true;
+  const native=createNativeTaskTools({sdk,turnId:'turn',inputId:'first-input',callNative:async(operation,args,options)=>{
+    calls.push({operation,args,...options});
+    if (operation==='open_task_working_context') return {ok:true,value:{task_id:'task',command_budget:{status:'ready'},capabilities:{max_log_page_bytes:65536}}};
+    if (operation==='submit_task_command' && lost) {lost=false;return {ok:false,failure:{reason:'receipt lost',submission_effect:'unknown'}};}
+    if (operation==='submit_task_command') return {ok:true,value:{request_id:args.request_id,job_id:'new-job',status:'queued'}};
+    if (operation==='register_task_artifacts') return {ok:false,failure:{reason:'registration receipt lost',submission_effect:'unknown'}};
+    if (operation==='read_task_command' && queryUnavailable) {queryUnavailable=false;return {ok:false,failure:{reason:'lookup unavailable',submission_effect:'not_submitted'}};}
+    return {ok:true,value:{request_id:args.request_id,job_id:'original-job',status:'succeeded',stdout:'host output',stderr:'',output:'host output',
+      exit_code:0,process_state:'exited',release_state:'released',truncated:false}};
+  }});
+  const bash=native.tools.find(tool=>tool.name==='bash');
+  native.beginRound();
+  assert.equal((await bash.execute('reused-provider-id',{command:'printf host'})).isError,true);
+  const original=calls.find(call=>call.operation==='submit_task_command').args.request_id;
+  native.beginRound();
+  const unavailable=await bash.execute('query-provider-id',{command:'printf host'});
+  assert.equal(unavailable.isError,true);assert.equal(unavailable.details.failure.submission_effect,'unknown');
+  native.beginRound();
+  assert.equal((await bash.execute('reused-provider-id',{command:'printf host'})).isError,undefined);
+  assert.equal(calls.filter(call=>call.operation==='submit_task_command').length,1);
+  assert.equal(calls.find(call=>call.operation==='read_task_command').args.request_id,original);
+  native.rebind({AI_VIDEO_DIARY_AGENT_INPUT_ID:'second-input'});native.beginRound();
+  assert.equal((await bash.execute('reused-provider-id',{command:'printf host'})).isError,undefined);
+  const submits=calls.filter(call=>call.operation==='submit_task_command');
+  assert.equal(submits.length,2);assert.notEqual(submits[1].args.request_id,original);
+  assert(!submits.some(call=>'env' in call.args));
+  const register=native.tools.find(tool=>tool.name==='register_task_artifacts');
+  const files=[{path:'/task/outputs/result.png',role:'image',expected_sha256:'actual-sha'}];
+  const registration=await register.execute('register',{execution_job_id:'original-job',files});
+  const originalRegistration=calls.find(call=>call.operation==='register_task_artifacts').args.request_id;
+  assert.equal(registration.isError,true);assert.equal(registration.details.native_execution.request_id,originalRegistration);
+  native.beginRound();
+  await register.execute('retry-register',{execution_job_id:'original-job',files});
+  assert.equal(calls.filter(call=>call.operation==='register_task_artifacts').length,1);
+  assert.equal(calls.findLast(call=>call.operation==='read_task_command').args.request_id,originalRegistration);
+});

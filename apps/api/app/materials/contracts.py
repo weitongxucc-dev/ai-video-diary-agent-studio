@@ -220,6 +220,51 @@ def material_allows_automation(asset: MaterialAsset) -> bool:
     return asset.use_state in {"available", "not_for_publish"}
 
 
+MaterialUsagePurpose = Literal["reference", "manual", "automatic", "publish"]
+
+
+@dataclass(frozen=True)
+class MaterialUsageEligibility:
+    status: Literal["eligible", "not_found", "unreadable", "processing", "restricted", "input_changed"]
+    reason: str
+    repair_action: str | None = None
+
+    @property
+    def eligible(self) -> bool:
+        return self.status == "eligible"
+
+
+def material_usage_eligibility(asset: MaterialAsset | None, segment: MaterialSegment | None = None, *,
+    purpose: MaterialUsagePurpose, readable: bool = True, expected_asset_version: datetime | None = None,
+    expected_segment_version: datetime | None = None) -> MaterialUsageEligibility:
+    """Qualify authorized object versions for an explicit use, apart from ranking.
+
+    Callers resolve identity and actual file facts. No review flag is changed:
+    raw means unreviewed, while explicit rejection and use restrictions still apply.
+    """
+    if purpose not in {"reference", "manual", "automatic", "publish"}:
+        raise ValueError("素材用途必须明确为参考、人工、自动或发布")
+    if not readable:
+        return MaterialUsageEligibility("unreadable", "当前身份不可读取此素材", "使用当前身份可读取的素材")
+    if asset is None or segment is not None and segment.asset_id != asset.id:
+        return MaterialUsageEligibility("not_found", "未找到所引用的素材或片段", "沿原素材引用重新查询")
+    if (expected_asset_version is not None and asset.updated_at != expected_asset_version or
+            expected_segment_version is not None and (segment is None or segment.updated_at != expected_segment_version)):
+        return MaterialUsageEligibility("input_changed", "素材或片段已不再是读取时的版本", "重新读取原对象并核对用途，不能静默改绑新版")
+    if asset.review_status == "rejected" or segment is not None and segment.review_status == "rejected":
+        return MaterialUsageEligibility("restricted", "素材或片段已被明确拒绝使用", "由用户核对并修改原对象的使用限制")
+    if asset.usage_role == "exclude" or segment is not None and effective_segment_usage_role(asset, segment) == "exclude":
+        return MaterialUsageEligibility("restricted", "素材或片段已被明确排除", "由用户核对原对象的用途")
+    restricted = (asset.use_state == "excluded" or asset.use_state == "reference_only" and purpose != "reference"
+        or asset.use_state == "not_for_automation" and purpose == "automatic"
+        or asset.use_state == "not_for_publish" and purpose == "publish")
+    if restricted:
+        return MaterialUsageEligibility("restricted", "当前用途不符合素材的使用限制", "选择符合用途的素材，或由用户调整原使用限制")
+    if purpose != "reference" and asset.analysis_status != "ready":
+        return MaterialUsageEligibility("processing", "素材分析尚未就绪", "查询原分析状态；按具体失败原因恢复后再选用")
+    return MaterialUsageEligibility("eligible", "当前对象版本可用于所请求的用途")
+
+
 def effective_segment_usage_role(
     asset: MaterialAsset,
     segment: MaterialSegment,

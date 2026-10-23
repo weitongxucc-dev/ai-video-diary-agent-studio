@@ -93,7 +93,7 @@ def test_semantic_only_candidate_carries_real_cached_source_evidence(setup):
     assert _search(s, query="feeding operation", automatic_selection=True).matches == []
 
 
-@pytest.mark.parametrize("change", ["private", "raw", "rejected", "excluded", "exclude_role", "segment_raw", "segment_exclude", "not_for_automation"])
+@pytest.mark.parametrize("change", ["private", "raw", "rejected", "excluded", "exclude_role", "segment_raw", "segment_exclude", "not_for_automation", "processing"])
 def test_current_permissions_review_and_exclusion_precede_feature_reads(setup, change, monkeypatch):
     s = setup
     asset = s.repo.get_asset("workspace", s.asset.id)
@@ -105,6 +105,8 @@ def test_current_permissions_review_and_exclusion_precede_feature_reads(setup, c
         asset.use_state = change
     elif change == "exclude_role":
         asset.usage_role = "exclude"
+    elif change == "processing":
+        asset.analysis_status = 'pending'
     else:
         for segment in asset.segments:
             if change == "segment_raw":
@@ -114,9 +116,19 @@ def test_current_permissions_review_and_exclusion_precede_feature_reads(setup, c
     with s.repo._connect() as conn:
         conn.execute("UPDATE material_assets SET payload=?,visibility=? WHERE id=?",
                      (_json_payload(asset), asset.visibility, asset.id))
+    if change in {"raw", "segment_raw"}:
+        _cache(s, "设备", [1.0, 0.0])
+        assert _search(s, query="设备").matches
+        persisted = s.repo.get_asset("workspace", asset.id)
+        assert (persisted.review_status == "raw" if change == "raw" else
+                all(segment.review_status == "raw" for segment in persisted.segments))
+        return
     monkeypatch.setattr(s.service.analysis, "read_visual_features",
                         lambda *_: pytest.fail("ineligible features must not be read"))
-    assert _search(s, query="设备", automatic_selection=change == "not_for_automation").matches == []
+    result = _search(s, query="设备", automatic_selection=change == "not_for_automation")
+    assert result.matches == []
+    if change in {'processing', 'not_for_automation'}:
+        assert ('分析尚未就绪' if change == 'processing' else '用途限制') in result.semantic_message
 
 
 def test_scope_and_structured_filters_apply_before_limit(setup):

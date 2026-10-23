@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 import time
+import hashlib
 
 from pydantic import ValidationError
 from fastapi import HTTPException
@@ -14,6 +15,38 @@ from app.creation.execution_control import ExecutionControlRejected
 from app.creation.output_observation_use_case import OutputObservationRejected, read_original_observation_request
 from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
 from app.schemas import CreationTaskScriptDraftRequest, CreationTaskScriptConfirmRequest, CreationTaskTopicConfirmRequest
+
+
+def record_narration_semantic_review(production, task, origin, payload, *, write_guard):
+    """Store a model comparison, never a deterministic factual verdict."""
+    from app.creation.contracts import TaskEvent
+    from app.schemas import NarrationSemanticReviewRequest
+    trusted_input_id=origin.get('input_id') or origin.get('assistant_turn_id')
+    if payload.get('input_id') is not None and payload['input_id']!=trusted_input_id:
+        raise ValueError('语义复核不能切换原输入')
+    payload=NarrationSemanticReviewRequest.model_validate({**payload,'input_id':trusted_input_id}).model_dump(mode='json')
+    if not payload['findings']:
+        raise ValueError('语义复核须记录具体前后对照依据')
+    for finding in payload['findings']:
+        if (set(finding)!={'rule_id','before','after','assessment','reason'}
+                or finding['assessment'] not in {'preserved','uncertain','conflict'}
+                or not all(isinstance(finding[k],str) and finding[k].strip() for k in finding)):
+            raise ValueError('每项语义对照须包含原句、改写、结论和依据')
+    if payload['conclusion']=='preserved' and any(f['assessment']!='preserved' for f in payload['findings']):
+        raise ValueError('存疑或冲突的语义依据不能记为通过')
+    if payload['authorized_locked_section_ids']:
+        raise ValueError('模型复核不能授予定稿解锁权限')
+    source={'conversation_id':origin['conversation_id'],'input_id':trusted_input_id,
+            **{k:origin[k] for k in ('assistant_turn_id','input_turn_id') if k in origin}}
+    if not source.get('assistant_turn_id'):
+        raise ValueError('语义复核缺少可信原回合')
+    identity=hashlib.sha256(json.dumps([task.workspace_id,task.id,source,payload['request_id']],
+        sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    event=TaskEvent(id='narration_semantic_review_'+identity,workspace_id=task.workspace_id,task_id=task.id,
+        job_id=None,event_type='narration_semantic_review',payload={**payload,'source':source,
+        'evidence_kind':'pi_semantic_comparison'})
+    event=production.save_semantic_review(event,write_guard=write_guard)
+    return {'semantic_review_ref':event.id,**event.payload}
 
 
 class TaskBusinessRejected(PermissionError):
@@ -28,7 +61,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -39,6 +72,32 @@ class TaskBusiness:
         self.observation_facts,self.observe_output=observation_facts,observe_output
         self.request_result,self.media_result=request_result,media_result
         self.record_adoption=record_adoption
+        self.segments=segments
+        self.native_case=native_case
+
+    def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
+        """Same task authorization, with the native owner as sole execution writer."""
+        entered=False
+        try:
+            actor,task,goal,origin,_scope=self.check(source_binding,cancel_event,deadline_monotonic,check_version=False)
+            if self.native_case is None: raise TaskBusinessRejected('原生执行用例尚未装配')
+            native_origin={**origin,'task_id':task.id,'assistant_turn_id':source_binding['turn_id'],
+                'input_id':origin.get('input_id') or source_binding['turn_id'],
+                'session_id':source_binding['session_id'],'sdk_round':source_binding.get('sdk_round',0)}
+            guard=lambda conn:self.check(source_binding,cancel_event,deadline_monotonic,connection=conn,check_version=False)
+            entered=True
+            value=self.native_case.dispatch(operation,arguments,actor=actor,origin=native_origin,
+                write_guard=guard,runtime=self.runtime() if operation in {'submit_task_command','cancel_task_command','register_task_artifacts'} else None,
+                call_id=call_id,cancel_event=cancel_event,
+                deadline_monotonic=deadline_monotonic)
+            from fastapi.encoders import jsonable_encoder
+            return {'ok':True,'value':jsonable_encoder(value)}
+        except (TaskBusinessRejected,HTTPException) as exc:
+            return {'ok':False,'failure':{'status_code':exc.status_code,'reason':str(exc.detail),
+                'submission_effect':'unknown' if entered else 'not_submitted'}}
+        except (KeyError,ValueError,PermissionError) as exc:
+            return {'ok':False,'failure':{'status_code':403 if isinstance(exc,PermissionError) else 409,
+                'reason':str(exc),'submission_effect':'unknown' if entered else 'not_submitted'}}
 
     def original(self, goal):
         ws,task_id=goal['workspace_id'],goal['task_id']
@@ -115,9 +174,14 @@ class TaskBusiness:
         entered=False
         try:
             binding=dict(source_binding)
-            reconcile_original=(operation in {'read_task_observation_request','read_task_media_job','read_creation_execution'}
+            reconcile_original=(operation in {'read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision'}
                 or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
-            actor,task,goal,origin,sealed=self.check(binding,cancel_event,deadline_monotonic,check_version=not reconcile_original)
+            # Section owners validate the frozen target and dependency digest at
+            # commit. An unrelated timeline publication may legitimately move HEAD.
+            section_scoped=operation in {'read_narration_segment_context','read_narration_segments',
+                'record_narration_semantic_review','revise_narration_segment'}
+            check_version=not (reconcile_original or section_scoped)
+            actor,task,goal,origin,sealed=self.check(binding,cancel_event,deadline_monotonic,check_version=check_version)
             if arguments.get('task_id',task.id)!=task.id:
                 raise TaskBusinessRejected('工具参数不能切换原任务')
             if operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None:
@@ -129,9 +193,12 @@ class TaskBusiness:
             declared=arguments.get('assistant_turn_id') or (arguments.get('payload') or {}).get('assistant_turn_id')
             if declared is not None and declared!=binding['turn_id']:
                 raise TaskBusinessRejected('工具参数不能切换原回合')
+            if operation in {'record_input_understanding','record_narration_semantic_review','revise_narration_segment'}:
+                if arguments['payload'].get('input_id')!=(origin.get('input_id') or binding['turn_id']):
+                    raise TaskBusinessRejected('局部修改不能切换原输入')
             if operation in {'save_assistant_script_draft','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
                 arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
-            guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn)
+            guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,check_version=check_version)
             entered=True
             value=self.execute(operation,arguments,actor,task,goal,origin,sealed,guard)
             from fastapi.encoders import jsonable_encoder
@@ -165,7 +232,7 @@ class TaskBusiness:
                 'input_turn_id':goal['source_input_turn_id'],'task_version':version}
             binding.update(trusted)
             delta={'INPUT_ID':item['input_id'],'INPUT_TURN_ID':binding['turn_id'],
-                'USER_INSTRUCTION':goal['original_instruction'],'SELECTED_REFS':json.dumps(context['selected_object_refs']),
+                'USER_INSTRUCTION':item['message'],'SELECTED_REFS':json.dumps(context['selected_object_refs']),
                 'SELECTED_REFERENCES':json.dumps(snapshot['selected_references'],ensure_ascii=False),
                 'TASK_VERSION':json.dumps(version),'PLAYHEAD_MS':'',
                 **{key.upper():json.dumps(snapshot[key],ensure_ascii=False) if snapshot.get(key) else ''
@@ -178,6 +245,27 @@ class TaskBusiness:
                 '_business_binding':trusted}
         return AssistantInputDelivery(self.conversations,conversation_id=binding['conversation_id'],
             workspace_id=binding['workspace_id'],member_id=binding['member_id'],turn_id=binding['turn_id'],consume=consume)
+
+    def claim_pending_input(self, candidate):
+        def validate(conn,item,goal):
+            actor,task,sealed=self.original(goal)
+            return self._input_context(conn,item['request_context'],task,actor,goal,sealed)
+        return self.conversations.claim_pending_goal_input(candidate,validate=validate,
+            seal=lambda conn,old,new,context:self.authorizations.inherit_business_context(old,new,context,connection=conn))
+
+    def read_input_submission(self, candidate):
+        """Read the preserved original request without running or resubmitting Pi."""
+        goal,item=candidate['root']['goal'],candidate['input']
+        actor,task,_scope=self.original(goal)
+        original=item.get('submission') or item['business_effect']
+        try:
+            receipt=self.segments.read_request(task.workspace_id,task.id,original['request_id'],actor)
+        except KeyError:
+            return {'task_id':task.id,'input_id':item['input_id'],'request_id':original['request_id'],'status':'result_unknown'}
+        if (receipt['request_id']!=original['request_id'] or receipt['input_id']!=item['input_id']
+                or receipt['task_id']!=task.id or original.get('section_id',receipt['section_id'])!=receipt['section_id']):
+            raise ValueError('回读修改不属于原输入或稳定段落')
+        return receipt
 
     def _input_context(self, conn, frozen, task, actor, old_goal, sealed):
         from app.assistant.references import normalize_selection, validate_timeline_reference, timeline_object_refs
@@ -277,6 +365,29 @@ class TaskBusiness:
 
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
+        if operation in {'read_narration_segment_context','read_narration_segments','read_narration_revision','revise_narration_segment'}:
+            if self.segments is None: raise TaskBusinessRejected('局部修改业务用例尚未装配')
+            if operation=='read_narration_segment_context': return self.segments.context(ws,task_id,args['segment_id'],actor)
+            if operation=='read_narration_segments': return self.segments.list_segments(ws,task_id,actor)
+            if operation=='read_narration_revision': return self.segments.read_request(ws,task_id,args['request_id'],actor)
+            from app.schemas import NarrationRevisionRequest
+            payload=NarrationRevisionRequest.model_validate({k:v for k,v in args['payload'].items() if k!='assistant_turn_id'})
+            self.conversations.record_input_submission(goal['current_turn_id'],ws,goal['member_id'],
+                input_id=payload.input_id,request_id=payload.request_id,section_id=payload.section_id)
+            def commit_guard(conn):
+                guard(conn)
+                self.conversations.record_input_business_effect(goal['current_turn_id'],ws,goal['member_id'],
+                    input_id=payload.input_id,request_id=payload.request_id,status='queued',
+                    adoption_mode=payload.adoption_mode,connection=conn)
+            return self.segments.submit_revision(ws,task_id,actor,payload,runtime=self.runtime(),write_guard=commit_guard)
+        if operation=='record_input_understanding':
+            return self.conversations.record_input_understanding(origin['conversation_id'],ws,goal['member_id'],
+                goal['current_turn_id'],origin.get('input_id'),
+                **{k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}})
+        if operation=='record_narration_semantic_review':
+            return record_narration_semantic_review(self.production,task,
+                {**origin,'assistant_turn_id':goal['current_turn_id']},
+                {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
         if operation=='read_task_workspace': return self.workspace_facts(ws,task)
         if operation=='read_creator_memory': return sealed['memory']
         if operation=='read_assistant_script_context': return self.script_context(ws,task_id,actor.user_id or actor.member_id)
@@ -292,6 +403,12 @@ class TaskBusiness:
                 return self.material_facts(self.production.get_asset(ws,args['asset_id']))
             query=str(args.get('query','')).casefold();limit=int(args.get('limit',8))
             if not 1<=limit<=20: raise ValueError('素材搜索范围须为1至20')
+            if args.get('include_eligibility'):
+                purpose=args.get('purpose','manual')
+                if purpose not in {'manual','automatic'}: raise ValueError('镜头检索用途无效')
+                return self.production.search_material_segments(ws,query=query,asset_ids=sorted(allowed),
+                    usage_roles=['a_roll','b_roll'],limit=limit,viewer_user_id=actor.user_id or actor.member_id,
+                    purpose=purpose,include_eligibility=True)
             assets=[asset for asset in self.production.list_assets(ws,viewer_user_id=actor.user_id or actor.member_id)
                     if asset.id in allowed and (not query or query in (asset.file_name+' '+asset.user_description+' '+' '.join(asset.user_tags)).casefold())]
             return {"assets":[self.material_facts(asset) for asset in assets[:limit]],"total_count":len(assets),"has_more":len(assets)>limit}

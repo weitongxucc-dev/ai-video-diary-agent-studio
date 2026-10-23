@@ -80,6 +80,22 @@ def test_material_defaults_and_date_factories_keep_existing_value_semantics():
     )
     first.user_tags.append("用户标签")
     assert second.user_tags == []
+    first.analysis_status = 'ready'
+    segment = contracts.MaterialSegment('segment', first.id, 0, 1)
+    qualify = contracts.material_usage_eligibility
+    assert qualify(first, segment, purpose='automatic').eligible  # raw is not excluded.
+    first.use_state = 'not_for_automation'
+    assert qualify(first, segment, purpose='manual').eligible
+    assert qualify(first, segment, purpose='automatic').status == 'restricted'
+    first.use_state = 'reference_only'
+    assert qualify(first, segment, purpose='reference').eligible
+    assert qualify(first, segment, purpose='manual').status == 'restricted'
+    assert qualify(first, segment, purpose='reference', expected_asset_version=when).status == 'input_changed'
+    assert qualify(None, purpose='manual', readable=False).status == 'unreadable'
+    assert qualify(None, purpose='manual').status == 'not_found'
+    first.use_state, first.analysis_status = 'available', 'pending'
+    assert qualify(first, segment, purpose='automatic').status == 'processing'
+    assert qualify(first, segment, purpose='reference').eligible
     for value_type in (contracts.MaterialAsset, contracts.MaterialSegment, contracts.MaterialCollection):
         defaults = {field.name: field.default_factory for field in fields(value_type)}
         assert defaults["created_at"] is defaults["updated_at"] is utc_now

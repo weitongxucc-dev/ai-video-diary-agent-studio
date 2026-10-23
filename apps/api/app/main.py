@@ -236,7 +236,7 @@ from app.scheduled_tasks import (
     ScheduledTaskService,
     ScheduledTaskUpdateRequest,
 )
-from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, ScriptLibraryEntry, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_allows_footage, material_segment_eligible)
+from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, ScriptLibraryEntry, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_segment_eligible)
 from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
@@ -421,6 +421,7 @@ from app.schemas import (
     MaterialReviewRequest,
     MaterialUseStateRequest,
     MaterialSegmentMatchResponse,
+    MaterialSegmentSearchResponse,
     MaterialSegmentUpdateRequest,
     MediaCapabilityResponse,
     MediaPreviewRunResponse,
@@ -7823,6 +7824,10 @@ def _creation_task_assistant_turn(
     trusted_refs = frozen_context.get("selected_object_refs", trusted_refs)
     material_selection = (frozen_context.get("target_snapshot") or {}).get("material_selection")
     try:
+        native_actor = _request_permit_actor(request,workspace_id)
+        native_binding = {'workspace_id':workspace_id,'member_id':member_id,'task_id':task_id,
+            'conversation_id':str(payload.conversation_id),'turn_id':turn_id,'input_id':None,'task_version':task_version}
+        native_handler = _ordinary_native_handler(native_actor,native_binding) if native_actor is not None else None
         reply, preview = run_task_turn(
             _workspace_settings_for(workspace_id),
             workspace_id=workspace_id,
@@ -7838,6 +7843,7 @@ def _creation_task_assistant_turn(
             cookie=request.headers.get("cookie"),
             on_event=on_event,
             turn_id=turn_id,
+            native_handler=native_handler,source_binding=native_binding,
             selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
             input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
             profile_reference=profile_reference,
@@ -8674,6 +8680,238 @@ def _narration_stage_use_case(repository=None,*,narration_budget=None):
     return NarrationStageUseCase(repository,narration_generator,_picture_preview_components(repository)[1],narration_budget)
 
 
+def _segment_production_use_case(repository=None):
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    repo = production_repo if repository is None else repository
+    return SegmentProductionUseCase(repo,narration_stage=_narration_stage_use_case(repo),
+        renderer=montage_renderer,artifact_store=artifact_store,
+        output_root=settings.effective_temporary_root_path)
+
+
+def _native_task_operations_case(repository=None,*,budget=None,authorizations=None):
+    from app.creation.native_task_operations import NativeTaskOperations
+    from app.member_permits import native_command_budget_from_env
+    repo = production_repo if repository is None else repository
+    return NativeTaskOperations(repo,artifact_store,repo.database_path.parent/'native-task-workspaces',
+        budget=native_command_budget_from_env() if budget is None else budget,
+        authorizations=authorizations if authorizations is not None else _task_authorizations_for_goal(),
+        python_path=settings.model_runtime_python_path)
+
+
+def _ordinary_native_handler(actor,binding):
+    from app.creation.native_task_operations import NativeOperationHandler
+    case = _native_task_operations_case()
+    initialized = False
+    def verify(source,conn):
+        nonlocal initialized
+        if any(source.get(key)!=binding[key] for key in ('workspace_id','member_id','task_id','conversation_id','turn_id')):
+            raise PermissionError('原生工具不能切换原任务、成员或对话')
+        if actor.device_id is None and find_member(local_members_service,actor.member_id) is None:
+            raise PermissionError('当前本地成员已失效，未执行原生操作')
+        current = (conversation_repo._task_turn_source(conn,source['turn_id'],source['workspace_id'],source['member_id'],source['task_id'])
+            if conn is not None else conversation_repo.task_turn_source(source['turn_id'],source['workspace_id'],source['member_id'],source['task_id']))
+        if (current['conversation_id'],current.get('input_id'))!=(source['conversation_id'],source.get('input_id')) or not source.get('session_id'):
+            raise PermissionError('原生工具不是当前已消费输入与实际SDK会话')
+        authorization = case.authorizations
+        if conn is None and not initialized:
+            task = production_repo.get_creation_task(source['workspace_id'],source['task_id'])
+            authorization.ensure(task,actor,interactive=True)
+            initialized = True
+        if authorization.status(source['workspace_id'],source['task_id'],identity=authorization.identity(actor),
+                operation='task_goal',connection=conn,check_scope=False)!='valid':
+            raise PermissionError('原任务授权已到期、撤销或超出原范围，未执行新操作')
+        return {**current,'task_id':source['task_id'],'assistant_turn_id':source['turn_id'],
+            'input_id':current.get('input_id') or source['turn_id'],'session_id':source['session_id'],'sdk_round':source.get('sdk_round',0)}
+    return NativeOperationHandler(case,actor,verify,_creation_runtime)
+
+
+@app.get('/api/creation-tasks/{task_id}/native-operations')
+def creation_task_native_operations(task_id: str,request: Request,offset: int=Query(0,ge=0),limit: int=Query(30,ge=1,le=100)):
+    ws = current_workspace_id(request)
+    actor = _request_permit_actor(request,ws)
+    if actor is None:
+        raise HTTPException(status_code=403,detail='缺少原任务成员身份')
+    try:
+        return _native_task_operations_case().list_operations(actor,task_id,offset=offset,limit=limit)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/native-artifacts/{artifact_id}/content')
+def creation_task_native_artifact(task_id: str,artifact_id: str,request: Request):
+    ws = current_workspace_id(request)
+    actor = _request_permit_actor(request,ws)
+    if actor is None:
+        raise HTTPException(status_code=403,detail='缺少原任务成员身份')
+    try:
+        from app.creation.native_task_operations import actual_mime
+        path = _native_task_operations_case().artifact_path(actor,task_id,artifact_id)
+        return FileResponse(path,media_type=actual_mime(path),headers={
+            'X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"})
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError,OSError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+def _local_revision_origin(task_id,request,payload):
+    """Adapt an existing consumed assistant turn; identity never comes from model arguments."""
+    ws = current_workspace_id(request)
+    actor = _require_permit_actor(request,ws)
+    turn_id = payload.get('assistant_turn_id')
+    if not isinstance(turn_id,str) or not turn_id:
+        raise HTTPException(status_code=409,detail='修改判断必须绑定正在运行的可信助手回合')
+    origin = _assistant_creation_adoption_scope(task_id,request,turn_id,draft_only=True)
+    input_id = origin.get('input_id') or turn_id
+    if payload.get('input_id') != input_id:
+        raise HTTPException(status_code=409,detail='修改判断没有绑定当前原输入')
+    return actor,{**origin,'assistant_turn_id':turn_id,'input_id':input_id}
+
+
+@app.post('/api/creation-tasks/{task_id}/assistant/input-understanding')
+def creation_task_input_understanding(task_id: str, request: Request, payload: dict):
+    actor,origin = _local_revision_origin(task_id,request,payload)
+    try:
+        return conversation_repo.record_input_understanding(origin['conversation_id'],actor.workspace_id,actor.member_id,
+            origin['assistant_turn_id'],None if origin['input_id']==origin['assistant_turn_id'] else origin['input_id'],
+            **{key:value for key,value in payload.items() if key not in {'assistant_turn_id','input_id'}})
+    except (ValueError,PermissionError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.post('/api/creation-tasks/{task_id}/assistant/narration-semantic-review')
+def creation_task_narration_semantic_review(task_id: str, request: Request, payload: dict):
+    from app.assistant.task_business import record_narration_semantic_review
+    actor,origin = _local_revision_origin(task_id,request,payload)
+    task = production_repo.get_creation_task(actor.workspace_id,task_id)
+    def guard(conn):
+        current = conversation_repo._task_turn_source(conn,origin['assistant_turn_id'],actor.workspace_id,actor.member_id,task_id)
+        if (current.get('input_id') or origin['assistant_turn_id']) != origin['input_id']:
+            raise ValueError('原输入已变化，不能登记旧语义比较')
+    try:
+        return record_narration_semantic_review(production_repo,task,origin,
+            {key:value for key,value in payload.items() if key!='assistant_turn_id'},write_guard=guard)
+    except (ValueError,PermissionError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/segments')
+def creation_task_segments(task_id: str, request: Request, offset: int = Query(0,ge=0), limit: int = Query(30,ge=1,le=100)):
+    ws = current_workspace_id(request)
+    try:
+        return _segment_production_use_case().list_segments(ws,task_id,_require_permit_actor(request,ws),offset=offset,limit=limit)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404,detail='当前任务或段落不存在') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/segments/{section_id}/context')
+def creation_task_segment_context(task_id: str, section_id: str, request: Request):
+    ws = current_workspace_id(request)
+    try:
+        return _segment_production_use_case().context(ws,task_id,section_id,_require_permit_actor(request,ws))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.post('/api/creation-tasks/{task_id}/segments/{section_id}/revision')
+def revise_creation_task_segment(task_id: str, section_id: str, payload: dict, request: Request):
+    from app.schemas import NarrationRevisionRequest
+    from pydantic import ValidationError
+    ws = current_workspace_id(request)
+    _require_automation_task_open(request,ws,task_id)
+    try:
+        actor,origin = _local_revision_origin(task_id,request,payload)
+        command = NarrationRevisionRequest.model_validate({key:value for key,value in payload.items() if key!='assistant_turn_id'})
+        if command.section_id != section_id:
+            raise ValueError('路由与稳定段落ID不一致')
+        review = production_repo.get_task_event(ws,command.semantic_review_ref)
+        source = review.payload.get('source',{})
+        if (source.get('conversation_id'),source.get('assistant_turn_id'),source.get('input_id') or source.get('assistant_turn_id')) != (
+                origin['conversation_id'],origin['assistant_turn_id'],origin['input_id']):
+            raise ValueError('语义回执不属于当前可信助手回合与原输入')
+        case = _segment_production_use_case()
+        def commit_guard(conn):
+            current = conversation_repo._task_turn_source(conn,origin['assistant_turn_id'],ws,actor.member_id,task_id)
+            if (current['conversation_id'],current.get('input_id') or origin['assistant_turn_id']) != (
+                    origin['conversation_id'],origin['input_id']):
+                raise ValueError('提交时原输入已变化，未登记旧修改影响')
+            case.verify_revision(ws,task_id,actor,command,connection=conn)
+            conversation_repo.record_input_business_effect(origin['assistant_turn_id'],ws,actor.member_id,
+                input_id=command.input_id,request_id=command.request_id,status='queued',
+                adoption_mode=command.adoption_mode,connection=conn)
+        return case.submit_revision(ws,task_id,actor,command,runtime=_creation_runtime(),write_guard=commit_guard)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError,ValidationError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/segment-requests/{request_id}')
+def creation_task_segment_request(task_id: str, request_id: str, request: Request):
+    ws = current_workspace_id(request)
+    try:
+        return _segment_production_use_case().read_request(ws,task_id,request_id,_require_permit_actor(request,ws))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404,detail='原修改请求不存在') from exc
+
+
+@app.post('/api/creation-tasks/{task_id}/segment-requests/{request_id}/resume')
+def resume_creation_task_segment(task_id: str, request_id: str, request: Request):
+    ws = current_workspace_id(request)
+    _require_automation_task_open(request,ws,task_id)
+    try:
+        return _segment_production_use_case().resume_request(ws,task_id,request_id,_require_permit_actor(request,ws),runtime=_creation_runtime())
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/segments/{section_id}/versions/{version}/video')
+def creation_task_segment_video(task_id: str, section_id: str, version: str, request: Request):
+    ws = current_workspace_id(request)
+    try:
+        path = _segment_production_use_case().video_path(ws,task_id,section_id,version,_require_permit_actor(request,ws))
+        return FileResponse(path,media_type='video/mp4')
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError,FileNotFoundError) as exc:
+        raise HTTPException(status_code=404,detail='此段落版本的视频不可读取') from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/budget')
+def creation_task_budget(task_id: str, request: Request):
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+    ws = current_workspace_id(request)
+    try:
+        return TaskBudgetUseCase(production_repo).read(ws,task_id,_require_permit_actor(request,ws))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+
+
+@app.post('/api/creation-tasks/{task_id}/budget/resume')
+def resume_creation_task_budget(task_id: str, request: Request, payload: dict):
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+    from app.schemas import TaskBudgetResumeRequest
+    ws = current_workspace_id(request)
+    _require_automation_task_open(request,ws,task_id)
+    try:
+        return TaskBudgetUseCase(production_repo).resume(ws,task_id,_require_permit_actor(request,ws),
+            TaskBudgetResumeRequest.model_validate(payload),execution_control=_creation_execution_control(),runtime=_creation_runtime())
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except (KeyError,ValueError,ExecutionControlRejected) as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
 def _cover_use_case(repository=None, *, budget=None):
     repo = production_repo if repository is None else repository
     return CoverUseCase(repo, artifact_store, _picture_preview_components(repo)[1],
@@ -8791,7 +9029,7 @@ def _metadata_edit_response(outcome):
             return JSONResponse(status_code=recorded['status_code'], content=recorded['response'])
         outcome = outcome.result
     return CreationTaskEditConfirmResponse(operation=asdict(outcome.operation),
-        montage=_creation_task_montage_response(outcome.montage),
+        montage=_creation_task_montage_response(outcome.montage) if outcome.montage is not None else None,
         narration=_creation_task_narration_response(outcome.task, outcome.narration)
             if outcome.narration is not None else None)
 
@@ -11133,7 +11371,7 @@ def get_unmatched_material_corrections(asset_id: str, request: Request) -> dict[
 
 @app.get(
     "/api/production/materials/search",
-    response_model=list[MaterialSegmentMatchResponse],
+    response_model=list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse,
 )
 def search_production_material_segments(
     request: Request,
@@ -11143,7 +11381,9 @@ def search_production_material_segments(
     min_duration_seconds: float | None = None,
     max_duration_seconds: float | None = None,
     limit: int = 20,
-) -> list[MaterialSegmentMatchResponse]:
+    purpose: Literal['manual','automatic'] = 'manual',
+    include_eligibility: bool = False,
+) -> list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse:
     if usage_role not in {None, "a_roll", "b_roll"}:
         raise HTTPException(status_code=422, detail="invalid material usage role")
     workspace_id = current_workspace_id(request)
@@ -11161,9 +11401,13 @@ def search_production_material_segments(
             limit=limit,
             viewer_user_id=viewer_user_id,
             local_diagnostic=local_diagnostic,
+            purpose=purpose,
+            include_eligibility=include_eligibility,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if include_eligibility:
+        return MaterialSegmentSearchResponse.model_validate({**matches,'matches':[asdict(item) for item in matches['matches']]})
     return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
 
 
@@ -11617,10 +11861,8 @@ def list_production_montage_clip_candidates(
     for asset in production_repo.list_assets(
         workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
     ):
-        if asset.review_status != "approved" or not material_allows_footage(asset):
-            continue
         for segment in asset.segments:
-            if segment.review_status != "approved" or segment.usage_role not in {"a_roll", "b_roll"}:
+            if not material_segment_eligible(asset,segment,workspace_id):
                 continue
             available = segment.end_seconds - segment.start_seconds
             slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
@@ -13483,6 +13725,8 @@ def _new_creation_execution(repository: ProductionRepository) -> CreationExecuti
 
 def _recover_creation_executions() -> None:
     _creation_execution_control().recover(device_runtime)
+    if device_runtime is not None:
+        device_runtime.registrations['creation_job'].owner.segments.recover(device_runtime)
 
 
 def _creation_runtime():
@@ -13763,7 +14007,7 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
                         production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
                             failure_reason="user_cancelled", impact="当前时间线保持不变。",
                             repair_action="查询原封面请求后重新发起。")
-                elif job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND, TASK_MEDIA_KIND}:
+                elif job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND, TASK_MEDIA_KIND, 'creation_task_segment_revision'}:
                     if job.status in {"queued", "interrupted", "running"}:
                         production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
                             failure_reason="user_cancelled", impact="目标片段和当前版本保持不变。",
@@ -13841,8 +14085,8 @@ def _build_device_components(*, repository: ProductionRepository):
     budget = replace(budget, narration=narration_budget, montage=montage_budget,
                      presenter=presenter_budget, presenter_cpu_render=presenter_cpu_render_budget)
     audio_budget = cpu_audio_budget_from_env()
-    from app.member_permits import media_script_budget_from_env
-    budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),
+    from app.member_permits import media_script_budget_from_env,native_command_budget_from_env
+    budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),native_command=native_command_budget_from_env(),
                      observation=observation_budget_from_env())
     from app.creation.task_authorization import TaskAuthorizationUseCase
     task_authorizations = TaskAuthorizationUseCase(repository, lambda identity: _verify_creation_identity(
@@ -13891,6 +14135,13 @@ def _build_device_components(*, repository: ProductionRepository):
     }
     from app.automation_runtime import restrict_automation_registration
     creation_owner=registrations['creation_job'].owner
+    segments = _segment_production_use_case(repository)
+    segments.narration_stage = registrations['creation_job'].executor.narration_stage
+    creation_owner.segments = segments
+    registrations['creation_job'].executor.segments = segments
+    native_case = _native_task_operations_case(repository,budget=budget.native_command,authorizations=task_authorizations)
+    creation_owner.native_case = native_case
+    registrations['creation_job'].executor.native_case = native_case
     registrations["creation_job"] = restrict_automation_registration(registrations["creation_job"])
     creation_registration = registrations["creation_job"]
     registrations["creation_job"] = replace(creation_registration,
@@ -14102,7 +14353,7 @@ def _task_business():
         script_capabilities=_task_script_capability_facts,tool_capabilities=_script_tool_capability_facts,
         material_facts=_material_asset_response,observation_facts=lambda task,actor:_task_observation_metadata(task,actor.user_id or actor.member_id),
         observe_output=_submit_goal_observation,request_result=_goal_request_metadata,media_result=_goal_media_metadata,
-        record_adoption=_goal_service().record_script_adoption)
+        record_adoption=_goal_service().record_script_adoption,segments=_segment_production_use_case(),native_case=_native_task_operations_case())
 
 
 def _submit_goal_observation(task,actor,values,origin,guard):
@@ -14332,7 +14583,8 @@ def _run_goal_turn(claim, fresh):
     if (claim["event"].get("status") == "confirmed" and "adopted_operation" in fresh["facts"]
             or stage == "review" and task.stage == "montage"):
         stage = task.stage
-    payload = CreationTaskAssistantTurnRequest(conversation_id=goal["conversation_id"], message=goal["original_instruction"],
+    message = claim['event']['message'] if claim['phase'] == 'input' else goal['original_instruction']
+    payload = CreationTaskAssistantTurnRequest(conversation_id=goal["conversation_id"], message=message,
         client_request_id=turn_id, expected_draft_version=0, context_stage=context["stage"],
         selected_object_refs=[ref for ref in context.get("selected_object_refs", [])
             if ref not in fresh["task_version"].get("removed_selected_refs", [])], playhead_ms=context.get("playhead_ms"))
@@ -14363,11 +14615,14 @@ def _run_goal_turn(claim, fresh):
         binding={"workspace_id":workspace_id,"member_id":goal["member_id"],"task_id":task_id,
             "conversation_id":goal["conversation_id"],"turn_id":turn_id,"goal_revision":str(goal.get("revision",0)),
             "input_id":goal.get("source_input_id"),"input_turn_id":goal.get("source_input_turn_id"),"task_version":fresh["task_version"]}
+        from app.creation.native_task_operations import NativeOperationHandler
+        native_actor,_native_task,_native_scope = business.original(goal)
+        native_handler = NativeOperationHandler(business.native_case,native_actor,None,_creation_runtime,delegate=business.native_call)
         reply, preview = run_task_turn(_workspace_settings_for(workspace_id), workspace_id=workspace_id,
             caller_user_id=goal["member_id"],
-            task_id=task_id, conversation_id=goal["conversation_id"], message=goal["original_instruction"], stage=stage,
+            task_id=task_id, conversation_id=goal["conversation_id"], message=message, stage=stage,
             selected_refs=refs, playhead_ms=context.get("playhead_ms"), on_event=on_event, turn_id=turn_id,
-            business_handler=business,source_binding=binding,input_handler=business.input_delivery(binding),
+            business_handler=business,native_handler=native_handler,source_binding=binding,input_handler=business.input_delivery(binding),
             profile_reference=fresh["facts"].get("profile_reference"), knowledge_reference=fresh["facts"].get("knowledge_reference"),
             task_version=fresh["task_version"], material_selection=material_selection,
             selected_references=[],

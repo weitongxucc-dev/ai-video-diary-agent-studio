@@ -66,7 +66,7 @@ const toolStateLabels = {running: "进行中", succeeded: "已返回", failed: "
 
 function ToolResult({ tool, reading, readingKey }: { tool: TurnBlock; reading?: ReadingState; readingKey: string }) {
   if (tool.state === "failed" && tool.failure) return <div className="assistant-tool-failure">
-    <p>{tool.failure.reason}</p>{tool.failure.repair_action ? <p>{tool.failure.repair_action}</p> : null}
+    <p>{tool.failure.reason}</p>{tool.failure.impact ? <p>{tool.failure.impact}</p> : null}{tool.failure.repair_action ? <p>{tool.failure.repair_action}</p> : null}
   </div>;
   return <div><AssistantFailureMessage reading={reading} readingKey={readingKey}
     message={tool.summary || (tool.state === "running" ? "等待此操作返回。"
@@ -516,6 +516,8 @@ export function AssistantConversationPanel({
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
   const goalProgress = assistantConversationGoal(conversation);
+  const acceptsQueuedInput = currentRunning || Boolean(conversation?.scope_kind === "task" && goalProgress
+    && ["running","waiting_result","waiting_adoption","waiting_identity","waiting_unknown"].includes(goalProgress.goal.status));
   const historyContent = JSON.stringify(turns.map(turn => [turn.id, turn.status, turn.updated_at, turn.assistant_text,
     turn.events.length, assistantTaskTurnResult(turn)?.continuation, assistantTaskTurnResult(turn)?.response?.media_job?.status,
     assistantTaskTurnResult(turn)?.response?.media_job?.resource_wait,
@@ -525,12 +527,12 @@ export function AssistantConversationPanel({
   latestHistoryContent.current = historyContent;
   const isLocalCommand = input.trim().startsWith("/");
   const commandDisabled = state.loading || !conversation || busy || currentRunning || composing;
-  const sendLabel = currentRunning && !isLocalCommand ? inputMode === "follow_up" ? "排入后续" : "追加要求" : busy && !isLocalCommand ? "正在处理" : "发送";
-  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || (currentRunning && selection !== null && selection.version === undefined) || (busy && !currentRunning)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || !configured));
+  const sendLabel = acceptsQueuedInput && !isLocalCommand ? inputMode === "follow_up" ? "排入后续" : "追加要求" : busy && !isLocalCommand ? "正在处理" : "发送";
+  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || (acceptsQueuedInput && selection !== null && selection.version === undefined) || (busy && !acceptsQueuedInput)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || !configured));
   const sendReason = state.loading || !conversation ? "正在恢复对话"
     : composing ? "中文组合输入中，请先完成输入"
     : !input.trim() ? "先填写对话要求"
-      : currentRunning ? "追加要求在安全点核验后处理；已提交动作不会追改"
+      : acceptsQueuedInput ? "要求将持久保存，等待 Agent 处理；已提交动作不会追改"
         : busy ? "本轮正在处理，请稍后再发送"
           : isLocalCommand ? "Enter 执行本地会话操作；无效命令不会发送给模型"
             : referenceStatus.pending ? "正在保存或核验引用"
@@ -625,7 +627,7 @@ export function AssistantConversationPanel({
     const text = (commandText ?? input).trim();
     if (!text || composing) return;
     const localCommand = text.startsWith("/");
-    if (state.loading || !conversation || sendingInput || (busy && !currentRunning)) { setError(sendReason); return; }
+    if (state.loading || !conversation || sendingInput || (busy && !acceptsQueuedInput)) { setError(sendReason); return; }
     if (!localCommand && !configured) { setError(sendReason); return; }
     if (localCommand && (busy || currentRunning)) { setError(localCommand ? "本轮运行中，可继续编辑草稿；停止后再执行。" : sendReason); return; }
     if (localCommand) {
@@ -663,7 +665,7 @@ export function AssistantConversationPanel({
     }
     setError(null);
     try {
-      if (currentRunning) {
+      if (acceptsQueuedInput) {
         if (selection?.version === undefined) throw new Error("引用版本尚未恢复，请稍后发送。");
         setSendingInput(true);
         await state.sendInput(text,inputMode,selection.version);
@@ -721,8 +723,11 @@ export function AssistantConversationPanel({
     </div>
     {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
     {turns.flatMap(turn=>turn.events.filter(event=>event.type === "assistant_input")).map(item=> item.type === "assistant_input" ? <div className="assistant-input-receipt" key={item.input_id}>
-      <p>{item.message}</p><span>{{accepted:"已接收，等待安全点",consumed:"已生效，正在处理",completed:"本次要求已处理",withdrawn:"已撤回",rejected:"未执行",interrupted:"处理已中断"}[item.status]}</span>
-      {item.reason ? <p>{item.reason}</p> : null}{item.status === "accepted" ? <Button variant="ghost" type="button" onClick={()=>void state.withdrawInput(item.input_id).catch(cause=>setError(cause.message))}>撤回</Button> : null}
+      <p>{item.message}</p><span>{{accepted:"已接收，等待 Agent 处理",consumed:"Agent 正在处理",completed:"Agent 已处理此输入",withdrawn:"已撤回",rejected:"未执行",interrupted:"处理已中断"}[item.status]}</span>
+      {item.understanding ? <p>{{query:"查询",clarification:"澄清",candidate:"尝试候选",effective_modification:"修改要求",adoption:"采用要求",independent_goal:"独立目标"}[item.understanding.kind]}：{item.understanding.summary}</p> : null}
+      {item.understanding && !item.business_effect && item.understanding.kind === "effective_modification" ? <p>已理解要求，尚未收到业务生效回执。</p> : null}
+      {item.business_effect ? <p>修改回执：{item.business_effect.status}</p> : null}
+      {item.reason && item.reason !== "waiting_agent" ? <p>{item.reason}</p> : null}{item.status === "accepted" ? <Button variant="ghost" type="button" onClick={()=>void state.withdrawInput(item.input_id).catch(cause=>setError(cause.message))}>撤回</Button> : null}
     </div> : null)}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">
       {selection ? <ReferenceChips items={selection.items} onRemove={item => { selection.remove(item); focus?.focus(); }}/> : null}
@@ -733,7 +738,7 @@ export function AssistantConversationPanel({
         {busy || currentRunning ? <p>本轮运行中，可以编辑草稿，暂不能执行命令。</p> : null}
       </div> : null}
       <InputGroupTextarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => onInput(event.target.value)} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={2} />
-      {currentRunning ? <label className="assistant-input-mode">追加要求<select aria-label="追加要求处理方式" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点调整当前目标</option><option value="follow_up">本轮完成后处理</option></select></label> : null}
+      {acceptsQueuedInput ? <label className="assistant-input-mode">追加要求<select aria-label="追加要求处理方式" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点调整当前目标</option><option value="follow_up">本轮完成后处理</option></select></label> : null}
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>

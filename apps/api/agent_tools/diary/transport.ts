@@ -17,6 +17,8 @@ export type ScriptReviewIssue = ScriptCandidateLocation & {
 
 export type ScriptDraftFailure = Partial<ScriptCandidateLocation> & {
   error: "script_review_invalid" | "script_fact_unsupported" | "script_goal_conflict";
+  reason?: string;
+  repair_action?: string;
   reason_code: string;
   section_index: number | null;
   retryable: boolean;
@@ -83,11 +85,11 @@ export function safeScriptReviewIssues(value: any, secrets: string[] = []): Scri
 // Only business locators and finite diagnostics cross into model input/events.
 export function safeBusinessFailure(value: any, secrets: string[] = []): Partial<BusinessFailure> {
   const safe: Record<string, string | number | boolean | null | ScriptReviewIssue[]> = {};
-  for (const key of ["reason", "repair_action"]) {
+  for (const key of ["reason", "impact", "repair_action"]) {
     const text = safeFailureText(value?.[key], secrets);
     if (text) safe[key] = text;
   }
-  for (const key of ["error", "code", "stage", "object_type", "query_tool", "reason_code"])
+  for (const key of ["error", "code", "stage", "object_type", "query_tool", "reason_code", "failure_category"])
     if (typeof value?.[key] === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(value[key])) safe[key] = value[key];
   for (const key of ["request_id", "window_id", "current_window_id", "plan_id", "task_id", "object_id", "job_id"])
     if (typeof value?.[key] === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value[key])
@@ -125,6 +127,8 @@ function scriptDraftFailure(detail: any, secrets: string[]): ScriptDraftFailure 
     : reason === (error === "script_fact_unsupported" ? "unsupported_fact" : "goal_conflict");
   const issues = safeScriptReviewIssues(detail, secrets);
   return {error, reason_code: validReason ? reason : "unavailable",
+    ...(safeFailureText(detail.reason, secrets) ? {reason: safeFailureText(detail.reason, secrets)} : {}),
+    ...(safeFailureText(detail.repair_action, secrets) ? {repair_action: safeFailureText(detail.repair_action, secrets)} : {}),
     section_index: Number.isInteger(detail.section_index) && detail.section_index >= 1 && detail.section_index <= 20
       ? detail.section_index : null,
     retryable: detail.retryable === true, ...safeScriptCandidateLocation(detail), ...(issues ? {review_issues: issues} : {})};
@@ -166,8 +170,9 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (method === 'GET') {
     if (pathname === '/api/assistant/memory' && !search) return result('read_creator_memory');
     if (pathname === '/api/media-script-tools/capabilities' && !search) return result('read_media_script_tool_capabilities');
-    if (pathname === '/api/production/materials/search' && only('q', 'limit'))
-      return result('search_task_materials', {query: query.get('q') || '', limit: Number(query.get('limit') || 8)});
+    if (pathname === '/api/production/materials/search' && only('q', 'limit', 'purpose', 'include_eligibility'))
+      return result('search_task_materials', {query: query.get('q') || '', limit: Number(query.get('limit') || 8),
+        purpose: query.get('purpose') || 'manual', include_eligibility: query.get('include_eligibility') === 'true'});
     const material = pathname.match(/^\/api\/production\/materials\/([^/]+)$/);
     if (material && !search) return result('read_task_material', {asset_id: decodeURIComponent(material[1])});
   }
@@ -187,6 +192,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       '/observations': 'read_task_observations',
     };
     if (reads[suffix] && !search) return result(reads[suffix], args);
+    const segmentContext=suffix.match(/^\/segments\/([^/]+)\/context$/);
+    if (segmentContext && !search) return result('read_narration_segment_context',{...args,segment_id:decodeURIComponent(segmentContext[1])});
+    const segmentRequest=suffix.match(/^\/segment-requests\/([^/]+)$/);
+    if (segmentRequest && !search) return result('read_narration_revision',{...args,request_id:decodeURIComponent(segmentRequest[1])});
     const observationRequest = suffix.match(/^\/assistant\/edit-requests\/([^/]+)$/);
     if (observationRequest && only('phase') && query.get('phase') === 'observation')
       return result('read_task_observation_request', {...args, request_id: decodeURIComponent(observationRequest[1])});
@@ -199,12 +208,16 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
   if (search) return null;
   const writes: Record<string, string> = {
+    '/assistant/input-understanding':'record_input_understanding',
+    '/assistant/narration-semantic-review':'record_narration_semantic_review',
     '/assistant/script-draft': 'save_assistant_script_draft',
     '/execution/cancel': 'cancel_creation_execution',
     '/topics/generate': 'generate_creation_task_topics',
     '/observations': 'observe_task_output',
   };
   if (writes[suffix]) return result(writes[suffix], {...args, payload});
+  const segmentRevision=suffix.match(/^\/segments\/([^/]+)\/revision$/);
+  if (segmentRevision) return result('revise_narration_segment',{...args,segment_id:decodeURIComponent(segmentRevision[1]),payload});
   const script = suffix.match(/^\/scripts\/([^/]+)\/confirm$/);
   if (script) return result('confirm_creation_task_script', {...args, script_id: decodeURIComponent(script[1]), payload});
   const topic = suffix.match(/^\/topics\/([^/]+)\/confirm$/);
@@ -317,7 +330,9 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
         const effect = safe.submission_effect ?? (status < 500 || scriptFailure ? "rejected" : "unknown");
         const failure: BusinessFailure = {...locators, ...safe, error: safe.error || safe.code || `http_${status}`,
           stage: safe.stage || "business_request", submission_effect: effect,
-          reason: scriptFailure ? "文案审核未通过，草稿未保存。" : safe.reason || `业务操作失败（${status}）。`,
+          ...(scriptFailure ? {failure_category: scriptFailure.error === "script_review_invalid" ? "protocol_invalid" : "content_rejected"} : {}),
+          reason: safe.reason || (scriptFailure?.error === "script_review_invalid" ? "核查报告无效，尚不能判定正文是否通过；本次送审稿未保存。"
+            : scriptFailure ? "本次送审稿未通过内容核查，未保存。" : `业务操作失败（${status}）。`),
           repair_action: effect === "unknown" ? ("先查询原请求及当前对象，确定未写入后才能修订并再次提交；不要盲重试。"
             + (safe.repair_action ? ` 确定未写入后再处理：${safe.repair_action}` : "")).slice(0, 500)
             : safe.repair_action || "读取当前对象和原请求，按拒绝原因修订后再提交。"};

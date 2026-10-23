@@ -12,9 +12,12 @@ export function TaskIssue({ stage, reason, impact, repair, code, label, children
     label?: string;
     children?: ReactNode;
 }) {
+    const reviewFailure = ["script_review_invalid", "script_fact_unsupported", "script_goal_conflict"].includes(code ?? "");
     return <section className={styles.blocker} role="alert" aria-label={label}>
     <AlertCircle size={16}/><div className={styles.issueBody}>
-      <strong>{creationTaskFailureReason(reason ?? impact ?? null, stage) ?? "这次操作没有完成"}</strong>
+      <strong>{(reviewFailure ? reason : creationTaskFailureReason(reason ?? impact ?? null, stage)) ?? "这次操作没有完成"}</strong>
+      {reviewFailure && impact ? <p>{impact}</p> : null}
+      {reviewFailure && repair ? <p>{repair}</p> : null}
       {children}
       <details className={styles.traceDetails}><summary>诊断详情</summary>
         {reason ? <p>原始原因：{reason}</p> : null}

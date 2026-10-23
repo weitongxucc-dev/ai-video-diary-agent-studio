@@ -15,13 +15,20 @@ def _now():
 def settle_inputs(events, reason, *, adopted_input_id=None):
     for item in events:
         if item.get("type") == "assistant_input" and item["status"] in {"accepted", "consumed"}:
+            if item["status"] == "accepted":
+                # Receipt belongs to the conversation, not the lifetime of a
+                # model turn. It remains withdrawable until a safe point claims it.
+                item.update(reason="waiting_agent", updated_at=_now())
+                continue
+            if item.get('business_effect') or (item.get('submission') or {}).get('status') in {'submitted','result_unknown'}:
+                item.update(reason='read_original_input_request',updated_at=_now())
+                continue
             if item['status']=='consumed' and item['input_id']==adopted_input_id:
                 # The owner already adopted/sealed this goal in its writer.
                 # Ending its model turn does not withdraw that authority.
                 item.update(reason='adopted_goal_turn_interrupted',updated_at=_now())
                 continue
-            item.update(status="rejected" if item["status"] == "accepted" else "interrupted",
-                        reason=reason, updated_at=_now())
+            item.update(status="interrupted", reason=reason, updated_at=_now())
     return events
 
 
@@ -47,8 +54,8 @@ def enqueue_input(conn, *, conversation_id, workspace_id, member_id, target_turn
                 raise AssistantInputConflict("此追加请求身份已用于不同文字、目标或版本。")
             return previous, False
     turn = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=? AND conversation_id=?", (target_turn_id, conversation_id)).fetchone()
-    if turn is None or turn["status"] != "running":
-        raise AssistantInputConflict("目标轮次已结束，请按新一轮发送；草稿仍保留。")
+    if turn is None:
+        raise AssistantInputConflict("目标轮次不可用；草稿仍保留。")
     if chat["draft_version"] != expected_draft_version or chat["draft_text"] != message:
         raise AssistantInputConflict("追加输入草稿已变化，请重新读取后发送。")
     selected = json.loads(chat["selected_reference_json"]) if chat["selected_reference_json"] else None
@@ -56,7 +63,8 @@ def enqueue_input(conn, *, conversation_id, workspace_id, member_id, target_turn
         raise AssistantInputConflict("追加输入引用已变化，请重新选择；没有改绑目标。")
     now = _now()
     item = {"type": "assistant_input", "input_id": client_request_id, **binding,
-            "status": "accepted", "created_at": now, "updated_at": now, "reason": None}
+            "status": "accepted", "understanding": None, "business_effect": None,
+            "created_at": now, "updated_at": now, "reason": "waiting_agent"}
     events = json.loads(turn["events_json"])
     events.append(item)
     conn.execute("UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?", (json.dumps(events, ensure_ascii=False), now, target_turn_id))
@@ -76,6 +84,25 @@ def active_input(events: list[dict]) -> dict | None:
     if latest and latest["status"] != "interrupted":
         return latest
     return None
+
+
+def settle_delivered_input(conn, turn_id, status):
+    """The receipt stays on its original turn when Pi runs a later safe point."""
+    rows=conn.execute("SELECT DISTINCT t.id,t.events_json FROM assistant_conversation_turns t "
+        "JOIN json_each(t.events_json) e WHERE json_extract(e.value,'$.type')='assistant_input' "
+        "AND json_extract(e.value,'$.delivery_turn_id')=? AND json_extract(e.value,'$.status')='consumed'",(turn_id,)).fetchall()
+    for row in rows:
+        events=json.loads(row['events_json'])
+        for item in events:
+            if item.get('type')=='assistant_input' and item.get('delivery_turn_id')==turn_id and item['status']=='consumed':
+                if status!='completed' and (item.get('business_effect') or
+                        (item.get('submission') or {}).get('status') in {'submitted','result_unknown'}):
+                    item.update(reason='read_original_input_request',updated_at=_now())
+                    continue
+                item.update(status='completed' if status=='completed' else 'interrupted',updated_at=_now(),
+                    reason=None if status=='completed' else 'input_runner_interrupted')
+        conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+            (json.dumps(events,ensure_ascii=False),_now(),row['id']))
 
 
 def transition_input(conn, *, conversation_id, workspace_id, member_id, input_id, status, reason=None):

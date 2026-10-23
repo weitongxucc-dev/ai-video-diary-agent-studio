@@ -331,18 +331,242 @@ class ConversationRepository:
         with self._connect() as conn:
             return list_inputs(conn, conversation_id, workspace_id, member_id)
 
+    def pending_input_candidates(self, *, limit=8):
+        """Inputs on finished turns, ordered by their durable receive order."""
+        with self._connect() as conn:
+            rows=conn.execute("SELECT t.id,t.conversation_id,c.workspace_id,c.member_id,e.value "
+                "FROM assistant_conversation_turns t JOIN assistant_conversations c ON c.id=t.conversation_id "
+                "JOIN json_each(t.events_json) e WHERE t.status!='running' "
+                "AND json_extract(e.value,'$.type')='assistant_input' AND (json_extract(e.value,'$.status')='accepted' "
+                "OR (json_extract(e.value,'$.status')='consumed' AND json_extract(e.value,'$.reason')='read_original_input_request')) "
+                "AND NOT EXISTS (SELECT 1 FROM assistant_conversation_turns active "
+                "WHERE active.conversation_id=t.conversation_id AND active.status='running') "
+                "ORDER BY t.created_at,t.sequence,e.key LIMIT ?",(limit,)).fetchall()
+            candidates=[]
+            for row in rows:
+                root=self._goal_root(conn,row['id'])
+                if root is not None:
+                    item=json.loads(row['value'])
+                    if item['status']=='consumed' and root['goal'].get('source_input_id')!=item['input_id']: continue
+                    candidates.append({'root':root,'source_turn_id':row['id'],'input':item,
+                        'reconcile_only':item['status']=='consumed',
+                        'event':{'type':'assistant_input_ready','event_id':'input:'+item['input_id'],
+                            'task_id':root['goal']['task_id'],'phase':'input','status':'received'}})
+            return candidates
+
+    def claim_pending_goal_input(self, candidate, *, validate, seal):
+        """Claim a received input once in the existing goal/turn transaction."""
+        from app.assistant.inputs import AssistantInputConflict
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            root=self._goal_root(conn,candidate['source_turn_id'])
+            if root is None or not self._goal_revision_matches(root,candidate['root']['goal']):
+                return None
+            if not self._goal_origin_current(conn,root): return None
+            if conn.execute("SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running'",
+                    (root['conversation_id'],)).fetchone(): return None
+            row=conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?',
+                (candidate['source_turn_id'],)).fetchone()
+            events=json.loads(row['events_json'])
+            item=next((e for e in events if e.get('type')=='assistant_input' and e['input_id']==candidate['input']['input_id']),None)
+            if item is None or item['status']!='accepted': return None
+            context=validate(conn,item,root['goal'])
+            turn_id=str(uuid5(NAMESPACE_URL,'yaohe-input:'+root['conversation_id']+':'+item['input_id']))
+            now=_now();item.update(status='consumed',reason=None,delivery_turn_id=turn_id,updated_at=now)
+            conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                (json.dumps(events,ensure_ascii=False),now,candidate['source_turn_id']))
+            goal={**root['goal'],'revision':root['goal'].get('revision',0)+1,'source_input_id':item['input_id'],
+                'source_input_turn_id':candidate['source_turn_id'],'current_turn_id':turn_id,'status':'running',
+                'waiting_reason':'input_understanding_pending','request_context':context,'target_snapshot':context['target_snapshot'],
+                'input_resume':{key:root['goal'].get(key) for key in ('status','waiting_reason','unfinished_steps','next_checkpoint')},
+                'retained_business_sources':[*root['goal'].get('retained_business_sources',[]),
+                    {'input_id':root['goal'].get('source_input_id'),'input_turn_id':root['goal'].get('source_input_turn_id')}],
+                'authorization_inputs':[*root['goal'].get('authorization_inputs',[]),
+                    {'turn_id':candidate['source_turn_id'],'input_id':item['input_id']}], 'round_count':0}
+            context={**context,'source_kind':'business_event','original_turn_id':root['id'],
+                'source_turn_id':candidate['source_turn_id'],'business_event_id':candidate['event']['event_id'],
+                'source_input_id':item['input_id'],'source_input_turn_id':candidate['source_turn_id'],
+                'goal_revision':goal['revision'],'goal_instruction':goal['original_instruction'],'input_instruction':item['message']}
+            sequence=conn.execute('SELECT COALESCE(MAX(sequence),0)+1 FROM assistant_conversation_turns WHERE conversation_id=?',
+                (root['conversation_id'],)).fetchone()[0]
+            event={'type':'goal_continuation_started','source_kind':'user_input','original_turn_id':root['id'],
+                'source_turn_id':candidate['source_turn_id'],'event_id':candidate['event']['event_id']}
+            conn.execute("INSERT INTO assistant_conversation_turns "
+                "(id,conversation_id,sequence,user_message,assistant_text,status,events_json,result_json,created_at,updated_at) "
+                "VALUES(?,?,?,'','','running',?,NULL,?,?)",(turn_id,root['conversation_id'],sequence,json.dumps([event]),now,now))
+            conn.execute("INSERT INTO assistant_conversation_request_receipts "
+                "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
+                "expected_draft_version,request_context_json,outcome,turn_id,created_at) VALUES(?,?,?,?,?,?,'',0,?,'consumed',?,?)",
+                (turn_id,root['conversation_id'],root['workspace_id'],root['member_id'],'task',goal['task_id'],
+                    json.dumps(context,ensure_ascii=False),turn_id,now))
+            self._write_goal(conn,root,goal)
+            seal(conn,root['goal'],goal,context)
+            return {'turn_id':turn_id,'conversation_id':root['conversation_id'],'goal':goal,'request_context':context,
+                'event':{**candidate['event'],'input_id':item['input_id'],'message':item['message']},'source_turn_id':candidate['source_turn_id']}
+
+    def settle_input_round(self, claim):
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            root=self._goal_root(conn,claim['turn_id'])
+            if root is None or root['goal']['current_turn_id']!=claim['turn_id']: return None
+            goal=dict(root['goal']);resume=goal.pop('input_resume',None)
+            if resume is None: return goal
+            from app.assistant.inputs import list_inputs
+            current=next((item for item in list_inputs(conn,root['conversation_id'],root['workspace_id'],root['member_id'])
+                if item['input_id']==goal.get('source_input_id')),None)
+            if current and current.get('reason')=='read_original_input_request':
+                goal.update(status='waiting_unknown',waiting_reason='read_original_input_request',input_resume=resume,
+                    unfinished_steps=['read_original_request_result'])
+            elif goal.get('requirement_revision',0)!=claim['goal'].get('requirement_revision',0):
+                goal.update(status='waiting_result',waiting_reason='await_local_modification')
+            else:
+                goal.update(resume)
+            self._write_goal(conn,root,goal)
+            return goal
+
     def transition_input(self, conversation_id, workspace_id, member_id, input_id, status, *, reason=None):
         from app.assistant.inputs import transition_input
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             item = transition_input(conn, conversation_id=conversation_id, workspace_id=workspace_id,
                                     member_id=member_id, input_id=input_id, status=status, reason=reason)
-            if status == "consumed":
-                root = self._goal_root(conn, item["target_turn_id"])
-                if root is not None and root["goal"].get("source_input_id") != input_id:
-                    self._write_goal(conn, root, {**root["goal"], "status":"invalidated",
-                        "waiting_reason":"consumed_input_superseded_business_goal", "unfinished_steps":[]})
             return item
+
+    def record_input_understanding(self, conversation_id, workspace_id, member_id, turn_id, input_id, *,
+                                   kind, summary, target_refs):
+        """Persist Pi's interpretation; this is not a business change receipt."""
+        from app.assistant.inputs import AssistantInputConflict
+        kinds={"query","clarification","candidate","effective_modification","adoption","independent_goal"}
+        if kind not in kinds or not isinstance(summary,str) or not summary.strip():
+            raise ValueError("输入理解须有明确分类和依据")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row=conn.execute("SELECT t.* FROM assistant_conversation_turns t JOIN assistant_conversations c "
+                "ON c.id=t.conversation_id WHERE t.id=? AND c.id=? AND c.workspace_id=? AND c.member_id=?",
+                (turn_id,conversation_id,workspace_id,member_id)).fetchone()
+            if row is None or row['status']!='running':
+                raise AssistantInputConflict("输入理解不属于当前运行回合")
+            events=json.loads(row['events_json'])
+            understanding={'kind':kind,'summary':summary,'target_refs':target_refs}
+            if input_id is None:
+                previous=next((e for e in events if e.get('type')=='assistant_input_understanding'),None)
+                event={'type':'assistant_input_understanding','input_id':None,**understanding}
+                if previous is not None and previous!=event:
+                    raise AssistantInputConflict("当前原输入已有不同理解，请先核对原回执")
+                if previous is None: events.append(event)
+            else:
+                origin=self._task_turn_source(conn,turn_id,workspace_id,member_id,
+                    json.loads(conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts "
+                        "WHERE turn_id=? AND outcome='consumed'",(turn_id,)).fetchone()[0])['task_id'])
+                if origin.get('input_id')!=input_id:
+                    raise AssistantInputConflict('输入理解不能改绑原输入')
+                owner_turn=origin.get('input_turn_id',turn_id)
+                if owner_turn!=turn_id:
+                    events=json.loads(conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?',
+                        (owner_turn,)).fetchone()[0])
+                item=next((e for e in events if e.get('type')=='assistant_input' and e['input_id']==input_id),None)
+                if item is None or item['status'] not in {'consumed','completed'}:
+                    raise AssistantInputConflict("只记录当前已消费输入的理解")
+                if item.get('understanding') is not None and item['understanding']!=understanding:
+                    raise AssistantInputConflict("此输入已有不同理解，请先核对原回执")
+                item.update(understanding=understanding,updated_at=_now())
+            conn.execute("UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?",
+                (json.dumps(events,ensure_ascii=False),_now(),owner_turn if input_id else turn_id))
+            return {'input_id':input_id,**understanding,'business_effect':None}
+
+    def record_input_submission(self, turn_id, workspace_id, member_id, *, input_id, request_id, section_id):
+        """Retain the original write identity before entering the revision owner."""
+        if input_id==turn_id: return
+        from app.assistant.inputs import AssistantInputConflict
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            context=json.loads(conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts "
+                "WHERE turn_id=? AND workspace_id=? AND member_id=? AND outcome='consumed'",
+                (turn_id,workspace_id,member_id)).fetchone()[0])
+            origin=self._task_turn_source(conn,turn_id,workspace_id,member_id,context['task_id'])
+            if origin.get('input_id')!=input_id: raise AssistantInputConflict('修改提交不能切换原输入')
+            row=conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?',(origin['input_turn_id'],)).fetchone()
+            events=json.loads(row[0]);item=next(e for e in events if e.get('type')=='assistant_input' and e['input_id']==input_id)
+            submission={'request_id':request_id,'section_id':section_id,'status':'result_unknown'}
+            if item.get('submission') is not None:
+                if any(item['submission'][key]!=submission[key] for key in ('request_id','section_id')):
+                    raise AssistantInputConflict('原修改请求尚待核对，不能换身份提交')
+                return
+            item.update(submission=submission,delivery_turn_id=turn_id,updated_at=_now())
+            conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                (json.dumps(events,ensure_ascii=False),_now(),origin['input_turn_id']))
+
+    def reconcile_input_submission(self, candidate, receipt):
+        """Project only a read of the original request, never replay the input."""
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            root=self._goal_root(conn,candidate['source_turn_id'])
+            if (not self._goal_revision_matches(root,candidate['root']['goal']) or not self._goal_origin_current(conn,root)
+                    or root['goal'].get('source_input_id')!=candidate['input']['input_id']): return False
+            owner=conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?',(candidate['source_turn_id'],)).fetchone()
+            events=json.loads(owner[0]);item=next(e for e in events if e.get('type')=='assistant_input' and e['input_id']==candidate['input']['input_id'])
+            if item['status']!='consumed' or item.get('reason')!='read_original_input_request': return False
+            original=item.get('submission') or item['business_effect']
+            if (receipt['request_id']!=original['request_id'] or receipt.get('input_id')!=item['input_id']
+                    or receipt.get('task_id')!=root['goal']['task_id']): raise ValueError('对账结果不属于原修改请求')
+            if receipt['status']=='result_unknown': return False
+            if not receipt.get('job_id'): raise ValueError('原修改回执没有真实作业身份')
+            terminal=receipt['status'] in {'succeeded','failed','cancelled','interrupted'}
+            item.update(status='completed' if terminal else 'consumed',reason=None if terminal else 'read_original_input_request',
+                business_effect={'request_id':receipt['request_id'],'status':receipt['status']},updated_at=_now())
+            conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                (json.dumps(events,ensure_ascii=False),_now(),candidate['source_turn_id']))
+            if terminal:
+                delivery=conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?',(item['delivery_turn_id'],)).fetchone()
+                delivered=json.loads(delivery[0]);event_id='input-reconciled:'+item['input_id']+':'+receipt['job_id']
+                if not any(e.get('event_id')==event_id for e in delivered):
+                    delivered.append({'type':'business_result','event_id':event_id,'task_id':receipt['task_id'],
+                        'input_id':item['input_id'],'request_id':receipt['request_id'],'job_id':receipt['job_id'],
+                        'phase':'segment_revision','status':receipt['status'],'original_request':receipt})
+                    conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                        (json.dumps(delivered,ensure_ascii=False),_now(),item['delivery_turn_id']))
+            self._write_goal(conn,root,{**root['goal'],'status':'waiting_result','waiting_reason':'read_original_request_result',
+                'unfinished_steps':['evaluate_actual_result','complete_original_instruction']})
+            return True
+
+    def record_input_business_effect(self, turn_id, workspace_id, member_id, *, input_id,
+                                     request_id, status, adoption_mode, connection):
+        """Join a real modification commit in its owner's transaction."""
+        from app.assistant.inputs import list_inputs, AssistantInputConflict
+        conn=connection
+        root=self._goal_root(conn,turn_id)
+        row=conn.execute("SELECT t.conversation_id,r.request_context_json FROM assistant_conversation_turns t "
+            "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id WHERE t.id=? "
+            "AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",(turn_id,workspace_id,member_id)).fetchone()
+        if row is None: raise AssistantInputConflict('修改回执不属于原成员与回合')
+        if input_id==turn_id: input_id=None
+        if input_id is not None:
+            item=next((e for e in list_inputs(conn,row['conversation_id'],workspace_id,member_id) if e['input_id']==input_id),None)
+            if item is None or item['status'] not in {'consumed','completed'}:
+                raise AssistantInputConflict('修改未绑定已消费原输入')
+            kind=(item.get('understanding') or {}).get('kind')
+            if kind not in ({'candidate'} if adoption_mode=='candidate' else {'effective_modification','adoption'}):
+                raise AssistantInputConflict('修改的采用方式与输入理解不一致')
+            effect={'request_id':request_id,'status':status}
+            if item.get('business_effect') is not None:
+                if item['business_effect']!=effect: raise AssistantInputConflict('原输入已有其他修改回执')
+                return item
+            owner=conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?',(item['target_turn_id'],)).fetchone()
+            events=json.loads(owner[0]);saved=next(e for e in events if e.get('type')=='assistant_input' and e['input_id']==input_id)
+            saved.update(business_effect=effect,updated_at=_now())
+            if saved.get('submission'):
+                saved['submission']={**saved['submission'],'status':'submitted'}
+            conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                (json.dumps(events,ensure_ascii=False),_now(),item['target_turn_id']))
+        if root is not None and adoption_mode=='apply':
+            goal={**root['goal'],'requirement_revision':root['goal'].get('requirement_revision',0)+1,
+                'retained_business_sources':[],'waiting_reason':'local_modification_submitted',
+                'latest_modification_request_id':request_id,'unfinished_steps':['await_local_modification','complete_original_instruction']}
+            if input_id is not None:
+                goal['original_instruction']+='\n\n已提交的后续修改要求：\n'+item['message']
+            for key in ('completed_output_checkpoint','production_result'): goal.pop(key,None)
+            self._write_goal(conn,root,goal)
+        return {'request_id':request_id,'status':status}
 
     def consume_task_goal_input(self, conversation_id, workspace_id, member_id, input_id, *,
                                 expected_binding, validate, seal):
@@ -365,21 +589,20 @@ class ConversationRepository:
             context=validate(conn,item,old_goal)
             item=transition_input(conn,conversation_id=conversation_id,workspace_id=workspace_id,member_id=member_id,
                 input_id=input_id,status='consumed')
-            instruction=old_goal['original_instruction']+'\n\n后续用户要求（冲突时以后续为准）：\n'+item['message']
             goal={**old_goal,'revision':old_goal.get('revision',0)+1,'source_input_id':input_id,
-                'source_input_turn_id':item['target_turn_id'],'original_instruction':instruction,
+                'source_input_turn_id':item['target_turn_id'],
                 'request_context':context,'target_snapshot':context['target_snapshot'],
-                'status':'running','waiting_reason':'consumed_task_refinement',
+                'status':'running','waiting_reason':'input_understanding_pending',
+                'retained_business_sources':[*old_goal.get('retained_business_sources',[]),
+                    {'input_id':old_goal.get('source_input_id'),'input_turn_id':old_goal.get('source_input_turn_id')}],
                 'authorization_inputs':[*old_goal.get('authorization_inputs',[]),{'turn_id':item['target_turn_id'],'input_id':input_id}],
                 'unfinished_steps':['evaluate_consumed_input','complete_original_instruction']}
-            for key in ('completed_output_checkpoint','production_result'):
-                goal.pop(key,None)
             receipt=conn.execute("SELECT request_context_json FROM assistant_conversation_request_receipts "
                 "WHERE turn_id=? AND workspace_id=? AND member_id=? AND outcome='consumed'",
                 (item['target_turn_id'],workspace_id,member_id)).fetchone()
             protocol=json.loads(receipt['request_context_json'])
             protocol.update(goal_revision=goal['revision'],source_input_id=input_id,source_input_turn_id=item['target_turn_id'],
-                goal_instruction=instruction,target_snapshot=context['target_snapshot'])
+                goal_instruction=old_goal['original_instruction'],target_snapshot=context['target_snapshot'])
             conn.execute("UPDATE assistant_conversation_request_receipts SET request_context_json=? WHERE turn_id=? AND outcome='consumed'",
                 (json.dumps(protocol,ensure_ascii=False),item['target_turn_id']))
             self._write_goal(conn,root,goal)
@@ -613,7 +836,7 @@ class ConversationRepository:
                     or context.get("goal_revision",0) != root["goal"].get("revision",0)
                     or context.get("source_input_id") != root["goal"].get("source_input_id")):
                 raise ValueError("原创作目标已停止，不能沿后台回合提交修改")
-            original = root["goal"]["original_instruction"]
+            original = context.get('input_instruction') or root["goal"]["original_instruction"]
         return {"context": context, "raw_command": original, "conversation_id": row["conversation_id"],
                 **({"input_id":context["source_input_id"],"input_turn_id":context["source_input_turn_id"]}
                    if context.get("source_input_id") else {})}
@@ -1185,6 +1408,11 @@ class ConversationRepository:
                 root = self._goal_root(conn, root_row["id"])
                 if root is None:
                     continue
+                if conn.execute("SELECT 1 FROM assistant_conversation_turns WHERE id=? AND status='running'",
+                        (root['goal']['current_turn_id'],)).fetchone():
+                    # Keep receipts durable, but let the current model turn
+                    # retain its running authority until its safe boundary.
+                    continue
                 turns = conn.execute("SELECT t.id,t.status,t.events_json,t.result_json,r.request_context_json "
                                      "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
                                      "WHERE t.conversation_id=? AND t.sequence>=? ORDER BY t.sequence",
@@ -1208,7 +1436,9 @@ class ConversationRepository:
                         if (event.get("type") == "business_result" and event.get("event_id")
                                 and event["event_id"] not in root["goal"]["handled_event_ids"]
                                 and self._business_effect_key(event) not in handled
-                                and event.get("input_id") == root["goal"].get("source_input_id")):
+                                and (event.get("input_id") == root["goal"].get("source_input_id")
+                                    or any(event.get('input_id')==source['input_id']
+                                        for source in root['goal'].get('retained_business_sources',[])))):
                             candidates.append({"root": root, "source_turn_id": turn["id"], "event": event})
                             break
                     if candidates and candidates[-1]["root"]["id"] == root["id"]:
@@ -1261,7 +1491,9 @@ class ConversationRepository:
                 return None
             goal = root["goal"]
             expected=candidate["root"]["goal"]
-            if (goal.get("revision",0),goal.get("source_input_id")) != (expected.get("revision",0),expected.get("source_input_id")) or event.get("input_id") != goal.get("source_input_id"):
+            if ((goal.get("revision",0),goal.get("source_input_id")) != (expected.get("revision",0),expected.get("source_input_id"))
+                    or event.get("input_id") != goal.get("source_input_id") and not any(
+                        event.get('input_id')==source['input_id'] for source in goal.get('retained_business_sources',[]))):
                 return None
             if event["event_id"] in goal["handled_event_ids"]:
                 return None
@@ -1602,6 +1834,8 @@ class ConversationRepository:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
+            from app.assistant.inputs import settle_delivered_input
+            settle_delivered_input(conn,turn_id,status)
             if completed_input_id is not None:
                 from app.assistant.inputs import transition_input
                 root=self._goal_root(conn,turn_id)
@@ -1644,7 +1878,8 @@ class ConversationRepository:
             rows = conn.execute("SELECT t.id,t.result_json,t.events_json,r.request_context_json FROM assistant_conversation_turns t "
                 "LEFT JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id AND r.outcome='consumed' WHERE t.status='running'").fetchall()
             for row in rows:
-                from app.assistant.inputs import settle_inputs
+                from app.assistant.inputs import settle_inputs, settle_delivered_input
+                settle_delivered_input(conn,row['id'],'failed')
                 latest = latest_consumed_input(json.loads(row["events_json"]))
                 source_input = latest["input_id"] if latest else json.loads(row["request_context_json"] or "{}").get("source_input_id")
                 result = self._preserve_execution_result(json.loads(row["result_json"] or "{}"), {"reason": "api_restarted"}, input_id=source_input)

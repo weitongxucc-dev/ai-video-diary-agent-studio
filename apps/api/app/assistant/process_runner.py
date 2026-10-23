@@ -8,7 +8,7 @@ import json
 import copy
 from collections import deque
 from pathlib import Path
-from app.assistant.turn_control import AssistantStopped, TurnControl, _capture_process_group, _process_group_released, _require_process_group_platform
+from app.assistant.turn_control import AssistantStopped, AssistantProcessReleaseError, TurnControl, _capture_process_group, _process_group_released, _require_process_group_platform
 
 
 class AssistantPhaseTimeout(subprocess.TimeoutExpired):
@@ -102,8 +102,22 @@ class _PhaseDeadlines:
 def run_pi_streaming(
     cmd: list[str], *, message: str, env: dict[str, str], cwd: Path,
     timeout_seconds: int, on_event, control: TurnControl, terminate, projector_factory, business_event_lines, turn_id: str | None = None, keep_turn_control: bool = False, input_handler=None,
-    business_handler=None, source_binding=None,
+    business_handler=None, native_handler=None, source_binding=None,
 ) -> subprocess.CompletedProcess[str]:
+    business_bridge=business_handler is not None
+    if native_handler is not None:
+        if not callable(getattr(native_handler,'cancel',None)):
+            raise ValueError('原生执行缺少宿主取消与释放端口，未启动助手')
+        original_business=business_handler
+        native_operations={'open_task_working_context','native_task_file','submit_task_command',
+            'read_task_command','cancel_task_command','register_task_artifacts'}
+        def dispatch(operation,arguments,**context):
+            if operation in native_operations: return native_handler(operation,arguments,**context)
+            if original_business is None:
+                return {'ok':False,'failure':{'status_code':403,'submission_effect':'not_submitted',
+                    'reason':'此管道只提供任务原生操作；原业务工具沿原入口执行。'}}
+            return original_business(operation,arguments,**context)
+        business_handler=dispatch
     if business_handler is not None and not isinstance(source_binding, dict):
         raise ValueError("后台业务管道缺少宿主绑定的可信来源。")
     if business_handler is not None and turn_id is None:
@@ -155,6 +169,20 @@ def run_pi_streaming(
     business_results = queue.SimpleQueue()
     business_calls = {}
     business_closed = threading.Event()
+    native_cancel_requested=threading.Event()
+
+    def verify_native_release(deadline):
+        if not native_cancel_requested.is_set() and not (stop_event is not None and stop_event.is_set()): return
+        # Called only after the one admitted host worker drained, so no late
+        # submit can commit after the native owner enumerates these jobs.
+        try:
+            receipt=native_handler.cancel(source_binding=current_binding,deadline_monotonic=deadline)
+            if not receipt['cancellation_complete'] or receipt['truncated'] or any((job['process_state'],job['release_state']) not in {
+                    ('exited','released'),('not_started','not_acquired')} for job in receipt['jobs']):
+                raise AssistantProcessReleaseError('原生执行仍未证实退出和释放；停止登记保留，请回读原作业')
+        except AssistantProcessReleaseError: raise
+        except Exception as exc:
+            raise AssistantProcessReleaseError('原生执行取消回执不可核实；停止登记保留，不能确认资源已释放') from exc
 
     def failure(error, reason, effect="not_submitted", status=409):
         return {"ok": False, "failure": {"status_code": status, "error": error,
@@ -222,6 +250,8 @@ def run_pi_streaming(
             return
         kind = event.get("type")
         if business_handler is not None:
+            if native_handler is not None and kind=='turn_start':
+                current_binding={**current_binding,'sdk_round':current_binding.get('sdk_round',0)+1}
             if kind == "tool_execution_start":
                 tool_bindings[event["toolCallId"]] = copy.deepcopy(current_binding)
             elif kind == "diary_business_cancel":
@@ -253,15 +283,19 @@ def run_pi_streaming(
         if event.get("type") == "diary_input_checkpoint":
             if input_handler is not None and not cancelling:
                 input_options=({"cancel_event":stop_event,"deadline_monotonic":time.monotonic()+min(120,max(0,phases.remaining(time.monotonic())))}
-                    if business_handler is not None else {})
+                    if business_bridge else {})
                 result = input_handler(event["phase"], event.get("input_id"), event.get("mode"),**input_options)
-                if business_handler is not None and event["phase"] == "consume" and result:
+                if business_bridge and event["phase"] == "consume" and result:
                     # Only the repository-backed host callback can advance a
                     # goal binding. This private field is never sent to JS.
                     trusted=result.pop('_business_binding')
                     current_binding = {**current_binding,
                         "goal_revision":trusted['goal_revision'],"input_id":trusted['input_id'],
                         "input_turn_id":trusted['input_turn_id'],"task_version":trusted['task_version']}
+                elif native_handler is not None and event['phase']=='consume' and result:
+                    snapshot=result['frozen_context']['target_snapshot']
+                    current_binding={**current_binding,'input_id':event['input_id'],'input_turn_id':current_binding['turn_id'],
+                        'task_version':{key:snapshot[key] for key in ('timeline_version_id','timeline_sequence')}}
                 write_input({"type": "diary_input_response", "checkpoint_id": event["checkpoint_id"], "result": result})
             return
         for business_line in business_event_lines(line, seen_business_calls):
@@ -270,6 +304,7 @@ def run_pi_streaming(
                 on_event(projected)
 
     def cancel_and_collect() -> None:
+        native_cancel_requested.set()
         for cancelled in business_calls.values():
             cancelled.set()
         if control_enabled and process.poll() is None:
@@ -301,7 +336,8 @@ def run_pi_streaming(
         stderr_thread.join(timeout=1)
     try:
         if business_handler is not None:
-            control.launch_callback(turn_id, threading.Thread(target=run_business, name="pi-assistant-business", daemon=True), close_business)
+            control.launch_callback(turn_id, threading.Thread(target=run_business, name="pi-assistant-business", daemon=True), close_business,
+                **({'verify_release':verify_native_release} if native_handler is not None else {}))
         assert process.stdin is not None
         try:
             process.stdin.write(message)

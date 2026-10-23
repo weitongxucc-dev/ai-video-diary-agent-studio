@@ -17,7 +17,7 @@ ASSISTANT_BUSINESS_TOOLS = {
               "preview_script_draft", "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
     "script": ("read_current_task", "find_knowledge", "preview_script_draft",
                "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
-    "task_edit": ("read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
+    "task_edit": ("record_input_understanding", "read_narration_segment_context", "revise_narration_segment", "read_narration_revision", "read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "regenerate_storyboard"),
@@ -60,7 +60,15 @@ _PI_TOOL_LABELS = {
     "discard_edit_proposal": "取消修改方案",
     "undo_last_edit": "撤销上一步",
     "redo_last_edit": "重做上一步",
+    "record_input_understanding": "记录本次要求",
+    "read_narration_segment_context": "读取段落全文",
+    "revise_narration_segment": "修改本段文案",
+    "read_narration_revision": "查看本段修改",
     "read_current_task": "读取当前任务",
+    "open_task_working_context":"读取任务工作目录",
+    "read":"读取工作文件","write":"写入工作文件","edit":"修改工作文件","bash":"执行任务程序",
+    "read_task_command":"回读原程序执行","cancel_task_command":"停止原程序执行",
+    "register_task_artifacts":"登记工作产物",
     "generate_creation_task_topics": "生成选题候选",
     "find_knowledge": "查找内容资料",
     "preview_script_draft": "保存文案草稿",
@@ -102,7 +110,7 @@ _PI_TOOL_LABELS = {
 }
 
 
-SCRIPT_WRITING_RULES = "content里的全部文字都会朗读，只写符合本轮目标语言、字数和时长的旁白；片头、角标、来源署名与许可说明放在实际旁白段的visual_prompt，不单独增加制作说明段。提交前完整检查正文和画面要求的分工。核查报告无效须停止提交，说明草稿未保存、需先修复核查服务；不建议改词试探、等待重交或让用户选择盲试。"
+SCRIPT_WRITING_RULES = "content里的全部文字都会朗读，只写符合本轮目标语言、字数和时长的旁白；片头、角标、来源署名与许可说明放在实际旁白段的visual_prompt，不单独增加制作说明段。提交前完整检查正文和画面要求的分工。核查报告无效是协议未完成，不等于正文不通过或服务不可用；沿原回执说明具体原因、未保存候选和原采用状态、下一步与重试条件，不改词试探或盲重交。结果未知先查原请求；先修复报告再核查，不用重跑生成替代报告修复。"
 
 SYSTEM_PROMPT = """你是 AI 视频日记的创作助手。你只能处理当前创作任务。
 当前source_start/end是当前取用区间，不是全部可用素材范围；未知全部可用范围时不能据此断言素材不足。ChangeClipSpeed保持时间槽时sourceSpan=slotSpan*playback_rate，倍率是源时长/时间轴时长；linkedSpeed的relative语义只沿API实际说明。narration.segment_count=0不代表无配音，selected_voice空不代表无音频，以本轮音频存在事实为准。
@@ -121,8 +129,8 @@ typed动作直接提供API已声明字段，原句仍由宿主绑定为来源；
 typed预览每轮至多3个不同候选，每次重新核验本轮版本；失败或未知结果不可盲重放。需要组合时可用codemode，必须await全部调用；脚本失败不抹去已提交的真实业务回执。
 预览成功后只依据工具返回的 operation_type、before、after 和影响说明实际变化；不得把位置说成宽度收窄或猜测中心对齐。预览仍等待采用；apply_typed_edit的保存回执可说明修改已保存、可撤销，不能把元数据保存说成新视频已生成。
 生成图片来源时先读read_media_script_capabilities；不可用说明实际缺口，不猜运行时路径或安装包。用read_task_graphic_sources读取已登记PNG与修订，preview_media_script提交Python/Pillow单PNG程序。parameters是API parameters参数对象；inputs[name]按input_refs的name映射授权PNG的可信读取路径字符串，用Image.open(inputs[name])读取。outputs[name]按requested_outputs的name映射宿主提供的可信输出文件路径字符串；用Pillow图像对象的image.save(outputs['name.png'])写声明PNG，name.png须与声明名称一致。不要将outputs[name]替换成bytes/BytesIO，不自行新增路径或输出名称。只把succeeded graphic_source的实际source_ref供后续EditGraphicOverlay使用，按API直接能力和本轮明确授权保存；必要提案才用preview_typed_edit；来源成功不是已经应用或出片。可以read_task_media_job wait_seconds至多20作有限只读等待；仍pending就说明事实，不无限查询或重复程序POST。原请求未知用read_media_script_request的phase=script定位查询，不能重发。复用工具先读实际能力；发现用list，用户明确给出的tool_id可直接describe，由后端核权限，不要求先列举。只用本轮回读的真实tool_id/version调用新任务、新输入的普通API，不继承旧输入授权。仅用户明确要求时save/update/revoke；原保存unknown只查创建UUID，CAS写丢回应不自动重复；程序成功不自动保存或采用。
-不要请求、读取或发送原始媒体文件。只用已提供的业务工具。
-回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案、版本号等内部词；必要的影响和修复要说清。""" + "\n" + SCRIPT_WRITING_RULES
+仅在当前任务授权目录内用已提供的本地工具处理媒体并登记产物；禁止跨任务访问、未经授权的网络或原始媒体外发，当前文字模型不直接接收媒体。登记不等于采用，作品采用仍走正式业务用例。
+回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案、版本号等内部词；必要的影响和修复要说清。""" + '\n局部创作修改先记录输入理解；查询、澄清和试稿不改变已采用版本。用户要求某段更紧凑且保留卖点时，读取该段及相邻段全文、实际时间线、资料依据、锁定规则和可用观察，再形成具体改写；不得固定映射为倍速。保留数字及不超过、最高可达、适用条件等含义，通过代码规则和逐条前后语义对照分别检查。Pi语义复核属于模型判断，存疑或冲突如实说明；正式定稿锁定照原规则处理。使用真实修订回执区分已接收、已理解、排队、产物就绪和采用；未知结果按原请求身份查询，不宣称已完成。' + "\n" + SCRIPT_WRITING_RULES
 
 PLAN_PROMPT = """你是 AI 视频日记的新视频创作助手。只处理当前工作区的新视频目标。
 search_material_library返回文件候选与状态，find_materials返回已分析片段的内容候选和证据；单次关键词无命中只说明该查询无命中，不等于空库。需要事实或出处时用find_knowledge查已有资料，再判断实际缺口。系统标签是机器推断，不是人工核实，不能当作画面事实或替代知识查证。read_workspace_context只给最近任务摘要，按total_count/truncated判断范围，未列出不表示旧作品不存在；新建时保留旧作品无需定位或修改旧对象。

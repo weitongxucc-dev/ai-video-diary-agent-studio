@@ -1,5 +1,5 @@
 "use client";
-import { WorkspaceAudio } from "../workbench/WorkspaceMedia";
+import { WorkspaceAudio, WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { useWorkspacePage } from "../workbench/context";
 import type { TaskMediaJob, TaskMediaJobPage, TaskMediaResultMap } from "@/lib/types";
 import NextImage from "next/image";
@@ -11,6 +11,75 @@ import type { CreationTask, TaskJobProgress } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { errorDetails } from './request-errors';
 import { formatDuration, jobStatusLabel, jobKindLabel } from './execution-labels';
+import { Button } from '../ui/button';
+import { readCreationTaskNativeOperations, readCreationTaskNativeArtifact } from '@/lib/api/task-media';
+import type { CreationTaskNativeArtifact, CreationTaskNativeOperations } from '@/lib/types/creation-tasks';
+
+export function NativeOperationsPanel({taskId,adoptedRefs,onPreviewImage,canPrepare}:{taskId:string;adoptedRefs:string[];
+    onPreviewImage:(artifact:CreationTaskNativeArtifact)=>void;canPrepare:boolean}) {
+    const viewActive=useWorkspacePage()?.active ?? true;
+    const [page,setPage]=useState<CreationTaskNativeOperations|null>(null),[offset,setOffset]=useState(0);
+    const [error,setError]=useState<string|null>(null),[retry,setRetry]=useState(0);
+    const [selected,setSelected]=useState<CreationTaskNativeArtifact|null>(null),[url,setUrl]=useState<string|null>(null);
+    const [previewError,setPreviewError]=useState<string|null>(null);
+    useEffect(()=>{
+        if (!viewActive) return;
+        const controller=new AbortController();let reading=false;
+        async function read() {
+            if (reading) return;reading=true;
+            try {
+                const value=await readCreationTaskNativeOperations(taskId,offset,controller.signal);
+                if (!controller.signal.aborted) {
+                    if (value.task_id!==taskId) throw new Error('工作产物回执不属于当前作品');
+                    setPage(value);setError(null);
+                }
+            } catch(cause) {if (!controller.signal.aborted) setError(cause instanceof Error?cause.message:'工作产物状态读取失败');}
+            finally {reading=false;}
+        }
+        void read();const timer=setInterval(()=>void read(),5000);
+        return ()=>{controller.abort();clearInterval(timer);};
+    },[taskId,offset,retry,viewActive]);
+    useEffect(()=>{
+        setUrl(null);setPreviewError(null);
+        if (!selected || !viewActive) return;
+        const controller=new AbortController();let objectUrl:string|null=null;
+        void readCreationTaskNativeArtifact(taskId,selected.artifact_id,controller.signal).then(blob=>{
+            if (controller.signal.aborted) return;
+            objectUrl=URL.createObjectURL(blob);setUrl(objectUrl);
+        }).catch(cause=>{if (!controller.signal.aborted) setPreviewError(cause instanceof Error?cause.message:'预览读取失败');});
+        return ()=>{controller.abort();if (objectUrl) URL.revokeObjectURL(objectUrl);};
+    },[taskId,selected,viewActive]);
+    const current=page?.task_id===taskId?page:null;
+    if (!error && (!current || current.total_count===0)) return null;
+    const statuses:Record<string,string>={queued:'等待执行',waiting:'等待资源',running:'正在执行',succeeded:'执行成功',failed:'执行失败',cancel_requested:'正在停止',cancelled:'已取消',interrupted:'已中断'};
+    const processStates:Record<string,string>={not_started:'未启动',running:'运行中',exited:'已退出',unknown:'待核对'};
+    const releaseStates:Record<string,string>={not_acquired:'未占用',released:'已释放',unknown:'待核对'};
+    return <section className={styles.workSection} aria-label="任务执行与工作产物">
+        <div className={styles.sectionHeading}><div><h2>工作产物</h2><p>登记后先作为候选，采用到时间线后才成为作品的一部分。</p></div><Button variant="outline" onClick={()=>setRetry(value=>value+1)}>刷新产物</Button></div>
+        {error?<p role="alert">{error}</p>:null}
+        {selected?<div className={styles.segmentVideoPreview}>
+            {url && selected.media_type.startsWith('image/')?<NextImage unoptimized width={640} height={360} style={{width:'100%',height:'auto',objectFit:'contain'}} src={url} alt="实际登记的工作产物候选"/>:null}
+            {url && selected.media_type.startsWith('video/')?<WorkspaceVideo controls preload="metadata" src={url} aria-label="实际登记的视频候选"/>:null}
+            {url && selected.media_type.startsWith('audio/')?<WorkspaceAudio controls preload="metadata" src={url} aria-label="实际登记的音频候选"/>:null}
+            {!url && !previewError?<p role="status">正在读取原产物…</p>:null}{previewError?<p role="alert">{previewError}</p>:null}
+            <p>{adoptedRefs.includes(selected.source_ref)?'已在当前时间线使用；最终合成状态另行核对':'当前是登记候选，尚未采用'}</p>
+        </div>:null}
+        <div className={styles.segmentProductionList}>{current?.items.map(item=><article key={item.job_id}>
+            <strong>{item.operation==='register_task_artifacts'?'产物登记':item.operation==='native_task_file'?'工作文件':'程序执行'} · {statuses[item.status]??item.status}</strong>
+            <p>进程：{processStates[item.process_state]??item.process_state} · 资源：{releaseStates[item.release_state]??item.release_state}</p>
+            {item.failure_reason?<p>失败原因：{item.failure_reason}</p>:null}
+            {item.waiting_reason?<p>等待原因：{item.waiting_reason}</p>:null}
+            {item.repair_action?<p>恢复方式：{item.repair_action}</p>:null}
+            {item.artifacts.map(artifact=><div key={artifact.artifact_id}>
+                <p>{artifact.role} · {artifact.media_type} · {(artifact.size_bytes/1024).toFixed(1)} KB</p>
+                {/^(image|video|audio)\//.test(artifact.media_type)?<Button variant="outline" onClick={()=>setSelected(artifact)}>预览候选</Button>:null}
+                {artifact.media_type.startsWith('image/')?<Button variant="outline" disabled={!canPrepare} title={canPrepare?'准备原作品中的图片图层':'当前作品时间线尚未准备完成'} onClick={()=>onPreviewImage(artifact)}>准备图片图层</Button>:null}
+                {adoptedRefs.includes(artifact.source_ref)?<span>已在当前时间线使用</span>:<span>登记候选</span>}
+            </div>)}
+        </article>)}</div>
+        {current && (current.offset>0 || current.truncated)?<div><p>当前显示 {current.offset+1}–{current.offset+current.items.length} / {current.total_count} 条</p><Button variant="outline" disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>上一页</Button><Button variant="outline" disabled={!current.truncated} onClick={()=>setOffset(offset+30)}>下一页</Button></div>:null}
+    </section>;
+}
 /**
  * 作业进度读后台已经落库的作业行：重开应用读到同一批记录，页面关闭不改变它们。
  * 作业还在排队或执行时按固定间隔重新读取，结束后停止；切换任务时丢弃旧结果。

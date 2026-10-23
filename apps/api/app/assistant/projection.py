@@ -45,11 +45,11 @@ def _safe_business_failure(value: object, *, secrets=()) -> dict:
     if not isinstance(value, dict):
         return {}
     safe = {}
-    for key in ("reason", "repair_action"):
+    for key in ("reason", "impact", "repair_action"):
         text = _safe_failure_text(value.get(key), secrets)
         if text is not None:
             safe[key] = text
-    for key in ("error", "code", "stage", "object_type", "query_tool", "reason_code"):
+    for key in ("error", "code", "stage", "object_type", "query_tool", "reason_code", "failure_category"):
         if isinstance(value.get(key), str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", value[key]):
             safe[key] = value[key]
     if isinstance(value.get("tool_name"), str) and value["tool_name"] in _PI_TOOL_LABELS:

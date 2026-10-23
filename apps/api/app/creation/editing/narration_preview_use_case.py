@@ -1,6 +1,8 @@
 """Original NarrationPreviewUseCase command preview, separate from compilation and rendering."""
 from __future__ import annotations
 
+import re
+
 from app.creation.contracts import EditIntent
 from app.creation.contracts import EditProposal
 from app.production import MediaAuthorityError
@@ -9,6 +11,27 @@ from app.montage import creation_task_montage_plan_from_payload
 from app.models import utc_now
 from uuid import uuid4
 from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs
+
+
+def inspect_narration_revision(source_text, replacement_text, protected_rules):
+    """Check explicit literal rules only; this result never asserts semantic equivalence."""
+    checks = []
+    for rule in protected_rules:
+        source_present = rule.source_text in source_text
+        required_is_bound = rule.required_text in rule.source_text
+        if rule.kind in {'exact_text', 'qualified_claim'}:
+            required_is_bound = rule.required_text == rule.source_text
+            retained = rule.required_text in replacement_text
+        else:
+            pattern = r'(?<![\d.])' + re.escape(rule.required_text) + r'(?![\d.])'
+            required_is_bound = (any(char.isdigit() for char in rule.required_text)
+                and re.search(pattern,rule.source_text) is not None)
+            retained = re.search(pattern, replacement_text) is not None
+        checks.append({'rule_id': rule.id, 'kind': rule.kind, 'source_reference': rule.source_reference,
+            'source_bound': source_present and required_is_bound, 'retained': retained,
+            'passed': source_present and required_is_bound and retained})
+    return {'status': 'passed' if all(item['passed'] for item in checks) else 'rejected',
+            'checks': checks, 'semantic_verification': 'requires_pi_review'}
 
 
 class NarrationPreviewUseCase:

@@ -152,8 +152,8 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
       required: ["query"], additionalProperties: false,
     },
     execute: async (_id: string, params: { query: string }) => {
-      const matches = await request(`/api/production/materials/search?q=${encodeURIComponent(params.query)}&limit=8`);
-      const excerpts = matches.slice(0, 8).map((item: {asset_ref: string; segment_ref: string; score: number; reasons: string[];
+      const result = await request(`/api/production/materials/search?q=${encodeURIComponent(params.query)}&limit=8&purpose=automatic&include_eligibility=true`);
+      const excerpts = result.matches.slice(0, 8).map((item: {asset_ref: string; segment_ref: string; score: number; reasons: string[];
         match_tier: string; evidence_excerpt: string; start_seconds: number; end_seconds: number;
         duration_seconds: number; time_range: string; needs_confirmation: boolean}) => ({
         asset_ref: item.asset_ref, segment_ref: item.segment_ref, score: item.score,
@@ -162,7 +162,9 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         start_seconds: item.start_seconds, end_seconds: item.end_seconds, duration_seconds: item.duration_seconds,
         time_range: item.time_range, needs_confirmation: item.needs_confirmation,
       }));
-      return { content: [{ type: "text", text: JSON.stringify(excerpts) }], details: { matches: excerpts } };
+      const details = {matches: excerpts, qualification_message: result.qualification_message,
+        total_count: result.total_count, truncated: result.truncated};
+      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   });
 

@@ -317,6 +317,9 @@ def run_granted_command(
     output_paths: Sequence[str | Path] = (),
     max_output_file_bytes: int | None = None,
     resource_purpose: str | None = None,
+    cwd: str | Path | None = None,
+    on_output=None,
+    max_output_files: int | None = None,
 ) -> GrantedCommandResult:
     """Run one command with group cleanup; nonzero exit is returned to caller.
 
@@ -350,14 +353,15 @@ def run_granted_command(
         (grant.owner_type == "creation_job" and grant.unit_key.startswith(("narration:", "person_render:", "person_edit:")))
         or (grant.owner_type == "media_preview" and grant.unit_key.startswith(("voice:", "avatar_lipsync:")))))
     quality_unit = isinstance(grant, Grant) and grant.owner_type == "quality_check"
+    native_unit = isinstance(grant,Grant) and grant.owner_type=='creation_job' and grant.unit_key.startswith('native_command:')
     cover_unit = isinstance(grant, Grant) and grant.owner_type == "creation_job" and grant.unit_key.startswith("cover:")
-    if (scene_unit or model_unit or quality_unit or cover_unit) and not isinstance(resources, HostResourceProbe):
+    if (scene_unit or model_unit or quality_unit or cover_unit or native_unit) and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("场景子进程缺少真实资源探针")
     if resource_purpose is not None and not isinstance(resources, HostResourceProbe):
         raise RecoveryBlocked("组合音频用途缺少真实资源探针")
     scene_limits = (resources.scene_runtime_limits(grant, purpose=resource_purpose) if resource_purpose is not None else
                     resources.scene_runtime_limits(grant)) if isinstance(resources, HostResourceProbe) else None
-    if (scene_unit or model_unit or quality_unit or cover_unit) and scene_limits is None:
+    if (scene_unit or model_unit or quality_unit or cover_unit or native_unit) and scene_limits is None:
         raise RecoveryBlocked("场景子进程缺少运行中资源预算")
     cpu_policy = scene_limits.cpu_policy if scene_limits is not None else None
     if cpu_policy is None:
@@ -388,6 +392,7 @@ def run_granted_command(
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True, pass_fds=(read_fd,),
             env=env,
+            cwd=cwd,
         )
         os.close(read_fd)
         read_fd = -1
@@ -442,7 +447,18 @@ def run_granted_command(
                 output_count = 0
                 for target in output_paths:
                     try:
-                        output_size += Path(target).stat().st_size
+                        path = Path(target)
+                        if max_output_files is not None and path.is_dir():
+                            for member in path.rglob('*'):
+                                output_count += 1
+                                if output_count>max_output_files:
+                                    raise GrantedCommandOutputLimit('任务工作文件数超过本次有限上限')
+                                if member.is_symlink():
+                                    continue
+                                if member.is_file():
+                                    output_size += member.stat().st_size
+                        else:
+                            output_size += path.stat().st_size
                         output_count += 1
                     except FileNotFoundError:
                         continue  # atomic temporary/final rename during worker output
@@ -471,6 +487,8 @@ def run_granted_command(
                         selector.unregister(key.fileobj)
                     else:
                         outputs[name].extend(chunk)
+                        if on_output is not None:
+                            on_output(name,chunk)
                         if len(outputs[name]) > limits[name]:
                             raise GrantedCommandOutputLimit(f"{name} exceeded its byte limit")
         while True:

@@ -7,12 +7,15 @@ def input_goal_authorization(conn, root, turn):
     current=active_input(json.loads(turn["events_json"]))
     if current is None:
         return None
+    if 'understanding' in current and (current.get('understanding') or {}).get('kind') not in {'effective_modification','adoption'}:
+        return None
     chain=[]
     rows=conn.execute("SELECT id,events_json FROM assistant_conversation_turns WHERE conversation_id=? "
         "AND sequence>=? AND sequence<=? ORDER BY sequence",(root["conversation_id"],root["sequence"],turn["sequence"])).fetchall()
     for row in rows:
         for item in json.loads(row["events_json"]):
-            if item.get("type") == "assistant_input" and item["status"] in {"consumed","completed"}:
+            if (item.get("type") == "assistant_input" and item["status"] in {"consumed","completed"}
+                    and ('understanding' not in item or (item.get('understanding') or {}).get('kind') in {'effective_modification','adoption'})):
                 chain.append({**item,"source_turn_id":row["id"]})
     position=next(index for index,item in enumerate(chain) if item["input_id"] == current["input_id"])
     chain=chain[:position+1]
