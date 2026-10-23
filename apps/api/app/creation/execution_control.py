@@ -276,14 +276,17 @@ class CreationExecutionControl:
     def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
             latest = self.execution.latest(workspace_id, task_id)
-            migrated = (migrate_creation_narration_request(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
-                if latest is not None else None)
-            resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard,
-                executor=runtime.registrations['creation_job'].executor)
-                if latest is not None and migrated is None else False)
-            job = (self.repository.get_job_run(workspace_id, latest.id) if migrated is not None or resumed else
-                self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
-                    admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection)))
+            if latest is not None and self.execution.rerender_current(latest,actor,runtime.scheduler,write_guard=write_guard):
+                job = self.repository.get_job_run(workspace_id,latest.id)
+            else:
+                migrated = (migrate_creation_narration_request(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
+                    if latest is not None else None)
+                resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard,
+                    executor=runtime.registrations['creation_job'].executor)
+                    if latest is not None and migrated is None else False)
+                job = (self.repository.get_job_run(workspace_id, latest.id) if migrated is not None or resumed else
+                    self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
+                        admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection)))
             if execution_source is not None:
                 self.repository.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)

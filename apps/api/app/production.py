@@ -6387,6 +6387,28 @@ class ProductionRepository:
         connection.execute("UPDATE job_runs SET status='queued',failure_reason=NULL,impact=NULL,repair_action=NULL,"
             "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?", (utc_now().isoformat(), workspace_id, job_id))
 
+    def reopen_creation_execution_for_render(self, run, event, *, expected_timeline_version_id, connection):
+        """Reopen this completed creation only for its current, fixed render input."""
+        if not connection.in_transaction:
+            raise ValueError('重新输出必须使用原作业的提交事务')
+        row = connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
+            (run.workspace_id, run.id)).fetchone()
+        task = self._require_creation_task(connection, run.workspace_id, run.task_id)
+        if (row is None or self._job_run_from_row(row) != run
+                or run.kind != 'creation_task_execution' or run.status != 'succeeded'
+                or not expected_timeline_version_id or task.current_timeline_version_id != expected_timeline_version_id
+                or (event.workspace_id, event.task_id, event.job_id) != (run.workspace_id, run.task_id, run.id)
+                or event.event_type != 'creation_execution_stage' or event.payload.get('stage') != 'render'
+                or event.payload.get('status') != 'pending'
+                or event.payload.get('input_timeline_version_id') != expected_timeline_version_id
+                or not event.payload.get('unit_key', '').startswith('render:')):
+            raise PermissionError('原完成作业或重新输出的时间线已变化')
+        connection.execute("UPDATE job_runs SET status='queued',progress=66,failure_reason=NULL,impact=NULL,repair_action=NULL,"
+            "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
+            (event.created_at.isoformat(), run.workspace_id, run.id))
+        self.append_task_event(event, connection=connection)
+        return self.get_job_run(run.workspace_id, run.id, connection=connection)
+
     def resume_creation_narration_job(self, workspace_id, job_id, *, connection):
         usage = self.creation_narration_usage(workspace_id, job_id, connection=connection)
         if usage['budget'] is None or usage['unsettled']:

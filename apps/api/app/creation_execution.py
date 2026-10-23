@@ -1979,6 +1979,9 @@ class CreationJobUnitExecutor:
             if changed != 1:
                 raise ValueError("外层制作作业状态已变化")
         event_id = f"event_{grant.owner_id}_{stage}_{status}"
+        if stage == 'render' and conn.execute('SELECT 1 FROM task_events WHERE workspace_id=? AND id=?',
+                (grant.workspace_id, event_id)).fetchone() is not None:
+            event_id = f'{event_id}_{grant.request_id}'
         conn.execute(
             "INSERT OR IGNORE INTO task_events "
             "(id,workspace_id,task_id,job_id,event_type,payload_json,created_at) "
@@ -1986,6 +1989,7 @@ class CreationJobUnitExecutor:
             (event_id, grant.workspace_id, row["task_id"], grant.owner_id,
              "creation_execution_stage",
              json.dumps({"stage": stage, "status": "completed" if status in {"queued", "succeeded"} else status,
+                         **({'request_id': grant.request_id, 'unit_key': grant.unit_key} if stage == 'render' else {}),
                          **({"output": output} if output else {}),
                          **({"reason": reason} if reason else {})}, ensure_ascii=False), now),
         )
@@ -3057,6 +3061,39 @@ class CreationExecution:
         task = self.repository.get_creation_task(workspace_id, task_id)
         return StoryboardRegeneration(self.repository).enqueue(task, inputs, actor,
             validate_input=self.validate_input, stage_facts=stage_facts)
+
+    def rerender_current(self, job, actor, scheduler, *, write_guard=None) -> bool:
+        """Queue only a new current-timeline render on the original completed Job."""
+        if job.kind != KIND or job.status != 'succeeded':
+            return False
+        owner = scheduler.owners
+        if hasattr(owner, 'registrations'):
+            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+        with self.repository._connect() as reader:
+            current, task, start, _script, _plan = owner._facts(reader, job.workspace_id, job.id)
+        if current != job or actor != CreationExecutionActor.from_event(job.workspace_id, start):
+            raise PermissionError('不能重新输出其他身份的原作业')
+        if self.render_is_valid(job.workspace_id, job.task_id):
+            return False
+        if self.repository.creation_narration_usage(job.workspace_id, job.id)['unsettled']:
+            raise RecoveryBlocked('原配音消耗尚未核实，不能重开输出')
+        version_id = task.current_timeline_version_id
+        intent = next_creation_intent(self.repository, scheduler, job)
+        if not version_id or intent is None or not intent.unit_key.startswith('render:'):
+            raise ValueError('当前作品尚不能仅重新输出；配音或剪辑仍未就绪')
+        identity = hashlib.sha256(json.dumps([version_id, intent.unit_key]).encode()).hexdigest()
+        event = TaskEvent(id=f'event_{job.id}_render_requested_{identity}', workspace_id=job.workspace_id,
+            task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
+            payload={'stage': 'render', 'status': 'pending', 'input_timeline_version_id': version_id,
+                'unit_key': intent.unit_key, 'input_digest': job.input_digest})
+        with self.repository._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if write_guard is not None:
+                write_guard(conn)
+            self.repository.reopen_creation_execution_for_render(job, event,
+                expected_timeline_version_id=version_id, connection=conn)
+            owner.verify_submission(intent, actor, connection=conn)
+        return True
 
     def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None, write_guard=None, execution_source=None,
               admission_recheck=None) -> JobRun:

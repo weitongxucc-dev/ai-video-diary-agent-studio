@@ -4880,3 +4880,89 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
         assert observed and len(case.execution.jobs('local', case.task_id)) == 1
     assert case.scheduler._get(first.request_id).state == 'failed'
     assert case.repo.creation_narration_usage('local', case.job.id) == before
+
+
+@pytest.mark.parametrize('denied', [False, True])
+def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_path, denied):
+    from app.creation.contracts import TaskEvent
+    from app.creation.execution_control import CreationExecutionControl, ExecutionControlRejected
+    from app.graphic_overlays import TextOverlay
+    repo, task_id, script_id, digest, actor, execution, owner, scheduler, base, _members = _render_version_fixture(tmp_path)
+    from app.host_resource_probes import HostResourceDecision
+    scheduler.resources.admit = lambda request: HostResourceDecision(True, dict(request.resources), {}, None)
+    job = execution.start('local', task_id, script_id, digest, actor=actor)
+    original_request = submit_creation_stage(execution, scheduler, job, actor)
+    old_output = TaskEvent(f'event_{job.id}_render_succeeded', 'local', task_id, job.id,
+        'creation_execution_stage', {'stage': 'render', 'status': 'completed', 'output': 'timeline_old:preview.mp4'})
+    repo.append_task_event(old_output)
+    settled = TaskEvent(f'event_{job.id}_narration_settled_1', 'local', task_id, job.id,
+        'creation_narration_unit_settled', {'usage_id': 'original-tts:1', 'elapsed_seconds': 12.5,
+            'output_bytes': 48044, 'total_seconds': 12.5, 'total_output_bytes': 48044})
+    repo.append_task_event(settled)
+    repo.append_task_event(TaskEvent(f'event_{job.id}_narration_budget', 'local', task_id, job.id,
+        'creation_narration_budget', {'parent_timeout_seconds': 300, 'parent_max_output_bytes': 3145728,
+            'settled_event_id': settled.id, 'active_event_id': None}))
+    with repo._connect() as conn:
+        conn.execute("UPDATE job_runs SET status='succeeded' WHERE id=?", (job.id,))
+        conn.execute("UPDATE device_work_requests SET state='done' WHERE id=?", (original_request,))
+    montage = repo.get_creation_task_montage_plan('local', task_id)
+    montage['graphic_overlays'] = [TextOverlay(id='opening', text='Opening title', start_seconds=0, end_seconds=.4).model_dump(),
+        TextOverlay(id='credit', text='Closing credit', start_seconds=.5, end_seconds=1).model_dump()]
+    repo.save_creation_task_montage_plan('local', task_id, montage['id'], montage)
+    edited = repo.create_timeline_version(TimelineVersion('timeline_two_titles', 'local', task_id,
+        base.id, 2, {'montage': repo.get_creation_task_montage_plan('local', task_id)}, 'two-title-edit'))
+    audio = repo.get_narration_artifact('local', 'cache_1')
+    audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
+    usage = repo.creation_narration_usage('local', job.id)
+    control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    executor = CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail('unexpected render'),
+        render_is_valid=lambda *_: False)
+    runtime = SimpleNamespace(scheduler=scheduler, registrations={
+        'creation_job': SimpleNamespace(owner=owner, executor=executor)}, wake=lambda: None)
+    guarded = []
+    def guard(conn):
+        assert conn.in_transaction
+        guarded.append(True)
+        if denied:
+            raise PermissionError('original source revoked')
+    if denied:
+        with pytest.raises(ExecutionControlRejected) as rejected:
+            control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
+        assert rejected.value.status_code == 403
+        assert repo.get_job_run('local', job.id).status == 'succeeded'
+        assert len(repo.list_creation_job_request_states('local', job.id)) == 1
+        assert not any(event.payload.get('input_timeline_version_id') == edited.id
+            for event in repo.list_task_events('local', task_id))
+    else:
+        control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
+        requests = repo.list_creation_job_request_states('local', job.id)
+        fresh = next(row for row in requests if row['id'] != original_request)
+        assert fresh['unit_key'].startswith('render:') and fresh['state'] == 'waiting'
+        assert scheduler._get(fresh['id']).resources['overlay_count'] == 2
+        assert repo.get_job_run('local', job.id).status == 'queued'
+        control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
+        assert repo.list_creation_job_request_states('local', job.id) == requests
+        grant = scheduler.pick_and_grant()
+        assert grant.request_id == fresh['id']
+        # The inner renderer is covered separately; publish metadata for the outer receipt contract.
+        rendered = repo.get_creation_task_montage_plan('local', task_id)
+        rendered.update(status='rendered', output_path='artifact://new-render/preview.mp4')
+        repo.save_creation_task_montage_plan('local', task_id, rendered['id'], rendered)
+        published = repo.create_timeline_version(TimelineVersion('timeline_new_render', 'local', task_id,
+            edited.id, 3, {'montage': rendered, 'output_refs': [rendered['output_path']]}, None))
+        with repo._connect() as conn:
+            conn.execute("UPDATE job_runs SET status='running' WHERE id=?", (job.id,))
+            executor._checkpoint(conn, grant, status='succeeded', stage='render',
+                output=f'{published.id}:{rendered["output_path"]}')
+        scheduler.defer_unit(grant, reason='input_stale')
+        completed = repo.get_task_event('local', f'{old_output.id}_{fresh["id"]}')
+        assert completed.payload['output'] == f'{published.id}:{rendered["output_path"]}'
+        assert completed.payload['request_id'] == fresh['id']
+        assert len(execution.jobs('local', task_id)) == 1
+    assert guarded
+    assert repo.get_task_event('local', old_output.id) == old_output
+    assert repo.get_task_event('local', settled.id) == settled
+    assert repo.creation_narration_usage('local', job.id) == usage
+    assert repo.get_narration_artifact('local', 'cache_1') == audio
+    assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
+    assert scheduler._get(original_request).state == 'done'
