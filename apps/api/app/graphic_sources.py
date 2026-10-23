@@ -78,8 +78,11 @@ def graphic_sources(repository,workspace_id,task_id,store=None):
                 resolve_graphic_source(repository,store,workspace_id,task_id,ref)
         except (KeyError,ValueError,FileNotFoundError):
             continue
+        name=transform.parameters.get('name')
+        if not isinstance(name,str) or not name.strip():
+            name=Path(ref).name
         sources.append({'source_ref':ref,'artifact_id':record.id,'sha256':record.sha256,'size_bytes':record.size_bytes,
-            **{key:transform.parameters[key] for key in ('name','width','height')}})
+            'name':name,**{key:transform.parameters[key] for key in ('width','height')}})
     return sources
 
 
