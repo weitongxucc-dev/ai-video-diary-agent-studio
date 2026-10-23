@@ -172,3 +172,32 @@ console.log('host receipt: PASS');`, pathToFileURL(join(tree.root, 'Resources', 
     {cwd: tree.root, env: tree.environment, timeout: 10000});
   assert.match(stdout, /host receipt: PASS/);
 });
+
+test('background exact edits, original receipts, voice and media pages use typed host calls', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+import assert from 'node:assert/strict';
+const {createBusinessRequest}=await import(process.argv[1]);
+const calls=[];
+const request=createBusinessRequest({taskId:'task',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw new Error('credentials forbidden')},getSignal:()=>undefined,
+ fetchRequest(){throw new Error('HTTP forbidden')},businessCall:async(operation,args)=>{calls.push({operation,args});return {ok:true,value:{saved:true}}}});
+const base='/api/creation-tasks/task';
+const payload={request_id:'original',operation_type:'DuplicateClip',clip_id:'clip',expected_timeline_version_id:'base',expected_timeline_sequence:3};
+await request(base+'/edits/exact',{method:'POST',body:JSON.stringify(payload)});
+await request(base+'/edits/exact/preview',{method:'POST',body:JSON.stringify(payload)});
+await request(base+'/assistant/edit-requests/original?phase=apply');
+await request(base+'/assistant/edit-requests/original?phase=preview');
+await request(base+'/narration/voice',{method:'POST',body:JSON.stringify({request_id:'voice-original',voice_profile_id:'voice'})});
+await request(base+'/narration/voice/requests/voice-original');
+await request(base+'/media-jobs?limit=2&cursor=job-original');
+await request(base+'/edits/exact/preview?draft=true',{method:'POST',body:JSON.stringify(payload)});
+assert.deepEqual(calls.map(c=>c.operation),['apply_task_edit','preview_task_edit','read_task_edit_request','read_task_edit_request','select_narration_voice','read_narration_voice_request','read_task_media_jobs','preview_task_edit']);
+assert.deepEqual(calls[0].args.payload,payload);assert.deepEqual(calls[1].args.payload,payload);
+assert.deepEqual(calls[2].args,{task_id:'task',request_id:'original',phase:'apply'});
+assert.deepEqual(calls[6].args,{task_id:'task',cursor:'job-original',limit:2});
+assert.equal(calls[7].args.draft_only,true);
+console.log('common host calls: PASS');`, pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/common host calls: PASS/);
+});

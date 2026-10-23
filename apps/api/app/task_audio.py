@@ -562,6 +562,33 @@ class TaskMediaJobs:
         self.verify_identity = verify_identity
         self.task_authorizations = None
 
+    def list(self, workspace_id, task_id, actor, *, cursor=None, limit=20):
+        from app.creation_execution import CreationExecutionActor
+        if not 1 <= limit <= 40:
+            raise ValueError('媒体作业分页大小须为 1–40')
+        self.repository.get_creation_task(workspace_id, task_id)
+        parameters = [workspace_id, task_id, TASK_MEDIA_KIND, actor.member_id]
+        before = ''
+        if cursor is not None:
+            saved, event = self.read(workspace_id, cursor)
+            if saved.task_id != task_id or CreationExecutionActor.from_event(workspace_id, event) != actor:
+                raise KeyError('媒体作业分页位置不存在')
+            before = ' AND (j.created_at < ? OR (j.created_at = ? AND j.id < ?))'
+            parameters.extend([saved.created_at.isoformat(), saved.created_at.isoformat(), saved.id])
+        parameters.append(limit + 1)
+        with self.repository._connect() as conn:
+            rows = conn.execute("SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id "
+                "AND e.job_id=j.id AND e.id='event_' || j.id || '_start' "
+                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND json_extract(e.payload_json,'$.member_id')=?" + before +
+                ' ORDER BY j.created_at DESC,j.id DESC LIMIT ?', parameters).fetchall()
+        jobs = []
+        for row in rows[:limit]:
+            job, event = self.read(workspace_id, row['id'])
+            if CreationExecutionActor.from_event(workspace_id, event) != actor:
+                continue
+            jobs.append(job)
+        return jobs, rows[limit-1]['id'] if len(rows) > limit else None
+
     def authorization_verdict(self, job, event, actor, *, connection=None, check_scope=True):
         if self.task_authorizations is None:
             return self.verify_identity(actor)

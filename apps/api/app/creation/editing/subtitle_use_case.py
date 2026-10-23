@@ -69,7 +69,7 @@ class SubtitleEditUseCase:
             raise ValueError('提案不是纯字幕编辑')
         task = self.repository.get_creation_task(command.workspace_id, command.task_id)
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, task.id))
-        base = self.montage_edits.ensure_montage_base(command.workspace_id, task, montage)
+        base = self.montage_edits.ensure_montage_base(command.workspace_id, task, montage, source=command.source)
         task = self.repository.get_creation_task(command.workspace_id, task.id)
         command_base = command.base_version_id if command.base_version_id is not None else base.id
         command = replace(command, base_version_id=command_base, values={**command.values, 'base_version_id': command_base})
@@ -554,7 +554,7 @@ class SubtitleEditUseCase:
             raise EditPreviewRejected(status_code=404, detail='creation task subtitle edit target not found') from exc
         if new_text == cue.text:
             raise edit_preview_failure(status_code=409, error='edit_no_change', reason='新字幕与当前字幕相同。', impact='没有创建新的时间线版本。', repair_action='输入不同的字幕文字后再试。', retryable=True)
-        base_version = self.montage_edits.ensure_montage_base(workspace_id, task, montage)
+        base_version = self.montage_edits.ensure_montage_base(workspace_id, task, montage, source=request_source)
         task = self.repository.get_creation_task(workspace_id, task.id)
         subtitle_track = next((track for track in self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage) if any((track_cue.id == cue.id for track_cue in track.cues))), None)
         now = utc_now()

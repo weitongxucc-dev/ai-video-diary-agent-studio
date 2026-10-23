@@ -3,6 +3,7 @@
 Opaque fixture source bytes are never decoded, and no provider/media job is run.
 """
 import json
+import pytest
 import os
 import subprocess
 import threading
@@ -336,3 +337,352 @@ def test_rejected_direct_request_replays_original_error_without_business_writes(
         assert receipt.json()["submitted_input"]["cue_id"] == payload["cue_id"]
     assert state.repo.get_creation_task("ws",state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.list_edit_operations("ws",state.task.id) == []
+
+
+def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_state,monkeypatch):
+    from app.creation_execution import CreationExecutionActor
+    s=metadata_http_state
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    conversations=ConversationRepository(s.repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    chat=conversations.create('ws',s.member.member_id,'task',s.task.id)
+    conversations.save_draft(chat['id'],'ws',s.member.member_id,'调整现有作品',0)
+    turn,_=conversations.create_turn_idempotent(chat['id'],'ws',s.member.member_id,'调整现有作品',str(uuid4()),1,{'kind':'task','task_id':s.task.id})
+    origin={**conversations.task_turn_source(turn['id'],'ws',s.member.member_id,s.task.id),'assistant_turn_id':turn['id']}
+    business=main._task_business()
+    def invoke(operation,action):
+        task=s.repo.get_creation_task('ws',s.task.id)
+        version=s.repo.get_timeline_version('ws',task.current_timeline_version_id)
+        payload={**action,'request_id':str(uuid4()),'expected_timeline_version_id':version.id,
+                 'expected_timeline_sequence':version.sequence}
+        return business.execute(operation,{'payload':payload,'draft_only':True},actor,task,{},origin,{},lambda conn:None)
+    preview=invoke('preview_task_edit',{'operation_type':'ChangeCanvas','aspect_ratio':'1:1'})
+    assert preview['proposal']['operation']['operation_type']=='ChangeCanvas'
+    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+    canvas=invoke('apply_task_edit',{'operation_type':'ChangeCanvas','aspect_ratio':'1:1'})
+    assert canvas['montage']['aspect_ratio']=='1:1'
+    linked=invoke('apply_task_edit',{'operation_type':'DuplicateClip','clip_id':'clip'})
+    assert len(linked['montage']['clips'])==2
+    task=s.repo.get_creation_task('ws',s.task.id)
+    track=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=task.current_timeline_version_id)[0]
+    result=invoke('apply_task_edit',{'operation_type':'ReplaceSubtitleText','track_id':track.id,
+        'find_text':track.cues[0].text,'replacement_text':'共同入口字幕'})
+    current=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=result['operation']['result_version_id'])
+    assert current[0].cues[0].text=='共同入口字幕'
+
+
+@pytest.mark.parametrize('operation',['ChangeCanvas','ChangeCrop'])
+def test_common_exact_rechecks_guard_in_real_commit(metadata_http_state,monkeypatch,operation):
+    from datetime import datetime,timezone
+    from app.creation.editing.metadata_use_case import EditPreviewRejected
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    from app.schemas import CreationTaskExactEditRequest
+    s=metadata_http_state
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
+    authority.ensure(s.task,actor,interactive=True)
+    def guard(conn):
+        assert conn.in_transaction
+        if authority.status('ws',s.task.id,operation='task_goal',connection=conn,check_scope=False)!='valid':
+            raise PermissionError('原任务授权已撤销')
+    case=main._exact_preview_use_case(write_guard=guard)
+    name='persist_subtitle_edit' if operation=='ChangeCanvas' else 'persist_montage_edit'
+    persist=getattr(case.metadata,name)
+    def revoke_before_commit(**values):
+        current=s.repo.get_task_authorization('ws',s.task.id)
+        s.repo.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=datetime.now(timezone.utc)),
+            expected_revision=current.revision)
+        return persist(**values)
+    monkeypatch.setattr(case.metadata,name,revoke_before_commit)
+    action=({'aspect_ratio':'1:1'} if operation=='ChangeCanvas' else
+        {'clip_id':'clip','fit_mode':'fit','crop_x':0.3,'crop_y':0.7})
+    payload=CreationTaskExactEditRequest(operation_type=operation,**action,request_id=uuid4(),
+        expected_timeline_version_id=s.base.id,expected_timeline_sequence=s.base.sequence)
+    with pytest.raises(EditPreviewRejected) as error:
+        case.apply(s.task,actor,payload,identity=s.identity)
+    assert error.value.status_code==403
+    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+    assert s.repo.list_edit_operations('ws',s.task.id)==[]
+
+
+def test_business_original_read_survives_head_but_rejects_foreign_input_and_revocation(metadata_http_state,monkeypatch):
+    from threading import Event
+    from datetime import datetime,timezone
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    s=metadata_http_state
+    conversations=ConversationRepository(s.repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    chat=conversations.create('ws',s.member.member_id,'task',s.task.id)
+    conversations.save_draft(chat['id'],'ws',s.member.member_id,'修改这个作品',0)
+    turn,_=conversations.create_turn_idempotent(chat['id'],'ws',s.member.member_id,'修改这个作品',str(uuid4()),1,
+        {'kind':'task','task_id':s.task.id})
+    goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'original_instruction':'修改这个作品',
+        'workspace_id':'ws','member_id':s.member.member_id,'task_id':s.task.id,'conversation_id':chat['id'],
+        'revision':0,'status':'running'}
+    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
+    granted=authority.ensure(s.task,actor,interactive=True)
+    required=authority._requirements('ws',s.task.id)[1]
+    s.repo.save_task_authorization(replace(granted,revision=granted.revision+1,
+        resource_scope={**granted.resource_scope,'references':required['references']}),expected_revision=granted.revision)
+    authority.bind_business_context(s.task,actor,goal,memory={})
+    business=main._task_business()
+    business.authorizations=authority
+    binding={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'conversation_id':chat['id'],
+        'turn_id':turn['id'],'input_id':None,'goal_revision':0,
+        'task_version':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}}
+    def call(operation,arguments):
+        return business(operation,arguments,call_id='fixture',tool_call_id='fixture',source_binding=binding,
+            cancel_event=Event(),deadline_monotonic=float('inf'))
+    request_id=str(uuid4())
+    saved=call('apply_task_edit',{'payload':{'operation_type':'ChangeCrop','clip_id':'clip','fit_mode':'fit','crop_x':0.3,'crop_y':0.7,
+        'request_id':request_id,'expected_timeline_version_id':s.base.id,'expected_timeline_sequence':s.base.sequence}})
+    assert saved['ok'],saved
+    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id!=s.base.id
+    read=call('read_task_edit_request',{'request_id':request_id,'phase':'apply'})
+    assert read['ok'] and read['value']['result']==saved['value'],read
+    assert not call('read_task_edit_request',{'task_id':'other-task','request_id':request_id,'phase':'apply'})['ok']
+    foreign_id=str(uuid4())
+    s.repo.claim_edit_request(s.task,s.member.member_id,foreign_id,'apply',{'_business_source':{
+        'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id'],'input_id':'another-input','input_turn_id':turn['id']}})
+    assert not call('read_task_edit_request',{'request_id':foreign_id,'phase':'apply'})['ok']
+    authorization=s.repo.get_task_authorization('ws',s.task.id)
+    s.repo.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
+        expected_revision=authorization.revision)
+    assert not call('read_task_edit_request',{'request_id':request_id,'phase':'apply'})['ok']
+
+
+def test_edit_origin_queued_work_accepts_finished_turn_only_with_current_goal(metadata_http_state):
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    from app.creation_execution import CreationExecutionActor
+    s=metadata_http_state
+    conversations=ConversationRepository(s.repo.database_path)
+    chat=conversations.create('ws',s.member.member_id,'task',s.task.id)
+    conversations.save_draft(chat['id'],'ws',s.member.member_id,'继续完成这段修改',0)
+    turn,_=conversations.create_turn_idempotent(chat['id'],'ws',s.member.member_id,'继续完成这段修改',str(uuid4()),1,
+        {'kind':'task','task_id':s.task.id})
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    source={**conversations.task_turn_source(turn['id'],'ws',s.member.member_id,s.task.id),
+        'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,
+        'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id']}
+    validate_edit_origin(conversations,source,actor)
+    conversations.finish_turn(turn['id'],'completed','已排队',{})
+    with pytest.raises(ValueError): validate_edit_origin(conversations,source,actor)
+    goal={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
+        'current_turn_id':turn['id'],'status':'waiting_result','original_instruction':'继续完成这段修改'}
+    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    validate_edit_origin(conversations,source,actor)
+    with conversations._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        validate_edit_origin(conversations,source,actor,connection=conn)
+        conversations._write_goal(conn,{'id':turn['id']},{**goal,'status':'stopped'})
+        with pytest.raises(ValueError): validate_edit_origin(conversations,source,actor,connection=conn)
+
+
+@pytest.mark.parametrize('phase',['apply','preview'])
+def test_http_exact_journal_source_is_readable_from_business_after_head_advances(metadata_http_state,monkeypatch,phase):
+    from threading import Event
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.assistant.task_business import TaskBusinessRejected
+    from app.creation.editing.metadata_use_case import EditPreviewRejected
+    s=metadata_http_state
+    conversations=ConversationRepository(s.repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    chat=conversations.create('ws',s.member.member_id,'task',s.task.id)
+    conversations.save_draft(chat['id'],'ws',s.member.member_id,'调整画幅并继续完成',0)
+    turn,_=conversations.create_turn_idempotent(chat['id'],'ws',s.member.member_id,'调整画幅并继续完成',str(uuid4()),1,
+        {'kind':'task','task_id':s.task.id,'target_snapshot':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}})
+    goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'original_instruction':'调整画幅并继续完成',
+        'workspace_id':'ws','member_id':s.member.member_id,'task_id':s.task.id,'conversation_id':chat['id'],
+        'revision':0,'status':'running'}
+    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
+    granted=authority.ensure(s.task,actor,interactive=True)
+    required=authority._requirements('ws',s.task.id)[1]
+    s.repo.save_task_authorization(replace(granted,revision=granted.revision+1,
+        resource_scope={**granted.resource_scope,'references':required['references']}),expected_revision=granted.revision)
+    authority.bind_business_context(s.task,actor,goal,memory={})
+    payload={'operation_type':'ChangeCanvas','aspect_ratio':'1:1','assistant_turn_id':turn['id'],
+        'request_id':str(uuid4()),'expected_timeline_version_id':s.base.id,'expected_timeline_sequence':s.base.sequence}
+    endpoint=s.url+'/edits/exact'+('/preview?draft=true' if phase=='preview' else '')
+    forged=s.client.post(endpoint,json={**payload,'request_id':str(uuid4())},
+        headers={'X-Assistant-Input-ID':'not-a-consumed-input'})
+    assert forged.status_code==409,forged.text
+    submitted=s.client.post(endpoint,json=payload)
+    assert submitted.status_code==200,submitted.text
+    if phase=='preview':
+        from app.schemas import CreationTaskExactEditRequest
+        case=main._exact_preview_use_case()
+        case.apply(s.task,actor,CreationTaskExactEditRequest(operation_type='ChangeCrop',clip_id='clip',
+            fit_mode='fit',crop_x=.3,crop_y=.7,request_id=uuid4(),expected_timeline_version_id=s.base.id,
+            expected_timeline_sequence=s.base.sequence),identity=s.identity)
+    current=s.repo.get_creation_task('ws',s.task.id)
+    assert current.current_timeline_version_id!=s.base.id
+    business=main._task_business()
+    business.authorizations=authority
+    binding={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'conversation_id':chat['id'],
+        'turn_id':turn['id'],'input_id':None,'goal_revision':0,
+        'task_version':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}}
+    result=business('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},
+        call_id='read-http',tool_call_id='read-http',source_binding=binding,cancel_event=Event(),deadline_monotonic=float('inf'))
+    assert result['ok'] and result['value']['result']==submitted.json(),result
+    from app.assistant_goal_continuation import GoalResultProjection
+    event_id,_=GoalResultProjection(s.repo,conversations).request_claim(current,s.member.member_id,payload['request_id'],phase)
+    with pytest.raises(PermissionError):
+        main._exact_preview_use_case().read_request_source(current,event_id,replace(actor,member_id='other-actor'))
+    with pytest.raises(TaskBusinessRejected):
+        business.execute('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},actor,current,
+            {**goal,'source_input_id':'another-input','source_input_turn_id':turn['id']},{},{},None)
+    legacy_id=str(uuid4())
+    legacy_event,_=s.repo.claim_edit_request(current,s.member.member_id,legacy_id,phase,{'request_id':legacy_id})
+    s.repo.save_edit_request_result(current,legacy_event,status_code=200,response={'original_result':'preserved'})
+    with pytest.raises(EditPreviewRejected) as unknown:
+        business.execute('read_task_edit_request',{'request_id':legacy_id,'phase':phase},actor,current,goal,{},{},None)
+    assert unknown.value.detail['submission_effect']=='unknown'
+    assert s.repo.read_edit_request_result(current,legacy_event)=={'status_code':200,'response':{'original_result':'preserved'}}
+    gap_payload={**payload,'request_id':str(uuid4())}
+    gap_inputs={**gap_payload,**({'_draft':True} if phase=='preview' else {})}
+    gap_event,_=s.repo.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
+    gap=s.client.post(endpoint,json=gap_payload)
+    assert gap.status_code==409 and gap.json()['detail']['submission_effect']=='unknown',gap.text
+    with pytest.raises(KeyError): s.repo.get_task_event('ws',gap_event+'_source')
+    assert s.repo.read_edit_request_result(current,gap_event) is None
+    conversations.finish_turn(turn['id'],'completed','原请求已提交',{})
+    foreign_input=s.client.post(endpoint,json=payload,headers={'X-Assistant-Input-ID':'another-input'})
+    assert foreign_input.status_code==403,foreign_input.text
+    replay=s.client.post(endpoint,json=payload)
+    assert replay.status_code==200 and replay.json()==submitted.json(),replay.text
+    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==current.current_timeline_version_id
+
+
+def _bootstrap_input(s, bootstrap):
+    from copy import deepcopy
+    from app.creation.contracts import TimelineVersion
+    from app.montage import creation_task_montage_plan_to_payload
+    creation_plan=replace(s.repo.get_creation_plan('ws',s.task.plan_id),id='bootstrap-plan')
+    seeded_task=replace(s.task,id='bootstrap-task',plan_id=creation_plan.id,current_timeline_version_id=None,
+        montage_plan_id=None)
+    s.repo.confirm_creation_plan(creation_plan,seeded_task,verified_owner_user_id=s.member.member_id)
+    montage=deepcopy(s.plan)
+    montage.id='bootstrap-montage'
+    montage.task_id=seeded_task.id
+    s.repo.save_creation_task_montage_plan('ws',seeded_task.id,montage.id,creation_task_montage_plan_to_payload(montage))
+    if bootstrap=='missing_montage':
+        s.repo.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
+            parent_version_id=None,created_by_operation_id=None,snapshot={}),
+            expected_current_version_id=None)
+    task=s.repo.get_creation_task('ws',seeded_task.id)
+    return task,montage
+
+
+@pytest.mark.parametrize('bootstrap',['no_timeline','missing_montage'])
+@pytest.mark.parametrize('invalidation',['revoked','stopped','head_advanced'])
+def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metadata_http_state,monkeypatch,bootstrap,invalidation):
+    from datetime import datetime,timezone
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.schemas import CreationTaskExactEditRequest
+    s=metadata_http_state
+    from app.creation.contracts import TimelineVersion
+    task,montage=_bootstrap_input(s,bootstrap)
+    conversations=ConversationRepository(s.repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    chat=conversations.create('ws',s.member.member_id,'task',task.id)
+    conversations.save_draft(chat['id'],'ws',s.member.member_id,'调整画幅',0)
+    expected_sequence=0 if bootstrap=='no_timeline' else s.base.sequence
+    turn,_=conversations.create_turn_idempotent(chat['id'],'ws',s.member.member_id,'调整画幅',str(uuid4()),1,
+        {'kind':'task','task_id':task.id,'target_snapshot':{'timeline_version_id':task.current_timeline_version_id,
+            'timeline_sequence':expected_sequence}})
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
+    authorization=authority.ensure(task,actor,interactive=True)
+    assert authority.status('ws',task.id,check_scope=False)=='valid',authorization
+    def guard(conn):
+        assert conn.in_transaction
+        if authority.status('ws',task.id,operation='task_goal',connection=conn,check_scope=False)!='valid':
+            raise PermissionError('原授权已撤销')
+    case=main._exact_preview_use_case(write_guard=guard)
+    payload=CreationTaskExactEditRequest(operation_type='ChangeCanvas',aspect_ratio='1:1',assistant_turn_id=turn['id'],
+        request_id=uuid4(),expected_timeline_version_id=task.current_timeline_version_id,expected_timeline_sequence=expected_sequence)
+    _,source=case._source(task,payload,s.identity,actor,None)
+    if invalidation=='revoked':
+        s.repo.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
+            expected_revision=authorization.revision)
+    elif invalidation=='stopped':
+        goal={'workspace_id':'ws','task_id':task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
+            'current_turn_id':turn['id'],'status':'stopped'}
+        with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    else:
+        s.repo.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
+            sequence=expected_sequence+1,parent_version_id=task.current_timeline_version_id,created_by_operation_id=None,snapshot={}),
+            expected_current_version_id=task.current_timeline_version_id)
+    before_head=s.repo.get_creation_task('ws',task.id).current_timeline_version_id
+    with s.repo._connect() as conn:
+        before=[tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]
+        montage_before=[tuple(row) for row in conn.execute('SELECT * FROM creation_task_montage_plans ORDER BY id')]
+    with pytest.raises((PermissionError,ValueError)):
+        case.metadata.ensure_montage_base('ws',task,montage,source=source)
+    with s.repo._connect() as conn:
+        assert [tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]==before
+        assert [tuple(row) for row in conn.execute('SELECT * FROM creation_task_montage_plans ORDER BY id')]==montage_before
+    assert s.repo.get_creation_task('ws',task.id).current_timeline_version_id==before_head
+
+
+@pytest.mark.parametrize('authorization_state',['revoked','expired','wrong_identity','unverified','missing_assistant','manual'])
+def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_http_state,monkeypatch,authorization_state):
+    from datetime import datetime,timedelta,timezone
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    s=metadata_http_state
+    task,_=_bootstrap_input(s,'no_timeline')
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    conversations=ConversationRepository(s.repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    assistant={}
+    if authorization_state!='manual':
+        chat=conversations.create('ws',s.member.member_id,'task',task.id)
+        conversations.save_draft(chat['id'],'ws',s.member.member_id,'调整画幅',0)
+        turn,_=conversations.create_turn_idempotent(chat['id'],'ws',s.member.member_id,'调整画幅',str(uuid4()),1,
+            {'kind':'task','task_id':task.id,'target_snapshot':{'timeline_version_id':None,'timeline_sequence':0}})
+        assistant={'assistant_turn_id':turn['id']}
+    authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
+    if authorization_state not in {'manual','missing_assistant'}:
+        authorization=authority.ensure(task,actor,interactive=True)
+        now=datetime.now(timezone.utc)
+        changes={'revision':authorization.revision+1}
+        if authorization_state=='revoked': changes['revoked_at']=now
+        elif authorization_state=='expired': changes['expires_at']=now-timedelta(seconds=1)
+        elif authorization_state=='unverified': changes['expires_at']=None
+        else: changes['identity']={**authorization.identity,'member_id':'another-member'}
+        s.repo.save_task_authorization(replace(authorization,**changes),expected_revision=authorization.revision)
+    case=main._exact_preview_use_case()
+    assert case.metadata.write_guard is None
+    original_status=case.metadata.task_authorizations.status
+    def status(workspace_id,task_id,**options):
+        assert options['connection'].in_transaction
+        assert options['identity']==authority.identity(actor)
+        assert options['check_scope'] is False and 'operation' not in options
+        return original_status(workspace_id,task_id,**options)
+    monkeypatch.setattr(case.metadata.task_authorizations,'status',status)
+    monkeypatch.setattr(main,'_exact_preview_use_case',lambda *args,**kwargs:case)
+    monkeypatch.setattr(main,'_verify_creation_identity',lambda *_:pytest.fail('内容bootstrap不能请求设备生成许可'))
+    with s.repo._connect() as conn:
+        before=[tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]
+    response=s.client.post(f'/api/creation-tasks/{task.id}/edits/exact/preview?draft=true',json={
+        'operation_type':'ChangeCanvas','aspect_ratio':'1:1','request_id':str(uuid4()),
+        'expected_timeline_version_id':None,'expected_timeline_sequence':0,**assistant})
+    current=s.repo.get_creation_task('ws',task.id)
+    if authorization_state=='manual':
+        assert response.status_code==200,response.text
+        assert current.current_timeline_version_id is not None
+        assert s.repo.get_task_authorization('ws',task.id) is None
+    else:
+        assert response.status_code==403,response.text
+        with s.repo._connect() as conn:
+            assert [tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]==before
+        assert current.current_timeline_version_id is None

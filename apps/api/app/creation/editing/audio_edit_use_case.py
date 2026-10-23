@@ -116,7 +116,7 @@ class AudioEditUseCase:
             raise AudioEditRejected(status_code=422, detail=detail) from exc
         if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
             raise AudioEditRejected(status_code=409, detail='试听生成期间时间线发生变化，请重新预览')
-        base = self.montage_edits.ensure_montage_base(workspace_id, task, plan)
+        base = self.montage_edits.ensure_montage_base(workspace_id, task, plan, source=source)
         intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=payload.raw_command, context_stage='montage', selected_object_refs=[f'audio:{payload.target_id}'], playhead_ms=round(start * 1000), intent_type='edit_audio', scope={'kind': 'audio', 'target_id': payload.target_id}, constraints={'preserve_video': True, 'audio_source_facts': self.source_facts(task, before, after, actor)}, confidence=1, status='interpreted'), source=source)
         labels = {'add': '添加音频片段', 'update': '修改音频片段', 'delete': '删除音频片段（保留时间空隙）', 'split': '分割音频片段', 'duplicate': '复制音频片段', 'track': '修改音轨设置', 'replace_narration': '用本机录音替换整条旁白'}
         summary = labels[payload.action]

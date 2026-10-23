@@ -171,7 +171,7 @@ def logical_montage_output_refs(plan: CreationTaskMontagePlan) -> list[str]:
 
 
 class MetadataEditUseCase:
-    def __init__(self, repository, artifact_store, *, output_root, audio_service, task_authorizations=None):
+    def __init__(self, repository, artifact_store, *, output_root, audio_service, task_authorizations=None, write_guard=None, validate_origin=None):
         self.repository = repository
         self.artifact_store = artifact_store
         self.output_root = output_root
@@ -179,6 +179,18 @@ class MetadataEditUseCase:
         self.picture_renderer = None
         self.preview_settings = None
         self.task_authorizations = task_authorizations
+        self.write_guard = write_guard
+        self.validate_origin = validate_origin
+
+    def verify_edit_origin(self, proposal, *, connection, direct_intent=None):
+        if self.validate_origin is None:
+            return
+        intent=direct_intent or self.repository.get_edit_intent(proposal.workspace_id,proposal.intent_id)
+        source=intent.constraints.get('request_source')
+        if source is not None:
+            from app.creation_execution import CreationExecutionActor
+            actor=CreationExecutionActor.from_event(proposal.workspace_id,source['actor_identity'])
+            self.validate_origin(source,actor,connection=connection)
 
     def prepare_material_scope(self, task, before, after, identity, *, connection):
         previous = {clip.asset_id for clip in before.clips if not clip.person_render_id}
@@ -339,26 +351,52 @@ class MetadataEditUseCase:
         return segments
 
 
-    def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan) -> TimelineVersion:
-        if task.current_timeline_version_id is not None:
+    def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan, *, source=None) -> TimelineVersion:
+        if task.current_timeline_version_id:
             current = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
-            if isinstance(current.snapshot.get('montage'),dict):
+            if isinstance(current.snapshot.get('montage'), dict):
                 return current
-            version = TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=workspace_id,task_id=task.id,
-                parent_version_id=current.id,sequence=current.sequence+1,
+        with self.repository._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if self.write_guard is not None:
+                self.write_guard(conn)
+            current_task=self.repository.get_creation_task(workspace_id,task.id,connection=conn)
+            expected=source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id
+            if current_task.current_timeline_version_id != expected:
+                raise EditConflict('时间线已变化，未创建基础版本')
+            current=(self.repository.get_timeline_version(workspace_id,expected,connection=conn) if expected else None)
+            if source is not None:
+                if source['expected_timeline_sequence'] != (current.sequence if current else 0):
+                    raise EditConflict('时间线序号已变化，未创建基础版本')
+                from app.creation_execution import CreationExecutionActor
+                actor=CreationExecutionActor.from_event(workspace_id,source['actor_identity'])
+                if self.validate_origin is not None:
+                    self.validate_origin(source,actor,connection=conn)
+                authorization=self.repository.get_task_authorization(workspace_id,task.id,connection=conn,metadata_only=True)
+                if source.get('assistant_turn_id') or authorization is not None:
+                    if self.task_authorizations is None:
+                        raise PermissionError('基础版本缺少可复验的原任务授权')
+                    status=self.task_authorizations.status(workspace_id,task.id,
+                        identity=self.task_authorizations.identity(actor),connection=conn,check_scope=False)
+                    if status!='valid':
+                        raise PermissionError(f'原任务授权不可用于创建基础版本：{status}')
+            if current is not None:
                 snapshot={**current.snapshot,'montage':creation_task_montage_plan_to_payload(plan),
-                    **self.current_narration_snapshot(workspace_id,task)},created_by_operation_id=None)
-            return self.repository.create_timeline_version(version,expected_current_version_id=current.id)
-        versions = self.repository.list_timeline_versions(workspace_id, task.id)
-        if versions:
-            return versions[-1]
-        version = TimelineVersion(id=f'timeline_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, parent_version_id=None, sequence=1, snapshot={'montage': creation_task_montage_plan_to_payload(plan), **self.current_narration_snapshot(workspace_id, task)}, created_by_operation_id=None)
-        return self.repository.create_timeline_version(version)
+                    **self.current_narration_snapshot(workspace_id,current_task)}
+                version=TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=workspace_id,task_id=task.id,
+                    sequence=current.sequence+1,parent_version_id=current.id,created_by_operation_id=None,snapshot=snapshot)
+            else:
+                version=TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=workspace_id,task_id=task.id,sequence=1,
+                    parent_version_id=None,created_by_operation_id=None,
+                    snapshot={'montage':creation_task_montage_plan_to_payload(plan),
+                            **self.current_narration_snapshot(workspace_id,current_task)})
+            self.repository.create_timeline_version(version,connection=conn,expected_current_version_id=expected)
+        return self.repository.get_timeline_version(workspace_id,version.id)
 
     def begin(self, task, member_id, request_id, inputs, *, phase="preview"):
         if request_id is None:
             return None, None
-        event_id, fresh = self.repository.claim_edit_request(task, member_id, request_id, phase, inputs)
+        event_id, fresh = self.repository.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.write_guard)
         if fresh:
             return event_id, None
         recorded = self.repository.read_edit_request_result(task, event_id)
@@ -376,7 +414,8 @@ class MetadataEditUseCase:
                     operation = candidate
                 break
         if operation is None:
-            raise EditConflict('原保存结果尚未确定，请查询原请求，不重复执行')
+            raise EditPreviewRejected(409,{'error':'edit_request_result_unknown',
+                'reason':'原保存结果尚未确定，请查询原请求，不重复执行','submission_effect':'unknown'})
         version = self.repository.get_timeline_version(task.workspace_id, operation.result_version_id)
         plan = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return event_id, MetadataEditReplay(None, MetadataEditResult(operation, plan, task, None,
@@ -589,6 +628,9 @@ class MetadataEditUseCase:
             updated_plan or creation_task_montage_plan_from_payload(base_version.snapshot['montage']),actor_identity,connection=None)
         readiness={}
         def verify_commit(conn):
+            if self.write_guard is not None:
+                self.write_guard(conn)
+            self.verify_edit_origin(proposal,connection=conn)
             if verify_sources is not None:
                 verify_sources(conn)
             readiness.update(authorization_write(conn))
@@ -646,6 +688,9 @@ class MetadataEditUseCase:
             source_subtitle_tracks=self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))
         readiness = {}
         def verify_commit(conn):
+            if self.write_guard is not None:
+                self.write_guard(conn)
+            self.verify_edit_origin(proposal,connection=conn,direct_intent=direct_intent)
             if direct_intent is not None:
                 direct_source_verifier.verify_change(direct_command, change.montage_payload, conn)
             elif proposal_source_verifier is not None:
@@ -686,7 +731,7 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
         action = payload.overlay_action
         identity = payload.graphic_overlay.id if action == 'add' else payload.overlay_id
-        base = self.ensure_montage_base(workspace_id, task, plan)
+        base = self.ensure_montage_base(workspace_id, task, plan, source=source)
         tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
         try:
             for item in edited.graphic_overlays:
@@ -719,7 +764,7 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=409, detail='正在渲染或转场镜头已锁定，请先解锁或等待完成')
         if targets[1].transition_in_seconds == payload.transition_seconds:
             raise EditPreviewRejected(status_code=422, detail='转场没有变化')
-        base = self.ensure_montage_base(workspace_id, task, plan)
+        base = self.ensure_montage_base(workspace_id, task, plan, source=source)
         edited = deepcopy(plan)
         edited.clips[index].transition_in_seconds = payload.transition_seconds
         tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
@@ -747,7 +792,7 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=422, detail='画幅修改需要9:16、16:9或1:1，可同时指定填充或适应')
         task = self.task_or_missing(workspace_id, task_id)
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
-        base = self.ensure_montage_base(workspace_id, task, montage)
+        base = self.ensure_montage_base(workspace_id, task, montage, source=source)
         if any((clip.locked for clip in montage.clips)):
             raise EditPreviewRejected(status_code=422, detail='改变画幅会影响所有镜头，请先解锁镜头')
         if montage.aspect_ratio == payload.aspect_ratio and (payload.fit_mode is None or all((clip.fit_mode == payload.fit_mode for clip in montage.clips))):
@@ -812,7 +857,7 @@ class MetadataEditUseCase:
         invalidated_refs = logical_montage_output_refs(persisted_plan)
         if payload.operation_type == 'TrimClip' and task.current_timeline_version_id is None:
             raise edit_preview_failure(status_code=409, error='timeline_version_required', reason='当前故事板还没有可撤销的初始版本。', impact='裁剪预览和有效时间线均未改变。', repair_action='点击“保留当前故事板并建立版本”，再预览裁剪。', retryable=True)
-        base_version = self.ensure_montage_base(workspace_id, task, persisted_plan)
+        base_version = self.ensure_montage_base(workspace_id, task, persisted_plan, source=source)
         task = self.repository.get_creation_task(workspace_id, task_id)
         plan = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(persisted_plan))
         supplied = {'fit_mode': payload.fit_mode, 'crop_x': payload.crop_x, 'crop_y': payload.crop_y, 'asset_id': payload.asset_id, 'segment_id': payload.segment_id, 'source_start_seconds': payload.source_start_seconds, 'split_time_seconds': payload.split_time_seconds, 'playback_rate': payload.playback_rate, 'position': payload.position, 'locked': payload.locked}
@@ -1015,7 +1060,7 @@ class MetadataEditUseCase:
             candidates = [candidate_by_ref[match.asset_ref, match.segment_ref] for match in matched_refs if (match.asset_ref, match.segment_ref) in candidate_by_ref]
         if not candidates:
             raise edit_preview_failure(status_code=409, error='replacement_clip_unavailable', reason=f'当前工作区没有符合“{material_constraint}”且满足时间槽的其他镜头。' if material_constraint else '当前工作区没有满足这个时间槽的其他可用镜头。', impact='原镜头和当前成片保持不变。', repair_action='导入或审核更多素材后重新提出替换要求。', retryable=True)
-        base_version = self.ensure_montage_base(workspace_id, task, plan)
+        base_version = self.ensure_montage_base(workspace_id, task, plan, source=request_source)
         replacement = candidates[0]
         now = utc_now()
         source_command = metadata_edit_command(task, identity, 'ReplaceClip', {'base_version_id': base_version.id, 'clip_id': clip.id, 'asset_id': replacement.asset_id, 'segment_id': replacement.segment_id, 'source_start_seconds': replacement.start_seconds}, source=request_source)
@@ -1072,7 +1117,7 @@ class MetadataEditUseCase:
         else:
             new_order.insert(destination, new_order.pop(source))
         link_narration = self.reorder_narration_scope(plan, new_order, target_ids)
-        base = self.ensure_montage_base(workspace_id, task, plan)
+        base = self.ensure_montage_base(workspace_id, task, plan, source=request_source)
         candidate = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan))
         for index, clip_id in enumerate(new_order):
             if old_order[index] != clip_id:

@@ -8,6 +8,8 @@ import hashlib
 
 from pydantic import ValidationError
 from fastapi import HTTPException
+from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.assistant_goal_continuation import GoalProjectionRejected
 from app.assistant.projection import _safe_business_failure
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.creation.script_draft_use_case import ScriptDraftRejected
@@ -61,7 +63,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -75,6 +77,8 @@ class TaskBusiness:
         self.segments=segments
         self.native_case=native_case
         self.timeline_restores=timeline_restores
+        self.exact_case_for=exact_case_for
+        self.media_jobs_list=media_jobs_list
 
     def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -175,7 +179,7 @@ class TaskBusiness:
         entered=False
         try:
             binding=dict(source_binding)
-            reconcile_original=(operation in {'read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision'}
+            reconcile_original=(operation in {'read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','apply_task_edit','preview_task_edit','select_narration_voice'}
                 or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
             # Section owners validate the frozen target and dependency digest at
             # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -202,11 +206,11 @@ class TaskBusiness:
                 arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
             guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,check_version=check_version)
             entered=True
-            value=self.execute(operation,arguments,actor,task,goal,origin,sealed,guard)
+            value=self.execute(operation,arguments,actor,task,goal,{**origin,'assistant_turn_id':binding['turn_id']},sealed,guard)
             from fastapi.encoders import jsonable_encoder
             value=jsonable_encoder(value)
             return {"ok":True,"value":value}
-        except (TaskBusinessRejected,ScriptDraftRejected,ExecutionControlRejected,OutputObservationRejected,HTTPException) as exc:
+        except (TaskBusinessRejected,ScriptDraftRejected,ExecutionControlRejected,OutputObservationRejected,EditPreviewRejected,GoalProjectionRejected,HTTPException) as exc:
             failure={"status_code":exc.status_code,**(_safe_business_failure(exc.detail) if isinstance(exc.detail,dict) else {"reason":str(exc.detail)})}
             if not entered and 'submission_effect' not in failure:
                 failure['submission_effect']='not_submitted'
@@ -367,6 +371,37 @@ class TaskBusiness:
 
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
+        if operation in {'apply_task_edit','preview_task_edit'}:
+            from app.schemas import CreationTaskExactEditRequest
+            payload=CreationTaskExactEditRequest.model_validate({**args['payload'], 'assistant_turn_id':origin['assistant_turn_id']})
+            case=self.exact_case_for(write_guard=guard)
+            identity={'member_id':actor.user_id or actor.member_id,'local_diagnostic':False}
+            if operation=='apply_task_edit':
+                result=case.apply(task,actor,payload,identity=identity,origin=origin)
+            else:
+                result=case.submit_preview(self.runtime,actor,task,payload,identity=identity,
+                    origin=origin,draft_only=args.get('draft_only',False),project_media=lambda media,job,actor,runtime:self.media_result(task,actor,job.id))
+            if result.status_code>=400: raise HTTPException(result.status_code,result.value.get('detail',result.value))
+            return result.value
+        if operation=='read_task_edit_request':
+            from app.assistant_goal_continuation import GoalResultProjection
+            projection=GoalResultProjection(self.production,self.conversations)
+            event_id,event=projection.request_claim(task,actor.user_id or actor.member_id,args['request_id'],args.get('phase','preview'))
+            source=self.exact_case_for().read_request_source(task,event_id,actor)
+            if (not source.get('assistant_turn_id') or not projection.source_belongs_to_goal(goal,source)):
+                raise TaskBusinessRejected('原请求不属于当前目标输入')
+            return self.request_result(task,actor,args['request_id'],args.get('phase','preview'))
+        if operation=='read_task_media_jobs':
+            return self.media_jobs_list(task,actor,cursor=args.get('cursor'),limit=args.get('limit',20))
+        if operation in {'select_narration_voice','read_narration_voice_request'}:
+            member=actor.user_id or actor.member_id
+            if operation=='read_narration_voice_request':
+                return self.production.get_creation_task_narration_voice_selection(ws,task_id,args['request_id'],member_id=member)
+            from app.schemas import CreationTaskNarrationVoiceSelectionRequest
+            payload=CreationTaskNarrationVoiceSelectionRequest.model_validate(args['payload'])
+            return self.execution.select_narration_voice(runtime=self.runtime(),actor=actor,write_guard=guard,
+                workspace_id=ws,task_id=task_id,member_id=member,
+                **{**payload.model_dump(exclude={'assistant_turn_id'}),'request_id':str(payload.request_id)})
         if operation in {'read_timeline_history','read_timeline_restore_request','restore_timeline'}:
             if self.timeline_restores is None: raise TaskBusinessRejected('原修改恢复用例尚未装配')
             if operation=='read_timeline_history': return self.timeline_restores.history(ws,task_id,actor,

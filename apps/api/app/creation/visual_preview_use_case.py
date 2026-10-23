@@ -95,7 +95,7 @@ class VisualPreviewUseCase:
             if not draft_only:
                 if any(item.visual_effects["beauty_strength"] or item.visual_effects["skin_exposure"] for item in changed_clips.values()):
                     raise ValueError("本机人像效果尚无受许可执行路径，请先移除该效果")
-                base = self.metadata.ensure_montage_base(workspace_id, task, plan)
+                base = self.metadata.ensure_montage_base(workspace_id, task, plan, source=source)
                 tracks = self.renderer.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
                 before, after, projected = self.project(plan, payload.clip_ids, patch, tracks)
                 records = [self.publish_picture(workspace_id, task, base, candidate, scoped_tracks,
@@ -106,7 +106,7 @@ class VisualPreviewUseCase:
             raise PicturePreviewRejected(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
         if self.repository.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
             raise PicturePreviewRejected(status_code=409,detail="预览期间时间线发生变化，请重新预览")
-        base=self.metadata.ensure_montage_base(workspace_id,task,plan)
+        base=self.metadata.ensure_montage_base(workspace_id,task,plan,source=source)
         refs=[f"clip:{clip.id}" for clip in clips]
         intent=self.repository.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
             raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="visual_adjustment",

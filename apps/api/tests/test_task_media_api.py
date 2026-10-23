@@ -309,3 +309,31 @@ def test_list_is_bounded_member_filtered_and_restores_same_jobs(tmp_path, monkey
     assert {item['job_id'] for item in first['items']+second['items']} == {job.id for job in own}
     assert client.get('/api/creation-tasks/task/media-jobs?limit=41').status_code == 422
     runtime.stop(0)
+
+
+def test_owner_media_pages_reject_foreign_cursor_without_execution(tmp_path):
+    from dataclasses import replace
+    from app.creation.contracts import JobRun,TaskEvent
+    from app.creation_execution import CreationExecutionActor
+    from app.task_audio import TaskMediaJobs,TASK_MEDIA_KIND
+    from test_metadata_edit_use_case import metadata_state
+    s=metadata_state(tmp_path)
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    media=TaskMediaJobs(s.repo,facts=lambda *args:None,verify_identity=lambda actor:'ready')
+    def add(job_id,who,task_id=s.task.id):
+        s.repo.create_job_run(JobRun(job_id,'ws',task_id,TASK_MEDIA_KIND,job_id,'fixture'))
+        s.repo.append_task_event(TaskEvent('event_'+job_id+'_start','ws',task_id,job_id,'task_media_started',who.identity_payload()))
+    for n in range(3): add('own-'+str(n),actor)
+    other=replace(actor,member_id='other')
+    add('foreign',other)
+    foreign_plan=replace(s.repo.get_creation_plan('ws',s.task.plan_id),id='other-plan')
+    foreign_task=replace(s.task,id='other-task',plan_id=foreign_plan.id)
+    s.repo.confirm_creation_plan(foreign_plan,foreign_task,verified_owner_user_id=s.member.member_id)
+    add('foreign-task',actor,foreign_task.id)
+    first,cursor=media.list('ws',s.task.id,actor,limit=2)
+    second,end=media.list('ws',s.task.id,actor,cursor=cursor,limit=2)
+    assert {job.id for job in first+second}=={'own-0','own-1','own-2'}
+    assert end is None
+    for bad in ['foreign','foreign-task','missing']:
+        with pytest.raises(KeyError): media.list('ws',s.task.id,actor,cursor=bad,limit=2)
+    with pytest.raises(ValueError): media.list('ws',s.task.id,actor,limit=41)

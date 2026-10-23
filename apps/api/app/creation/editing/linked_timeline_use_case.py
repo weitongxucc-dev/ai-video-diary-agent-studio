@@ -109,7 +109,7 @@ class LinkedTimelineEditUseCase:
         if operation == 'ChangeLinkedSpeed':
             check_command(task, command)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, command.task_id))
-        base = self.montage_edits.ensure_montage_base(command.workspace_id, task, plan)
+        base = self.montage_edits.ensure_montage_base(command.workspace_id, task, plan, source=command.source)
         task = self.repository.get_creation_task(command.workspace_id, command.task_id)
         command = replace(command, base_version_id=base.id, values={**command.values, 'base_version_id': base.id})
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=plan)
@@ -301,7 +301,7 @@ class LinkedTimelineEditUseCase:
             raise EditPreviewRejected(status_code=404, detail='所选镜头不存在。')
         if clip.locked:
             raise EditPreviewRejected(status_code=409, detail='所选镜头已锁定，请先解锁。')
-        base = self.montage_edits.ensure_montage_base(workspace_id, task, plan)
+        base = self.montage_edits.ensure_montage_base(workspace_id, task, plan, source=request_source)
         tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
         graph = effective_audio_timeline(plan)
         voice_ids = {t.id for t in graph.tracks if t.role in {'narration', 'original'} and (not t.muted) and any((not c.muted for c in t.clips))}

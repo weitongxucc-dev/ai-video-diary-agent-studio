@@ -3010,7 +3010,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
     assert wav_reads
 
 
-@pytest.mark.parametrize('interrupt_final',[False,True,'dependency_changed'])
+@pytest.mark.parametrize('interrupt_final',[False,True,'dependency_changed','source_changed'])
 def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption(tmp_path,monkeypatch,interrupt_final):
     from model_workers.pcm_assembly import execute as assemble
     from app.creation.contracts import EditIntent,EditProposal,JobRun,TaskEvent
@@ -3022,7 +3022,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     def worker(_scheduler,_grant,command,**_kwargs):
         manifest=json.loads(Path(command[-1]).read_text())
         receipt=assemble(manifest,{'generated_bytes':0,'work_created':False})
-        if interrupt_final is True and manifest['job_id']!=case.job.id and receipt['finalized']:
+        if interrupt_final in (True, 'source_changed') and manifest['job_id']!=case.job.id and receipt['finalized']:
             Path(manifest['receipt_path']).unlink()
             raise OSError('模拟局部配音seal后登记前退出')
         return SimpleNamespace(returncode=0,stdout=json.dumps(receipt),stderr='')
@@ -3064,23 +3064,47 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     control=CreationExecutionControl(case.repo,case.execution,SimpleNamespace(valid=lambda *_:False),lambda _:'ready')
     runtime=SimpleNamespace(scheduler=case.scheduler,registrations={
         'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)},wake=lambda:None)
-    job,queued=control.submit_narration_edit('local',task,proposal,case.actor,runtime)
+    from functools import partial
+    from app.conversation_repository import ConversationRepository
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    conversations = ConversationRepository(case.repo.database_path)
+    source = {'source_kind': 'interactive', 'workspace_id': 'local', 'task_id': task.id, 'member_id': case.actor.member_id,
+        'actor_identity': case.actor.identity_payload(), 'request_id': proposal.id,
+        'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence}
+    if interrupt_final in (True, 'source_changed'):
+        source['source_kind'] = 'assistant'
+        chat = conversations.create('local', case.actor.member_id, 'task', task.id)
+        conversations.save_draft(chat['id'], 'local', case.actor.member_id, '重新配音', 0)
+        turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', case.actor.member_id,
+            '重新配音', 'origin-request', 1, {'kind': 'task', 'task_id': task.id})
+        source.update(conversations.task_turn_source(turn['id'], 'local', case.actor.member_id, task.id))
+        source['assistant_turn_id'] = turn['id']
+    verifier = partial(validate_edit_origin, conversations)
+    case.owner.source_verifier = case.executor.source_verifier = verifier
+    job,queued=control.submit_narration_edit('local',task,proposal,case.actor,runtime,source=source)
     binding=case.repo.creation_narration_source_binding('local',job.id)
     assert binding.payload['business_input_digest']==job.input_digest
     assert binding.payload['basis']=='current_bytes_at_adoption'
+    if interrupt_final is True:
+        conversations.finish_turn(turn['id'], 'completed', '已排队', {})
+        goal = {'workspace_id': 'local', 'task_id': task.id, 'member_id': case.actor.member_id,
+            'original_turn_id': turn['id'], 'current_turn_id': turn['id'], 'status': 'waiting_result',
+            'original_instruction': '重新配音'}
+        with conversations._connect() as conn:
+            conversations._write_goal(conn, {'id': turn['id']}, goal)
     if interrupt_final == 'dependency_changed':
         from app.device_scheduler import RecoveryBlocked
         _replace_fixed_voice_file(SimpleNamespace(**{**vars(case),'job':job}))
         original_audio=case.repo.resolve_authorized_narration_audio_reference('local',segments[1].audio_reference)
         original_audio.write_bytes(original_audio.read_bytes())
         with pytest.raises(RecoveryBlocked,match='其他产物或依赖已变化'):
-            control.submit_narration_edit('local',task,proposal,case.actor,runtime)
+            control.submit_narration_edit('local',task,proposal,case.actor,runtime,source=source)
         assert case.scheduler._get(queued.id).state=='waiting'
         assert case.repo.creation_narration_source_binding('local',job.id)==binding
         return
     if not interrupt_final:
         _replace_fixed_voice_file(SimpleNamespace(**{**vars(case),'job':job}))
-        same,revalidated=control.submit_narration_edit('local',task,proposal,case.actor,runtime)
+        same,revalidated=control.submit_narration_edit('local',task,proposal,case.actor,runtime,source=source)
         assert same.id==job.id and revalidated.id!=queued.id
         assert revalidated.first_ready_at_utc==queued.first_ready_at_utc
         assert case.repo.creation_narration_source_binding('local',job.id)==binding
@@ -3094,6 +3118,21 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
         with pytest.raises(RecoveryBlocked):
             case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
         control=CreationExecutionControl(case.repo,case.execution,SimpleNamespace(valid=lambda *_:False),lambda _:'ready')
+        if interrupt_final == 'source_changed':
+            conversations.finish_turn(turn['id'], 'stopped', '原目标已停止', {})
+            assert case.executor.recover_pcm_unit(job, case.actor, case.scheduler)
+            current = case.repo.get_creation_task('local', task.id)
+            assert current.current_timeline_version_id == base.id
+            assert case.repo.get_job_run('local', job.id).status == 'interrupted'
+            assert case.repo.list_edit_operations('local', task.id) == []
+            usage = case.repo.creation_narration_usage('local', job.id)
+            assert not usage['unsettled'] and usage['used_output_bytes'] == 192096
+            reconciled = [event for event in case.repo.list_task_events('local', task.id)
+                if event.job_id == job.id and event.event_type == 'narration_edit_result_reconciled']
+            assert len(reconciled) == 1 and reconciled[0].payload['publication_blocked']
+            assert reconciled[0].payload['pcm']['finalized']
+            assert case.repo.narration_edit_generated('local', job.id)
+            return
         control.recover(SimpleNamespace(scheduler=case.scheduler,registrations={
             'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)},wake=lambda:None))
     else:
@@ -4602,3 +4641,105 @@ def test_segment_visual_decision_rejects_stale_or_revoked_adoption(tmp_path, mon
     with pytest.raises(KeyError):
         case.repo.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
     assert case.scheduler.pick_and_grant() is None
+
+
+def _edit_source_boundary_case(tmp_path, monkeypatch, kind):
+    from app.conversation_repository import ConversationRepository
+    from app.creation.contracts import EditIntent, EditProposal
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    from app.device_scheduler import SubmissionIntent, SchedulePolicy
+    case = _narration_units_case(tmp_path)
+    conversations = ConversationRepository(case.repo.database_path)
+    chat = conversations.create('local', case.actor.member_id, 'task', case.task_id)
+    conversations.save_draft(chat['id'], 'local', case.actor.member_id, '修改原作品', 0)
+    turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', case.actor.member_id,
+        '修改原作品', 'edit-source', 1, {'kind': 'task', 'task_id': case.task_id})
+    source = {**conversations.task_turn_source(turn['id'], 'local', case.actor.member_id, case.task_id),
+        'workspace_id': 'local', 'task_id': case.task_id, 'member_id': case.actor.member_id,
+        'actor_identity': case.actor.identity_payload(), 'assistant_turn_id': turn['id']}
+    intent = case.repo.create_edit_intent(EditIntent('source-intent', 'local', case.task_id,
+        '修改原作品', 'person', [], None, 'edit', {}, {}, 1, 'interpreted'))
+    proposal = case.repo.create_edit_proposal(EditProposal('source-proposal', 'local', case.task_id,
+        intent.id, '修改原作品', ['clip:original'], {'operation_type': 'RegeneratePersonRender',
+            'payload': {'person_profile_id': 'person', 'person_version': 'v1'}}, [], {}, []))
+    with case.repo._connect() as conn:
+        conn.execute('UPDATE job_runs SET kind=?,status=? WHERE id=?', (kind, 'running', case.job.id))
+        event = case.repo.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
+        payload = {**event.payload, 'source': source, 'edit_proposal_id': proposal.id}
+        conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',
+            (json.dumps(payload), event.id))
+    # Resource/proposal eligibility is covered by the existing real edit integration;
+    # these boundary cases isolate persisted source changes with real SQLite/turn facts.
+    key = ('person_edit:' if kind == 'creation_task_person_edit' else 'narration_edit:') + 'source'
+    resources = {'kind': 'edit_source_boundary'}
+    monkeypatch.setattr(case.owner, '_check_facts', lambda *a: 'ready')
+    monkeypatch.setattr(case.owner, 'edit_facts', lambda *a, **kw: (key, resources))
+    monkeypatch.setattr(case.owner, 'narration_edit_facts', lambda *a, **kw: (key, resources))
+    connections = []
+    def verifier(source, actor, *, connection=None):
+        connections.append(connection)
+        validate_edit_origin(conversations, source, actor, connection=connection)
+    case.owner.source_verifier = case.executor.source_verifier = verifier
+    request = SimpleNamespace(workspace_id='local', owner_id=case.job.id, owner_type='creation_job',
+        member_id=case.actor.member_id, source_refs=(), unit_key=key, input_digest=case.job.input_digest,
+        work_class='preview_dependency' if kind == 'creation_task_narration_edit' else 'normal_make', resources=resources)
+    submission = SubmissionIntent('local', 'creation_job', case.job.id, case.job.input_digest, key, SchedulePolicy())
+    return SimpleNamespace(**vars(case), turn=turn, source=source, request=request,
+        submission=submission, connections=connections)
+
+
+@pytest.mark.parametrize('kind', ['creation_task_person_edit', 'creation_task_narration_edit'])
+def test_edit_source_rechecked_in_submission_grant_and_success_transaction(tmp_path, monkeypatch, kind):
+    case = _edit_source_boundary_case(tmp_path, monkeypatch, kind)
+    checkpoint = (case.executor._person_edit_checkpoint if kind == 'creation_task_person_edit'
+        else case.executor._narration_edit_checkpoint)
+    grant = SimpleNamespace(workspace_id='local', owner_id=case.job.id, request_id='original-request',
+        unit_key=case.request.unit_key, attempt_number=1)
+    with case.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert case.owner.verify_submission(case.submission, case.actor, connection=conn)
+        assert case.owner.check_current(case.request, conn) == 'ready'
+        captured = case.owner.capture_local(case.request, conn)
+        assert captured(conn) == 'ready'
+        conn.execute("UPDATE assistant_conversation_turns SET status='stopped' WHERE id=?", (case.turn['id'],))
+        with pytest.raises((PermissionError, ValueError)):
+            case.owner.verify_submission(case.submission, case.actor, connection=conn)
+        assert case.owner.check_current(case.request, conn) == 'stale'
+        assert captured(conn) == 'stale'
+        with pytest.raises((PermissionError, ValueError)):
+            checkpoint(conn, grant, 'succeeded', commit=lambda _: pytest.fail('stale source published'))
+        assert all(current is conn and current.in_transaction for current in case.connections)
+        # Terminal receipts and original reads do not require renewed source permission.
+        terminal = 'cancelled' if kind == 'creation_task_person_edit' else 'failed'
+        ref = checkpoint(conn, grant, terminal, reason='source_unavailable')
+        assert case.repo.get_task_event('local', ref, connection=conn).payload['status'] == terminal
+    original = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+    assert original.payload['source'] == case.source
+    assert case.repo.list_edit_operations('local', case.task_id) == []
+
+
+@pytest.mark.parametrize('kind,blocker', [
+    ('creation_task_person_edit', 'missing'),
+    ('creation_task_narration_edit', 'malformed'),
+    ('creation_task_person_edit', 'not_configured'),
+    ('creation_task_narration_edit', 'wrong_actor'),
+])
+def test_edit_source_unverifiable_jobs_cannot_be_submitted(tmp_path, monkeypatch, kind, blocker):
+    case = _edit_source_boundary_case(tmp_path, monkeypatch, kind)
+    with case.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        event = case.repo.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
+        payload = event.payload
+        if blocker == 'missing':
+            payload.pop('source')
+        elif blocker == 'malformed':
+            payload['source'] = ['not a source']
+        elif blocker == 'wrong_actor':
+            payload['source']['actor_identity'] = {**case.actor.identity_payload(), 'device_id': 'another-device'}
+        else:
+            case.owner.source_verifier = None
+        conn.execute('UPDATE task_events SET payload_json=? WHERE id=?', (json.dumps(payload), event.id))
+        with pytest.raises(PermissionError):
+            case.owner.verify_submission(case.submission, case.actor, connection=conn)
+        assert case.owner.check_current(case.request, conn) == 'stale'
+    assert case.repo.get_job_run('local', case.job.id).status == 'running'

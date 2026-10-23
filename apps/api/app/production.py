@@ -9941,6 +9941,7 @@ class ProductionRepository:
         expected_task_updated_at: datetime | str,
         queued_job_rebind=None,
         voice_source_preparation=None,
+        write_guard=None,
     ) -> dict[str, object]:
         """Select one fixed voice and record its original request in the same transaction."""
         if not request_id.strip():
@@ -9952,6 +9953,8 @@ class ProductionRepository:
         event_id = _assistant_reply_request_event_id("task_narration_voice_selected", workspace_id, request_id)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             task = self._require_creation_task(conn, workspace_id, task_id)
             self._narration_voice_selection_owner(task, member_id)
             previous = conn.execute("SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()

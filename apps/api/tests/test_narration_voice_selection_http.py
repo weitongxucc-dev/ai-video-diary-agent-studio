@@ -90,3 +90,16 @@ def test_jobless_voice_selection_and_replay_do_not_require_device_execution_perm
     assert first.status_code == 200, first.text
     assert http_state.client.post(route,json=original).json() == first.json()
     assert http_state.repo.get_creation_plan('workspace','plan').selected_voice.profile_id == 'voice-1'
+
+
+
+def test_voice_selection_guard_runs_in_real_transaction_before_mutation(http_state):
+    from test_narration_voice_selection_receipts import snapshot
+    before=snapshot(http_state.repo)
+    def revoked(conn):
+        assert conn.in_transaction
+        raise PermissionError('原输入已撤销')
+    with pytest.raises(PermissionError):
+        main._creation_execution_control().select_narration_voice(runtime=None,write_guard=revoked,
+            **command(http_state))
+    assert snapshot(http_state.repo)==before

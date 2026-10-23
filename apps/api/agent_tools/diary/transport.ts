@@ -209,6 +209,12 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     const observationRequest = suffix.match(/^\/assistant\/edit-requests\/([^/]+)$/);
     if (observationRequest && only('phase') && query.get('phase') === 'observation')
       return result('read_task_observation_request', {...args, request_id: decodeURIComponent(observationRequest[1])});
+    if (observationRequest && only('phase') && ['preview','apply'].includes(query.get('phase') || 'preview'))
+      return result('read_task_edit_request', {...args, request_id: decodeURIComponent(observationRequest[1]), phase: query.get('phase') || 'preview'});
+    const voiceRequest = suffix.match(/^\/narration\/voice\/requests\/([^/]+)$/);
+    if (voiceRequest && !search) return result('read_narration_voice_request', {...args, request_id: decodeURIComponent(voiceRequest[1])});
+    if (suffix === '/media-jobs' && only('cursor','limit')) return result('read_task_media_jobs',
+      {...args, ...(query.has('cursor') ? {cursor:query.get('cursor')} : {}), limit:Number(query.get('limit') || 20)});
     const mediaJob = suffix.match(/^\/media-jobs\/([^/]+)$/);
     if (mediaJob && !search) return result('read_task_media_job', {...args, job_id: decodeURIComponent(mediaJob[1])});
   }
@@ -216,6 +222,8 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (['/execution/start', '/execution/resume'].includes(suffix) && only('assistant_turn_id'))
     return result(suffix.endsWith('/start') ? 'start_creation_execution' : 'resume_creation_execution',
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
+  if (suffix === '/edits/exact/preview' && only('draft') && (!query.has('draft') || ['true','false'].includes(query.get('draft')!)))
+    return result('preview_task_edit', {...args,payload,...(query.has('draft') ? {draft_only:query.get('draft') === 'true'} : {})});
   if (search) return null;
   if (suffix === '/timeline/undo' || suffix === '/timeline/redo') return result('restore_timeline',
     {...args, action: suffix.endsWith('/undo') ? 'undo' : 'redo', payload});
@@ -229,6 +237,8 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     '/execution/cancel': 'cancel_creation_execution',
     '/topics/generate': 'generate_creation_task_topics',
     '/observations': 'observe_task_output',
+    '/edits/exact': 'apply_task_edit',
+    '/narration/voice': 'select_narration_voice',
   };
   if (writes[suffix]) return result(writes[suffix], {...args, payload});
   const segmentRevision=suffix.match(/^\/segments\/([^/]+)\/revision$/);
@@ -267,7 +277,7 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     if (locators.task_id && locators.request_id) {
       const root = `/api/creation-tasks/${locators.task_id}`;
       if (path.split("?")[0] === `${root}/edits/exact` || path.split("?")[0] === `${root}/edits/exact/preview`)
-        locators.query_url = `${root}/assistant/edit-requests/${locators.request_id}?phase=${path.endsWith("/preview") ? "preview" : "apply"}`;
+        locators.query_url = `${root}/assistant/edit-requests/${locators.request_id}?phase=${path.split("?")[0].endsWith("/preview") ? "preview" : "apply"}`;
       if (path === `${root}/montage/plan` || path === `${root}/narration/voice`)
         locators.query_url = `${path}/requests/${locators.request_id}`;
     }

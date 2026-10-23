@@ -1,14 +1,18 @@
 """The finite exact-edit preview application, with explicit source and execution."""
 from collections import Counter
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
+from contextlib import nullcontext
 from uuid import uuid4
 
 from app.audio_timeline import AudioEditRequest, apply_audio_edit
-from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewConflict, needs_full_visual_preview
-from app.creation.contracts import EditIntent, EditProposal
+from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewConflict, ClipPreviewUnavailable, needs_full_visual_preview
+from app.creation.contracts import EditIntent, EditProposal, TaskEvent
+from app.creation.editing.audio_edit_use_case import AudioEditRejected
+from app.creation.execution_control import ExecutionControlRejected
+from app.media.picture_preview import PicturePreviewRejected
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, edit_preview_failure,
-    metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
+    metadata_edit_command, effective_audio_timeline, logical_montage_output_refs, MetadataEditReplay)
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
@@ -22,15 +26,72 @@ from app.visual_effects import VisualEditRequest
 import subprocess
 
 
+@dataclass(frozen=True)
+class ExactEditResult:
+    status_code: int
+    value: dict
+    changed: bool = False
+
+
+def validate_edit_origin(conversations, source, actor, *, connection=None):
+    if source is None:
+        return
+    if (source.get('workspace_id')!=actor.workspace_id
+            or source.get('member_id')!=(actor.user_id or actor.member_id)
+            or source.get('actor_identity')!=actor.identity_payload()):
+        raise PermissionError('编辑来源与原成员身份不一致')
+    if not source.get('assistant_turn_id'):
+        if source.get('source_kind')!='interactive' or source.get('input_id') or source.get('input_turn_id'):
+            raise PermissionError('交互编辑来源不能缺失或冒用助手输入')
+        return
+    with (conversations._connect() if connection is None else nullcontext(connection)) as conn:
+        row=conn.execute('SELECT status FROM assistant_conversation_turns WHERE id=?',
+            (source['assistant_turn_id'],)).fetchone()
+        if row is None:
+            raise ValueError('原编辑轮次不存在')
+        root=conversations._goal_root(conn,source['assistant_turn_id'])
+        if root is not None and root['goal']['status'] not in {'running','waiting_result','waiting_adoption','waiting_identity','waiting_unknown'}:
+            raise ValueError('原编辑目标已停止')
+        if row['status']=='running':
+            origin=conversations._task_turn_source(conn,source['assistant_turn_id'],actor.workspace_id,
+                actor.user_id or actor.member_id,source['task_id'])
+            if root is None:
+                root={'id':source['assistant_turn_id'],'conversation_id':origin['conversation_id'],'goal':{}}
+        elif row['status'] in {'completed','failed'} and root is not None:
+            goal=root['goal']
+            if (goal['status'] not in {'running','waiting_result','waiting_adoption','waiting_identity','waiting_unknown'}
+                    or (goal['workspace_id'],goal['task_id'],goal['member_id']) !=
+                        (actor.workspace_id,source['task_id'],actor.user_id or actor.member_id)
+                    or (goal.get('source_input_id'),goal.get('source_input_turn_id')) !=
+                        (source.get('input_id'),source.get('input_turn_id'))):
+                raise ValueError('原编辑目标已停止或输入已变化')
+            origin=conversations.task_result_source(source['assistant_turn_id'],actor.workspace_id,
+                actor.user_id or actor.member_id,source['task_id'],input_id=source.get('input_id'),
+                input_turn_id=source.get('input_turn_id'))
+            if origin['context'].get('source_kind')=='business_event':
+                origin['raw_command']=origin['context'].get('input_instruction') or goal['original_instruction']
+        else:
+            raise ValueError('原编辑轮次已停止且没有继续执行的目标')
+        if not conversations._goal_origin_current(conn,root):
+            raise ValueError('原编辑目标已被新要求替代')
+    if (origin.get('input_id')!=source.get('input_id') or origin.get('input_turn_id')!=source.get('input_turn_id')
+            or origin['conversation_id']!=source.get('conversation_id') or origin['raw_command']!=source.get('raw_command')):
+        raise ValueError('原编辑输入已变化，不能沿旧来源执行')
+
+
+
 class ExactPreviewUseCase:
-    def __init__(self, repository, metadata, subtitles, linked, audio_edit, visual, clip_preview, conversations, settings):
+    def __init__(self, repository, metadata, subtitles, linked, audio_edit, visual, clip_preview, conversations, settings, *, edit_result=None, preview_result=None, person_preview=None, narration_preview=None, person_stage=None, execution_control=None, runtime_for=None):
         self.repository, self.metadata, self.subtitles, self.linked = repository, metadata, subtitles, linked
         self.audio_edit, self.visual, self.clip_preview = audio_edit, visual, clip_preview
         self.conversations, self.settings = conversations, settings
+        self.edit_result, self.preview_result = edit_result, preview_result
+        self.person_preview,self.narration_preview,self.person_stage=person_preview,narration_preview,person_stage
+        self.execution_control,self.runtime_for=execution_control,runtime_for
 
     def claim_request(self, task, member_id, request_id, phase, inputs):
         try:
-            return self.repository.claim_edit_request(task, member_id, request_id, phase, inputs)
+            return self.repository.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.metadata.write_guard)
         except ValueError as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
 
@@ -38,7 +99,72 @@ class ExactPreviewUseCase:
         return self.repository.read_edit_request_result(task, event_id)
 
     def record_request_result(self, task, event_id, *, status_code, response):
-        return self.repository.save_edit_request_result(task, event_id, status_code=status_code, response=response)
+        if event_id is not None:
+            return self.repository.save_edit_request_result(task, event_id, status_code=status_code, response=response)
+
+    def _request_origin(self, task, payload, identity, actor, origin, expected_input_id):
+        source={'workspace_id':task.workspace_id,'task_id':task.id,'member_id':identity['member_id'],
+            'request_id':str(payload.request_id),'actor_identity':actor.identity_payload()}
+        if payload.assistant_turn_id is None:
+            return {**source,'source_kind':'interactive'}
+        if origin is None:
+            origin=self.conversations.task_turn_source(str(payload.assistant_turn_id),task.workspace_id,
+                identity['member_id'],task.id)
+            if expected_input_id != origin.get('input_id'):
+                raise EditPreviewRejected(409,'助手输入已变化，不能封存旧请求来源')
+        elif origin['assistant_turn_id'] != str(payload.assistant_turn_id):
+            raise EditPreviewRejected(409,'原请求不能切换助手轮次')
+        return {**source,'assistant_turn_id':str(payload.assistant_turn_id),
+            **{key:origin[key] for key in ('conversation_id','raw_command','input_id','input_turn_id') if key in origin}}
+
+    def _seal_request_origin(self, task, event_id, source, actor):
+        if event_id is None:
+            return
+        with self.repository._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if self.metadata.write_guard is not None:
+                self.metadata.write_guard(conn)
+            claim=self.repository.get_task_event(task.workspace_id,event_id,connection=conn)
+            self.validate_origin(source,actor,connection=conn)
+            if source.get('assistant_turn_id'):
+                self.conversations._task_turn_source(conn,source['assistant_turn_id'],task.workspace_id,
+                    source['member_id'],task.id)
+            value={'request_event_id':event_id,'input_digest':claim.payload['input_digest'],'source':source}
+            self.repository.append_task_event(TaskEvent(event_id+'_source',task.workspace_id,task.id,None,
+                'edit_request_source',value),connection=conn)
+
+    def read_request_source(self, task, event_id, actor):
+        claim=self.repository.get_task_event(task.workspace_id,event_id)
+        if claim.task_id != task.id or claim.payload.get('phase') not in {'apply','preview'}:
+            raise EditPreviewRejected(409,'该来源读回只适用于原 exact apply/preview 请求')
+        try:
+            anchor=self.repository.get_task_event(task.workspace_id,event_id+'_source')
+        except KeyError as exc:
+            raise EditPreviewRejected(409,{'error':'edit_request_source_unavailable',
+                'reason':'原请求已存在，但缺少可信来源锚点，不能推定未提交或自动重试',
+                'submission_effect':'unknown','repair_action':'保留原请求，核对既有结果与任务状态。'}) from exc
+        source=anchor.payload['source']
+        if (anchor.event_type!='edit_request_source' or anchor.task_id!=task.id
+                or anchor.payload['request_event_id']!=event_id
+                or anchor.payload['input_digest']!=claim.payload['input_digest']
+                or source['workspace_id']!=task.workspace_id or source['task_id']!=task.id
+                or source['request_id']!=claim.payload['request_id']
+                or source['member_id']!=claim.payload['member_id']
+                or source['actor_identity']!=actor.identity_payload()
+                or source['member_id']!=(actor.user_id or actor.member_id)):
+            raise PermissionError('原请求来源与任务或完整成员身份不一致')
+        return source
+
+    def _verify_request_replay(self, task, event_id, actor, payload, origin, expected_input_id):
+        try:
+            source=self.read_request_source(task,event_id,actor)
+        except PermissionError as exc:
+            raise EditPreviewRejected(403,str(exc)) from exc
+        expected_turn=str(payload.assistant_turn_id) if payload.assistant_turn_id is not None else None
+        expected_input=origin.get('input_id') if origin is not None else expected_input_id
+        if (source.get('assistant_turn_id')!=expected_turn or source.get('input_id')!=expected_input
+                or origin is not None and source.get('input_turn_id')!=origin.get('input_turn_id')):
+            raise EditPreviewRejected(403,'原请求不能归入另一轮次或输入')
 
     def typed_source(self, task, payload, member_id):
         version = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
@@ -48,10 +174,14 @@ class ExactPreviewUseCase:
             raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新读取当前任务')
         source = {'workspace_id': task.workspace_id, 'task_id': task.id, 'member_id': member_id, 'request_id': str(payload.request_id) if payload.request_id else None, 'expected_timeline_version_id': payload.expected_timeline_version_id, 'expected_timeline_sequence': payload.expected_timeline_sequence}
         return source, version
-    def complete_typed(self, task, payload, member_id, actor, source, version):
+    def complete_typed(self, task, payload, member_id, actor, source, version, *, origin=None):
         if actor is not None:
             source['actor_identity'] = actor.identity_payload()
-        if payload.assistant_turn_id:
+        if origin is not None:
+            if str(payload.assistant_turn_id) != origin['assistant_turn_id']:
+                raise EditPreviewRejected(409, '类型化请求不能切换原回合')
+            source.update({key: origin[key] for key in ('assistant_turn_id', 'conversation_id', 'raw_command', 'input_id', 'input_turn_id') if key in origin})
+        elif payload.assistant_turn_id:
             try:
                 origin = self.conversations.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task.id)
             except ValueError as exc:
@@ -61,6 +191,8 @@ class ExactPreviewUseCase:
                 raise EditPreviewRejected(status_code=409, detail='助手轮次的目标版本已失效')
             source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin['conversation_id'], raw_command=origin['raw_command'],
                           **{key: origin[key] for key in ('input_id', 'input_turn_id') if key in origin})
+        if not payload.assistant_turn_id:
+            source['source_kind']='interactive'
         clean = CreationTaskExactEditRequest.model_validate(payload.action_values())
         source['action'] = clean.action_values()
         return (clean, source)
@@ -111,6 +243,20 @@ class ExactPreviewUseCase:
 
     def preview(self, workspace_id, task_id, payload, *, identity, actor, source, draft_only, execution, reader_identity):
         operation = payload.operation_type
+        if operation in {'ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'}:
+            from app.schemas import CreationTaskEditPreviewRequest
+            task=self.metadata.task_or_missing(workspace_id,task_id)
+            if operation=='RegenerateNarrationSegment':
+                selected=f'narration:{payload.narration_segment_id}'
+                command=payload.delivery_instruction or '这句重新配音'
+                preview_payload=CreationTaskEditPreviewRequest(raw_command=command,context_stage='narration',selected_object_refs=[selected])
+                return self.narration_preview.preview(task,preview_payload,selected,command,identity=identity,
+                    request_source=source,draft_only=draft_only,execution=execution,actor=actor)
+            selected=f'clip:{payload.clip_id}'
+            command='这里只重做口型，其他都不要动' if operation=='RegeneratePersonRender' else '这一段换成当前人物出镜'
+            preview_payload=CreationTaskEditPreviewRequest(raw_command=command,context_stage='review' if task.stage=='review' else 'montage',selected_object_refs=[selected])
+            return self.person_preview.preview(task,preview_payload,selected,command,identity=identity,
+                request_source=source,draft_only=draft_only,execution=execution,actor=actor)
         if operation in {'EditAudioTimeline', 'AdjustVisualEffects'}:
             task = self.metadata.task_or_missing(workspace_id, task_id)
             if operation == 'EditAudioTimeline':
@@ -183,7 +329,7 @@ class ExactPreviewUseCase:
         if source is not None:
             arguments['_typed_source'] = source
         arguments['payload'] = {'operation_type': command.operation_type, 'clip_ids': command.clip_ids, 'clip_id': command.clip_ids[0], 'base_version_id': command.base_version_id, **({'effects': command.values} if command.operation_type == 'AdjustVisualEffects' else command.values)}
-        return media.submit(runtime, actor, task_id, operation, arguments, 'edit_preview')
+        return media.submit(runtime, actor, task_id, operation, arguments, 'edit_preview', write_guard=self.metadata.write_guard)
 
     def execute(self, job, event, actor, context):
         payload = CreationTaskExactEditRequest.model_validate(event['arguments']['payload'])
@@ -257,7 +403,7 @@ class ExactPreviewUseCase:
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
         except KeyError as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task montage plan not found') from exc
-        base_version = self.metadata.ensure_montage_base(workspace_id, task, montage)
+        base_version = self.metadata.ensure_montage_base(workspace_id, task, montage, source=source)
         task = self.repository.get_creation_task(workspace_id, task_id)
         tracks = self.metadata.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
         now = utc_now()
@@ -343,12 +489,193 @@ class ExactPreviewUseCase:
             values['payload']['base_version_id']=task.current_timeline_version_id
         return task,values
 
-    def submit(self,runtime,media,actor,task,values):
+    def submit(self,runtime,media,actor,task,values,*,write_guard=None):
         if task.montage_plan_id and task.current_timeline_version_id is None:
             media.facts(task.workspace_id,task.id,'exact_edit_preview',values,actor)
             if media.verify_identity(actor) != 'ready':
                 raise PermissionError('媒体处理身份失效或无法复核')
             montage=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id,task.id))
-            base=self.metadata.ensure_montage_base(task.workspace_id,task,montage)
+            base=self.metadata.ensure_montage_base(task.workspace_id,task,montage,source=values.get('_typed_source'))
             if 'base_version_id' in values['payload']:values['payload']['base_version_id']=base.id
-        return media.submit(runtime,actor,task.id,'exact_edit_preview',values,'edit_preview')
+        return media.submit(runtime,actor,task.id,'exact_edit_preview',values,'edit_preview',write_guard=write_guard)
+
+    def validate_origin(self, source, actor, *, connection=None):
+        return validate_edit_origin(self.conversations,source,actor,connection=connection)
+
+    def _source(self, task, payload, identity, actor, origin, expected_input_id=None):
+        from app.schemas import EXACT_EDIT_ENVELOPE_FIELDS
+        if not payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS:
+            return payload, None
+        source, version = self.typed_source(task, payload, identity['member_id'])
+        source['source_facts'] = self.source_facts(task, payload, identity, actor)
+        clean, source = self.complete_typed(task, payload, identity['member_id'], actor, source, version, origin=origin)
+        if origin is None and source.get('assistant_turn_id') and expected_input_id != source.get('input_id'):
+            raise EditPreviewRejected(409, '助手输入已变化，旧请求不能归入新要求；请查询原请求回执')
+        return clean, source
+
+    def _record(self, task, event_id, result):
+        self.record_request_result(task, event_id, status_code=result.status_code, response=result.value)
+        return result
+
+    def _failure(self, task, event_id, status, detail):
+        self.record_request_result(task, event_id, status_code=status, response={'detail': detail})
+        return EditPreviewRejected(status, detail)
+
+    def confirm(self, task, proposal, *, identity, reader_identity, actor, source):
+        from app.creation.editing.metadata_use_case import PICTURE_METADATA_OPERATIONS, CLIP_METADATA_OPERATIONS
+        operation = proposal.operation['operation_type']
+        if operation in {'ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'}:
+            from app.creation.person_stage_use_case import PersonEditGrantRequired,PersonStageRejected
+            if operation!='RegenerateNarrationSegment':
+                try:
+                    return self.person_stage.apply_segment_edit(task.workspace_id,task,proposal)
+                except PersonEditGrantRequired:
+                    pass
+                except PersonStageRejected as exc:
+                    raise EditPreviewRejected(exc.status_code,exc.detail) from exc
+            if actor is None:
+                raise EditPreviewRejected(403,'提交人物或配音编辑需要原成员身份')
+            control=self.execution_control()
+            submit=control.submit_narration_edit if operation=='RegenerateNarrationSegment' else control.submit_person_edit
+            def submit_guard(conn):
+                if self.metadata.write_guard is not None:
+                    self.metadata.write_guard(conn)
+                self.validate_origin(source,actor,connection=conn)
+                if source is not None and source.get('assistant_turn_id'):
+                    self.conversations._task_turn_source(conn,source['assistant_turn_id'],actor.workspace_id,
+                        actor.user_id or actor.member_id,task.id)
+            job,queued=submit(task.workspace_id,task,proposal,actor,self.runtime_for(),source=source,write_guard=submit_guard)
+            return ExactEditResult(202,{'status':'queued','job_id':job.id,'request_id':queued.id},True)
+        if operation in {'ChangeCanvas','ChangePresenterShare','ReorderTimelineItems'} | PICTURE_METADATA_OPERATIONS | CLIP_METADATA_OPERATIONS:
+            return self.metadata.confirm(task,proposal,identity=identity,reader_identity=reader_identity,source=source)
+        if operation in {'AlignSubtitleTiming','ConfigureSubtitleTrack','UpdateSubtitleCue'}:
+            return self.subtitles.confirm_legacy(task,proposal,settings=self.settings)
+        if operation == 'EditAudioTimeline':
+            return self.audio_edit.confirm(task,proposal,actor,source=source)
+        if operation == 'RemoveSilence':
+            return self.linked.confirm_remove_silence(task,proposal)
+        raise EditPreviewRejected(409, '此操作不能直接保存，请使用对应预览与采用入口')
+
+    def apply(self, task, actor, payload, *, identity, origin=None, expected_input_id=None):
+        from app.creation.editing.metadata_use_case import PICTURE_METADATA_OPERATIONS, CLIP_METADATA_OPERATIONS, MetadataEditReplay, metadata_edit_command
+        from app.schemas import EXACT_EDIT_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS
+        from app.creation.editing.subtitle_use_case import is_subtitle_edit, SubtitleNoChange, SubtitleTargetMissing, SubtitlePreviewFailed
+        inputs = payload.model_dump(mode='json', exclude_unset=True)
+        event_id, replay = self.metadata.begin(task, identity['member_id'], payload.request_id,
+            inputs, phase='apply')
+        if replay is not None:
+            self._verify_request_replay(task,event_id,actor,payload,origin,expected_input_id)
+            status, value = self.edit_result(replay)
+            result = ExactEditResult(status, value, replay.recorded_projection is None)
+            return self._record(task,event_id,result) if replay.recorded_projection is None else result
+        try:
+            if event_id is not None:
+                provenance=self._request_origin(task,payload,identity,actor,origin,expected_input_id)
+                self._seal_request_origin(task,event_id,provenance,actor)
+            payload, source = self._source(task, payload, identity, actor, origin, expected_input_id)
+            if (payload.operation_type in PICTURE_METADATA_OPERATIONS | CLIP_METADATA_OPERATIONS
+                    or payload.operation_type == 'EditAudioTimeline' and payload.audio_edit.action in {'update', 'track'}
+                    or payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None
+                    or payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None):
+                values = payload.action_values()
+                values.pop('operation_type')
+                required = ({'cue_id', 'text'} if payload.operation_type == 'UpdateSubtitleCue' else
+                    EXACT_MONTAGE_REQUIRED_FIELDS.get(payload.operation_type, set()) | ({'clip_id'} if payload.operation_type in CLIP_METADATA_OPERATIONS else set()))
+                if set(values) - EXACT_EDIT_FIELDS[payload.operation_type] or any(values.get(key) is None for key in required):
+                    raise EditPreviewRejected(422, '精确编辑包含其他操作字段或缺少必要字段')
+                values['base_version_id'] = source['expected_timeline_version_id'] if source else task.current_timeline_version_id
+                command = metadata_edit_command(task, identity, payload.operation_type, values, source=source)
+                audio_edit = AudioEditRequest(base_version_id=command.base_version_id, **payload.audio_edit.model_dump()) if payload.operation_type == 'EditAudioTimeline' else None
+                outcome = self.metadata.save(task, command, audio_edit=audio_edit, audio_actor=actor)
+            elif payload.operation_type in {'ChangeLinkedSpeed', 'DeleteClip', 'DuplicateClip', 'InsertClip'}:
+                task, values = self.prepare_linked(task.workspace_id, task.id, payload)
+                command = self.linked_command(task, identity, payload.operation_type,
+                    {'base_version_id': task.current_timeline_version_id, **values}, source=source, reader_identity=identity)
+                outcome = self.linked.apply(command)
+            elif is_subtitle_edit(payload.operation_type, payload.model_dump(exclude_unset=True)):
+                command = metadata_edit_command(task, identity, payload.operation_type,
+                    {'base_version_id': task.current_timeline_version_id, **subtitle_values(payload)}, source=source)
+                outcome = self.subtitles.apply(command)
+            else:
+                _intent, proposal = self.preview(task.workspace_id,task.id,payload,identity=identity,
+                    actor=actor,source=source,draft_only=True,execution=None,reader_identity=identity)
+                outcome = self.confirm(task,proposal,identity=identity,reader_identity=identity,actor=actor,source=source)
+            if isinstance(outcome,ExactEditResult):
+                result=outcome
+            else:
+                status, value = self.edit_result(outcome)
+                result = ExactEditResult(status, value, not isinstance(outcome, MetadataEditReplay))
+        except (EditPreviewRejected,AudioEditRejected,PicturePreviewRejected,ExecutionControlRejected) as exc:
+            self.record_request_result(task, event_id, status_code=exc.status_code, response={'detail': exc.detail})
+            raise
+        except SubtitleNoChange as exc:
+            raise self._failure(task, event_id, exc.details['status_code'], {k:v for k,v in exc.details.items() if k != 'status_code'}) from exc
+        except (SubtitleTargetMissing, InsertMaterialMissing) as exc:
+            raise self._failure(task, event_id, 404, exc.args[0]) from exc
+        except LinkedEditInputError as exc:
+            raise self._failure(task, event_id, 422, str(exc)) from exc
+        except InsertSourceRangeError as exc:
+            raise self._failure(task, event_id, 400, str(exc)) from exc
+        except SubtitlePreviewFailed as exc:
+            raise self._failure(task, event_id, 422, str(exc.original)) from exc
+        except PermissionError as exc:
+            raise self._failure(task, event_id, 403, str(exc)) from exc
+        except (ValueError, KeyError, OSError) as exc:
+            raise self._failure(task, event_id, 409, str(exc)) from exc
+        return self._record(task, event_id, result)
+
+    def submit_preview(self, runtime_for, actor, task, payload, *, identity, project_media, origin=None, expected_input_id=None, draft_only=False):
+        from app.task_audio import TaskMediaRequired
+        event_id = None
+        inputs = {**payload.model_dump(mode='json', exclude_unset=True), '_draft':draft_only}
+        if payload.request_id is not None:
+            event_id, fresh = self.claim_request(task, identity['member_id'], payload.request_id, 'preview', inputs)
+            recorded = self.read_request_result(task, event_id)
+            if recorded is not None:
+                self._verify_request_replay(task,event_id,actor,payload,origin,expected_input_id)
+                return ExactEditResult(recorded['status_code'], recorded['response'])
+            if not fresh:
+                raise EditPreviewRejected(409,{'error':'edit_request_result_unknown',
+                    'reason':'原预览请求结果尚未确定，请查询原请求，不重复执行', 'submission_effect':'unknown'})
+        try:
+            if event_id is not None:
+                provenance=self._request_origin(task,payload,identity,actor,origin,expected_input_id)
+                self._seal_request_origin(task,event_id,provenance,actor)
+            clean,source=self._source(task,payload,identity,actor,origin,expected_input_id)
+            result=self._preview_or_submit(runtime_for,actor,task,clean,identity=identity,
+                source=source,project_media=project_media,draft_only=draft_only)
+        except (EditPreviewRejected,AudioEditRejected,PicturePreviewRejected) as exc:
+            raise self._failure(task,event_id,exc.status_code,exc.detail) from exc
+        except ClipPreviewUnavailable as exc:
+            raise self._failure(task,event_id,503,str(exc)) from exc
+        except PermissionError as exc:
+            raise self._failure(task,event_id,403,str(exc)) from exc
+        except (ValueError,KeyError,OSError) as exc:
+            raise self._failure(task,event_id,409,str(exc)) from exc
+        return self._record(task,event_id,result)
+
+    def _preview_or_submit(self, runtime_for, actor, task, clean, *, identity, source, project_media, draft_only):
+        from app.task_audio import TaskMediaRequired
+        try:
+            outcome = self.preview(task.workspace_id, task.id, clean, identity=identity, actor=actor,
+                source=source, execution=None, reader_identity=identity, draft_only=draft_only)
+            if isinstance(outcome,ClipPreviewCommand):
+                runtime=runtime_for()
+                media=runtime.registrations['creation_job'].owner.task_media
+                command=self.prepare_clip_submission(actor,outcome)
+                job=self.submit_clip(runtime,media,actor,command,operation='exact_edit_preview')
+                receipt=project_media(media,job,actor,runtime)
+                receipt['result']=None
+                result=ExactEditResult(202,receipt)
+            else:
+                result = ExactEditResult(200, self.preview_result(*outcome))
+        except TaskMediaRequired as required:
+            runtime = runtime_for()
+            media = runtime.registrations['creation_job'].owner.task_media
+            task, values = self.submission_arguments(task.workspace_id, task.id, actor, clean,
+                media_kind=required.kind, draft_only=draft_only, source=source)
+            job = self.submit(runtime, media, actor, task, values, write_guard=self.metadata.write_guard)
+            receipt = project_media(media, job, actor, runtime)
+            receipt['result'] = None
+            result = ExactEditResult(202, receipt)
+        return result

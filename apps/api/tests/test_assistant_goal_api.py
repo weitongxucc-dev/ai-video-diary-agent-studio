@@ -776,3 +776,97 @@ def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction
         json={'script_id':preview['script_id'],'input_digest':preview['input_digest'],'requirements_confirmed':True})
     assert response.status_code==409,response.text
     assert [job.id for job in state.production.list_job_runs(state.workspace_id,state.task.id)]==before
+
+
+@pytest.mark.parametrize('operation',['ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'])
+def test_common_edit_registration_persists_real_start_source_without_running_media(tmp_path,monkeypatch,operation):
+    from functools import partial
+    from uuid import uuid4
+    from app.conversation_repository import ConversationRepository
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    from app.creation_execution import CreationExecutionActor
+    from app.device_runtime import build_device_runtime
+    from app.device_scheduler import SubmissionIntent
+    from app.creation.editing.metadata_use_case import EditPreviewRejected
+    from app.host_resource_probes import PresenterBudget,NarrationBudget,CpuAudioBudget,MontageBudget,HostProcessProbe
+    from app.member_permits import MemberDeviceAccess,creation_job_registration
+    from app.schemas import CreationTaskExactEditRequest
+    from test_montage_pipeline import _person_render_edit_state
+    from _media_preview_test_fixtures import ControlledResources
+    root=tmp_path/'source-registration'
+    root.mkdir()
+    s=_person_render_edit_state(root,monkeypatch,'local')
+    repo=s.production
+    actor=CreationExecutionActor('local',s.member.member_id)
+    conversations=ConversationRepository(repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    verifier=partial(validate_edit_origin,conversations)
+    access=MemberDeviceAccess(s.members)
+    presenter=PresenterBudget(1,1024**2,30,4096,1,5,64*1024**2,32,.1,64*1024**2,4096)
+    narration=NarrationBudget(374,3,1000000,30,3*1024**2,1,300,1024,16,.1,2048,1024,input_scope='single_call_experiment_v1')
+    audio=CpuAudioBudget(2,32*1024**2,30,30,48000,2,3*1024**2,1,30,1024,16,.1,2048,1024)
+    def forbidden(*args,**kwargs): pytest.fail('注册不能运行媒体或模型')
+    registration=creation_job_registration(repo,render_action=forbidden,render_is_valid=forbidden,
+        presenter_budget=presenter,presenter_models={'fast':s.provider.model_id},
+        presenter_cpu_render_budget=None,resolve_presenter_output=main._person_render_media_path,
+        narration_budget=narration,narration_audio_budget=audio,
+        montage_budget=MontageBudget(1,4,100000,100000,5,1),
+        verify_identity=access.verify_identity,source_verifier=verifier)
+    runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'registration.lock',
+        device_access=access,registrations={'creation_job':registration},resources=ControlledResources(),processes=HostProcessProbe())
+    control=CreationExecutionControl(repo,None,None,access.verify_identity)
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main,'_creation_execution_control',lambda:control)
+    case=main._exact_preview_use_case()
+    task=repo.get_creation_task('local',s.task.id)
+    base=case.metadata.ensure_montage_base('local',task,s.montage)
+    task=repo.get_creation_task('local',s.task.id)
+    action=({'narration_segment_id':s.montage.cues[0].narration_segment_id}
+        if operation=='RegenerateNarrationSegment' else {'clip_id':s.montage.clips[0].id})
+    assistant={}
+    if operation!='ChangePersonSegment':
+        chat=conversations.create('local',actor.member_id,'task',task.id)
+        conversations.save_draft(chat['id'],'local',actor.member_id,'继续完成当前修改',0)
+        turn,_=conversations.create_turn_idempotent(chat['id'],'local',actor.member_id,'继续完成当前修改',str(uuid4()),1,
+            {'kind':'task','task_id':task.id,'target_snapshot':{'timeline_version_id':base.id,'timeline_sequence':base.sequence}})
+        assistant={'assistant_turn_id':turn['id']}
+    payload=CreationTaskExactEditRequest(operation_type=operation,**action,**assistant,request_id=uuid4(),
+        expected_timeline_version_id=base.id,expected_timeline_sequence=base.sequence)
+    calls=list(s.provider.output_cache_keys)
+    try:
+        result=case.apply(task,actor,payload,identity={'member_id':actor.member_id,'local_diagnostic':False})
+        assert result.status_code==202,result
+        job=repo.get_job_run('local',result.value['job_id'])
+        event=repo.get_task_event('local',f'event_{job.id}_start').payload
+        assert event['source']['workspace_id']=='local' and event['source']['task_id']==task.id
+        assert event['source']['actor_identity']==actor.identity_payload()
+        assert event['source']['request_id']==str(payload.request_id)
+        if not assistant:
+            assert event['source']['source_kind']=='interactive' and 'assistant_turn_id' not in event['source']
+        else:
+            assert event['source']['assistant_turn_id']==turn['id']
+        assert event['source']['expected_timeline_version_id']==base.id
+        request=runtime.scheduler._get(result.value['request_id'])
+        assert request.state=='waiting'
+        if assistant:
+            terminal='completed' if operation=='RegeneratePersonRender' else 'failed'
+            conversations.finish_turn(turn['id'],terminal,'原请求已提交',{})
+            goal={'workspace_id':'local','task_id':task.id,'member_id':actor.member_id,
+                'original_turn_id':turn['id'],'current_turn_id':turn['id'],'status':'waiting_result',
+                'original_instruction':'继续完成当前修改'}
+            with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+            intent=SubmissionIntent('local','creation_job',job.id,job.input_digest,request.unit_key,request.policy)
+            registration.owner.verify_submission(intent,actor)
+            with pytest.raises(EditPreviewRejected):
+                case.apply(task,actor,payload.model_copy(update={'request_id':uuid4()}),
+                    identity={'member_id':actor.member_id,'local_diagnostic':False})
+            with conversations._connect() as conn:
+                conversations._write_goal(conn,{'id':turn['id']},{**goal,'status':'stopped'})
+            with pytest.raises(ValueError): registration.owner.verify_submission(intent,actor)
+            assert repo.get_task_event('local',f'event_{job.id}_start').payload==event
+
+        assert s.provider.output_cache_keys==calls
+        assert repo.get_creation_task('local',task.id).current_timeline_version_id==base.id
+    finally:
+        assert runtime.stop(1)

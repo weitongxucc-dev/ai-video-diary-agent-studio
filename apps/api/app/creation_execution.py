@@ -82,6 +82,22 @@ class CreationExecutionActor:
         return cls(workspace_id, member_id)
 
 
+def _verify_edit_origin(job, task, event, actor, source_verifier, *, connection):
+    if job.kind not in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND}:
+        return
+    source = event.get('source')
+    original = CreationExecutionActor.from_event(job.workspace_id, event)
+    if (not isinstance(source, dict) or source_verifier is None
+            or task.id != job.task_id or task.workspace_id != job.workspace_id
+            or actor != original or actor.workspace_id != job.workspace_id
+            or source.get('workspace_id') != job.workspace_id
+            or source.get('task_id') != job.task_id
+            or source.get('member_id') != (actor.user_id or actor.member_id)
+            or source.get('actor_identity') != actor.identity_payload()):
+        raise PermissionError('人物或配音编辑缺少可复验的原来源，禁止新执行或发布')
+    source_verifier(source, actor, connection=connection)
+
+
 @dataclass(frozen=True)
 class CreationStageGrantContext:
     scheduler: DeviceScheduler
@@ -681,7 +697,7 @@ class CreationJobOwnerVerifier:
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
                  presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
-                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None) -> None:
+                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None, source_verifier=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -699,6 +715,7 @@ class CreationJobOwnerVerifier:
         self.task_authorizations = task_authorizations
         self.segments = segments
         self.native_case = native_case
+        self.source_verifier = source_verifier
 
     def authorization_verdict(self, task, actor, stage, *, connection=None, check_scope=True):
         if self.task_authorizations is None:
@@ -1219,6 +1236,7 @@ class CreationJobOwnerVerifier:
                 raise PermissionError("制作作业持久身份无法复核") from None
             if actor != original:
                 raise PermissionError("制作作业原身份不匹配")
+            _verify_edit_origin(job, task, event, original, self.source_verifier, connection=conn)
             if verdict == "ready" and self.task_authorizations is not None and connection is None:
                 self.task_authorizations.ensure(task, original)
                 if stage == "person_edit":
@@ -1340,6 +1358,10 @@ class CreationJobOwnerVerifier:
             original = CreationExecutionActor.from_event(job.workspace_id, event)
         except (ValueError, KeyError, TypeError, AttributeError):
             return "unauthorized"
+        try:
+            _verify_edit_origin(job, task, event, original, self.source_verifier, connection=conn)
+        except (PermissionError, ValueError, KeyError):
+            return "stale"
         verdict = self.authorization_verdict(task, original, stage, connection=conn, check_scope=False)
         if verdict != "ready":
             return verdict
@@ -1491,6 +1513,11 @@ class CreationJobOwnerVerifier:
                 return lambda _:'stale'
 
         def check(current):
+            try:
+                _verify_edit_origin(job, task, event, CreationExecutionActor.from_event(task.workspace_id, event),
+                    self.source_verifier, connection=current)
+            except (PermissionError, ValueError, KeyError):
+                return "stale"
             if read(current) != expected:
                 return "stale"
             if pcm is not None:
@@ -1725,7 +1752,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None, on_render_completed=None, segments=None, native_case=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None, on_render_completed=None, segments=None, native_case=None, source_verifier=None) -> None:
         self.repository = repository
         self.render_action = render_action
         self.render_is_valid = render_is_valid
@@ -1737,6 +1764,7 @@ class CreationJobUnitExecutor:
         self.person_stage = person_stage
         self.segments = segments
         self.native_case = native_case
+        self.source_verifier = source_verifier
         self._cancellations: dict[str, threading.Event] = {}
         self._cancellation_lock = threading.Lock()
         self._application_quit = threading.Event()
@@ -1946,11 +1974,20 @@ class CreationJobUnitExecutor:
             record=self.narration_stage.pcm_record(task,resources,receipt,ordered) if receipt['finalized'] and job.kind==KIND else None
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
-                if write_guard is not None:
+                if job.kind != NARRATION_EDIT_KIND and write_guard is not None:
                     write_guard(conn)
                 if owner.pcm_assembly_baseline(request,conn,original_recovery=True)!=baseline:
                     raise RecoveryBlocked('原PCM恢复提交前依赖已变化')
                 current_job,current_task,current_event,current_script,current_plan=owner._facts(conn,job.workspace_id,job.id)
+                source_error = None
+                if current_job.kind == NARRATION_EDIT_KIND:
+                    try:
+                        _verify_edit_origin(current_job, current_task, current_event, actor,
+                            self.source_verifier, connection=conn)
+                        if write_guard is not None:
+                            write_guard(conn)
+                    except (PermissionError, ValueError, KeyError) as exc:
+                        source_error = str(exc)
                 if (owner._check_facts(current_job,current_task,current_event,current_script,current_plan,
                         request.unit_key.split(':',1)[0],actor.member_id)!='ready'
                         or owner.authorization_verdict(current_task,actor,request.unit_key.split(':',1)[0],connection=conn)!='ready'):
@@ -1958,6 +1995,20 @@ class CreationJobUnitExecutor:
                 verify_prepared()
                 self.repository.settle_creation_narration_unit(grant,elapsed_seconds=elapsed,
                     output_bytes=receipt['generated_bytes'],connection=conn)
+                if source_error is not None:
+                    reconciled = TaskEvent(id=f'event_{job.id}_pcm_reconciled_{grant.generation}',
+                        workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
+                        event_type='narration_edit_result_reconciled', payload={
+                            'request_id': request.id, 'unit_id': active['usage_id'],
+                            'pcm': receipt, 'publication_blocked': True, 'reason': 'edit_source_unavailable',
+                            'source_error': source_error, 'stage': 'narration_edit', 'status': 'interrupted'})
+                    self.repository.interrupt_creation_execution(reconciled,
+                        impact='原音频产物和已结算消耗保留，未发布版本。',
+                        repair_action='请由真实交互重新核实原编辑来源。',
+                        task_is_current=lambda _: False, connection=conn)
+                    scheduler.complete_recovered_narration_pcm(conn, request,
+                        generation=free_generation, checkpoint_ref=reconciled.id)
+                    return True
                 conn.execute("UPDATE job_runs SET status='running' WHERE workspace_id=? AND id=? AND status IN ('interrupted','running','queued')",
                     (job.workspace_id,job.id))
                 if receipt['finalized']:
@@ -2250,6 +2301,15 @@ class CreationJobUnitExecutor:
             raise ValueError("人物编辑作业不在可提交状态")
         if row["status"] == "cancelled" and status != "cancelled":
             raise ValueError("已取消的人物编辑不能提交版本")
+        if status == "succeeded":
+            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
+            task = self.repository.get_creation_task(grant.workspace_id, job.task_id, connection=conn)
+            event = self.repository.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
+            if event.task_id != task.id or event.job_id != job.id:
+                raise PermissionError('编辑开始记录不属于原作业')
+            _verify_edit_origin(job, task, event.payload,
+                CreationExecutionActor.from_event(grant.workspace_id, event.payload),
+                self.source_verifier, connection=conn)
         operation = commit(conn) if status == "succeeded" else None
         now = datetime.now(timezone.utc).isoformat()
         conn.execute("UPDATE job_runs SET status=?,progress=?,failure_reason=?,impact=?,repair_action=?,"
@@ -2322,6 +2382,15 @@ class CreationJobUnitExecutor:
             raise ValueError("配音编辑作业不在可提交状态")
         if row["status"] == "cancelled" and status != "cancelled":
             raise ValueError("已取消的配音编辑不能提交版本")
+        if status == "succeeded":
+            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
+            task = self.repository.get_creation_task(grant.workspace_id, job.task_id, connection=conn)
+            event = self.repository.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
+            if event.task_id != task.id or event.job_id != job.id:
+                raise PermissionError('编辑开始记录不属于原作业')
+            _verify_edit_origin(job, task, event.payload,
+                CreationExecutionActor.from_event(grant.workspace_id, event.payload),
+                self.source_verifier, connection=conn)
         operation = commit(conn) if status == "succeeded" else None
         if operation is not None:
             start = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? AND id=?",

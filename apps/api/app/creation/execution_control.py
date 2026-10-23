@@ -10,7 +10,7 @@ import time
 from uuid import uuid4
 
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
-    NARRATION_EDIT_KIND, narration_edit_digest,
+    NARRATION_EDIT_KIND, narration_edit_digest, PERSON_EDIT_KIND, person_edit_digest,
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
@@ -465,7 +465,68 @@ class CreationExecutionControl:
                 logger.warning("制作作业 %s 的当前许可或输入未就绪，保留待处理：%s", job.id, exc)
         runtime.wake()
 
-    def submit_narration_edit(self, workspace_id, task, proposal, actor, runtime):
+    def _edit_source(self, task, proposal, actor, source):
+        if source is not None:
+            return source
+        base_id=proposal.operation['payload']['base_version_id']
+        base=self.repository.get_timeline_version(task.workspace_id,base_id)
+        return {'source_kind':'interactive','workspace_id':task.workspace_id,'task_id':task.id,
+            'member_id':actor.user_id or actor.member_id,'actor_identity':actor.identity_payload(),
+            'proposal_id':proposal.id,'expected_timeline_version_id':base.id,'expected_timeline_sequence':base.sequence}
+
+    def submit_person_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
+        operation=proposal.operation
+        source=self._edit_source(task,proposal,actor,source)
+        script=self.repository.get_creation_task_script(workspace_id,task.confirmed_script_id)
+        plan=self.repository.get_creation_plan(workspace_id,task.plan_id)
+        digest=person_edit_digest(operation)
+        payload={**actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,
+            'revision_digest':revision_digest(script,plan),'input_digest':digest,'edit_proposal_id':proposal.id,'source':source}
+        candidate=JobRun(f'person_edit_{uuid4().hex}',workspace_id,task.id,PERSON_EDIT_KIND,
+            f'person-edit:{workspace_id}:{task.id}:{actor.member_id}:{proposal.id}',digest)
+        owner=runtime.registrations['creation_job'].owner
+        job=None
+        created=False
+        try:
+            key,_=owner.edit_facts(candidate,task,payload,plan)
+            with self.repository._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                if write_guard is not None:
+                    write_guard(conn)
+                prior=conn.execute('SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?',
+                    (workspace_id,candidate.idempotency_key)).fetchone()
+                if prior is not None and prior['status'] not in {'queued','running','interrupted'}:
+                    raise ValueError('这次人物编辑已结束，请查看作业结果后重新预览')
+                active=conn.execute("SELECT j.* FROM job_runs j JOIN task_events e ON e.job_id=j.id AND e.workspace_id=j.workspace_id "
+                    "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.input_digest=? "
+                    "AND j.status IN ('queued','running','interrupted') AND e.event_type='person_edit_requested' "
+                    "AND json_extract(e.payload_json,'$.member_id')=? ORDER BY j.created_at DESC LIMIT 1",
+                    (workspace_id,task.id,PERSON_EDIT_KIND,digest,actor.member_id)).fetchone()
+                if active is not None:
+                    job=self.repository._job_run_from_row(active)
+                    saved=self.repository.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
+                    if saved.get('source')!=source:
+                        raise ValueError('原人物编辑属于另一输入，请查询原请求')
+                else:
+                    job=self.repository.create_job_run(candidate,connection=conn)
+                    created=True
+                    self.repository.append_task_event(TaskEvent(f'event_{job.id}_start',workspace_id,task.id,job.id,
+                        'person_edit_requested',payload,created_at=job.created_at),connection=conn)
+                owner.verify_submission(SubmissionIntent(workspace_id,'creation_job',job.id,digest,key,SchedulePolicy()),
+                    actor,connection=conn)
+            queued=runtime.scheduler.submit(SubmissionIntent(workspace_id,'creation_job',job.id,digest,key,SchedulePolicy()),actor)
+        except (PermissionError,KeyError,StopIteration,ValueError):
+            if created:
+                with self.repository._connect() as conn:
+                    conn.execute("UPDATE job_runs SET status='failed',failure_reason='person_edit_not_submitted',"
+                        "impact='人物编辑未安排成功，当前版本保持不变。',repair_action='修复原因后重新预览人物修改。',"
+                        "finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status='queued'",
+                        (datetime.now().astimezone().isoformat(),datetime.now().astimezone().isoformat(),workspace_id,job.id))
+            raise
+        runtime.wake()
+        return job,queued
+
+    def submit_narration_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         """One original edit Job, source adoption, then its existing bounded queue."""
         owner = runtime.registrations['creation_job'].owner
         script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
@@ -474,7 +535,8 @@ class CreationExecutionControl:
         candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,
             kind=NARRATION_EDIT_KIND, input_digest=digest,
             idempotency_key=f'narration-edit:{task.id}:{actor.member_id}:{digest}:{proposal.id}')
-        payload = {**actor.identity_payload(), 'script_id': script.id, 'plan_id': plan.id,
+        source=self._edit_source(task,proposal,actor,source)
+        payload = {**actor.identity_payload(), 'script_id': script.id, 'plan_id': plan.id, 'source':source,
             'revision_digest': revision_digest(script, plan), 'input_digest': digest, 'edit_proposal_id': proposal.id}
         def existing(conn):
             prior = conn.execute('SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?',
@@ -494,9 +556,14 @@ class CreationExecutionControl:
             owner.narration_edit_facts(candidate, task, payload, plan, pcm_preparation=preparation)
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
+                if write_guard is not None:
+                    write_guard(conn)
                 active = existing(conn)
                 if active is not None:
                     job = self.repository._job_run_from_row(active)
+                    saved=self.repository.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
+                    if saved.get('source')!=source:
+                        raise ValueError('原配音编辑属于另一输入，请查询原请求')
                 else:
                     if prepared is None:
                         raise ValueError('原配音编辑状态已变化，请查询原请求')
@@ -523,11 +590,11 @@ class CreationExecutionControl:
         runtime.wake()
         return job, queued
 
-    def select_narration_voice(self, *, runtime, actor=None, **inputs):
+    def select_narration_voice(self, *, runtime, actor=None, write_guard=None, **inputs):
         with ExitStack() as stack:
-            return self._select_narration_voice(runtime=runtime, stack=stack, actor=actor, **inputs)
+            return self._select_narration_voice(runtime=runtime, stack=stack, actor=actor, write_guard=write_guard, **inputs)
 
-    def _select_narration_voice(self, *, runtime, stack, actor, **inputs):
+    def _select_narration_voice(self, *, runtime, stack, actor, write_guard=None, **inputs):
         try:
             self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
                 inputs['request_id'], member_id=inputs['member_id'])
@@ -601,7 +668,7 @@ class CreationExecutionControl:
             runtime.scheduler.replace_unstarted_narration_voice(job, connection=conn, replacement_write=replace_input)
 
         receipt = self.repository.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind,
-            voice_source_preparation=source_preparation)
+            voice_source_preparation=source_preparation, write_guard=write_guard)
         if runtime is not None:
             runtime.wake()
         return receipt
