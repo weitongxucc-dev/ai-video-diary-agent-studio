@@ -24,19 +24,34 @@
 | 负责人 | 本批独占范围与交付 |
 | --- | --- |
 | 主控 | 共享文档、契约裁定、diff审核、集成提交与运行候选。需要主控直接修源码时先从原负责人取得明确交接。C取得运行窗口后主控不并行操纵同一应用或启动媒体。 |
-| A `01a14301-2730-7440-ab61-69fd35d9c341` | Pi与用户界面纵向负责人，新增独占 `apps/api/agent_runtime/`、`apps/api/agent_tools/controlled_codemode.ts`；原生工具适配、宿主可信上下文、取消与实际产物回读由A接通。`apps/api/agent_tools/diary/`、`apps/api/app/assistant/`、`apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py`；前端 `apps/web/src/components/creation-task/`、`CreationTaskWorkspace.tsx`及其module.css、`AssistantConversationPanel.tsx`、`useAssistantConversation.ts`、`AssistantConversationProvider.tsx`、`apps/web/src/lib/api/{assistant,creation-tasks,task-media}.ts`、`apps/web/src/lib/types/{assistant,creation-tasks,task-edits}.ts`、`apps/web/src/lib/creation-task-status.ts`；仅相应现有assistant/typed工具及对应组件测试。补持久等待/理解分类/后台业务调用、实际上下文与语义复核、右侧段预览/修改状态/回执/采用关系。不得写B后端文件。 |
-| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 共同编辑与执行用例负责人，新增独占 `apps/api/app/artifact_store.py`、`media_script.py`、`media_script_jobs.py`、`granted_subprocess.py`、`bootstrap.py`，按需在creation目录内补原生执行/产物登记用例。复用现有Job/TaskEvent/Artifact及受许可进程，提供A调用的业务契约，不限为PNG专用入口。`apps/api/app/creation/`、`production.py`、`schemas.py`、`creation_execution.py`、`narration.py`、`main.py`（仅必要组装/HTTP适配）、`device_scheduler.py`；仅对应既有creation_execution/narration/edit用例测试。复用原段、Job、Artifact、版本与依赖，补最小局部文案修订/配音字幕镜头接续、有声段产物、版本发布和中断/预算恢复。对A提供明确类型化入参/回执，main不承载业务。不得写A路径或更改保护门限、验收数据。 |
+| A `01a14301-2730-7440-ab61-69fd35d9c341` | Pi与用户界面纵向负责人，新增独占 `apps/api/agent_runtime/`、`apps/api/agent_tools/controlled_codemode.ts`；原生工具适配、宿主可信上下文、取消与实际产物回读由A接通。`apps/api/agent_tools/diary/`、`apps/api/app/assistant/`、`apps/api/app/assistant_pi.py`（仅运行回调签名及透传）、`apps/api/app/conversation_repository.py`、`apps/api/app/assistant_goal_continuation.py`；前端 `apps/web/src/components/creation-task/`、`CreationTaskWorkspace.tsx`及其module.css、`AssistantConversationPanel.tsx`、`useAssistantConversation.ts`、`AssistantConversationProvider.tsx`、`apps/web/src/lib/api/{assistant,creation-tasks,task-media}.ts`、`apps/web/src/lib/types/{assistant,creation-tasks,task-edits}.ts`、`apps/web/src/lib/creation-task-status.ts`；仅相应现有assistant/typed工具及对应组件测试。补持久等待/理解分类/后台业务调用、实际上下文与语义复核、右侧段预览/修改状态/回执/采用关系。不得写B后端文件。 |
+| B `01a14301-7591-74f1-b240-d3643b78ecfe` | 共同编辑与执行用例负责人，新增独占 `apps/api/app/artifact_store.py`、`media_script.py`、`media_script_jobs.py`、`granted_subprocess.py`、`bootstrap.py`、`host_resource_probes.py`和`member_permits.py`（后两者仅原生执行种类/有限策略接线，不改变既有保护值），按需在creation目录内补原生执行/产物登记用例。复用现有Job/TaskEvent/Artifact及受许可进程，提供A调用的业务契约，不限为PNG专用入口。`apps/api/app/creation/`、`production.py`、`schemas.py`、`creation_execution.py`、`narration.py`、`main.py`（仅必要组装/HTTP适配）、`device_scheduler.py`；仅对应既有creation_execution/narration/edit用例测试。复用原段、Job、Artifact、版本与依赖，补最小局部文案修订/配音字幕镜头接续、有声段产物、版本发布和中断/预算恢复。对A提供明确类型化入参/回执，main不承载业务。不得写A路径或更改保护门限、验收数据。 |
 | C `01a14301-b182-7a92-a973-66fe11baf450` | 恢复轻量只读准备权，无产品代码写权；主控交付明确候选与独占运行窗口后执行真实验收：独占主控交付候选的GUI操作、媒体播放、正常Quit/重启和指定安全点中断；只写既有验收目录下 `desktop-c-20261020-*` 定向证据。先准备同一任务的接受步骤和现有入口定位，不启动旧候选负载；收到新候选后串行执行，不人工补文案/镜头/内部ID或改库凑通过。 |
 | G `01a15854-9259-7231-977f-32bec26fd119` | 恢复只读定点审查：先复核保留B改动的三个既有阻断与本批运行/登记接口边界，随后审明确diff；规则/语义边界、用量证据、职责和事务、采用版本与未知回执；不重复审全仓，不写源码/测试/共享文档、不运行重活。 |
 | 设计语言 `01a1582b-200c-7220-8187-5925f6082fc5` | 用户独立授权范围保持，独占 `designs/yaohe-desktop-language-20261020/`；完整590项研究不缩成抽样，未采用候选不进入DESIGN或产品。本批不写该目录。 |
 
 新增文件 `apps/api/app/creation/segment_production_use_case.py` 与 `task_budget_use_case.py` 属B既有待审diff，不因文件存在认定已集成。设计研究保持用户独立授权范围，涉及新交互规则须按新DESIGN核对；不因本轮文档变更授权生产UI改版。
 
+B独占本轮轻量原生进程实证文件 `/Volumes/Dujiangyan-VM/AI视频日记/acceptance/phone-loop-20261018/desktop-c-20261020-native-smoke.json`，记录工具启动、隔离、停止与资源测量；该文件不属于C的作品验收结论，不授权B操作桌面、模型或制作真实作品。
+
+B已明确交接并停止写入 `apps/api/app/creation/section_timeline.py`，本批此单文件改由A独占：复用已有时间联动，负责目标段音画、字幕与实际依赖的纯转换；B继续独占仓储、事务、EditOperation与撤销入口接线。其余所有权不变。
+
 ### 2026-10-23 Pi 1.4 升级窄范围接管
 
 用户批准升级 Pi 1.4.0。主控已向 A 发出停止相关文件写入及交接通知；A 尚未返回交接回执，本次按用户批准的版本升级由主控独占下列文件，A 后续恢复不得沿旧表继续写入：`apps/api/agent_runtime/session.mjs`、`apps/api/agent_runtime/tests/phase-deadlines.test.mjs`、`apps/api/app/assistant/runtime_checks.py`、`apps/api/app/assistant/failures.py`。主控同时维护这些版本消费者对应的既有 SDK 测试夹具及桌面安装说明。保留各文件此前 diff，只提交本轮升级增量；不恢复其他旧实现任务，不改保护门限或扩大并发。
 
 复用真实 SDK 边界检查核验工具注册/原生操作、取消、压缩及会话恢复；Codemode 队列等待仍计入本产品既有期限。源码版本、实际依赖和后续桌面候选须一致，SDK 检查不代表真实模型或视频闭环通过。原作品链仍按§2与原计划验收；当前未集成媒体/撤销改动不得靠版本升级宣称完成。
+
+### 2026-10-23 事实、回执与版本一致性优先批次
+
+用户批准沿现有闭环先修事实口径、错误回执和版本依赖。基线为main `7e4ee736`；保留实现已保存于 `codex/pi-native-integration-wip-20261023` 的 `b09f190e`，不把它视为已验收。此前A/B实现冻结仅按本节重绑定后解除，已有diff保留。稳定规则见领域§2.4/§6.2、架构§3.15.3；接受路径复用计划§1.1.1a，不改变原中英30秒目标。
+
+- A：接回已完成Pi1.4升级的四个临时主控文件；除原A范围，新增独占 `apps/api/app/materials/contracts.py`、`materials/retrieval.py`、`topics.py` 及各自直接相关既有测试。先收敛素材资格公共判定与检索、核查错误的原始原因/下一步透传及Pi/UI读取，不新增通用对象数据库或万能寻址层。不得写B的production/main；公共素材判定的入参/返回与B明确后由B接入这些消费者。
+- B：保留原范围，收敛production/main中的素材判定消费者并保持实际文件/身份检查；完成目标/真实依赖版本、正文音画字幕联动与指定修改撤销，慢工作移出写事务。`section_timeline.py` 继续归A，B需要变动时提出精确接口需求，不越界写入。
+- G：只读审核本批明确diff，优先资格一致性、协议/内容/未知结果区分、版本冲突与撤销、事务边界；不全仓复审，不运行媒体或扩大测试。
+- C：先只读准备原任务/材料/运行入口，收到主控固定候选和独占窗口后串行验收；不自行启动旧候选，不人工补业务步骤。每次停点保留原请求、当前要求、版本、实际回执与产物定位。
+
+主控独占上述共享文档、审核和集成，不并行写实施文件。各线程先回REBASE_ACK说明本批复用/差额与最小验证后执行；若线程被额度挡住，先回报并交接具体文件，主控再绑定接管，不能把派工当已实施。设计研究、手机、Windows优先级不变。
 
 ## 4. 交付与运行
 
