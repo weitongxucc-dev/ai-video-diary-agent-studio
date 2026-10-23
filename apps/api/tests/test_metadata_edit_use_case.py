@@ -468,3 +468,34 @@ def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):
             'operation_type': proposal.operation['operation_type'], 'operation': operations[0].id,
             'base_version': base.id, 'result_version': current.current_timeline_version_id,
             'versions_added': 1, 'operations': 1, 'fresh_readback': True, 'native_calls': 0}, indent=2))
+
+
+@pytest.mark.parametrize('reuse_output',[False,True])
+def test_task_authorization_render_outputs_are_not_input_grants(state,reuse_output):
+    from datetime import timedelta
+    from app.audio_timeline import AudioTimeline,TimelineAudioTrack,TimelineAudioClip
+    from app.creation.contracts import TaskAuthorization
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    now=datetime.now(timezone.utc)
+    actor=CreationExecutionActor('ws',state.member.member_id)
+    service=TaskAuthorizationUseCase(state.repo,lambda _:'ready',clock=lambda:now)
+    _,scope=service._requirements('ws',state.task.id)
+    authorization=TaskAuthorization('render-input-authority','ws',state.task.id,service.identity(actor),
+        state.repo.task_authorization_goal_revision('ws',state.task.id),('task_media',),scope,now,now,now+timedelta(hours=1))
+    state.repo.save_task_authorization(authorization,expected_revision=None)
+    montage=dict(state.repo.get_creation_task_montage_plan('ws',state.task.id))
+    output='artifacts/task/final-render/preview.mp4'
+    sidecar='artifacts/task/final-render/subtitles.srt'
+    montage.update(output_path=output,subtitle_path=sidecar)
+    if reuse_output:
+        montage['audio_timeline']=AudioTimeline(tracks=[TimelineAudioTrack(id='reused-output',name='原声',role='original',
+            clips=[TimelineAudioClip(id='reused-output-audio',name='产物原声',source_ref=output,
+                source_start_ms=0,source_end_ms=1000,timeline_start_ms=0)])]).model_dump(mode='json')
+    state.repo.save_creation_task_montage_plan('ws',state.task.id,montage['id'],montage)
+    _,required=service._requirements('ws',state.task.id)
+    assert (output in required['references']) is reuse_output
+    assert sidecar not in required['references']
+    assert service.status('ws',state.task.id,identity=service.identity(actor),operation='task_media')==(
+        'outside_scope' if reuse_output else 'valid')
+    assert state.repo.get_task_authorization('ws',state.task.id)==authorization

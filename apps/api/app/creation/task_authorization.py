@@ -57,7 +57,7 @@ class TaskAuthorizationUseCase:
                 for child in value: references(child)
             elif isinstance(value, str) and value.startswith(("workspace://", "artifact://", "narration://", "person-render://", "artifacts/")):
                 result["references"].add(value)
-        references(montage)
+        references({key:value for key,value in montage.items() if key not in {'output_path','subtitle_path'}})
         return task, {key: sorted(values) for key, values in result.items()}
 
     def _scope(self, identity, task_id):
