@@ -82,11 +82,12 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
     detectImageMimeType:async path=>{
       const mime=calls.getStore().files.get(path).mime_type;
       if (['image/png','image/jpeg','image/gif','image/webp'].includes(mime))
-        throw new Error('此文字模型会话未获图片外发许可；请沿本地局部分析或作品预览检查，不能把原始图片自动发给模型');
+        throw new Error('当前 read 仅返回文字，不发送图片附件。请在任务授权范围内用本地程序处理，再通过 register_task_artifacts 登记并在作品候选中预览；当前没有直接观察未登记图片的本地语义分析入口。');
       if (!textMime(mime))
         throw new Error('二进制媒体不直接发送给文字模型；可在任务许可目录用程序处理并登记结果');
       return null;
     }}});
+  read.description='读取当前任务授权范围内的UTF-8文字文件；只返回有界文字，不发送图片或音视频附件。';
   read.parameters={...read.parameters,properties:{...read.parameters.properties,byte_offset:{type:'integer',minimum:0}}};
   const write=sdk.createWriteToolDefinition('/task/work',{operations:{writeFile,
     mkdir:async path=>{await request('native_task_file',{action:'mkdir',path});}}});
