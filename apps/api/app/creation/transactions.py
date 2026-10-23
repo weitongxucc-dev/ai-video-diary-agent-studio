@@ -8,6 +8,45 @@ from app.creation.contracts import CoverAsset, EditOperation, EditProposal, Subt
 from app.models import utc_now
 
 
+def changed_stage_sections(snapshot, montage, before_tracks, after_tracks):
+    """Identify published section videos whose actual render inputs changed."""
+    from app.creation.section_timeline import section_timeline_dependencies
+    before = snapshot.get('montage')
+    if not before or not montage:
+        return []
+
+    def subtitles(plan, section_id, tracks):
+        cues = {cue['id'] for cue in plan['cues'] if cue['source_section_id'] == section_id}
+        clips = [clip for clip in plan['clips'] if clip['cue_id'] in cues]
+        if not clips:
+            return []
+        start = min(clip['timeline_start_seconds'] for clip in clips)
+        end = max(clip['timeline_end_seconds'] for clip in clips)
+        result = []
+        for track in tracks:
+            relevant = [replace(cue, start_seconds=cue.start_seconds-start, end_seconds=cue.end_seconds-start)
+                for cue in track.cues if cue.source_cue_id in cues or cue.start_seconds < end and cue.end_seconds > start]
+            if relevant:
+                result.append({'language': track.language, 'generation_method': track.generation_method,
+                    'source_language': track.source_language, 'style': track.style,
+                    'cues': [asdict(cue) for cue in relevant]})
+        return sorted(result, key=lambda item: (item['language'], item['generation_method'], item['source_language'] or ''))
+
+    changed = []
+    for section_id in snapshot.get('stage_segments', {}):
+        try:
+            different = (before.get('aspect_ratio') != montage.get('aspect_ratio')
+                or section_timeline_dependencies(before, section_id) != section_timeline_dependencies(montage, section_id))
+        except ValueError:
+            # A section split across noncontiguous spans cannot reuse its old contiguous video.
+            different = True
+        if before_tracks is not None:
+            different = different or subtitles(before, section_id, before_tracks) != subtitles(montage, section_id, after_tracks)
+        if different:
+            changed.append(section_id)
+    return changed
+
+
 @dataclass(frozen=True)
 class EditChangeSet:
     operation: EditOperation
@@ -46,7 +85,7 @@ def prepare_change_set(*, proposal: EditProposal, base_version: TimelineVersion,
                        operation_type, operation_payload, result_version_id, montage_plan_id,
                        montage_payload, subtitle_tracks, cover_asset, snapshot_source=None,
                        narration_segments=None, narration_artifact=None, include_track_ids=True,
-                       absent_cover_value=False):
+                       absent_cover_value=False, source_subtitle_tracks=None):
     """Compute the whole immutable change before acquiring a SQLite write lock."""
     now = utc_now()
     operation = EditOperation(id=f"operation_{uuid4().hex}", workspace_id=proposal.workspace_id,
@@ -54,6 +93,18 @@ def prepare_change_set(*, proposal: EditProposal, base_version: TimelineVersion,
         payload=operation_payload, base_version_id=base_version.id, result_version_id=result_version_id,
         status="applied", created_at=now, applied_at=now)
     snapshot = dict(base_version.snapshot if snapshot_source is None else snapshot_source)
+    invalidations = dict(snapshot.get('stage_segment_invalidations', {}))
+    for section_id in changed_stage_sections(snapshot, montage_payload or snapshot.get('montage'), source_subtitle_tracks, subtitle_tracks):
+        invalidations[section_id] = {'publication_id': snapshot['stage_segments'][section_id],
+            'operation_id': operation.id, 'reason': 'section_render_inputs_changed'}
+    if operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}:
+        for section_id, value in operation_payload.get('stage_adoption_restore', {}).items():
+            if value is None:
+                invalidations.pop(section_id, None)
+            elif value['publication_id'] == snapshot.get('stage_segments',{}).get(section_id):
+                invalidations[section_id] = value
+    if invalidations or 'stage_segment_invalidations' in snapshot:
+        snapshot['stage_segment_invalidations'] = invalidations
     if montage_payload is not None:
         snapshot["montage"] = montage_payload
     if include_track_ids:

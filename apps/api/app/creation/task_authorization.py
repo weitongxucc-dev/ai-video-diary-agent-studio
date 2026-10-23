@@ -184,6 +184,99 @@ class TaskAuthorizationUseCase:
             raise refusal
         return result
 
+    def prepare_voice_selection(self, task, actor, voice_profile_id, voice_version):
+        """Verify one fixed replacement before the caller opens its writer transaction."""
+        identity = self.identity(actor)
+        current = self.repository.get_task_authorization(task.workspace_id, task.id)
+        if self.status(task.workspace_id, task.id, identity=identity, operation='narration') != 'valid':
+            raise TaskAuthorizationDenied('原任务授权无效，不能扩大声音范围')
+        if self.verify_identity(identity) != 'ready':
+            raise TaskAuthorizationDenied('本次设备或账号权限尚未核实，声音选择未提交')
+        plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
+        previous_voice = f'{plan.selected_voice.profile_id}:{plan.selected_voice.version}' if plan.selected_voice else None
+        with self.repository._connect() as conn:
+            candidate_current = self.repository.capture_profile_local_check(conn, task.workspace_id,
+                [('voice', voice_profile_id, voice_version)])
+        candidate = self.repository.creation_plan_voice_reference(task.workspace_id, voice_profile_id,
+            voice_version, viewer_user_id=identity.get('user_id') or identity['member_id'], local_diagnostic=False)
+
+        def commit(connection, selected_voice):
+            latest = self.repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+            if latest != current:
+                raise TaskAuthorizationConflict('声音核验期间原任务授权已变化，选择未提交')
+            if (self.clock() >= current.expires_at
+                    or self.repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection) != current.goal_revision
+                    or selected_voice != candidate or candidate_current(connection) != 'ready'):
+                raise TaskAuthorizationDenied('原目标、有效期或候选声音权限已变化，选择未提交')
+            voices = set(current.resource_scope.get('voices', []))
+            if previous_voice is not None:
+                voices.discard(previous_voice)
+            voices.add(f'{candidate.profile_id}:{candidate.version}')
+            updated = replace(current, revision=current.revision + 1,
+                resource_scope={**current.resource_scope, 'voices': sorted(voices)},
+                last_checked_at=self.clock(), last_verdict='ready')
+            self.repository.save_task_authorization(updated, expected_revision=current.revision, connection=connection)
+            if self.status(task.workspace_id, task.id, identity=identity, operation='narration', connection=connection) != 'valid':
+                raise TaskAuthorizationDenied('声音选择后的原任务授权不可用，未提交')
+
+        return commit
+
+    def prepare_material_edit(self, task, editor_identity, asset_ids):
+        """Prepare only newly used fixed materials; ordinary editing does not issue a task grant."""
+        from app.production import content_readable
+        current = self.repository.get_task_authorization(task.workspace_id, task.id)
+        reader = editor_identity.get('user_id') or editor_identity['member_id']
+        status = self.status(task.workspace_id, task.id, operation='render')
+        additions = set(asset_ids) - set(current.resource_scope.get('assets', [])) if current else set(asset_ids)
+        reason = None
+        if current is None or status != 'valid':
+            reason = 'task_authorization_' + status
+        elif additions and reader != (current.identity.get('user_id') or current.identity['member_id']):
+            reason = 'original_execution_identity_differs'
+        elif additions and self.verify_identity(current.identity) != 'ready':
+            reason = 'original_execution_identity_unverified'
+
+        def material_facts(connection):
+            return [tuple(row) for row in connection.execute('SELECT id,updated_at,visibility,payload FROM material_assets '
+                'WHERE workspace_id=? AND id IN (SELECT value FROM json_each(?)) ORDER BY id',
+                (task.workspace_id, json.dumps(sorted(additions))))]
+
+        references = []
+        with self.repository._connect() as conn:
+            facts = material_facts(conn)
+        if len(facts) != len(additions):
+            raise TaskAuthorizationDenied('本次替换素材已不存在')
+        for asset_id in sorted(additions):
+            asset = self.repository.get_asset(task.workspace_id, asset_id)
+            if not content_readable(user_id=reader, local_diagnostic=editor_identity.get('local_diagnostic', False),
+                    visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+                raise TaskAuthorizationDenied('当前编辑成员无权使用替换素材')
+            references.append(self.repository.workspace_media_reference_for_asset(task.workspace_id, asset_id))
+
+        def commit(connection):
+            if material_facts(connection) != facts:
+                raise TaskAuthorizationConflict('替换素材的权限或版本在提交前已变化')
+            if reason is not None:
+                return {'status': 'not_ready', 'reason_code': reason, 'device_admission': 'not_checked'}
+            if additions:
+                latest = self.repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+                if latest != current:
+                    raise TaskAuthorizationConflict('素材核验期间原任务授权已变化')
+                if (self.clock() >= current.expires_at
+                        or self.repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection) != current.goal_revision):
+                    raise TaskAuthorizationDenied('原任务授权已到期或目标变化，素材选择未提交')
+                scope = {**current.resource_scope,
+                    'assets': sorted(set(current.resource_scope.get('assets', [])) | additions),
+                    'references': sorted(set(current.resource_scope.get('references', [])) | set(references))}
+                self.repository.save_task_authorization(replace(current, resource_scope=scope,
+                    revision=current.revision+1,last_checked_at=self.clock(),last_verdict='ready'),
+                    expected_revision=current.revision,connection=connection)
+            verdict = self.status(task.workspace_id, task.id, operation='render', connection=connection)
+            return {'status': 'authorization_ready' if verdict == 'valid' else 'not_ready',
+                'reason_code': None if verdict == 'valid' else 'task_authorization_' + verdict,
+                'device_admission': 'not_checked'}
+        return commit
+
     def status(self, workspace_id, task_id, *, identity=None, operation=None, connection=None, check_scope=True):
         authorization = self.repository.get_task_authorization(workspace_id, task_id, connection=connection, metadata_only=not check_scope)
         if authorization is None:

@@ -28,7 +28,7 @@ from app.schemas import EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskMontageClipUp
 from app.production import TimelineVersionConflict
 
 from app.creation.contracts import (EditCommand, EditIntent, EditProposal, SubtitleTrack,
-    SubtitleCue, JobRun, ArtifactRecord, TransformRun, DependencyEdge, TimelineVersion)
+    SubtitleCue, JobRun, ArtifactRecord, TransformRun, DependencyEdge, TimelineVersion, TaskEvent)
 from app.creation.transactions import (clone_subtitle_track, clone_cover_asset,
     prepare_change_set, commit_direct_change, commit_change_set)
 from app.creation.editing.metadata import (check_command, prepare_subtitle_display_command,
@@ -109,6 +109,8 @@ class MetadataEditResult:
     montage: object
     task: object
     narration: object | None
+    restore_request: dict | None = None
+    execution_readiness: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -169,13 +171,31 @@ def logical_montage_output_refs(plan: CreationTaskMontagePlan) -> list[str]:
 
 
 class MetadataEditUseCase:
-    def __init__(self, repository, artifact_store, *, output_root, audio_service):
+    def __init__(self, repository, artifact_store, *, output_root, audio_service, task_authorizations=None):
         self.repository = repository
         self.artifact_store = artifact_store
         self.output_root = output_root
         self.audio_service = audio_service
         self.picture_renderer = None
         self.preview_settings = None
+        self.task_authorizations = task_authorizations
+
+    def prepare_material_scope(self, task, before, after, identity, *, connection):
+        previous = {clip.asset_id for clip in before.clips if not clip.person_render_id}
+        introduced = {clip.asset_id for clip in after.clips if not clip.person_render_id} - previous
+        if self.task_authorizations is None:
+            return lambda _conn: {'status':'not_ready','reason_code':'task_authorization_unavailable','device_admission':'not_checked'}
+        if introduced:
+            if identity is None:
+                raise PermissionError('资源替换缺少原可信编辑身份，未采用')
+            if connection is not None and connection.in_transaction:
+                raise PermissionError('资源替换须在写事务外完成权限准备，未采用')
+            return self.task_authorizations.prepare_material_edit(task, identity, introduced)
+        def unchanged(conn):
+            status = self.task_authorizations.status(task.workspace_id,task.id,operation='render',connection=conn)
+            return {'status':'authorization_ready' if status=='valid' else 'not_ready',
+                'reason_code':None if status=='valid' else 'task_authorization_'+status,'device_admission':'not_checked'}
+        return unchanged
 
     def confirm(self, task, proposal, *, identity, reader_identity, source):
         workspace_id, task_id = task.workspace_id, task.id
@@ -359,7 +379,8 @@ class MetadataEditUseCase:
             raise EditConflict('原保存结果尚未确定，请查询原请求，不重复执行')
         version = self.repository.get_timeline_version(task.workspace_id, operation.result_version_id)
         plan = creation_task_montage_plan_from_payload(version.snapshot['montage'])
-        return event_id, MetadataEditReplay(None, MetadataEditResult(operation, plan, task, None))
+        return event_id, MetadataEditReplay(None, MetadataEditResult(operation, plan, task, None,
+            execution_readiness=self.repository.edit_execution_readiness(task.workspace_id,task.id,operation.id)))
 
     def record_result(self, task, event_id, *, status_code, response):
         if event_id is not None:
@@ -555,15 +576,26 @@ class MetadataEditUseCase:
     def persist_subtitle_edit(self, *, workspace_id: str, task, proposal, base_version,
             result_version_id: str, operation_type: str, operation_payload: dict, subtitle_tracks,
             cover_asset=None, updated_plan=None, snapshot_source=None, narration_segments=None,
-            narration_artifact=None, verify_sources=None) -> MetadataEditResult:
+            narration_artifact=None, verify_sources=None, actor_identity=None) -> MetadataEditResult:
         montage_payload = creation_task_montage_plan_to_payload(updated_plan) if updated_plan is not None else None
         change = prepare_change_set(proposal=proposal, base_version=base_version,
             operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id,
             montage_plan_id=updated_plan.id if updated_plan is not None else None, montage_payload=montage_payload,
             subtitle_tracks=subtitle_tracks, cover_asset=cover_asset, snapshot_source=snapshot_source,
-            narration_segments=narration_segments, narration_artifact=narration_artifact)
+            narration_segments=narration_segments, narration_artifact=narration_artifact,
+            source_subtitle_tracks=self.current_subtitle_tracks(workspace_id, task, current_version=base_version))
+        authorization_write=self.prepare_material_scope(task,
+            creation_task_montage_plan_from_payload(base_version.snapshot['montage']),
+            updated_plan or creation_task_montage_plan_from_payload(base_version.snapshot['montage']),actor_identity,connection=None)
+        readiness={}
+        def verify_commit(conn):
+            if verify_sources is not None:
+                verify_sources(conn)
+            readiness.update(authorization_write(conn))
+            self.repository.append_task_event(TaskEvent(f'event_{change.operation.id}_execution_readiness',workspace_id,
+                task.id,None,'edit_execution_readiness',{'operation_id':change.operation.id,**readiness}),connection=conn)
         try:
-            _proposal, persisted_operation, _version, current_task = commit_change_set(self.repository, change,verify_sources=verify_sources)
+            _proposal, persisted_operation, _version, current_task = commit_change_set(self.repository, change,verify_sources=verify_commit)
         except ValueError as exc:
             raise EditConflict(str(exc)) from exc
         persisted_plan = creation_task_montage_plan_from_payload(
@@ -574,9 +606,9 @@ class MetadataEditUseCase:
             if current_task.narration_cache_key
             else None
         )
-        return MetadataEditResult(persisted_operation, persisted_plan, current_task, narration)
+        return MetadataEditResult(persisted_operation, persisted_plan, current_task, narration,execution_readiness=readiness)
 
-    def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None, verify_sources=None):
+    def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None, verify_sources=None, actor_identity=None):
         try:
             dissolve_frames(updated_plan.clips)
             validate_overlays(updated_plan.graphic_overlays, updated_plan.duration_seconds)
@@ -588,6 +620,10 @@ class MetadataEditUseCase:
         result_version_id = result_version_id or f'timeline_{uuid4().hex}'
         source_version = subtitle_source_version or base_version
         source_plan = creation_task_montage_plan_from_payload(source_version.snapshot['montage'])
+        source_command = direct_command or proposal_source_command
+        identity = actor_identity or (source_command.actor_identity if source_command is not None else None)
+        material_before = creation_task_montage_plan_from_payload(base_version.snapshot['montage'])
+        authorization_write = self.prepare_material_scope(task, material_before, updated_plan, identity, connection=connection)
         carried_tracks = [clone_subtitle_track(track, timeline_version_id=result_version_id) for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
         audio_edit = operation_payload.get('edit') if operation_type == 'EditAudioTimeline' else None
         if isinstance(audio_edit, dict) and audio_edit.get('action') == 'replace_narration':
@@ -606,9 +642,21 @@ class MetadataEditUseCase:
                 raise EditConflict(f'字幕重定时未保存，当前版本保持不变：{exc}') from exc
         source_cover = self.cover_asset_for_version(workspace_id, task.id, source_version)
         carried_cover = clone_cover_asset(source_cover, timeline_version_id=result_version_id) if source_cover is not None else None
-        change = prepare_change_set(proposal=proposal, base_version=base_version, operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id, montage_plan_id=updated_plan.id, montage_payload=montage_payload, subtitle_tracks=carried_tracks, cover_asset=carried_cover, snapshot_source=source_version.snapshot, narration_segments=narration_segments, narration_artifact=narration_artifact, include_track_ids=edited_subtitle_tracks is not None or bool(carried_tracks) or 'subtitle_track_ids' in source_version.snapshot, absent_cover_value=True)
+        change = prepare_change_set(proposal=proposal, base_version=base_version, operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id, montage_plan_id=updated_plan.id, montage_payload=montage_payload, subtitle_tracks=carried_tracks, cover_asset=carried_cover, snapshot_source=source_version.snapshot, narration_segments=narration_segments, narration_artifact=narration_artifact, include_track_ids=edited_subtitle_tracks is not None or bool(carried_tracks) or 'subtitle_track_ids' in source_version.snapshot, absent_cover_value=True,
+            source_subtitle_tracks=self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))
+        readiness = {}
+        def verify_commit(conn):
+            if direct_intent is not None:
+                direct_source_verifier.verify_change(direct_command, change.montage_payload, conn)
+            elif proposal_source_verifier is not None:
+                proposal_source_verifier.verify_change(proposal_source_command, change.montage_payload, conn)
+            elif verify_sources is not None:
+                verify_sources(conn)
+            readiness.update(authorization_write(conn))
+            self.repository.append_task_event(TaskEvent(f'event_{change.operation.id}_execution_readiness',workspace_id,
+                task.id,None,'edit_execution_readiness',{'operation_id':change.operation.id,**readiness}),connection=conn)
         try:
-            _confirmed, persisted_operation, _version, _task = commit_direct_change(self.repository, direct_command, direct_intent, proposal, change, verify_sources=lambda command, conn: direct_source_verifier.verify_change(command, change.montage_payload, conn), connection=connection) if direct_intent is not None else commit_change_set(self.repository, change, connection=connection, verify_sources=(lambda conn: proposal_source_verifier.verify_change(proposal_source_command, change.montage_payload, conn)) if proposal_source_verifier is not None else verify_sources)
+            _confirmed, persisted_operation, _version, _task = commit_direct_change(self.repository, direct_command, direct_intent, proposal, change, verify_sources=lambda command, conn: verify_commit(conn), connection=connection) if direct_intent is not None else commit_change_set(self.repository, change, connection=connection, verify_sources=verify_commit)
         except PermissionError as exc:
             raise PermissionError(str(exc)) from exc
         except OSError as exc:
@@ -620,7 +668,7 @@ class MetadataEditUseCase:
         persisted_plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
         current_task = self.repository.get_creation_task(workspace_id, task.id)
         current_narration = self.repository.get_narration_artifact(workspace_id, current_task.narration_cache_key) if current_task.narration_cache_key else None
-        return MetadataEditResult(persisted_operation, persisted_plan, current_task, current_narration)
+        return MetadataEditResult(persisted_operation, persisted_plan, current_task, current_narration,execution_readiness=readiness)
 
 
     def preview_graphic_overlay(self, workspace_id, task_id, payload, *, identity, source, draft_only, execution):

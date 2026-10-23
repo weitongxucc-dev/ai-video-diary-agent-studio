@@ -240,7 +240,8 @@ from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, Timeline
 from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
-    CreationPlanPreflightRejected, CreationPlanPreflightUseCase, source_item_identity)
+    CreationPlanPreflightRejected, CreationPlanPreflightUseCase)
+from app.source_types import source_item_identity
 from app.creation.contracts import (EditCommand, ArtifactRecord, CoverAsset, DependencyEdge, EditIntent, EditOperation, EditProposal, JobRun, TaskEvent, TimelineVersion, SubtitleCue, SubtitleTrack, TransformRun)
 from app.task_runtime import JobFailure, JobResult
 from app.quality_inspection import QualityCheckRepository
@@ -370,6 +371,7 @@ from app.schemas import (
     EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS,
     CreationTaskSubtitleCueUpdateRequest,
     CreationTaskTimelineUndoRequest,
+    CreationTaskTimelineRestoreRequest,
     CreationTaskWorkspaceResponse,
     CreationTasksResponse,
     CreatorProfileLearnResult,
@@ -3563,7 +3565,8 @@ def _output_observation_use_case(repository=None):
 def _audio_edit_use_case(repository=None):
     repo=repository if repository is not None else production_repo
     audio=TaskAudio(repo,artifact_store,settings.effective_temporary_root_path)
-    metadata=MetadataEditUseCase(repo,artifact_store,output_root=Path(settings.video_output_path),audio_service=audio)
+    metadata=MetadataEditUseCase(repo,artifact_store,output_root=Path(settings.video_output_path),audio_service=audio,
+        task_authorizations=_task_authorizations_for_goal(repo))
     return AudioEditUseCase(repo,audio,metadata,creation_execution_mode)
 
 
@@ -4133,7 +4136,8 @@ def retry_task_media_job(task_id: str, job_id: str, request: Request):
 def _picture_preview_components(repository=None):
     repo = repository if repository is not None else production_repo
     audio = TaskAudio(repo, artifact_store, settings.effective_temporary_root_path)
-    metadata = MetadataEditUseCase(repo, artifact_store, output_root=Path(settings.video_output_path), audio_service=audio)
+    metadata = MetadataEditUseCase(repo, artifact_store, output_root=Path(settings.video_output_path), audio_service=audio,
+        task_authorizations=_task_authorizations_for_goal(repo))
     renderer = PicturePreviewRenderer(repo, artifact_store, audio, metadata, montage_renderer,
         verify_identity=_verify_creation_identity, presenter_model_ids=_presenter_model_ids,
         output_root=Path(settings.video_output_path), portrait_worker_path=settings.native_portrait_worker_path,
@@ -5249,7 +5253,24 @@ def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict |
 
 def _assistant_conversation_response(row: dict, request: Request) -> dict:
     turns = conversation_repo.list_turns(row["id"])
-    for turn in turns:
+    for index, turn in enumerate(turns):
+        if (turn.get('result') or {}).get('kind') == 'task_turn':
+            context = conversation_repo.consumed_turn_request_context(turn['id'], row['id'], row['workspace_id'], row['member_id'])
+            if (context.get('kind') == 'task' and context.get('task_id')
+                    and (row['scope_kind'] != 'task' or context['task_id'] == row['scope_id'])):
+                from app.assistant.inputs import latest_consumed_input
+                from app.assistant.result_projection import refresh_original_receipts
+                consumed = latest_consumed_input(turn['events'])
+                input_id = consumed['input_id'] if consumed else context.get('source_input_id')
+                task_id, ws = context['task_id'], row['workspace_id']
+                def read_actor():
+                    try:
+                        return _require_permit_actor(request, ws)
+                    except HTTPException as exc:
+                        raise PermissionError('当前原请求读取身份不可核实') from exc
+                turns[index] = refresh_original_receipts(turn, task_id=task_id, input_id=input_id,
+                    read_segment=lambda request_id: _segment_production_use_case().read_request(ws, task_id, request_id, read_actor()),
+                    read_restore=lambda request_id: _timeline_restore_use_case().read_request(ws, task_id, request_id, read_actor()))
         if turn["status"] != "completed" or (turn.get("result") or {}).get("kind") != "conversation":
             continue
         saved = _assistant_creation_request_for_turn(request, turn)
@@ -7955,11 +7976,28 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     topic_candidates = None
     storyboard_regeneration = None
     timeline_action = None
-    media_job, edit_request, script_tool = None, None, None
+    media_job, edit_request, script_tool, segment_revision, timeline_restore = None, None, None, None, None
     if isinstance(preview, dict) and preview.get("kind") in {"execution_action", "execution_result"} and preview.get("applied_edit") is not None:
         edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview["applied_edit"])
         timeline_action = "apply"
-    if isinstance(preview, dict) and preview.get("kind") in {"storyboard_regeneration_receipt", "storyboard_regeneration_unknown", "storyboard_regeneration_rejected"}:
+    if isinstance(preview, dict) and preview.get('kind') == 'segment_revision':
+        from app.assistant.result_projection import resolve_segment_revision, segment_revision_message
+        actor = _require_permit_actor(request, workspace_id)
+        origin=conversation_repo.task_turn_source(str(turn_id),workspace_id,
+            _assistant_member_id(request,workspace_id),task_id)
+        segment_revision = resolve_segment_revision(preview, task_id=task_id, input_id=origin['input_id'],
+            read_original=lambda request_id: _segment_production_use_case().read_request(
+                workspace_id, task_id, request_id, actor))
+        reply = segment_revision_message(segment_revision)
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get('kind') == 'timeline_restore_request':
+        from app.assistant.result_projection import resolve_timeline_restore, timeline_restore_message
+        actor = _require_permit_actor(request, workspace_id)
+        timeline_restore = resolve_timeline_restore(preview, task_id=task_id,
+            read_original=lambda request_id: _timeline_restore_use_case().read_request(workspace_id, task_id, request_id, actor))
+        reply = timeline_restore_message(timeline_restore)
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get("kind") in {"storyboard_regeneration_receipt", "storyboard_regeneration_unknown", "storyboard_regeneration_rejected"}:
         from app.assistant.result_projection import storyboard_regeneration_message
         storyboard_regeneration = _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, preview)
         reply = storyboard_regeneration_message(storyboard_regeneration.model_dump(mode="json"))
@@ -8068,8 +8106,15 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         edit_preview = _edit_preview_response(actual_intent, actual_proposal)
     else:
         edit_preview = None
+    if edit_request is not None and isinstance(edit_request.result,dict):
+        from app.assistant.result_projection import execution_readiness_message
+        readiness_message=execution_readiness_message(edit_request.result.get('execution_readiness'))
+        if readiness_message:
+            reply+=' '+readiness_message
     response = CreationTaskAssistantTurnResponse(
         storyboard_regeneration=storyboard_regeneration,
+        segment_revision=segment_revision,
+        timeline_restore=timeline_restore,
         script_tool=script_tool,
         edit_request=edit_request,
         reply=reply,
@@ -8369,7 +8414,7 @@ def select_creation_task_narration_voice(
     if payload.assistant_turn_id is not None:
         _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     try:
-        receipt = production_repo.select_creation_task_narration_voice(
+        receipt = _creation_execution_control().select_narration_voice(runtime=device_runtime,
             workspace_id=task.workspace_id, task_id=task.id, member_id=member_id, request_id=str(payload.request_id),
             voice_profile_id=payload.voice_profile_id,
             voice_version=payload.voice_version,
@@ -8389,7 +8434,7 @@ def select_creation_task_narration_voice(
             repair_action=exc.repair_action,
             retryable=True,
         ) from exc
-    except ValueError as exc:
+    except (ValueError, RecoveryBlocked) as exc:
         raise _topic_failure_response(
             status_code=409,
             error="creation_task_voice_selection_conflict",
@@ -8685,7 +8730,7 @@ def _segment_production_use_case(repository=None):
     repo = production_repo if repository is None else repository
     return SegmentProductionUseCase(repo,narration_stage=_narration_stage_use_case(repo),
         renderer=montage_renderer,artifact_store=artifact_store,
-        output_root=settings.effective_temporary_root_path)
+        output_root=settings.effective_temporary_root_path,source_repository=source_repository)
 
 
 def _native_task_operations_case(repository=None,*,budget=None,authorizations=None):
@@ -8817,6 +8862,20 @@ def creation_task_segment_context(task_id: str, section_id: str, request: Reques
         raise HTTPException(status_code=403,detail=str(exc)) from exc
     except (KeyError,ValueError) as exc:
         raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.get('/api/creation-tasks/{task_id}/segments/{section_id}/sources')
+def creation_task_segment_sources(task_id: str, section_id: str, request: Request,
+        offset: int = Query(0, ge=0), limit: int = Query(8, ge=1, le=24),
+        text_offset: int = Query(0, ge=0), max_chars: int = Query(3000, ge=1, le=8000)):
+    ws = current_workspace_id(request)
+    try:
+        return _segment_production_use_case().sources(ws, task_id, section_id, _require_permit_actor(request, ws),
+            offset=offset, limit=limit, text_offset=text_offset, max_chars=max_chars)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail='原段落证据不存在') from exc
 
 
 @app.post('/api/creation-tasks/{task_id}/segments/{section_id}/revision')
@@ -9029,6 +9088,8 @@ def _metadata_edit_response(outcome):
             return JSONResponse(status_code=recorded['status_code'], content=recorded['response'])
         outcome = outcome.result
     return CreationTaskEditConfirmResponse(operation=asdict(outcome.operation),
+        restore_request=outcome.restore_request,
+        execution_readiness=outcome.execution_readiness,
         montage=_creation_task_montage_response(outcome.montage) if outcome.montage is not None else None,
         narration=_creation_task_narration_response(outcome.task, outcome.narration)
             if outcome.narration is not None else None)
@@ -9509,8 +9570,15 @@ def _submit_narration_edit(workspace_id, task, proposal, request):
                     id=f"event_{job.id}_start", workspace_id=workspace_id, task_id=task.id,
                     job_id=job.id, event_type="narration_edit_requested", payload=event_payload,
                     created_at=job.created_at), connection=conn)
-        queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, "creation_job", job.id,
-            digest, key, SchedulePolicy()), actor)
+        usage=production_repo.creation_narration_usage(workspace_id,job.id)
+        if usage['unsettled']:
+            queued=runtime.scheduler._get(usage['unsettled'][0]['request_id'])
+            if (queued.workspace_id,queued.owner_id,queued.member_id)!=(workspace_id,job.id,actor.member_id):
+                raise PermissionError('局部配音原请求与当前成员不一致')
+        else:
+            key,_=owner.narration_edit_facts(job,task,event_payload,plan)
+            queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, "creation_job", job.id,
+                digest, key, SchedulePolicy()), actor)
     except (PermissionError, KeyError, StopIteration, ValueError) as exc:
         if job is not None:
             with production_repo._connect() as conn:
@@ -10310,47 +10378,51 @@ def _preview_exact_montage_edit(task_id, request, payload):
 def undo_creation_task_timeline(
     task_id: str,
     request: Request,
-    _payload: CreationTaskTimelineUndoRequest,
+    _payload: CreationTaskTimelineRestoreRequest,
 ) -> CreationTaskEditConfirmResponse:
     return _restore_creation_task_timeline(task_id, request, redo=False, control=_payload)
 
 
 @app.post("/api/creation-tasks/{task_id}/timeline/redo", response_model=CreationTaskEditConfirmResponse)
-def redo_creation_task_timeline(task_id: str, request: Request, _payload: CreationTaskTimelineUndoRequest) -> CreationTaskEditConfirmResponse:
+def redo_creation_task_timeline(task_id: str, request: Request, _payload: CreationTaskTimelineRestoreRequest) -> CreationTaskEditConfirmResponse:
     return _restore_creation_task_timeline(task_id, request, redo=True, control=_payload)
 
 
-def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: bool, control: CreationTaskTimelineUndoRequest | None = None) -> CreationTaskEditConfirmResponse:
+def _restore_creation_task_timeline(task_id: str, request: Request, *, redo: bool, control: CreationTaskTimelineRestoreRequest) -> CreationTaskEditConfirmResponse:
     workspace_id = current_workspace_id(request)
-    task, _member_id = _exact_edit_access(task_id, request, write=True)
-    if control is not None and control.assistant_turn_id is not None:
-        _assistant_edit_control_instruction(task, request, control, "redo" if redo else "undo")
-    elif control is not None and control.model_fields_set & {"expected_timeline_version_id", "expected_timeline_sequence"}:
-        if not {"expected_timeline_version_id", "expected_timeline_sequence"} <= control.model_fields_set or control.expected_timeline_sequence is None:
-            raise HTTPException(status_code=422, detail="历史恢复需要同时提交期望版本与序号")
-        version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-        if (control.expected_timeline_version_id, control.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
-            raise HTTPException(status_code=409, detail="历史恢复所依据的时间线已变化，请重新读取当前版本")
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    source = ({'assistant_turn_id': str(control.assistant_turn_id), 'input_id': request.headers.get('x-assistant-input-id')}
+        if control.assistant_turn_id is not None else None)
     case = _timeline_restore_use_case()
     try:
-        prepared = case.prepare_restore(TimelineRestoreCommand(workspace_id, task, redo))
-        restore_output = _creation_render_is_valid(
-            workspace_id, task_id, verify_media=False, timeline_version=prepared.target_version,
-        )
-        outcome = case.apply_restore(prepared, TimelineOutputQualification(prepared, restore_output))
+        outcome = case.execute(TimelineRestoreCommand(workspace_id, task, redo),
+            actor=CreationExecutionActor(workspace_id, member_id), request_id=control.request_id,
+            target_operation_id=control.target_operation_id, expected_timeline_version_id=control.expected_timeline_version_id,
+            expected_timeline_sequence=control.expected_timeline_sequence, source=source)
     except (TimelineRestoreUnavailable, LegacyMontageReference) as exc:
         raise _topic_failure_response(**exc.details) from exc
     except InvalidMontage as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RecoveryBlocked) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _metadata_edit_response(outcome)
 
 
 def _timeline_restore_use_case():
-    return TimelineRestoreUseCase(production_repo, _metadata_edit_use_case())
+    return TimelineRestoreUseCase(production_repo, _metadata_edit_use_case(), conversations=conversation_repo,
+        qualify_output=lambda ws, task_id, version: _creation_render_is_valid(ws, task_id, verify_media=False, timeline_version=version))
+
+
+@app.get('/api/creation-tasks/{task_id}/timeline/restore-requests/{request_id}')
+def get_creation_task_timeline_restore_request(task_id: str, request_id: str, request: Request):
+    task, member_id = _exact_edit_access(task_id, request)
+    try:
+        return _timeline_restore_use_case().read_request(task.workspace_id, task_id, request_id,
+            CreationExecutionActor(task.workspace_id, member_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail='原恢复请求不存在，不能据此推定未提交') from exc
 
 
 def _apply_creation_task_montage_clip_update(workspace_id,task_id,plan,clip_id,payload,*,request):
@@ -10707,18 +10779,13 @@ def _history_artifacts(
     response_model=TimelineVersionListResponse,
 )
 def list_creation_task_timeline_versions(
-    task_id: str, request: Request
+    task_id: str, request: Request, limit: int = Query(20, ge=1, le=50),
+    before_sequence: int | None = Query(None, ge=1),
 ) -> TimelineVersionListResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    return TimelineVersionListResponse(
-        task_id=task.id,
-        current_version_id=task.current_timeline_version_id,
-        items=[
-            _history_summary(task, version, workspace_id)
-            for version in production_repo.list_timeline_versions(workspace_id, task_id)
-        ],
-    )
+    return TimelineVersionListResponse.model_validate(production_repo.timeline_history_page(
+        workspace_id, task.id, limit=limit, before_sequence=before_sequence))
 
 
 @app.get(
@@ -14311,11 +14378,12 @@ assistant_continuation_driver = None
 _goal_continuation_service = None
 
 
-def _task_authorizations_for_goal():
-    if device_runtime is not None:
+def _task_authorizations_for_goal(repository=None):
+    repo = production_repo if repository is None else repository
+    if device_runtime is not None and repo is production_repo:
         return device_runtime.task_authorizations
     from app.creation.task_authorization import TaskAuthorizationUseCase
-    return TaskAuthorizationUseCase(production_repo,lambda identity:_verify_creation_identity(
+    return TaskAuthorizationUseCase(repo,lambda identity:_verify_creation_identity(
         CreationExecutionActor.from_event(identity['workspace_id'],identity)))
 
 
@@ -14353,7 +14421,8 @@ def _task_business():
         script_capabilities=_task_script_capability_facts,tool_capabilities=_script_tool_capability_facts,
         material_facts=_material_asset_response,observation_facts=lambda task,actor:_task_observation_metadata(task,actor.user_id or actor.member_id),
         observe_output=_submit_goal_observation,request_result=_goal_request_metadata,media_result=_goal_media_metadata,
-        record_adoption=_goal_service().record_script_adoption,segments=_segment_production_use_case(),native_case=_native_task_operations_case())
+        record_adoption=_goal_service().record_script_adoption,segments=_segment_production_use_case(),native_case=_native_task_operations_case(),
+        timeline_restores=_timeline_restore_use_case())
 
 
 def _submit_goal_observation(task,actor,values,origin,guard):

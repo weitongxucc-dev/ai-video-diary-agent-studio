@@ -98,6 +98,64 @@ def crop_command(state, **values):
         {'base_version_id': state.base.id, 'clip_id': 'clip', 'fit_mode': 'fit', 'crop_x': .3, 'crop_y': .7, **values})
 
 
+@pytest.mark.parametrize('authorization_state',['valid','missing','expired','revoked_during_prepare'])
+def test_replace_material_adoption_keeps_original_authority_or_reports_not_ready(tmp_path,authorization_state):
+    from datetime import timedelta
+    from app.creation.contracts import TaskAuthorization
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    s = metadata_state(tmp_path)
+    path = tmp_path/'library'/'replacement.mp4'
+    path.write_bytes(b'different opaque source with fixed metadata')
+    info = path.stat()
+    asset = replace(s.asset,id='replacement',file_name=path.name,path=str(path),size_bytes=info.st_size,
+        modified_at=datetime.fromtimestamp(info.st_mtime,timezone.utc),
+        segments=[replace(s.asset.segments[0],id='replacement-segment',asset_id='replacement')])
+    s.repo._save_asset(asset)
+    reference = s.repo.workspace_media_reference_for_asset('ws',asset.id)
+    now = datetime.now(timezone.utc)
+    actor = CreationExecutionActor('ws',s.member.member_id)
+    def verify(_identity):
+        if authorization_state=='revoked_during_prepare':
+            current = s.repo.get_task_authorization('ws',s.task.id)
+            s.repo.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=now),
+                expected_revision=current.revision)
+        return 'ready'
+    service = TaskAuthorizationUseCase(s.repo,verify,clock=lambda:now)
+    _,required = service._requirements('ws',s.task.id)
+    original = TaskAuthorization('original','ws',s.task.id,service.identity(actor),
+        s.repo.task_authorization_goal_revision('ws',s.task.id),('render','narration'),
+        {**required,'voices':['keep:voice'],'persons':['keep:person']},now-timedelta(hours=1),
+        now-timedelta(hours=1),now+timedelta(hours=1) if authorization_state!='expired' else now-timedelta(seconds=1))
+    if authorization_state!='missing':
+        s.repo.save_task_authorization(original,expected_revision=None)
+    s.case.task_authorizations = service
+    command = metadata_edit_command(s.task,s.identity,'ReplaceClip',{'base_version_id':s.base.id,
+        'clip_id':'clip','asset_id':asset.id,'segment_id':'replacement-segment'})
+    if authorization_state=='revoked_during_prepare':
+        with pytest.raises(EditConflict,match='授权已变化'):
+            s.case.save(s.task,command)
+        assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+        assert s.repo.list_edit_operations('ws',s.task.id)==[]
+        assert reference not in s.repo.get_task_authorization('ws',s.task.id).resource_scope['references']
+        return
+    result = s.case.save(s.task,command)
+    assert result.montage.clips[0].asset_id==asset.id
+    saved = s.repo.get_task_authorization('ws',s.task.id)
+    assert result.execution_readiness['device_admission']=='not_checked'
+    if authorization_state=='valid':
+        assert result.execution_readiness['status']=='authorization_ready'
+        assert saved.resource_scope['assets']==['asset','replacement']
+        assert reference in saved.resource_scope['references']
+        assert saved.resource_scope['voices']==original.resource_scope['voices']
+        assert saved.resource_scope['persons']==original.resource_scope['persons']
+        assert (saved.identity,saved.goal_revision,saved.issued_at,saved.verified_at,saved.expires_at)==(
+            original.identity,original.goal_revision,original.issued_at,original.verified_at,original.expires_at)
+    else:
+        assert result.execution_readiness['status']=='not_ready'
+        assert saved==(None if authorization_state=='missing' else original)
+
+
 def editorial_rows(repo):
     with repo._connect() as conn:
         return {name: tuple(conn.execute(f'SELECT * FROM {name} ORDER BY rowid')) for name in
@@ -105,11 +163,173 @@ def editorial_rows(repo):
              'subtitle_tracks', 'task_events', 'creation_task_montage_plans')}
 
 
+def test_restore_material_uses_current_adoption_baseline_before_historical_subtitles(state):
+    from copy import deepcopy
+    from datetime import timedelta
+    from app.creation.contracts import TaskAuthorization,EditIntent,EditProposal
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    removed=deepcopy(state.plan);removed.clips=[]
+    payload=creation_task_montage_plan_to_payload(removed)
+    state.repo.save_creation_task_montage_plan('ws',state.task.id,removed.id,payload)
+    base=TimelineVersion('without-material','ws',state.task.id,state.base.id,2,
+        {**state.base.snapshot,'montage':payload,'subtitle_track_ids':[]},None)
+    state.repo.create_timeline_version(base)
+    task=state.repo.get_creation_task('ws',state.task.id)
+    now=datetime.now(timezone.utc)
+    actor=CreationExecutionActor('ws',state.member.member_id)
+    service=TaskAuthorizationUseCase(state.repo,lambda _:'ready',clock=lambda:now)
+    _,required=service._requirements('ws',task.id)
+    assert required['assets']==[]
+    original=TaskAuthorization('narrow-current','ws',task.id,service.identity(actor),
+        state.repo.task_authorization_goal_revision('ws',task.id),('render',),required,now,now,now+timedelta(hours=1))
+    state.repo.save_task_authorization(original,expected_revision=None)
+    state.case.task_authorizations=service
+    intent=state.repo.create_edit_intent(EditIntent('restore-intent','ws',task.id,'撤销删除','montage',[],None,
+        'undo_timeline',{}, {},1,'interpreted'))
+    proposal=state.repo.create_edit_proposal(EditProposal('restore-proposal','ws',task.id,intent.id,'恢复原素材',
+        ['clip:clip'],{'operation_type':'UndoTimelineVersion','payload':{'base_version_id':base.id}},[],{},[]))
+    result=state.case.persist_montage_edit(workspace_id='ws',task=task,proposal=proposal,base_version=base,
+        updated_plan=deepcopy(state.plan),operation_type='UndoTimelineVersion',operation_payload=proposal.operation['payload'],
+        subtitle_source_version=state.base,actor_identity=state.identity)
+    saved=state.repo.get_task_authorization('ws',task.id)
+    assert result.montage.clips[0].asset_id==state.asset.id
+    assert result.execution_readiness['status']=='authorization_ready'
+    assert saved.resource_scope['assets']==[state.asset.id]
+    assert state.plan.clips[0].source_path in saved.resource_scope['references']
+    assert saved.expires_at==original.expires_at and service.status('ws',task.id,operation='render')=='valid'
+
+
+def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readiness(state,tmp_path,monkeypatch):
+    from datetime import timedelta
+    from starlette.requests import Request
+    from app.creation.contracts import TaskAuthorization
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.editing.linked_timeline_use_case import LinkedTimelineEditUseCase
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase,TimelineRestoreCommand
+    from app.schemas import CreationTaskTimelineRestoreRequest
+    import app.main as main
+    s=state
+    import wave
+    audio_path=tmp_path/'original-narration.wav'
+    with wave.open(str(audio_path),'wb') as stream:
+        stream.setparams((1,2,16000,0,'NONE','not compressed'))
+        stream.writeframes(b'\x01\x00'*64000)
+    s.repo.save_narration_artifact(replace(s.narration,audio_path=str(audio_path),voice_profile_id='fixture-voice'))
+    from app.production import NarrationSegment
+    now=datetime.now(timezone.utc)
+    s.task.confirmed_script_id='fixed-script'
+    script={'id':'fixed-script','workspace_id':'ws','task_id':s.task.id,'run_id':'fixture-run','topic_id':'fixture-topic',
+        'title':'固定文案','language':'zh-CN','sections':[{'id':'section','title':'正文','content':'原字幕',
+            'visual_prompt':'fixture','evidence_reference_ids':[]}],'selection_status':'confirmed',
+        'created_at':now.isoformat(),'updated_at':now.isoformat(),'confirmed_at':now.isoformat()}
+    segment=NarrationSegment(id='fixed-segment',workspace_id='ws',task_id=s.task.id,script_id='fixed-script',
+        source_section_id='section',text='原字幕',audio_reference='narration://artifact/fixed-narration',
+        duration_seconds=4,sample_rate=16000,model_id=s.narration.model_id,voice_profile_id='fixture-voice',voice_version='v1',
+        language='zh',pronunciation_version=s.narration.pronunciation_version,status='ready')
+    s.base=TimelineVersion('complete-narration-base','ws',s.task.id,s.base.id,s.base.sequence+1,
+        {**s.base.snapshot,'narration_segments':[asdict(segment)],'subtitle_track_ids':['complete-zh']},None)
+    with s.repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(s.task),default=str),s.task.id))
+        conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
+            ('fixed-script','ws',s.task.id,'fixture-run',json.dumps(script),now.isoformat()))
+    s.repo.create_timeline_version(s.base)
+    s.repo.create_subtitle_track(replace(s.track,id='complete-zh',timeline_version_id=s.base.id))
+    s.repo.save_narration_segments('ws',s.task.id,'fixed-script',[segment])
+    path=tmp_path/'library'/'inserted.mp4';path.write_bytes(b'opaque inserted source')
+    info=path.stat()
+    asset=replace(s.asset,id='inserted-material',path=str(path),file_name=path.name,size_bytes=info.st_size,
+        modified_at=datetime.fromtimestamp(info.st_mtime,timezone.utc),duration_seconds=1,
+        segments=[replace(s.asset.segments[0],id='inserted-segment',asset_id='inserted-material',end_seconds=1)])
+    s.repo._save_asset(asset)
+    now=datetime.now(timezone.utc)
+    actor=CreationExecutionActor('ws',s.member.member_id)
+    service=TaskAuthorizationUseCase(s.repo,lambda _:'ready',clock=lambda:now)
+    _,scope=service._requirements('ws',s.task.id)
+    original=TaskAuthorization('insert-authority','ws',s.task.id,service.identity(actor),
+        s.repo.task_authorization_goal_revision('ws',s.task.id),('render',),scope,now,now,now+timedelta(hours=1))
+    s.repo.save_task_authorization(original,expected_revision=None)
+    s.case.task_authorizations=service
+    identity={**s.identity,'material_reader_identity':s.identity}
+    inserted=LinkedTimelineEditUseCase(s.repo,s.case).apply(metadata_edit_command(s.task,identity,'InsertClip',
+        {'base_version_id':s.base.id,'clip_id':'clip','asset_id':asset.id,'segment_id':'inserted-segment'}))
+    restore=TimelineRestoreUseCase(s.repo,s.case)
+    seen=s.repo.get_timeline_version('ws',inserted.task.current_timeline_version_id)
+    undone=restore.execute(TimelineRestoreCommand('ws',inserted.task,False),actor=actor,request_id='undo-insert',
+        target_operation_id=inserted.operation.id,expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
+    current=s.repo.get_task_authorization('ws',s.task.id)
+    _,remaining=service._requirements('ws',s.task.id)
+    assert asset.id not in remaining['assets']
+    s.repo.save_task_authorization(replace(current,revision=current.revision+1,resource_scope=remaining),expected_revision=current.revision)
+    assert service.status('ws',s.task.id,operation='render')=='valid'
+    monkeypatch.setattr(main,'current_workspace_id',lambda _:'ws')
+    monkeypatch.setattr(main,'production_repo',s.repo)
+    monkeypatch.setattr(main,'_exact_edit_access',lambda *_args,**_kwargs:(s.repo.get_creation_task('ws',s.task.id),actor.member_id))
+    monkeypatch.setattr(main,'_timeline_restore_use_case',lambda:restore)
+    request=Request({'type':'http','method':'POST','path':'/','headers':[]})
+    seen=s.repo.get_timeline_version('ws',undone.task.current_timeline_version_id)
+    payload=CreationTaskTimelineRestoreRequest(request_id='redo-insert',target_operation_id=inserted.operation.id,
+        expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
+    posted=main.redo_creation_task_timeline(s.task.id,request,payload)
+    queried=main.get_creation_task_timeline_restore_request(s.task.id,'redo-insert',request)
+    replayed=main.redo_creation_task_timeline(s.task.id,request,payload)
+    assert posted.execution_readiness==queried['execution_readiness']==replayed.execution_readiness
+    assert posted.restore_request['execution_readiness']==posted.execution_readiness
+    assert posted.execution_readiness['status']=='authorization_ready'
+    assert posted.execution_readiness['device_admission']=='not_checked'
+    assert posted.operation.id==replayed.operation.id
+    assert asset.id in s.repo.get_task_authorization('ws',s.task.id).resource_scope['assets']
+    assert service.status('ws',s.task.id,operation='render')=='valid'
+
+
 def test_use_case_cold_import_has_no_main_or_http_dependency():
     code = "import sys; import app.creation.editing.metadata_use_case; assert 'app.main' not in sys.modules; assert 'fastapi' not in sys.modules; assert 'starlette.requests' not in sys.modules"
     result = subprocess.run([sys.executable, '-B', '-c', code], env=dict(os.environ),
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_named_subtitle_restore_keeps_later_user_crop_and_rejects_changed_text(state):
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase, TimelineRestoreCommand
+    actor = CreationExecutionActor('ws', state.member.member_id)
+    a = state.case.save(state.task, metadata_edit_command(state.task,state.identity,'UpdateSubtitleCue',
+        {'base_version_id':state.base.id,'cue_id':'cue','text':'更新后的字幕'}))
+    b = state.case.save(a.task, metadata_edit_command(a.task,state.identity,'ChangeCrop',
+        {'base_version_id':a.task.current_timeline_version_id,'clip_id':'clip','fit_mode':'fit','crop_x':.3,'crop_y':.7}))
+    case = TimelineRestoreUseCase(state.repo,state.case)
+    seen = state.repo.get_timeline_version('ws',a.task.current_timeline_version_id)
+    versions_before = len(state.repo.list_timeline_versions('ws',state.task.id))
+    with pytest.raises(EditConflict,match='普通撤销'):
+        case.execute(TimelineRestoreCommand('ws',b.task,False),actor=actor,request_id='stale-default-undo',
+            expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
+    assert state.repo.get_creation_task('ws',state.task.id).current_timeline_version_id==b.task.current_timeline_version_id
+    assert len(state.repo.list_timeline_versions('ws',state.task.id))==versions_before
+    for redo,text in ((False,'原字幕'),(True,'更新后的字幕')):
+        task = state.repo.get_creation_task('ws',state.task.id)
+        version = state.repo.get_timeline_version('ws',task.current_timeline_version_id)
+        outcome = case.execute(TimelineRestoreCommand('ws',task,redo),actor=actor,
+            request_id='subtitle-redo' if redo else 'subtitle-undo',target_operation_id=a.operation.id,
+            expected_timeline_version_id=version.id,expected_timeline_sequence=version.sequence)
+        assert outcome.montage.clips[0].crop_x==.3 and outcome.montage.clips[0].crop_y==.7
+        tracks = state.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=outcome.task.current_timeline_version_id)
+        assert tracks[0].cues[0].text==text
+        assert state.store.resolve_file(tracks[0].artifact_ref).is_file()
+        assert outcome.execution_readiness==outcome.restore_request['execution_readiness']
+        original_readiness=dict(outcome.execution_readiness)
+        assert case.read_request('ws',task.id,outcome.restore_request['request_id'],actor)['execution_readiness']==original_readiness
+        replay=case.execute(TimelineRestoreCommand('ws',task,redo),actor=actor,
+            request_id=outcome.restore_request['request_id'],target_operation_id=a.operation.id,
+            expected_timeline_version_id=version.id,expected_timeline_sequence=version.sequence)
+        assert replay.execution_readiness==original_readiness and replay.operation.id==outcome.operation.id
+    changed = state.case.save(outcome.task, metadata_edit_command(outcome.task,state.identity,'UpdateSubtitleCue',
+        {'base_version_id':outcome.task.current_timeline_version_id,'cue_id':'cue','text':'另一次字幕修改'}))
+    version = state.repo.get_timeline_version('ws',changed.task.current_timeline_version_id)
+    with pytest.raises(EditConflict,match='修改字段|变化'):
+        case.execute(TimelineRestoreCommand('ws',changed.task,False),actor=actor,request_id='conflicting-subtitle-undo',
+            target_operation_id=a.operation.id,expected_timeline_version_id=version.id,expected_timeline_sequence=version.sequence)
+    assert state.repo.get_creation_task('ws',state.task.id).current_timeline_version_id==version.id
 
 
 def test_metadata_save_and_staged_request_replay_recover_original_version(state):

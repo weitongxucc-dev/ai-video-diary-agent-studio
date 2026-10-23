@@ -54,7 +54,7 @@ def _file_fact(path):
 
 @pytest.fixture
 def narration_preparation(tmp_path):
-    task=SimpleNamespace(id='task',plan_id='plan',stage='narration',confirmed_script_id='script',
+    task=SimpleNamespace(id='task',workspace_id='workspace',plan_id='plan',stage='narration',confirmed_script_id='script',
         owner_user_id='member',narration_cache_key=None)
     voice=SimpleNamespace(id='voice',version='v1',reference_audio_path='workspace://reference.wav',person_profile_id=None)
     plan=SimpleNamespace(creation_task_id=task.id,duration_target_seconds=30,
@@ -75,7 +75,9 @@ def narration_preparation(tmp_path):
         pytest.fail('preparation must leave the business checkpoint to its owner')
     repository=SimpleNamespace(
         get_job_run=lambda _ws,_job:job,get_task_event=lambda _ws,_event:start,
+        creation_execution_input=lambda *_:start.payload,
         get_creation_task=read_task,get_creation_plan=lambda *_:plan,get_creation_task_script=lambda *_:script,
+        effective_creation_script=lambda *_:script,
         resolve_creation_task_narration_inputs=lambda **_:inputs,
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
         get_narration_segment=lambda _ws,_task,identity:segments[identity],
@@ -93,19 +95,29 @@ def narration_preparation(tmp_path):
     def generate(**kwargs):
         calls.append(('segment',kwargs))
         return artifact(kwargs['segment_id'])
-    def merge(**kwargs):
-        calls.append(('merge',kwargs))
-        return artifact('combined')
-    use_case=NarrationStageUseCase(repository,SimpleNamespace(generate_for_creation_task=generate,
-        combine_creation_task_segments=merge),None,None)
+    use_case=NarrationStageUseCase(repository,SimpleNamespace(generate_for_creation_task=generate),None,None)
+    def resources():
+        return {'execution_mode':'cpu_pcm_wav_assembly','script_id':script.id,'merge_source_digest':'fixed-digest',
+            'merge_final':True,'inputs':[{'reference':'narration://artifact/'+use_case.segment_id(task.id,script.id,section.id)}
+                for section in script.sections]}
+    from contextlib import nullcontext
+    repository._connect=lambda:nullcontext(SimpleNamespace(execute=lambda *_:SimpleNamespace(fetchone=lambda:
+        {'resources_json':json.dumps(resources())})))
     for section in script.sections:
         identity=use_case.segment_id(task.id,script.id,section.id)
         segments[identity]=NarrationSegment(identity,'workspace',task.id,script.id,section.id,section.content,
             None,None,None,None,voice.id,voice.version,'en','', 'pending')
     def context(unit_key,limit=128):
-        return CreationStageGrantContext(SimpleNamespace(assert_grant=lambda _:None),
+        value=CreationStageGrantContext(SimpleNamespace(assert_grant=lambda _:None),
             SimpleNamespace(owner_type='creation_job',unit_key=unit_key,workspace_id='workspace',
-                owner_id=job.id,input_digest=job.input_digest),time.monotonic()+30,limit,1)
+                owner_id=job.id,input_digest=job.input_digest,request_id='fixture-request'),time.monotonic()+30,limit,1)
+        def assemble(declared):
+            calls.append(('merge',{'grant_context':value,'inputs':declared['inputs']}))
+            output=artifact('combined')
+            return {'finalized':True,'source_digest':declared['merge_source_digest'],
+                'pcm_bytes':96000,'work_path':output.audio_path,'generated_bytes':Path(output.audio_path).stat().st_size}
+        object.__setattr__(value,'run_pcm_assembly',assemble)
+        return value
     def ready():
         for section in script.sections:
             pending=segments[use_case.segment_id(task.id,script.id,section.id)]
@@ -119,7 +131,9 @@ def narration_preparation(tmp_path):
                 duration_seconds=record.duration_seconds,sample_rate=record.sample_rate,model_id=record.model_id,
                 pronunciation_version=record.pronunciation_version)
     return SimpleNamespace(case=use_case,task=task,script=script,voice=voice,segments=segments,
-        records=records,calls=calls,context=context,ready=ready,inputs=inputs,target_reads=target_reads)
+        records=records,calls=calls,context=context,ready=ready,inputs=inputs,target_reads=target_reads,
+        merge_inputs=lambda:['narration://artifact/'+use_case.segment_id(task.id,script.id,section.id)
+            for section in script.sections])
 
 
 def test_prepare_segment_keeps_context_and_pending_identity_without_checkpoint_write(narration_preparation):
@@ -141,11 +155,12 @@ def test_prepare_merge_orders_saved_ready_segments_without_publishing(narration_
     s=narration_preparation;s.ready()
     before=dict(s.segments);before_records=dict(s.records)
     context=s.context('narration:merge:v1:digest')
-    record,output_bytes=s.case.prepare_merge('workspace',s.task.id,script_id=s.script.id,grant_context=context)
+    record,output_bytes,receipt=s.case.prepare_merge('workspace',s.task.id,script_id=s.script.id,
+        input_references=s.merge_inputs(),grant_context=context)
     assert len(s.calls)==1 and s.calls[0][0]=='merge'
     assert s.calls[0][1]['grant_context'] is context
-    assert [item.cache_key for item in s.calls[0][1]['segments']]==[
-        s.case.segment_id(s.task.id,s.script.id,section.id) for section in s.script.sections]
+    assert [item['reference'] for item in s.calls[0][1]['inputs']]==s.merge_inputs()
+    assert receipt['finalized']
     assert output_bytes==Path(record.audio_path).stat().st_size
     assert s.segments==before and s.records==before_records and s.task.narration_cache_key is None
 
@@ -156,7 +171,7 @@ def test_prepare_merge_rejects_target_outside_original_grant_before_target_read(
     s=narration_preparation;s.ready()
     with pytest.raises(PermissionError):
         s.case.prepare_merge(target[0],target[1],script_id=target[2],
-            grant_context=s.context('narration:merge:v1:digest'))
+            input_references=s.merge_inputs(),grant_context=s.context('narration:merge:v1:digest'))
     assert s.target_reads==[] and s.calls==[]
 
 
@@ -172,7 +187,7 @@ def test_prepare_merge_rejects_old_or_mixed_fixed_pronunciation_input(narration_
         s.records[key]=replace(s.records[key],pronunciation_version=current)
     with pytest.raises(ValueError):
         s.case.prepare_merge('workspace',s.task.id,script_id=s.script.id,
-            grant_context=s.context('narration:merge:v1:digest'))
+            input_references=s.merge_inputs(),grant_context=s.context('narration:merge:v1:digest'))
     assert s.calls==[] and s.task.narration_cache_key is None
 
 
@@ -192,7 +207,7 @@ def test_narration_preparation_rejects_unbound_or_unusable_work(narration_prepar
     with pytest.raises((PermissionError,ValueError)):
         if invalid in {'incomplete-merge','stale-voice'}:
             s.case.prepare_merge('workspace',s.task.id,script_id=script_id,
-                grant_context=s.context('narration:merge:v1:digest'))
+                input_references=s.merge_inputs(),grant_context=s.context('narration:merge:v1:digest'))
         else:
             s.case.prepare_segment('workspace',s.task.id,script_id=script_id,section_id=section.id,grant_context=context)
     assert len(s.calls)==(1 if invalid=='exhausted-output' else 0)

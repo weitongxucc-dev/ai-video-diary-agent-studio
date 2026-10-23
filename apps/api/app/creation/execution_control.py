@@ -8,6 +8,7 @@ import threading
 import time
 
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
+    NARRATION_EDIT_KIND,
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
@@ -255,7 +256,8 @@ class CreationExecutionControl:
             latest = self.execution.latest(workspace_id, task_id)
             migrated = (migrate_creation_narration_request(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
                 if latest is not None else None)
-            resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
+            resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard,
+                executor=runtime.registrations['creation_job'].executor)
                 if latest is not None and migrated is None else False)
             job = (self.repository.get_job_run(workspace_id, latest.id) if migrated is not None or resumed else
                 self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
@@ -348,6 +350,29 @@ class CreationExecutionControl:
                 )
             return
         generation = runtime.scheduler.reconcile_released()
+        registration=runtime.registrations['creation_job']
+        owner,executor=registration.owner,registration.executor
+        for job in self.repository.list_pending_task_media_jobs(NARRATION_EDIT_KIND):
+            if job.status=='cancelled':
+                continue
+            try:
+                start=self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
+                original=CreationExecutionActor.from_event(job.workspace_id,start)
+                task=self.repository.get_creation_task(job.workspace_id,job.task_id)
+                if owner.task_authorizations is not None:
+                    owner.task_authorizations.ensure(task,original)
+                elif self.verify_identity(original)!='ready':
+                    continue
+                executor.recover_pcm_unit(job,original,runtime.scheduler)
+                job=self.repository.get_job_run(job.workspace_id,job.id)
+                if job.status=='succeeded':
+                    continue
+                plan=self.repository.get_creation_plan(job.workspace_id,task.plan_id)
+                key,_=owner.narration_edit_facts(job,task,start,plan)
+                runtime.scheduler.submit(SubmissionIntent(job.workspace_id,'creation_job',job.id,
+                    job.input_digest,key,SchedulePolicy()),original)
+            except (PermissionError,ValueError,KeyError,RecoveryBlocked,OSError) as exc:
+                logger.warning('局部配音原作业 %s 尚不能恢复，保留原请求：%s',job.id,exc)
         media = runtime.registrations["creation_job"].owner.task_media
         if media is not None:
             pending_media = self.repository.list_pending_task_media_jobs(TASK_MEDIA_KIND)
@@ -394,6 +419,14 @@ class CreationExecutionControl:
             except (ValueError, KeyError, TypeError, AttributeError):
                 logger.warning("制作作业 %s 缺少可复核的持久身份，保留待处理", job.id)
                 continue
+            if self.repository.creation_narration_usage(job.workspace_id,job.id)['unsettled']:
+                try:
+                    if not executor.recover_pcm_unit(job,original,runtime.scheduler):
+                        continue
+                    job=self.repository.get_job_run(job.workspace_id,job.id)
+                except (PermissionError,ValueError,KeyError,RecoveryBlocked,OSError) as exc:
+                    logger.warning('原PCM作业 %s 结果尚不可核实，保留原请求：%s',job.id,exc)
+                    continue
             if job.status == "interrupted":
                 task = self.repository.get_creation_task(job.workspace_id, job.task_id)
                 request = self.repository.creation_execution_wait_row(
@@ -430,9 +463,57 @@ class CreationExecutionControl:
                 logger.warning("制作作业 %s 的当前许可或输入未就绪，保留待处理：%s", job.id, exc)
         runtime.wake()
 
+    def select_narration_voice(self, *, runtime, **inputs):
+        voice_authorization = None
+        if runtime is not None and runtime.registrations['creation_job'].owner.task_authorizations is not None:
+            try:
+                self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
+                    inputs['request_id'], member_id=inputs['member_id'])
+            except KeyError:
+                job = self.execution.latest(inputs['workspace_id'], inputs['task_id'])
+                if job is not None and job.status == 'queued':
+                    owner = runtime.registrations['creation_job'].owner
+                    with self.repository._connect() as conn:
+                        job, task, start, _script, _plan = owner._facts(conn, job.workspace_id, job.id)
+                    original = CreationExecutionActor.from_event(job.workspace_id, start)
+                    if original.member_id != inputs['member_id']:
+                        raise TaskAuthorizationDenied('声音选择不属于原作业成员')
+                    voice_authorization = owner.task_authorizations.prepare_voice_selection(task, original,
+                        inputs['voice_profile_id'], inputs['voice_version'])
+
+        def rebind(conn, original_job, previous_plan, selection_event_id):
+            if runtime is None or runtime.scheduler.database_path != self.repository.database_path.resolve():
+                raise ValueError('原排队配音需要同一工作区的设备调度器才能安全改选声音')
+            if runtime.last_error is not None:
+                raise ValueError('设备许可状态需要核对，原排队声音选择未提交')
+            owner = runtime.registrations['creation_job'].owner
+            job, task, start, script, plan = owner._facts(conn, original_job.workspace_id, original_job.id)
+            original = CreationExecutionActor.from_event(job.workspace_id, start)
+            if (original.member_id != inputs['member_id'] or job != original_job
+                    or owner._check_facts(job, task, start, script, previous_plan, 'narration', original.member_id) != 'ready'):
+                raise ValueError('原排队作业身份、确认文案或方案版本已变化，不能改选声音')
+
+            def replace_input(connection, old):
+                if owner.task_authorizations is not None:
+                    if voice_authorization is None:
+                        raise TaskAuthorizationDenied('原作业缺少本次固定声音的实时授权核验')
+                    voice_authorization(connection, plan.selected_voice)
+                rebound = self.repository.rebind_unstarted_creation_voice(job, revision_digest(script, plan),
+                    selection_event_id, connection=connection)
+                key, _resources = owner.narration_unit_facts(connection, rebound, task, script, plan)
+                intent = SubmissionIntent(job.workspace_id, 'creation_job', job.id, rebound.input_digest, key, old.policy)
+                return intent, owner.verify_submission(intent, original, connection=connection)
+
+            runtime.scheduler.replace_unstarted_narration_voice(job, connection=conn, replacement_write=replace_input)
+
+        receipt = self.repository.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind)
+        if runtime is not None:
+            runtime.wake()
+        return receipt
+
     def read_bound(self, workspace_id, task_id, job_id, actor, *, verify_media: bool):
         job = self.repository.get_job_run(workspace_id, job_id)
-        start = self.repository.get_task_event(workspace_id, f"event_{job.id}_start").payload
+        start = self.repository.creation_execution_input(workspace_id, job.id)
         if (job.kind != "creation_task_execution" or job.task_id != task_id
                 or CreationExecutionActor.from_event(workspace_id, start) != actor
                 or start["input_digest"] != job.input_digest):

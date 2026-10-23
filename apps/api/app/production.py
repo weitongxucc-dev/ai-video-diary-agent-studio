@@ -4955,6 +4955,101 @@ class ProductionRepository:
             ).fetchall()
         return [self._timeline_version_from_row(row) for row in rows]
 
+    def timeline_history_page(self, workspace_id, task_id, *, limit=20, before_sequence=None):
+        if not 1 <= limit <= 50 or before_sequence is not None and before_sequence < 1:
+            raise ValueError('历史读取范围无效')
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            total = conn.execute('SELECT COUNT(*) FROM timeline_versions WHERE workspace_id=? AND task_id=?',
+                (workspace_id, task_id)).fetchone()[0]
+            rows = conn.execute("SELECT v.id,v.sequence,v.parent_version_id,v.created_at,v.created_by_operation_id AS operation_id,"
+                "o.operation_type,p.target_refs_json,json_extract(o.payload_json,'$.request_id') AS source_request_id,"
+                "coalesce(json_array_length(v.snapshot_json,'$.montage.clips'),0) AS shot_count,"
+                "coalesce(json_array_length(v.snapshot_json,'$.subtitle_track_ids'),0) AS subtitle_track_count,"
+                "coalesce(json_array_length(v.snapshot_json,'$.narration_segments'),0) AS narration_segment_count "
+                "FROM timeline_versions v LEFT JOIN edit_operations o ON o.workspace_id=v.workspace_id AND o.id=v.created_by_operation_id "
+                "LEFT JOIN edit_proposals p ON p.workspace_id=o.workspace_id AND p.id=o.proposal_id "
+                "WHERE v.workspace_id=? AND v.task_id=? AND (? IS NULL OR v.sequence<?) ORDER BY v.sequence DESC LIMIT ?",
+                (workspace_id, task_id, before_sequence, before_sequence, limit+1)).fetchall()
+        items = [{**{key: row[key] for key in row.keys() if key != 'target_refs_json'},
+            'is_current': row['id'] == task.current_timeline_version_id,
+            'target_refs': json.loads(row['target_refs_json'])[:20] if row['target_refs_json'] else []} for row in rows[:limit]]
+        truncated = len(rows) > limit
+        return {'task_id': task_id, 'current_version_id': task.current_timeline_version_id, 'items': items,
+            'total_count': total, 'truncated': truncated,
+            'next_before_sequence': items[-1]['sequence'] if truncated else None}
+
+    def timeline_contains_version(self, workspace_id, task_id, current_id, ancestor_id):
+        with self._connect() as conn:
+            return conn.execute("WITH RECURSIVE history(id,parent_version_id) AS ("
+                "SELECT id,parent_version_id FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=? UNION "
+                "SELECT v.id,v.parent_version_id FROM timeline_versions v JOIN history h ON h.parent_version_id=v.id "
+                "WHERE v.workspace_id=? AND v.task_id=?) SELECT 1 FROM history WHERE id=? LIMIT 1",
+                (workspace_id, task_id, current_id, workspace_id, task_id, ancestor_id)).fetchone() is not None
+
+    def latest_operation_restore(self, workspace_id, task_id, operation_id):
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM edit_operations WHERE workspace_id=? AND task_id=? "
+                "AND operation_type IN ('UndoTimelineVersion','RedoTimelineVersion') "
+                "AND json_extract(payload_json,'$.target_operation_id')=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                (workspace_id, task_id, operation_id)).fetchone()
+        return self._edit_operation_from_row(row) if row is not None else None
+
+    @staticmethod
+    def timeline_restore_request_id(workspace_id, member_id, request_id):
+        return 'event_edit_request_' + hashlib.sha256(json.dumps(
+            [workspace_id, member_id, str(request_id), 'restore'], sort_keys=True,
+            ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+
+    def claim_timeline_restore(self, task, member_id, request_id, inputs, *, write_guard=None):
+        event_id = self.timeline_restore_request_id(task.workspace_id, member_id, request_id)
+        fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=?',
+                (task.workspace_id, event_id)).fetchone()
+            if row is not None:
+                if row['task_id'] != task.id or json.loads(row['payload_json'])['input_digest'] != fingerprint:
+                    raise ValueError('原恢复请求已绑定其他操作或输入')
+                return event_id, False
+            if write_guard is not None:
+                write_guard(conn)
+            self.append_task_event(TaskEvent(event_id, task.workspace_id, task.id, None, 'edit_request_claimed',
+                {'member_id': member_id, 'request_id': request_id, 'phase': 'restore',
+                    'input_digest': fingerprint, 'inputs': inputs}), connection=conn)
+        return event_id, True
+
+    def edit_execution_readiness(self,workspace_id,task_id,operation_id,*,connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            row=conn.execute('SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? '
+                "AND event_type='edit_execution_readiness'",(workspace_id,f'event_{operation_id}_execution_readiness')).fetchone()
+        if row is None:
+            return None
+        value=json.loads(row['payload_json'])
+        if row['task_id']!=task_id or value['operation_id']!=operation_id:
+            raise ValueError('编辑执行状态回执不属于原操作')
+        return {key:value[key] for key in ('status','reason_code','device_admission')}
+
+    def timeline_restore_receipt(self, workspace_id, task_id, member_id, request_id):
+        event_id = self.timeline_restore_request_id(workspace_id, member_id, request_id)
+        with self._connect() as conn:
+            claim = self.get_task_event(workspace_id, event_id, connection=conn)
+            if claim.task_id != task_id or claim.payload['member_id'] != member_id:
+                raise KeyError(request_id)
+            row = conn.execute("SELECT * FROM edit_operations WHERE workspace_id=? AND task_id=? "
+                "AND json_extract(payload_json,'$.restore_request_id')=? "
+                "AND json_extract(payload_json,'$.restore_member_id')=? ORDER BY created_at DESC LIMIT 1",
+                (workspace_id, task_id, request_id, member_id)).fetchone()
+            refusal = conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?',
+                (workspace_id, event_id+'_refusal')).fetchone()
+        operation = self._edit_operation_from_row(row) if row is not None else None
+        return {'request_id': request_id, 'task_id': task_id, 'action': claim.payload['inputs']['action'],
+            'target_operation_id': operation.payload['target_operation_id'] if operation else claim.payload['inputs']['target_operation_id'],
+            'status': 'applied' if operation else 'refused' if refusal else 'result_unknown',
+            'operation_id': operation.id if operation else None, 'result_version_id': operation.result_version_id if operation else None,
+            'execution_readiness': self.edit_execution_readiness(workspace_id,task_id,operation.id) if operation else None,
+            'failure': json.loads(refusal['payload_json']) if refusal is not None and operation is None else None}
+
     def create_creation_execution_job(self, run, *, start_payload, event_type="creation_execution_started",
                                       write_guard=None, execution_source=None):
         with self._connect() as conn:
@@ -5563,6 +5658,9 @@ class ProductionRepository:
                 (task.workspace_id,task.current_timeline_version_id)).fetchone()
             snapshot = json.loads(row['snapshot_json']) if row else {}
             snapshot['stage_segments'] = {**snapshot.get('stage_segments',{}),payload['section_id']:event.id}
+            invalidations = dict(snapshot.get('stage_segment_invalidations', {}))
+            invalidations.pop(payload['section_id'], None)
+            snapshot['stage_segment_invalidations'] = invalidations
             # A local change invalidates the composed output while preserving its immutable ancestor.
             for key in ('rendered_video_ref','rendered_artifact_id','creation_render_request_id','output_refs'):
                 snapshot.pop(key,None)
@@ -5681,12 +5779,15 @@ class ProductionRepository:
                 raise ValueError('此修改之后已有新的配音总轨；不能用旧整片快照覆盖')
 
     def restore_script_section(self,workspace_id,task_id,*,history,expected_dependencies,redo,
-                               changed_version_id,restore_version_id,timeline_change,job):
+                               changed_version_id,restore_version_id,timeline_change,job,control_payload=None,write_guard=None,
+                               execution_readiness_write=None):
         """Restore one edit on the latest facts, with one owner and one SQLite commit."""
         side,expected = ('after','before') if redo else ('before','after')
         section_id = history['section_id']
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            if write_guard is not None:
+                write_guard(conn)
             task = self._require_creation_task(conn,workspace_id,task_id)
             state = self.stage_segment_state(workspace_id,task_id,section_id,connection=conn)
             if state is None or state['segment_version'] != history[f'{expected}_publication']:
@@ -5717,6 +5818,13 @@ class ProductionRepository:
             desired_version = self.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'],connection=conn)
             if source_version.task_id!=task_id or desired_version.task_id!=task_id:
                 raise ValueError('局部恢复来源版本不属于当前任务')
+            invalidations = dict(snapshot.get('stage_segment_invalidations', {}))
+            desired_invalidation = desired_version.snapshot.get('stage_segment_invalidations', {}).get(section_id)
+            if desired_invalidation is not None and desired_invalidation['publication_id'] == publication.id:
+                invalidations[section_id] = desired_invalidation
+            else:
+                invalidations.pop(section_id, None)
+            snapshot['stage_segment_invalidations'] = invalidations
             snapshot,tracks = timeline_change.restore(task,snapshot,section_id,publication.payload['montage'],segments,
                 version_id,job,conn,source_version=source_version,desired_version=desired_version)
             action = '重做' if redo else '撤销'
@@ -5726,7 +5834,7 @@ class ProductionRepository:
                 playhead_ms=None,intent_type='redo_timeline' if redo else 'undo_timeline',scope={'section_id':section_id},
                 constraints={},confidence=1.0,status='interpreted'),connection=conn,source=None)
             payload = {'changed_version_id':changed_version_id,'restore_version_id':restore_version_id,
-                'base_version_id':current.id,'section_history':history,'section_restore_side':side}
+                'base_version_id':current.id,'section_history':history,'section_restore_side':side,**(control_payload or {})}
             proposal = self.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=workspace_id,
                 task_id=task_id,intent_id=intent.id,summary=f'{action}目标段修改，保留其他片段的后续成果',
                 target_refs=[f'section:{section_id}'],operation={'operation_type':operation_type,'payload':payload},
@@ -5739,6 +5847,10 @@ class ProductionRepository:
             full = snapshot.get('montage')
             self.confirm_edit_proposal(workspace_id,task_id,proposal.id,operation=operation,result_version=version,
                 montage_plan_id=full['id'] if full else None,montage_payload=full,subtitle_tracks=tracks,connection=conn)
+            if execution_readiness_write is not None:
+                readiness=execution_readiness_write(conn)
+                self.append_task_event(TaskEvent(f'event_{operation.id}_execution_readiness',workspace_id,task_id,None,
+                    'edit_execution_readiness',{'operation_id':operation.id,**readiness}),connection=conn)
             self.save_narration_segments(workspace_id,task_id,task.confirmed_script_id,segments,connection=conn)
             task = self._invalidate_section_composition(workspace_id,task_id,conn)
             self.append_task_event(TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=workspace_id,task_id=task_id,
@@ -5838,14 +5950,27 @@ class ProductionRepository:
             task = self._require_creation_task(conn, workspace_id, task_id)
             version = conn.execute('SELECT snapshot_json FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
                 (workspace_id, task_id, task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
-            reference = json.loads(version['snapshot_json']).get('stage_segments', {}).get(section_id) if version else None
+            snapshot = json.loads(version['snapshot_json']) if version else {}
+            reference = snapshot.get('stage_segments', {}).get(section_id)
             if reference is None:
                 return None
             row = conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=? '
                 "AND event_type='segment_publication'", (workspace_id, task_id, reference)).fetchone()
             if row is None:
                 raise ValueError('段版本引用的原产物记录不可读取')
-            return {'segment_version': reference, **json.loads(row['payload_json'])}
+            invalidation = snapshot.get('stage_segment_invalidations', {}).get(section_id)
+            invalid = invalidation is not None and invalidation['publication_id'] == reference
+            return {'segment_version': reference, **json.loads(row['payload_json']),
+                'current_validity': 'invalidated' if invalid else 'current',
+                'invalidation_reason': invalidation['reason'] if invalid else None}
+
+    def unsettled_segment_units(self, workspace_id, job_id):
+        with self._connect() as conn:
+            return conn.execute("SELECT 1 FROM task_events s WHERE s.workspace_id=? AND s.job_id=? "
+                "AND s.event_type='task_execution_unit_started' AND NOT EXISTS (SELECT 1 FROM task_events e "
+                "WHERE e.workspace_id=s.workspace_id AND e.job_id=s.job_id AND e.event_type='task_execution_unit_settled' "
+                "AND json_extract(e.payload_json,'$.usage_id')=json_extract(s.payload_json,'$.usage_id')) LIMIT 1",
+                (workspace_id, job_id)).fetchone() is not None
 
     def effective_creation_script(self, workspace_id, task_id, *, connection=None):
         with nullcontext(connection) if connection is not None else self._connect() as conn:
@@ -5938,6 +6063,49 @@ class ProductionRepository:
                 'used_output_bytes': settled['total_output_bytes'] if settled is not None else 0,
                 'consumption_known': active is None, 'unsettled': [active] if active is not None else []}
 
+    def creation_execution_input(self, workspace_id, job_id, *, connection=None):
+        """Read effective inputs while keeping the original start audit immutable."""
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            job = self.get_job_run(workspace_id, job_id, connection=conn)
+            start = self.get_task_event(workspace_id, f'event_{job_id}_start', connection=conn)
+            if (start.task_id, start.job_id) != (job.task_id, job.id):
+                raise ValueError('原制作开始记录不属于当前任务')
+            if start.payload['input_digest'] == job.input_digest:
+                return start.payload
+            row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND job_id=? "
+                "AND event_type='creation_execution_input_rebound' AND json_extract(payload_json,'$.input_digest')=? "
+                "ORDER BY rowid DESC LIMIT 1", (workspace_id, job.task_id, job.id, job.input_digest)).fetchone()
+            if row is None or json.loads(row['payload_json'])['start_event_id'] != start.id:
+                from app.device_scheduler import RecoveryBlocked
+                raise RecoveryBlocked('原作业有效输入缺少声音改选回执，不能继续')
+            return {**start.payload, 'input_digest': job.input_digest}
+
+    def rebind_unstarted_creation_voice(self, job, input_digest, selection_event_id, *, connection):
+        usage = self.creation_narration_usage(job.workspace_id, job.id, connection=connection)
+        if (job.kind != 'creation_task_execution' or job.status != 'queued' or job.attempt != 0
+                or job.started_at is not None or not usage['consumption_known']
+                or usage['used_seconds'] != 0 or usage['used_output_bytes'] != 0
+                or connection.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND job_id=? "
+                    "AND event_type IN ('creation_narration_unit_started','creation_narration_unit_settled') LIMIT 1",
+                    (job.workspace_id, job.id)).fetchone()):
+            raise ValueError('原配音作业已开始或消耗未知，不能改选声音')
+        task = self._require_creation_task(connection, job.workspace_id, job.task_id)
+        if (task.narration_cache_key is not None
+                or self.list_narration_segments(job.workspace_id, job.task_id, task.confirmed_script_id, connection=connection)
+                or connection.execute("SELECT 1 FROM narration_artifacts WHERE workspace_id=? "
+                    "AND json_extract(payload,'$.task_id')=? LIMIT 1", (job.workspace_id, job.task_id)).fetchone()):
+            raise ValueError('原任务已有配音产物或片段，不能按未开始改选声音')
+        changed = connection.execute("UPDATE job_runs SET input_digest=?,updated_at=? WHERE workspace_id=? AND id=? "
+            "AND input_digest=? AND status='queued' AND attempt=0 AND started_at IS NULL",
+            (input_digest, utc_now().isoformat(), job.workspace_id, job.id, job.input_digest)).rowcount
+        if changed != 1:
+            raise ValueError('原配音作业版本已变化，声音选择未提交')
+        self.append_task_event(TaskEvent(id=f'{selection_event_id}_execution', workspace_id=job.workspace_id,
+            task_id=job.task_id, job_id=job.id, event_type='creation_execution_input_rebound',
+            payload={'start_event_id': f'event_{job.id}_start', 'selection_event_id': selection_event_id,
+                'previous_input_digest': job.input_digest, 'input_digest': input_digest}), connection=connection)
+        return self.get_job_run(job.workspace_id, job.id, connection=connection)
+
     def start_creation_narration_unit(self, grant, resources, pending_segments):
         from app.device_scheduler import RecoveryBlocked
         with self._connect() as conn:
@@ -5954,7 +6122,8 @@ class ProductionRepository:
                 raise RecoveryBlocked('原配音单元消耗尚未结算，须先核对原请求与进程回执')
             job = self.claim_job_run(grant.workspace_id, grant.owner_id, connection=conn)
             task = self._require_creation_task(conn, job.workspace_id, job.task_id)
-            if task.stage != 'narration' or task.confirmed_script_id != resources['script_id']:
+            if (job.kind != 'creation_task_narration_edit' and task.stage != 'narration'
+                    or task.confirmed_script_id != resources['script_id']):
                 raise PermissionError('配音许可与当前文案阶段不一致')
             if usage['budget'] is None:
                 budget = {key: resources[key] for key in ('parent_timeout_seconds', 'parent_max_output_bytes', 'script_id', 'input_contract')}
@@ -5968,11 +6137,14 @@ class ProductionRepository:
             if remaining_seconds <= 0 or remaining_bytes <= 0:
                 raise ValueError('原配音阶段累计额度已耗尽，不能重置额度重启')
             current_segments = self.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
-            if not current_segments:
+            if job.kind == 'creation_task_narration_edit':
+                pass  # Candidate generation does not replace applied segment facts.
+            elif not current_segments:
                 self.save_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, pending_segments, connection=conn)
             elif len(current_segments) != len(pending_segments):
                 raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
-            task.stage_status, task.status = 'running', 'running'
+            if job.kind != 'creation_task_narration_edit':
+                task.stage_status, task.status = 'running', 'running'
             task.stage_reason = task.stage_impact = task.stage_repair_action = task.stage_retryable = None
             task.updated_at = utc_now()
             conn.execute('UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?',
@@ -6061,6 +6233,56 @@ class ProductionRepository:
             payload={'stage': 'narration', 'status': 'pending', 'request_id': grant.request_id,
                 'unit_key': grant.unit_key, 'segment_id': segment.id, 'ordinal': ordinal,
                 'phase': 'segment', 'output': segment.audio_reference}, created_at=now), connection=connection)
+        return event_id
+
+    def narration_edit_generated(self, workspace_id, job_id, *, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                "AND event_type='creation_narration_edit_generated' ORDER BY rowid DESC LIMIT 1",(workspace_id,job_id)).fetchone()
+            return json.loads(row['payload_json']) if row else None
+
+    def checkpoint_narration_edit_generated(self, grant, artifact, segment, source_key, *, connection):
+        self.save_narration_artifact(artifact,connection=connection)
+        changed=connection.execute("UPDATE job_runs SET status='queued',updated_at=? WHERE workspace_id=? AND id=? AND status='running'",
+            (utc_now().isoformat(),grant.workspace_id,grant.owner_id)).rowcount
+        if changed != 1:
+            raise PermissionError('原局部配音Job已停止，未采用候选')
+        event_id=f'event_{grant.owner_id}_narration_edit_generated'
+        self.append_task_event(TaskEvent(event_id,grant.workspace_id,segment.task_id,grant.owner_id,
+            'creation_narration_edit_generated',{'source_key':source_key,'segment_id':segment.id,
+                'cache_key':artifact.cache_key,'request_id':grant.request_id,'permit_generation':grant.generation}),connection=connection)
+        return event_id
+
+    def creation_narration_merge_checkpoint(self, workspace_id, job_id, *, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                "AND event_type='creation_execution_stage' AND json_extract(payload_json,'$.phase')='merge' "
+                "AND json_extract(payload_json,'$.status')='pending' ORDER BY rowid DESC LIMIT 1",
+                (workspace_id, job_id)).fetchone()
+            return json.loads(row['payload_json']) if row is not None else None
+
+    def checkpoint_creation_narration_merge(self, grant, *, source_digest, section_ids,
+                                          input_references, pcm_receipt, connection):
+        job = self.get_job_run(grant.workspace_id, grant.owner_id, connection=connection)
+        task = self._require_creation_task(connection, job.workspace_id, job.task_id)
+        if (job.kind != 'creation_task_narration_edit' and task.stage != 'narration' or len(section_ids) < 1
+                or pcm_receipt['job_id'] != job.id
+                or pcm_receipt['unit_id'] != f'{grant.request_id}:{grant.generation}'
+                or pcm_receipt['source_digest'] != source_digest or pcm_receipt['finalized']):
+            raise ValueError('中间PCM检查点不属于原作业，不能发布为音频产物')
+        now = utc_now()
+        changed = connection.execute("UPDATE job_runs SET status='queued',updated_at=? WHERE workspace_id=? AND id=? AND status='running'",
+            (now.isoformat(), grant.workspace_id, grant.owner_id)).rowcount
+        if changed != 1:
+            raise PermissionError('原配音作业已停止，不能写入合并成功')
+        event_id = f'event_{grant.owner_id}_narration_merge_{grant.generation}'
+        self.append_task_event(TaskEvent(id=event_id, workspace_id=grant.workspace_id,
+            task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
+            payload={'stage': 'narration', 'status': 'pending', 'phase': 'merge',
+                'request_id': grant.request_id, 'unit_key': grant.unit_key, 'source_digest': source_digest,
+                'section_ids': section_ids, 'input_references': input_references,
+                'pcm': pcm_receipt},
+            created_at=now), connection=connection)
         return event_id
 
     def exhaust_creation_narration_budget(self, grant, task_id, *, connection):
@@ -8503,6 +8725,14 @@ class ProductionRepository:
             for row in rows
         ]
 
+    def get_topic_evidence_reference(self, workspace_id, task_id, evidence_id):
+        with self._connect() as conn:
+            row = conn.execute('SELECT payload FROM topic_evidence_references WHERE workspace_id=? AND task_id=? AND id=?',
+                (workspace_id, task_id, evidence_id)).fetchone()
+        if row is None:
+            raise KeyError(evidence_id)
+        return self._topic_evidence_reference_from_payload(json.loads(row['payload']))
+
     def confirm_topic_candidate(
         self, workspace_id: str, task_id: str, candidate_id: str, *, title: str | None = None,
         adoption_kind: Literal["manual", "delegated_system"] = "manual", verified_owner_user_id: str | None = None, write_guard=None) -> tuple[CreationTask, TopicCandidate]:
@@ -9637,6 +9867,7 @@ class ProductionRepository:
         voice_version: str,
         expected_plan_updated_at: datetime | str,
         expected_task_updated_at: datetime | str,
+        queued_job_rebind=None,
     ) -> dict[str, object]:
         """Select one fixed voice and record its original request in the same transaction."""
         if not request_id.strip():
@@ -9677,8 +9908,9 @@ class ProductionRepository:
                 "failed",
             }:
                 raise ValueError("当前任务不能选择配音声音")
-            if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
-                    (workspace_id, task_id)).fetchone():
+            active_jobs = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted')",
+                    (workspace_id, task_id)).fetchall()
+            if active_jobs and (queued_job_rebind is None or len(active_jobs) != 1):
                 raise ValueError("此任务仍有未结束的制作作业；先等作业结算或取消，再选择配音声音。")
             try:
                 selected_voice = self.creation_plan_voice_reference(workspace_id, voice_profile_id, voice_version,
@@ -9695,6 +9927,7 @@ class ProductionRepository:
                 scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language) for entry in entries]
 
             now = utc_now()
+            previous_plan = replace(plan)
             previous_voice = asdict(plan.selected_voice) if plan.selected_voice else None
             plan.selected_voice = selected_voice
             plan.pronunciation_references = pronunciation_references
@@ -9740,6 +9973,8 @@ class ProductionRepository:
                 "confirmed_script_id": task.confirmed_script_id}
             self.append_task_event(TaskEvent(event_id, workspace_id, task_id, None, "task_narration_voice_selected",
                 {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
+            if active_jobs:
+                queued_job_rebind(conn, self._job_run_from_row(active_jobs[0]), previous_plan, event_id)
             return receipt
 
     def complete_creation_task_narration(

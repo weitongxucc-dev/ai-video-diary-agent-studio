@@ -109,6 +109,23 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     assert finished.status == "succeeded" and saved.sections[0].evidence_reference_ids == [
         "knowledge:knowledge:1", "source:manual-source",
     ]
+    # Reference reading remains available after confirmation, independently of script editing gates.
+    task, saved = production.confirm_creation_task_script('qa',task.id,saved.id,
+        title=saved.title,sections=saved.sections,expected_updated_at=saved.updated_at,verified_owner_user_id='owner')
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    from app.creation_execution import CreationExecutionActor
+    case = SegmentProductionUseCase(production,narration_stage=None,renderer=None,
+        artifact_store=None,output_root='unused',source_repository=sources)
+    actor = CreationExecutionActor('qa','owner')
+    view = case.sources('qa',task.id,'section',actor,offset=1,limit=1,max_chars=4)
+    assert view['items'][0]['binding']['version_or_identity']==inputs[1]['version_or_identity']
+    assert view['items'][0]['status']=='matched' and view['items'][0]['text']=='手工来源'
+    assert view['items'][0]['truncated'] and view['total_count']==2
+    sources.save_source_items('qa',[replace(sources.get_source_item('qa','manual-source'),body='同ID后来替换的正文')])
+    changed = case.sources('qa',task.id,'section',actor,offset=1,limit=1)
+    assert changed['items'][0]['status']=='changed' and 'text' not in changed['items'][0]
+    unknown = case.source_bindings(replace(saved,run_id='missing-historical-run'),saved.sections[0])
+    assert all(item['binding_status']=='unknown' and item['version_or_identity'] is None for item in unknown)
 
 
 @pytest.mark.parametrize("restriction", ["excluded", "not_for_automation", "wrong-version", "wrong-workspace", "wrong-owner"])

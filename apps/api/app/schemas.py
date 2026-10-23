@@ -1885,6 +1885,11 @@ class CreationTaskTimelineUndoRequest(BaseModel):
     expected_timeline_sequence: int | None = Field(default=None, ge=0)
 
 
+class CreationTaskTimelineRestoreRequest(CreationTaskTimelineUndoRequest):
+    request_id: str = Field(min_length=1, max_length=128)
+    target_operation_id: str | None = Field(default=None, min_length=1, max_length=160)
+
+
 class CreationTaskSubtitleCueUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2466,7 +2471,25 @@ class AssistantStoryboardRegenerationFailure(BaseModel):
     failure: StoryboardRegenerationFailure
 
 
+class AssistantSegmentRevisionResponse(BaseModel):
+    kind: Literal['segment_revision'] = 'segment_revision'
+    action: Literal['submit', 'query', 'resume']
+    request_id: str
+    revision: dict[str, object] | None = None
+    failure: dict[str, object] | None = None
+
+
+class AssistantTimelineRestoreResponse(BaseModel):
+    kind: Literal['timeline_restore_request'] = 'timeline_restore_request'
+    action: Literal['undo', 'redo', 'query']
+    request_id: str
+    receipt: dict[str, object] | None = None
+    failure: dict[str, object] | None = None
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    timeline_restore: AssistantTimelineRestoreResponse | None = None
+    segment_revision: AssistantSegmentRevisionResponse | None = None
     storyboard_regeneration: AssistantStoryboardRegenerationReceipt | AssistantStoryboardRegenerationFailure | None = None
     script_tool: AssistantScriptToolReceipt | None = None
     edit_request: AssistantEditRequestLocator | None = None
@@ -2552,6 +2575,8 @@ class CreationTaskEditConfirmResponse(BaseModel):
     operation: EditOperationResponse
     montage: CreationTaskMontagePlanResponse | None
     narration: CreationTaskNarrationResponse | None = None
+    restore_request: dict[str, object] | None = None
+    execution_readiness: dict[str, object] | None = None
 
 
 class CreationTaskEditQueuedResponse(BaseModel):
@@ -4137,12 +4162,19 @@ class TimelineVersionSummaryResponse(BaseModel):
     shot_count: int
     subtitle_track_count: int
     narration_segment_count: int
+    operation_id: str | None = None
+    operation_type: str | None = None
+    target_refs: list[str] = Field(default_factory=list)
+    source_request_id: str | None = None
 
 
 class TimelineVersionListResponse(BaseModel):
     task_id: str
     current_version_id: str | None
     items: list[TimelineVersionSummaryResponse]
+    total_count: int
+    truncated: bool
+    next_before_sequence: int | None
 
 
 class TimelineVersionShotResponse(BaseModel):

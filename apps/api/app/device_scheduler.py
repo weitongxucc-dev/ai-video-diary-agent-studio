@@ -493,6 +493,57 @@ class DeviceScheduler:
             conn.commit()
         return self._request(new_row)
 
+    def replace_unstarted_narration_voice(self, job, *, connection, replacement_write):
+        """Replace only a never-granted narration request during atomic voice selection."""
+        if not connection.in_transaction:
+            raise ValueError('声音改选必须与原作业和设备请求在同一事务提交')
+        rows = connection.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
+            "AND owner_type='creation_job' AND owner_id=?", (job.workspace_id, job.id)).fetchall()
+        current = [row for row in rows if row['state'] != 'cancelled']
+        if (len(current) != 1 or any(row['last_grant_generation'] is not None or row['attempt_number'] != 1
+                or row['checkpoint_ref'] is not None for row in rows)
+                or connection.execute("SELECT 1 FROM device_request_events event JOIN device_work_requests request "
+                    "ON event.request_id=request.id WHERE request.workspace_id=? AND request.owner_type='creation_job' "
+                    "AND request.owner_id=? AND event.permit_generation IS NOT NULL LIMIT 1",
+                    (job.workspace_id, job.id)).fetchone()
+                or connection.execute("SELECT 1 FROM device_permit permit JOIN device_work_requests request "
+                    "ON permit.request_id=request.id WHERE request.workspace_id=? AND request.owner_type='creation_job' "
+                    "AND request.owner_id=? AND permit.state!='free' LIMIT 1", (job.workspace_id, job.id)).fetchone()):
+            raise RecoveryBlocked('原配音请求已有授予、结果或归属不唯一，不能改选声音')
+        old_row = current[0]
+        old = self._request(old_row)
+        if (not old.unit_key.startswith('narration:') or old.input_digest != job.input_digest
+                or old.source_refs or old.work_class != 'normal_make'
+                or old.state not in {'waiting', 'blocked'} and not (
+                    old.state == 'failed' and old_row['last_failure_reason'] == 'declared_resources_exceed_budget')):
+            raise RecoveryBlocked('原配音请求不在可安全改选的未执行边界')
+        intent, trusted = replacement_write(connection, old)
+        actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key)
+        if (actual != (intent.workspace_id, intent.owner_type, intent.owner_id, intent.input_digest, intent.unit_key)
+                or actual[:3] != (old.workspace_id, old.owner_type, old.owner_id)
+                or not trusted.unit_key.startswith('narration:segment:v1:')
+                or trusted.member_id != old.member_id or trusted.work_class != old.work_class
+                or trusted.source_refs != old.source_refs or intent.policy != old.policy
+                or trusted.resources['parent_timeout_seconds'] != old.resources.get('parent_timeout_seconds', old.resources['timeout_seconds'])
+                or trusted.resources['parent_max_output_bytes'] != old.resources.get('parent_max_output_bytes', old.resources['max_output_bytes'])):
+            raise PermissionError('声音改选不能改变原作业、成员、文案归属或等待策略')
+        new_id = uuid.uuid4().hex
+        now = _stamp(self._now())
+        connection.execute("INSERT INTO device_work_requests (id,workspace_id,member_id,owner_type,owner_id,input_digest,unit_key,"
+            "source_refs_json,work_class,policy,not_before_utc,window_json,first_ready_at_utc,eligible_since_utc,"
+            "eligible_wait_seconds,state,resources_json,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'waiting',?,?,?)",
+            (new_id, trusted.workspace_id, trusted.member_id, trusted.owner_type, trusted.owner_id, trusted.input_digest,
+             trusted.unit_key, old_row['source_refs_json'], trusted.work_class, old_row['policy'], old_row['not_before_utc'],
+             old_row['window_json'], old_row['first_ready_at_utc'], old_row['eligible_since_utc'],
+             old_row['eligible_wait_seconds'], json.dumps(trusted.resources, sort_keys=True), now, now))
+        self._record_event(connection, old_row, 'deferred', f'superseded_by:{new_id}:voice_reselection', trusted.member_id, now)
+        connection.execute("UPDATE device_work_requests SET state='cancelled',wait_reason=?,updated_at=? WHERE id=?",
+            (f'replaced_by:{new_id}', now, old.id))
+        row = connection.execute('SELECT * FROM device_work_requests WHERE id=?', (new_id,)).fetchone()
+        self._record_event(connection, row, 'deferred', f'replaces:{old.id}:voice_reselection', trusted.member_id, now)
+        return self._request(row)
+
     def replace_ungranted_creation_narration(self, old_request_id, *, replacement_write):
         """Keep one original Job and wait age across the verified narration contract change."""
         now = _stamp(self._now())
@@ -973,6 +1024,22 @@ class DeviceScheduler:
         connection.execute("UPDATE device_work_requests SET state=?,checkpoint_ref=?,wait_reason=?,retry_not_before_utc=NULL,last_failure_reason=CASE WHEN ?='failed' THEN 'quality_recovery_failed' ELSE last_failure_reason END,updated_at=? WHERE id=?",
                            (state, terminal_checkpoint, "quality_recovery_failed" if status == "failed" else None,
                             status, now, request.id))
+
+    def complete_recovered_narration_pcm(self, connection, request, *, generation, checkpoint_ref):
+        """Fence metadata recovery of this original released PCM request only."""
+        database=next(row[2] for row in connection.execute('PRAGMA database_list') if row[1]=='main')
+        if not connection.in_transaction or Path(database).resolve()!=self.database_path:
+            raise ValueError('PCM恢复必须使用同一Production写事务')
+        if request.owner_type!='creation_job' or request.resources.get('execution_mode')!='cpu_pcm_wav_assembly':
+            raise PermissionError('恢复只属于原PCM请求')
+        permit=connection.execute('SELECT state,generation FROM device_permit WHERE id=1').fetchone()
+        if permit is None or (permit['state'],permit['generation'])!=('free',generation):
+            raise RecoveryBlocked('原进程释放证明在PCM恢复提交前已变化')
+        row=connection.execute('SELECT * FROM device_work_requests WHERE id=?',(request.id,)).fetchone()
+        if row is None or self._request(row)!=request or request.state not in {'waiting','blocked'}:
+            raise RecoveryBlocked('原PCM请求在恢复提交前已变化或仍占用设备')
+        connection.execute("UPDATE device_work_requests SET state='done',checkpoint_ref=?,wait_reason=NULL,"
+            "retry_not_before_utc=NULL,updated_at=? WHERE id=?",(checkpoint_ref,_stamp(self._now()),request.id))
 
     def pick_and_grant(self) -> Grant | None:
         if self._held_fd is not None:

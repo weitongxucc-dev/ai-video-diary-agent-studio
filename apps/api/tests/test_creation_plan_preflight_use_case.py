@@ -10,7 +10,8 @@ from fastapi import HTTPException, Request
 import pytest
 
 from app import main
-from app.creation.plan_preflight_use_case import CreationPlanPreflightUseCase, source_item_identity
+from app.creation.plan_preflight_use_case import CreationPlanPreflightUseCase
+from app.source_types import source_item_identity
 from app.materials.contracts import MaterialSegmentMatch
 from app.production import ProductionRepository, VideoTemplate
 from app.schemas import CreationPlanConfirmRequest, CreationPlanPreviewRequest
