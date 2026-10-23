@@ -1385,14 +1385,20 @@ def test_only_one_complete_report_tool_is_accepted_without_execution_or_fallback
     assert document['script']['sections'][0]['content'] not in caplog.text
 
 
+@pytest.mark.parametrize("model", ["MiniMax-M3", "deepseek-flash"])
 @pytest.mark.parametrize("outcome", ["supported", "unsupported", "invalid-report"])
-def test_m3_disabled_thinking_keeps_fact_and_complete_report_gate(outcome):
+def test_disabled_thinking_keeps_fact_and_complete_report_gate(outcome, model):
     document = draft(FACT + ("每天自动备份。" if outcome == "unsupported" else ""))
     calls = []
     def respond(request):
         payload = json.loads(request.content)
         calls.append(payload)
-        assert payload["thinking"] == {"type": "disabled"} and payload["reasoning_split"] is True
+        assert payload["thinking"] == {"type": "disabled"}
+        assert payload.get("reasoning_split") is (True if model == "MiniMax-M3" else None)
+        assert payload["tool_choice"] == "required"
+        function = payload["tools"][0]["function"]
+        assert function["name"] == ("submit_script_draft" if len(calls) == 1 else "submit_script_review")
+        assert function["parameters"]["type"] == "object"
         if len(calls) == 1:
             return _response(document)
         data = json.loads(payload["messages"][1]["content"])
@@ -1400,7 +1406,7 @@ def test_m3_disabled_thinking_keeps_fact_and_complete_report_gate(outcome):
             return _review_tool_response({"sections": []})
         report = rejected(document, kind="unsupported_fact", field="content", quote="每天自动备份", detail="资料没有备份说明。") if outcome == "unsupported" else reviewed(document)
         return _review_tool_response(bound_review(report, data))
-    generator = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "MiniMax-M3",
+    generator = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", model,
         transport=httpx.MockTransport(respond))
     if outcome == "supported":
         assert generator.generate(inputs()).sections[0].content == FACT

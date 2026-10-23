@@ -31,8 +31,10 @@ from app.service_status_projection import (
 )
 
 
-def structured_completion_options(model_id: str) -> dict[str, object]:
-    """Keep MiniMax reasoning outside the JSON content parsed by production."""
+def structured_completion_options(model_id: str, *, forced_tools: bool = False) -> dict[str, object]:
+    """Separate MiniMax reasoning; disable DeepSeek thinking for forced tools."""
+    if forced_tools and model_id in {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"}:
+        return {"thinking": {"type": "disabled"}}
     return {"reasoning_split": True} if model_id.startswith("MiniMax-") else {}
 
 

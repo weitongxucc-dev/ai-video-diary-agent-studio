@@ -266,7 +266,7 @@ class OpenAICompatibleCreationTaskTopicGenerator:
             "tool_choice": "required",
             "temperature": 0.7,
             "max_tokens": 3200,
-            **structured_completion_options(self._model),
+            **structured_completion_options(self._model, forced_tools=True),
         }
         headers = (
             {"Authorization": f"Bearer {self._api_key}"}
@@ -850,7 +850,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "tool_choice": "required",
             "temperature": 0.4,
             "max_tokens": 8192,
-            **structured_completion_options(self._model),
+            **structured_completion_options(self._model, forced_tools=True),
             **({"thinking": {"type": "disabled"}} if self._model == "MiniMax-M3" else {}),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
@@ -1109,7 +1109,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 "description": "提交本次逐段核查报告；不改写、保存、确认文案或执行制作。",
                 "parameters": report_schema}}],
             "tool_choice": "required", "temperature": 0,
-            "max_tokens": 8192, **structured_completion_options(self._model),
+            "max_tokens": 8192, **structured_completion_options(self._model, forced_tools=True),
             **({"thinking": {"type": "disabled"}} if self._model == "MiniMax-M3" else {}),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
