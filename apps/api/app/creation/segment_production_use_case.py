@@ -361,8 +361,11 @@ class SegmentProductionUseCase:
         return False
 
     def persist_video_preparation(self, prepared, grant, *, connection):
+        return self.persist_video_preparation_for_request(prepared, grant.request_id, connection=connection)
+
+    def persist_video_preparation_for_request(self, prepared, request_id, *, connection):
         if prepared.event_type == 'segment_visual_decision_required':
-            prepared = replace(prepared,payload={**prepared.payload,'request_id':grant.request_id})
+            prepared = replace(prepared,payload={**prepared.payload,'request_id':request_id})
         self.repository.append_task_event(prepared,connection=connection)
         if prepared.event_type == 'segment_visual_decision_required':
             connection.execute("UPDATE job_runs SET failure_reason='waiting_for_user' WHERE workspace_id=? AND id=?",

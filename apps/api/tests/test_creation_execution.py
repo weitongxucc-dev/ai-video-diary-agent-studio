@@ -4743,3 +4743,90 @@ def test_edit_source_unverifiable_jobs_cannot_be_submitted(tmp_path, monkeypatch
             case.owner.verify_submission(case.submission, case.actor, connection=conn)
         assert case.owner.check_current(case.request, conn) == 'stale'
     assert case.repo.get_job_run('local', case.job.id).status == 'running'
+
+
+def _legacy_generated_segment_case(tmp_path, monkeypatch):
+    from app.narration import NarrationArtifact, NarrationGenerator, _pronunciation_dictionary, _pronunciation_version
+    case = _segment_units_case(tmp_path, monkeypatch)
+    _require_section_visual_decision(case, monkeypatch)
+    canonical = NarrationGenerator(tmp_path/'legacy-output', SimpleNamespace(model_id='test'))
+    case.stage.generator.output_root = canonical.output_root
+    output = {}
+    def legacy_generate(**kwargs):
+        reference = case.repo.profile_reference_input(kwargs['voice_identity'], viewer_user_id=case.actor.member_id)
+        dictionary = _pronunciation_dictionary(entries=kwargs['pronunciation_entries'], workspace_id='local',
+            person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=case.task_id)
+        cache = canonical.creation_task_cache_key(workspace_id='local', task_id=case.task_id,
+            script_id=case.script_id, narration_text=kwargs['narration_text'].strip(),
+            voice_identity=kwargs['voice_identity'], pronunciation_dictionary=dictionary,
+            segment_id=kwargs['segment_id'], language='zh',
+            generation_identity=hashlib.sha256(json.dumps([None, reference.identity]).encode()).hexdigest())
+        path = canonical.output_root/'creation-tasks'/'local'/case.task_id/f"segment_{kwargs['segment_id']}_{cache[:12]}.wav"
+        path.parent.mkdir(parents=True)
+        import wave
+        with wave.open(str(path), 'wb') as audio:
+            audio.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+            audio.writeframes(b'\x01\x00'*24000)
+        response = {'schema_version': 1, 'model_id': 'test', 'audio_path': str(path.resolve()),
+            'duration_seconds': 1.0, 'sample_rate': 24000}
+        kwargs['grant_context'].narration_output_usage[0] = path.stat().st_size + len(json.dumps(response).encode())
+        output.update(path=path, cache_key=cache)
+        return NarrationArtifact(task_id=case.task_id, script_id=case.script_id, audio_path=str(path),
+            duration_seconds=1.0, sample_rate=24000, model_id='test', voice_profile_id='voice_1',
+            cache_key=cache, language='zh', pronunciation_version=_pronunciation_version(dictionary))
+    monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', legacy_generate)
+    prepare_video = case.segments.prepare_video
+    monkeypatch.setattr(case.segments, 'prepare_video', lambda *a, **kw: (_ for _ in ()).throw(
+        ValueError('legacy visual decision failed before audio checkpoint')))
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    case.executor.execute(grant, case.scheduler)
+    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert case.scheduler._get(grant.request_id).state == 'failed'
+    settled = case.repo.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
+    assert settled.payload['output_file'] is None and settled.payload['output_bytes'] > 0
+    assert case.repo.get_narration_artifact('local', output['cache_key']) is None
+    monkeypatch.setattr(case.segments, 'prepare_video', prepare_video)
+    monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', lambda **kw: pytest.fail('provider fallback'))
+    from app.creation.execution_control import CreationExecutionControl
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={
+        'creation_job': SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
+    return SimpleNamespace(**vars(case), output=output, grant=grant, settled=settled, control=control, runtime=runtime)
+
+
+@pytest.mark.parametrize('mismatch', [None, 'output', 'source'])
+def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_charge(tmp_path, monkeypatch, mismatch):
+    from app.device_scheduler import RecoveryBlocked
+    case = _legacy_generated_segment_case(tmp_path, monkeypatch)
+    before = case.repo.creation_narration_usage('local', case.job.id)
+    if mismatch == 'output':
+        path = case.output['path']
+        path.write_bytes(path.read_bytes() + b'not_original')
+    elif mismatch == 'source':
+        inputs = case.repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id, voice_profile_id='voice_1', voice_version='v1')
+        source = case.repo.profile_reference_input(inputs.voice, viewer_user_id=case.actor.member_id)
+        Path(source.source_path).write_bytes(Path(source.source_path).read_bytes() + b'not_original')
+    def guard(conn):
+        assert conn.in_transaction
+    if mismatch:
+        from app.creation.execution_control import ExecutionControlRejected
+        with pytest.raises(ExecutionControlRejected):
+            case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
+        assert case.repo.get_narration_artifact('local', case.output['cache_key']) is None
+        assert all(row.status == 'pending' for row in case.repo.list_narration_segments('local', case.task_id, case.script_id))
+    else:
+        case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
+        result = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
+        assert result['status'] == 'waiting_for_user' and result['audio']['persisted']
+        assert case.repo.get_creation_task('local', case.task_id).stage_status == 'waiting_for_user'
+        record = case.repo.get_narration_artifact('local', case.output['cache_key'])
+        assert record.sample_rate == 24000 and record.duration_seconds == 1.0
+        decision = case.segments.visual_decision(case.repo.get_job_run('local', case.job.id), 'section_1')
+        case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
+        assert case.segments.visual_decision(case.repo.get_job_run('local', case.job.id), 'section_1') == decision
+        assert len(case.execution.jobs('local', case.task_id)) == 1
+    assert case.repo.creation_narration_usage('local', case.job.id) == before
+    assert case.repo.get_task_event('local', case.settled.id) == case.settled
+    assert case.scheduler._get(case.grant.request_id).state == 'failed'
+    assert case.scheduler.pick_and_grant() is None

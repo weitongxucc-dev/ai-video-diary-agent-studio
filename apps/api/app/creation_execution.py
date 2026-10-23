@@ -1631,6 +1631,8 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
     if (job.kind not in {KIND, NARRATION_EDIT_KIND, 'creation_task_segment_revision'} or owner.narration_budget is None
             or owner.narration_budget.input_scope != 'single_call_experiment_v1'):
         return None
+    if job.kind == KIND and owner.segments is not None and owner.segments.waiting_for_visual_decision(job):
+        return None
     with repository._connect() as conn:
         rows = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
             "AND owner_id=? AND input_digest=? AND state!='cancelled' ORDER BY created_at,id",
@@ -1650,6 +1652,9 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
                 or owner.authorization_verdict(task, actor, stage, connection=conn) != 'ready'):
             raise PermissionError('原配音请求的成员或任务授权不匹配')
         legacy = old.unit_key.startswith('narration:') and old.unit_key.count(':') == 1
+        if (job.kind == KIND and old.unit_key.startswith('narration:segment:v1:')
+                and old.state == 'failed' and old.last_grant_generation is not None):
+            return None  # An attempted section belongs to original-unit recovery, not ungranted migration.
         if not legacy and owner.check_current(old, conn) == 'ready':
             if old.state in {'waiting', 'blocked'} and conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND job_id=? "
                     "AND event_type='creation_narration_source_revalidated' AND json_extract(payload_json,'$.new_request_id')=?",
@@ -1690,6 +1695,9 @@ def resume_original_narration(repository, scheduler, job, actor, *, write_guard=
             "OR unit_key LIKE 'narration:merge:v1:%' OR unit_key LIKE 'segment_video:%') ORDER BY updated_at DESC LIMIT 2", (job.workspace_id, job.id)).fetchall()
     if len(rows) != 1:
         raise RecoveryBlocked('原配音没有唯一可继续单元；保留累计预算，先核对原作业')
+    if executor is not None and executor.recover_generated_segment(job, actor, scheduler,
+            request_id=rows[0]['id'], write_guard=write_guard):
+        return True
     owner = scheduler.owners
     if hasattr(owner, 'registrations'):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
@@ -1924,6 +1932,169 @@ class CreationJobUnitExecutor:
                          **({"reason": reason} if reason else {})}, ensure_ascii=False), now),
         )
         return event_id
+
+    def recover_generated_segment(self, job, actor, scheduler, *, request_id, write_guard=None):
+        """Recover only a settled legacy single-section result, never execute TTS."""
+        import fcntl
+        import stat
+        import wave
+        from app.creation.narration_pcm import prepare_narration_source, verify_narration_source
+        from app.narration import _safe_component, _pronunciation_dictionary
+        from app.production import NarrationArtifactRecord
+        from app.profiles.contracts import profile_cache_identity
+        from app.profile_reference_media import ProfileReferenceInput
+
+        request = scheduler._get(request_id)
+        if (job.kind != KIND or job.status != 'failed' or request.state != 'failed'
+                or request.last_grant_generation is None
+                or request.resources.get('narration_phase') != 'segment'
+                or request.resources.get('execution_mode') != 'isolated_qwen3_tts'):
+            return False
+        generation = request.last_grant_generation
+        settled_id = f'event_{job.id}_narration_settled_{generation}'
+        settled = self.repository.get_task_event(job.workspace_id, settled_id)
+        if settled.payload.get('output_file') is not None or settled.payload['output_bytes'] == 0:
+            return False
+        if self.segments is None or self.narration_stage is None:
+            raise RecoveryBlocked('原已付费单段缺少metadata恢复入口，禁止重配音')
+        owner = scheduler.owners
+        if hasattr(owner, 'registrations'):
+            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+        with self.repository._connect() as reader:
+            original_job, task, event, script, plan = owner._facts(reader, job.workspace_id, job.id)
+            binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
+            started = self.repository.get_task_event(job.workspace_id,
+                f'event_{job.id}_narration_started_{generation}', connection=reader)
+        resources = request.resources
+        usage_id = f'{request.id}:{generation}'
+        if (original_job != job or actor != CreationExecutionActor.from_event(job.workspace_id, event)
+                or request.owner_type != DEVICE_OWNER_TYPE or request.owner_id != job.id
+                or request.workspace_id != job.workspace_id or request.member_id != actor.member_id
+                or request.input_digest != job.input_digest or event.get('operation')
+                or settled.job_id != job.id or settled.task_id != job.task_id
+                or started.job_id != job.id or started.task_id != job.task_id
+                or any(item.payload.get('usage_id') != usage_id or item.payload.get('unit_key') != request.unit_key
+                    for item in (started, settled))
+                or binding.payload['narration_reference'] != resources['narration_reference']):
+            raise RecoveryBlocked('原单段作业、许可、结算或来源身份不匹配')
+        if task.stage != 'narration':
+            raise RecoveryBlocked('原单段已不属于当前配音阶段')
+        section = next(item for item in script.sections if item.id == resources['section_id'])
+        pending = next(item for item in self.repository.list_narration_segments(job.workspace_id,
+            job.task_id, script.id) if item.source_section_id == section.id)
+        if (pending.status != 'pending' or pending.id != resources['segment_id'] or pending.text != section.content
+                or (pending.model_id, pending.voice_profile_id, pending.voice_version, pending.language, pending.pronunciation_version)
+                    != tuple(resources[name] for name in ('model_id', 'voice_profile_id', 'voice_version', 'language', 'pronunciation_version'))):
+            raise RecoveryBlocked('原单段不在原声音与文案的pending边界')
+        with prepare_narration_source(self.repository, task, plan, actor, binding=binding.payload) as source:
+            with self.repository._connect() as reader:
+                key, facts = owner.narration_unit_facts(reader, job, task, script, plan, request=request,
+                    original_recovery=True)
+            if key != request.unit_key or facts != resources:
+                raise RecoveryBlocked('原单段文案或固定来源已变化，不能恢复缓存')
+            inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=job.workspace_id,
+                task_id=job.task_id, voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'])
+            reference_identity = ProfileReferenceInput(**resources['narration_reference']['reference']).identity
+            # This is the original single-section cache recipe; no generator/cache lookup is entered.
+            cache_payload = {'workspace_id': job.workspace_id, 'task_id': job.task_id, 'script_id': script.id,
+                'text': section.content.strip(), 'language': resources['language'],
+                'voice': profile_cache_identity(inputs.voice),
+                'pronunciation_dictionary': _pronunciation_dictionary(
+                    entries=inputs.pronunciation_entries, workspace_id=job.workspace_id,
+                    person_profile_id=inputs.voice.person_profile_id, task_id=task.id),
+                'provider_model_id': resources['model_id'], 'segment_id': pending.id,
+                'delivery_instruction': None,
+                'generation_identity': hashlib.sha256(json.dumps([None, reference_identity]).encode()).hexdigest()}
+            cache_key = hashlib.sha256(json.dumps(cache_payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            path = (Path(self.narration_stage.generator.output_root) / 'creation-tasks'
+                / _safe_component(job.workspace_id) / _safe_component(job.task_id)
+                / f'segment_{_safe_component(pending.id)}_{cache_key[:12]}.wav')
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError as exc:
+                raise RecoveryBlocked('原已付费单段的唯一缓存不可读取，禁止重新生成') from exc
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                info = os.fstat(fd)
+                identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or not 0 < info.st_size <= min(settled.payload['output_bytes'], resources['max_output_bytes'])
+                        or not started.created_at.timestamp() <= info.st_mtime <= settled.created_at.timestamp()):
+                    raise RecoveryBlocked('原单段缓存身份或写入时间不属于原许可')
+                try:
+                    with os.fdopen(os.dup(fd), 'rb') as stream, wave.open(stream, 'rb') as audio:
+                        rate, frames = audio.getframerate(), audio.getnframes()
+                        if (audio.getcomptype() != 'NONE' or audio.getnchannels() != 1
+                                or audio.getsampwidth() != 2 or rate != 24000
+                                or not 0 < frames <= min(info.st_size // 2, resources['duration_seconds'] * rate)
+                                or len(audio.readframes(frames)) != frames * 2):
+                            raise RecoveryBlocked('原单段缓存不是完整的单声道24k PCM16')
+                except (wave.Error, EOFError) as exc:
+                    raise RecoveryBlocked('原单段WAV无效或不完整，禁止重新生成') from exc
+                duration = frames / rate
+                response = {'schema_version': 1, 'model_id': resources['model_id'], 'audio_path': str(path.resolve()),
+                    'duration_seconds': round(duration, 3), 'sample_rate': rate}
+                if info.st_size + len(json.dumps(response).encode()) != settled.payload['output_bytes']:
+                    raise RecoveryBlocked('原单段WAV与工作进程响应字节不匹配原已结算消耗')
+                sha = hashlib.sha256()
+                offset = 0
+                while chunk := os.pread(fd, 65536, offset):
+                    sha.update(chunk)
+                    offset += len(chunk)
+                record = NarrationArtifactRecord(id=f'narration_{cache_key[:16]}', workspace_id=job.workspace_id,
+                    task_id=job.task_id, script_id=script.id, voice_profile_id=resources['voice_profile_id'],
+                    cache_key=cache_key, audio_path=str(path.resolve()), duration_seconds=duration, sample_rate=rate,
+                    model_id=resources['model_id'], language=resources['language'], pronunciation_version=resources['pronunciation_version'])
+                ready = replace(pending, status='ready', audio_reference=self.repository.narration_artifact_reference(cache_key),
+                    duration_seconds=duration, sample_rate=rate, updated_at=datetime.now(timezone.utc))
+                version = self.repository.stage_section_version(job.workspace_id, job.task_id, section.id)
+                prepared = self.segments.prepare_video(job, event, task, section.id, record, owner, text=section.content)
+                if prepared.event_type != 'segment_visual_decision_required':
+                    raise RecoveryBlocked('原单段画面已不在明确等待边界，未自动继续制作')
+                free_generation = scheduler.reconcile_released()
+                with self.repository._connect() as conn:
+                    conn.execute('BEGIN IMMEDIATE')
+                    if write_guard is not None:
+                        write_guard(conn)
+                    current, current_task, current_event, current_script, current_plan = owner._facts(conn, job.workspace_id, job.id)
+                    permit = conn.execute('SELECT state,generation FROM device_permit WHERE id=1').fetchone()
+                    current_request = conn.execute('SELECT state,last_grant_generation,resources_json FROM device_work_requests WHERE id=?', (request_id,)).fetchone()
+                    if (current != job or current_event != event or permit is None
+                            or tuple(permit) != ('free', free_generation)
+                            or current_request is None or tuple(current_request)[:2] != ('failed', generation)
+                            or json.loads(current_request['resources_json']) != resources
+                            or self.repository.get_task_event(job.workspace_id, settled_id, connection=conn) != settled
+                            or identity(os.fstat(fd)) != identity(info) or identity(path.stat()) != identity(info)
+                            or self.repository.stage_section_version(job.workspace_id, job.task_id, section.id, connection=conn) != version):
+                        raise RecoveryBlocked('原单段恢复提交前状态、文件或许可已变化')
+                    verify_narration_source(self.repository, current_task, current_plan, source, connection=conn)
+                    if owner.authorization_verdict(current_task, actor, 'narration', connection=conn) != 'ready':
+                        raise PermissionError('原单段恢复授权不可用')
+                    current_key, current_facts = owner.narration_unit_facts(conn, current, current_task,
+                        current_script, current_plan, request=request, original_recovery=True)
+                    if current_key != request.unit_key or current_facts != resources:
+                        raise RecoveryBlocked('原单段恢复提交前文案或来源版本已变化')
+                    self.repository.commit_creation_narration_segment(record, ready, connection=conn)
+                    conn.execute("UPDATE job_runs SET status='queued',failure_reason=NULL,finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
+                        (datetime.now(timezone.utc).isoformat(), job.workspace_id, job.id))
+                    current_task.stage_status = current_task.status = 'waiting_for_user'
+                    current_task.stage_reason = 'waiting_for_user'
+                    current_task.stage_impact = current_task.stage_repair_action = current_task.stage_retryable = None
+                    current_task.updated_at = datetime.now(timezone.utc)
+                    conn.execute('UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?',
+                        (json.dumps(asdict(current_task), default=str), current_task.updated_at.isoformat(), job.workspace_id, job.task_id))
+                    self.segments._validate_visual_decision(self.repository.get_job_run(job.workspace_id, job.id, connection=conn),
+                        current_task, actor, owner, prepared.payload, connection=conn)
+                    self.segments.persist_video_preparation_for_request(prepared, request_id, connection=conn)
+                    self.repository.append_task_event(TaskEvent(id=f'event_{job.id}_narration_recovered_{generation}',
+                        workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
+                        event_type='creation_narration_segment_recovered', payload={'request_id': request_id,
+                            'permit_generation': generation, 'settled_event_id': settled_id,
+                            'audio_reference': ready.audio_reference, 'sha256': sha.hexdigest(),
+                            'size_bytes': info.st_size, 'cache_key': cache_key}), connection=conn)
+                return True
+            finally:
+                os.close(fd)
 
     def recover_pcm_unit(self, job, actor, scheduler, *, write_guard=None):
         """Adopt a sealed original attempt after proving its process group released."""
