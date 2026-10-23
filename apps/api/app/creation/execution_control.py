@@ -1,18 +1,20 @@
 """Creation execution control, original queue reconciliation and status projection."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from contextlib import ExitStack, nullcontext
 from datetime import datetime
 import logging
 import threading
 import time
+from uuid import uuid4
 
 from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecutor,
-    NARRATION_EDIT_KIND,
+    NARRATION_EDIT_KIND, narration_edit_digest,
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
-from app.creation.contracts import TaskEvent
+from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.production import CreationPlan, CreationTask
@@ -463,8 +465,94 @@ class CreationExecutionControl:
                 logger.warning("制作作业 %s 的当前许可或输入未就绪，保留待处理：%s", job.id, exc)
         runtime.wake()
 
+    def submit_narration_edit(self, workspace_id, task, proposal, actor, runtime):
+        """One original edit Job, source adoption, then its existing bounded queue."""
+        owner = runtime.registrations['creation_job'].owner
+        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
+        plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+        digest = narration_edit_digest(proposal.operation)
+        candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,
+            kind=NARRATION_EDIT_KIND, input_digest=digest,
+            idempotency_key=f'narration-edit:{task.id}:{actor.member_id}:{digest}:{proposal.id}')
+        payload = {**actor.identity_payload(), 'script_id': script.id, 'plan_id': plan.id,
+            'revision_digest': revision_digest(script, plan), 'input_digest': digest, 'edit_proposal_id': proposal.id}
+        def existing(conn):
+            prior = conn.execute('SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?',
+                (workspace_id, candidate.idempotency_key)).fetchone()
+            if prior is not None and prior['status'] not in {'queued', 'running', 'interrupted'}:
+                raise ValueError('这次配音编辑已结束，请查看作业结果后重新预览')
+            return conn.execute("SELECT j.* FROM job_runs j JOIN task_events e ON e.job_id=j.id AND e.workspace_id=j.workspace_id "
+                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.input_digest=? "
+                "AND j.status IN ('queued','running','interrupted') AND e.event_type='narration_edit_requested' "
+                "AND json_extract(e.payload_json,'$.member_id')=? ORDER BY j.created_at DESC LIMIT 1",
+                (workspace_id, task.id, NARRATION_EDIT_KIND, digest, actor.member_id)).fetchone()
+        with self.repository._connect() as conn:
+            active = existing(conn)
+        from app.creation.narration_pcm import prepare_narration_source
+        with (prepare_narration_source(self.repository, task, plan, actor) if active is None else nullcontext(None)) as prepared:
+            preparation = {'_narration_reference': prepared['narration_reference']} if prepared else None
+            owner.narration_edit_facts(candidate, task, payload, plan, pcm_preparation=preparation)
+            with self.repository._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                active = existing(conn)
+                if active is not None:
+                    job = self.repository._job_run_from_row(active)
+                else:
+                    if prepared is None:
+                        raise ValueError('原配音编辑状态已变化，请查询原请求')
+                    job = self.repository.create_job_run(candidate, connection=conn)
+                    source_id = self.repository.seal_creation_narration_source(job, prepared,
+                        input_digest=digest, origin_event_id=f'event_{job.id}_start', connection=conn)
+                    self.repository.append_task_event(TaskEvent(f'event_{job.id}_start', workspace_id, task.id, job.id,
+                        'narration_edit_requested', {**payload, 'source_binding_event_id': source_id}), connection=conn)
+                    owner.verify_submission(SubmissionIntent(workspace_id, 'creation_job', job.id, digest,
+                        owner.narration_edit_facts(job, task, payload, plan, connection=conn, pcm_preparation=preparation)[0],
+                        SchedulePolicy()), actor, connection=conn, pcm_preparation=preparation)
+            usage = self.repository.creation_narration_usage(workspace_id, job.id)
+            if usage['unsettled']:
+                queued = runtime.scheduler._get(usage['unsettled'][0]['request_id'])
+                if (queued.workspace_id, queued.owner_id, queued.member_id) != (workspace_id, job.id, actor.member_id):
+                    raise PermissionError('局部配音原请求与当前成员不一致')
+            else:
+                queued = migrate_creation_narration_request(self.repository, runtime.scheduler, job, actor)
+                if queued is None:
+                    original = self.repository.creation_execution_input(workspace_id, job.id)
+                    key, _ = owner.narration_edit_facts(job, task, original, plan)
+                    queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id,
+                        digest, key, SchedulePolicy()), actor)
+        runtime.wake()
+        return job, queued
+
     def select_narration_voice(self, *, runtime, **inputs):
+        with ExitStack() as stack:
+            return self._select_narration_voice(runtime=runtime, stack=stack, **inputs)
+
+    def _select_narration_voice(self, *, runtime, stack, **inputs):
         voice_authorization = None
+        source_preparation = None
+        try:
+            self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
+                inputs['request_id'], member_id=inputs['member_id'])
+        except KeyError:
+            job = self.execution.latest(inputs['workspace_id'], inputs['task_id'])
+            if job is not None and job.status == 'queued':
+                owner = runtime.registrations['creation_job'].owner if runtime is not None else None
+                if owner is None:
+                    raise ValueError('原排队配音需要原设备调度器')
+                with self.repository._connect() as conn:
+                    _job, task, start, _script, plan = owner._facts(conn, job.workspace_id, job.id)
+                original = CreationExecutionActor.from_event(job.workspace_id, start)
+                if original.member_id != inputs['member_id']:
+                    raise TaskAuthorizationDenied('声音选择不属于原作业成员')
+                if plan.selected_voice is not None and (plan.selected_voice.profile_id, plan.selected_voice.version) == (
+                        inputs['voice_profile_id'], inputs['voice_version']):
+                    raise ValueError('原作业相同声音不能通过重新选择补建来源证据')
+                selected_voice = self.repository.creation_plan_voice_reference(job.workspace_id,
+                    inputs['voice_profile_id'], inputs['voice_version'], viewer_user_id=inputs['member_id'])
+                from app.creation.narration_pcm import prepare_narration_source
+                source_preparation = stack.enter_context(prepare_narration_source(self.repository, task,
+                    replace(plan, selected_voice=selected_voice), original))
+                source_preparation['selected_voice'] = selected_voice
         if runtime is not None and runtime.registrations['creation_job'].owner.task_authorizations is not None:
             try:
                 self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
@@ -494,19 +582,27 @@ class CreationExecutionControl:
                 raise ValueError('原排队作业身份、确认文案或方案版本已变化，不能改选声音')
 
             def replace_input(connection, old):
+                # The selection owner just committed the checked plan mutation in
+                # this transaction; seal its resulting business revision.
+                source_preparation['adoption_revision_digest'] = revision_digest(script, plan)
+                source_id = self.repository.seal_creation_narration_source(job, source_preparation,
+                    input_digest=revision_digest(script, plan), origin_event_id=f'{selection_event_id}_execution',
+                    connection=connection)
                 if owner.task_authorizations is not None:
                     if voice_authorization is None:
                         raise TaskAuthorizationDenied('原作业缺少本次固定声音的实时授权核验')
                     voice_authorization(connection, plan.selected_voice)
                 rebound = self.repository.rebind_unstarted_creation_voice(job, revision_digest(script, plan),
-                    selection_event_id, connection=connection)
-                key, _resources = owner.narration_unit_facts(connection, rebound, task, script, plan)
+                    selection_event_id, connection=connection, source_binding_event_id=source_id)
+                preparation = {'_narration_reference': source_preparation['narration_reference']}
+                key, _resources = owner.narration_unit_facts(connection, rebound, task, script, plan, pcm_preparation=preparation)
                 intent = SubmissionIntent(job.workspace_id, 'creation_job', job.id, rebound.input_digest, key, old.policy)
-                return intent, owner.verify_submission(intent, original, connection=connection)
+                return intent, owner.verify_submission(intent, original, connection=connection, pcm_preparation=preparation)
 
             runtime.scheduler.replace_unstarted_narration_voice(job, connection=conn, replacement_write=replace_input)
 
-        receipt = self.repository.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind)
+        receipt = self.repository.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind,
+            voice_source_preparation=source_preparation)
         if runtime is not None:
             runtime.wake()
         return receipt

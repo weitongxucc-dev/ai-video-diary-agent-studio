@@ -81,8 +81,16 @@ class NarrationStageUseCase:
         grant_context.check()
         grant = grant_context.grant
         job = self.repository.get_job_run(task.workspace_id, grant.owner_id)
+        from app.creation.segment_production_use_case import revision_execution_key
+        from app.profile_reference_media import ProfileReferenceInput
+        with self.repository._connect() as conn:
+            saved = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+        if saved is None:
+            from app.device_scheduler import RecoveryBlocked
+            raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
+        expected_key = revision_execution_key(job.input_digest, ProfileReferenceInput(**saved['reference']))
         if (job.task_id != task.id or job.kind != 'creation_task_segment_revision'
-                or grant.unit_key != f'segment_revision:{job.input_digest}'):
+                or grant.unit_key != expected_key):
             raise PermissionError('局部改写配音许可与原作业不一致')
         plan = self.repository.get_creation_plan(task.workspace_id,task.plan_id)
         script = self.repository.effective_creation_script(task.workspace_id,task.id)

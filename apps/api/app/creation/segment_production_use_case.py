@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -9,7 +10,7 @@ from pathlib import Path
 
 from app.creation.contracts import JobRun
 from app.creation.editing.narration_preview_use_case import inspect_narration_revision
-from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork
+from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork, RecoveryBlocked
 from app.models import utc_now
 
 SEGMENT_REVISION_KIND = 'creation_task_segment_revision'
@@ -21,6 +22,10 @@ def digest(value):
 
 def digest_section_version(script_id,section_id,text,audio_reference):
     return digest([script_id,section_id,text,audio_reference])
+
+
+def revision_execution_key(input_digest, reference):
+    return f'segment_revision:{input_digest}:{reference.identity}'
 
 
 class SegmentProductionUseCase:
@@ -221,7 +226,7 @@ class SegmentProductionUseCase:
             self.verify_revision(workspace_id, task_id, actor, command, connection=conn)
         job = self.repository.create_segment_revision_job(task, actor, encoded, rules, write_guard=submit_guard)
         runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id, job.input_digest,
-            f'segment_revision:{job.input_digest}', SchedulePolicy()), actor)
+            self.revision_key(job), SchedulePolicy()), actor)
         runtime.wake()
         return self.read_request(workspace_id, task_id, command.request_id, actor)
 
@@ -373,7 +378,18 @@ class SegmentProductionUseCase:
         from app.creation_execution import CreationExecutionActor
         return CreationExecutionActor.from_event(workspace_id, event)
 
-    def verify_submission(self, intent, actor, owner, *, connection=None):
+    def revision_key(self, job, reference=None):
+        if reference is None:
+            from app.profile_reference_media import ProfileReferenceInput
+            with self.repository._connect() as conn:
+                saved = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+            if saved is None:
+                from app.device_scheduler import RecoveryBlocked
+                raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
+            reference = ProfileReferenceInput(**saved['reference'])
+        return revision_execution_key(job.input_digest, reference)
+
+    def verify_submission(self, intent, actor, owner, *, connection=None, reference_preparation=None):
         job = self.repository.get_job_run(intent.workspace_id, intent.owner_id, connection=connection)
         event = self.repository.get_task_event(intent.workspace_id, f'event_{job.id}_start', connection=connection).payload
         task = self.require_actor(intent.workspace_id, job.task_id, actor, connection=connection)
@@ -387,18 +403,23 @@ class SegmentProductionUseCase:
             command = NarrationRevisionRequest.model_validate(event['command'])
             self.verify_revision(task.workspace_id, task.id, actor, command, connection=connection)
             plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
-            inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id, task_id=task.id,
-                voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
-            reference = self.repository.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
+            if reference_preparation is None:
+                with self.repository._connect() if connection is None else nullcontext(connection) as conn:
+                    reference_preparation = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+                if reference_preparation is None:
+                    from app.device_scheduler import RecoveryBlocked
+                    raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
+            from app.creation.narration_pcm import narration_reference_facts
+            inputs, reference, reference_preparation = narration_reference_facts(self.repository, task, plan, reference_preparation)
             budget = owner.narration_budget
             if budget is None or budget.input_scope != 'single_call_experiment_v1':
                 raise ValueError('局部改写配音缺少原单次资源档')
-            resources = {'kind': 'creation_narration', 'execution_mode': 'isolated_qwen3_tts',
+            resources = {'kind': 'creation_narration', 'execution_mode': 'isolated_qwen3_tts', 'narration_reference': reference_preparation,
                 'input_scope':budget.input_scope,'budget_basis':'controlled_experiment_unverified_legacy_cap',
                 'text_chars': len(command.replacement_text)+len(inputs.voice.reference_text), 'section_count': 1,
                 'reference_bytes': Path(reference.source_path).stat().st_size, 'duration_seconds': budget.max_duration_seconds,
                 'max_output_bytes': budget.max_output_bytes, 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds}
-            key = f'segment_revision:{job.input_digest}'
+            key = self.revision_key(job, reference)
         else:
             section_id = intent.unit_key.removeprefix('segment_video:').rpartition(':')[0]
             key, resources = self.video_facts(job, event, task, section_id, owner, connection=connection)
@@ -425,7 +446,7 @@ class SegmentProductionUseCase:
                 and trusted.work_class==request.work_class and trusted.source_refs==request.source_refs) else 'stale'
         except PermissionError:
             return 'unauthorized'
-        except (KeyError, StopIteration, ValueError, OSError):
+        except (KeyError, StopIteration, ValueError, OSError, RecoveryBlocked):
             return 'dependency'
 
     def next_initial(self, job, owner, *, connection=None):
@@ -476,10 +497,16 @@ class SegmentProductionUseCase:
         if not result['device_requests'] and result['status']=='queued':
             job = self.repository.get_job_run(workspace_id,result['job_id'])
             runtime.scheduler.submit(SubmissionIntent(workspace_id,'creation_job',job.id,job.input_digest,
-                f'segment_revision:{job.input_digest}',SchedulePolicy()),actor)
+                self.revision_key(job),SchedulePolicy()),actor)
             runtime.wake()
             return self.read_request(workspace_id,task_id,request_id,actor)
-        if result['status'] in {'queued','interrupted','running','succeeded'}:
+        if result['status'] == 'queued':
+            from app.creation_execution import migrate_creation_narration_request
+            job = self.repository.get_job_run(workspace_id, result['job_id'])
+            migrate_creation_narration_request(self.repository, runtime.scheduler, job, actor, write_guard=write_guard)
+            runtime.wake()
+            return self.read_request(workspace_id, task_id, request_id, actor)
+        if result['status'] in {'interrupted','running','succeeded'}:
             runtime.wake()
             return result
         rows = [item for item in result['device_requests'] if item['state'] in {'failed','cancelled'}]

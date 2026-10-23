@@ -132,6 +132,28 @@ class VoiceSamplingUseCase:
         with self._connect() as conn:
             return self._get(conn, workspace_id, owner_user_id, task_id)
 
+    def received_source_evidence(self, voice, *, connection=None):
+        """Only the exact received sample, fixed voice version and registered source."""
+        reference = voice.reference
+        if reference is None or not reference.asset_id or not voice.id.startswith('voice-sample-'):
+            return None
+        sample_id = voice.id.removeprefix('voice-')
+        if reference.asset_id != f'source-{sample_id}':
+            return None
+        from contextlib import nullcontext
+        with self._connect() if connection is None else nullcontext(connection) as conn:
+            row = conn.execute('SELECT payload FROM voice_sampling_tasks WHERE workspace_id=? AND owner_user_id=? AND id=?',
+                (voice.workspace_id, voice.owner_user_id, sample_id)).fetchone()
+        if row is None:
+            return None
+        task = VoiceSamplingTask(**json.loads(row['payload']))
+        if (task.status != 'received' or (task.voice_profile_id, task.voice_version) != (voice.id, voice.version)
+                or not task.received_at or not task.audio_sha256 or task.size_bytes is None
+                or voice.reference_audio_path != f'workspace://approved/voices/{task.id}-{task.audio_sha256}.wav'):
+            return None
+        return {'sampling_task_id': task.id, 'submission_request_id': task.submission_request_id,
+            'sha256': task.audio_sha256, 'size_bytes': task.size_bytes}
+
     def list(self, workspace_id: str, owner_user_id: str) -> list[VoiceSamplingTask]:
         _required(owner_user_id, "采样成员")
         with self._connect() as conn:

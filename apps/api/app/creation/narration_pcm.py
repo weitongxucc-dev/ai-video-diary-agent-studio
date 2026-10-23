@@ -17,6 +17,96 @@ from app.device_scheduler import RecoveryBlocked
 EMPTY_PCM_SHA256 = hashlib.sha256(b'').hexdigest()
 
 
+def _source_stat(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+@contextmanager
+def prepare_narration_source(repository, task, plan, actor, *, binding=None):
+    """Host-owned full-byte evidence, held until the short adoption/recovery commit."""
+    if task.owner_user_id is not None and task.owner_user_id != (actor.user_id or actor.member_id):
+        raise PermissionError('配音来源采用不属于原任务成员')
+    inputs, reference, qualified = narration_reference_facts(repository, task, plan)
+    fd = os.open(reference.source_path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or _source_stat(before) != (
+                reference.device, reference.inode, reference.size_bytes, reference.mtime_ns, reference.ctime_ns)):
+            raise RecoveryBlocked('配音来源在准备时被替换')
+        if Path(reference.source_path).suffix.lower() == '.wav':
+            try:
+                with os.fdopen(os.dup(fd), 'rb') as file, wave.open(file, 'rb') as audio:
+                    if (audio.getcomptype() != 'NONE' or audio.getnchannels() not in {1, 2}
+                            or audio.getsampwidth() not in {1, 2, 3, 4} or audio.getframerate() <= 0 or audio.getnframes() <= 0):
+                        raise ValueError('配音来源不是有效PCM WAV')
+                    remaining_frames = audio.getnframes()
+                    while remaining_frames:
+                        count = min(remaining_frames, 16384)
+                        if len(audio.readframes(count)) != count * audio.getnchannels() * audio.getsampwidth():
+                            raise ValueError('配音来源PCM WAV不完整')
+                        remaining_frames -= count
+            except (wave.Error, EOFError) as exc:
+                raise ValueError('配音来源不是完整可读PCM WAV') from exc
+            os.lseek(fd, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            part = os.read(fd, min(remaining, 65536))
+            if not part:
+                raise RecoveryBlocked('配音来源在完整字节核验期间被截断')
+            digest.update(part)
+            remaining -= len(part)
+        if _source_stat(os.fstat(fd)) != _source_stat(before):
+            raise RecoveryBlocked('配音来源在完整字节核验期间变化')
+        content = {'workspace_id': task.workspace_id, 'task_id': task.id, 'actor': actor.identity_payload(),
+            'voice_id': inputs.voice.id, 'voice_version': inputs.voice.version,
+            'source_asset_id': reference.asset_id, 'logical_ref': inputs.voice.reference_audio_path,
+            'sha256': digest.hexdigest(), 'size_bytes': before.st_size,
+            'segment_id': reference.segment_id, 'start_seconds': reference.start_seconds,
+            'end_seconds': reference.end_seconds,
+            'goal_revision': repository.task_authorization_goal_revision(task.workspace_id, task.id)}
+        receipt = repository.voice_sampling.received_source_evidence(inputs.voice)
+        if receipt is not None and (receipt['sha256'], receipt['size_bytes']) != (content['sha256'], content['size_bytes']):
+            raise RecoveryBlocked('original_source_content_changed: 当前声音与原采样接收字节不一致')
+        if binding is not None:
+            if any(binding.get(key) != value for key, value in content.items()):
+                raise RecoveryBlocked('original_source_content_changed: 原声音内容、版本、范围或目标已变化')
+            if (binding['narration_reference']['profile'] != qualified['profile']
+                    or binding['narration_reference']['source_asset_digest'] != qualified['source_asset_digest']):
+                raise RecoveryBlocked('原配音档案或来源依赖已变化')
+        authorization = repository.get_task_authorization(task.workspace_id, task.id)
+        from app.creation_execution import revision_digest
+        revision = revision_digest(repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id), plan)
+        yield {'content': content, 'narration_reference': qualified, 'fd': fd,
+            'authorization': authorization, 'sampling_receipt': receipt,
+            'adoption_revision_digest': revision,
+            'basis': 'prior_sampling_receipt' if receipt is not None else 'current_bytes_at_adoption'}
+    finally:
+        os.close(fd)
+
+
+def verify_narration_source(repository, task, plan, prepared, *, connection):
+    """Short SQL/FD/path CAS only; full reads and qualification already happened."""
+    narration_reference_facts(repository, task, plan, prepared['narration_reference'])
+    reference = prepared['narration_reference']['reference']
+    if _source_stat(os.fstat(prepared['fd'])) != tuple(reference[key] for key in (
+            'device', 'inode', 'size_bytes', 'mtime_ns', 'ctime_ns')):
+        raise RecoveryBlocked('配音来源在封存提交前变化')
+    if (repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection)
+            != prepared['content']['goal_revision']
+            or repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+            != prepared['authorization']):
+        raise RecoveryBlocked('配音目标或任务授权在来源准备后变化')
+
+
+def source_binding_payload(prepared, *, input_digest, origin_event_id):
+    return {'version': 1, **prepared['content'], 'business_input_digest': input_digest,
+        'origin_event_id': origin_event_id, 'basis': prepared['basis'],
+        'adoption_revision_digest': prepared['adoption_revision_digest'],
+        'sampling_receipt': prepared['sampling_receipt'], 'narration_reference': prepared['narration_reference']}
+
+
 def narration_reference_facts(repository,task,plan,prepared=None):
     """Reuse qualified reference evidence with current SQL facts and file CAS."""
     from app.profile_reference_media import ProfileReferenceInput

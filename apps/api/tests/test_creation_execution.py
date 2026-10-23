@@ -95,6 +95,17 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
     return repo, task_id, script_id, revision_digest(script, persisted_plan)
 
 
+def _qualify_start_voice(repo, task_id, member_id, workspace_id='local'):
+    register_synthetic_profiles(repo, workspace_id=workspace_id, member_id=member_id,
+        person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh', model_id='test',
+        person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1')
+    with repo._connect() as conn:
+        task=repo.get_creation_task(workspace_id,task_id)
+        task.owner_user_id=member_id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task),default=str),workspace_id,task_id))
+
+
 def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_path):
     repo, task_id, script_id, _digest = _seed(tmp_path)
     task = repo.get_creation_task("workspace_a", task_id)
@@ -107,6 +118,7 @@ def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_pa
     script = repo.get_creation_task_script("workspace_a", script_id)
     plan = repo.get_creation_plan("workspace_a", task.plan_id)
     actor = CreationExecutionActor("workspace_a", "member-a")
+    _qualify_start_voice(repo,task_id,actor.member_id,workspace_id='workspace_a')
     job = _execution(repo).start("workspace_a", task_id, script_id, revision_digest(script, plan), actor=actor)
     owner = CreationJobOwnerVerifier(repo)
     with repo._connect() as conn:
@@ -2353,6 +2365,7 @@ def test_creation_job_and_original_goal_source_share_the_guarded_owner_transacti
     from app.assistant.task_business import TaskBusinessRejected
     repo,task_id,script_id,digest=_seed(tmp_path,workspace_id='local')
     execution=_execution(repo);actor=CreationExecutionActor('local','original-member')
+    _qualify_start_voice(repo,task_id,actor.member_id)
     source={'workspace_id':'local','task_id':task_id,'member_id':actor.member_id,
         'assistant_turn_id':'trusted-turn','conversation_id':'trusted-conversation','action':'start'}
     def refused(conn):
@@ -2361,6 +2374,8 @@ def test_creation_job_and_original_goal_source_share_the_guarded_owner_transacti
     with pytest.raises(TaskBusinessRejected):
         execution.start('local',task_id,script_id,digest,actor=actor,write_guard=refused,execution_source=source)
     assert repo.list_job_runs('local',task_id)==[]
+    with repo._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0]==0
     calls=[]
     def allowed(conn):
         assert conn.in_transaction
@@ -2370,6 +2385,9 @@ def test_creation_job_and_original_goal_source_share_the_guarded_owner_transacti
     located=repo.get_task_event('local','event_assistant_execution_locator_trusted-turn')
     assert located.job_id==job.id and located.payload['source']==source
     assert calls==[True,True] and len(repo.list_job_runs('local',task_id))==1
+    binding=repo.creation_narration_source_binding('local',job.id)
+    assert binding.payload['basis']=='current_bytes_at_adoption'
+    assert binding.payload['business_input_digest']==digest
 
 
 def _seed_background_business(tmp_path):
@@ -2992,7 +3010,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
     assert wav_reads
 
 
-@pytest.mark.parametrize('interrupt_final',[False,True])
+@pytest.mark.parametrize('interrupt_final',[False,True,'dependency_changed'])
 def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption(tmp_path,monkeypatch,interrupt_final):
     from model_workers.pcm_assembly import execute as assemble
     from app.creation.contracts import EditIntent,EditProposal,JobRun,TaskEvent
@@ -3004,7 +3022,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     def worker(_scheduler,_grant,command,**_kwargs):
         manifest=json.loads(Path(command[-1]).read_text())
         receipt=assemble(manifest,{'generated_bytes':0,'work_created':False})
-        if interrupt_final and manifest['job_id']=='regenerate-original-job' and receipt['finalized']:
+        if interrupt_final is True and manifest['job_id']!=case.job.id and receipt['finalized']:
             Path(manifest['receipt_path']).unlink()
             raise OSError('模拟局部配音seal后登记前退出')
         return SimpleNamespace(returncode=0,stdout=json.dumps(receipt),stderr='')
@@ -3042,15 +3060,30 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
         ['narration:'+segments[0].id],{'operation_type':'RegenerateNarrationSegment','payload':{
             'base_version_id':base.id,'narration_segment_id':segments[0].id,
             'expected_audio_reference':segments[0].audio_reference}},[],{},[]))
-    digest=narration_edit_digest(proposal.operation)
-    job=case.repo.create_job_run(JobRun('regenerate-original-job','local',task.id,NARRATION_EDIT_KIND,'regenerate-key',digest))
-    plan=case.repo.get_creation_plan('local',task.plan_id)
-    script=case.repo.get_creation_task_script('local',case.script_id)
-    event={**case.actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,'input_digest':digest,
-        'revision_digest':revision_digest(script,plan),'edit_proposal_id':proposal.id}
-    case.repo.append_task_event(TaskEvent('event_'+job.id+'_start','local',task.id,job.id,'narration_edit_requested',event))
-    key,_=case.owner.narration_edit_facts(job,task,event,plan)
-    case.scheduler.submit(SubmissionIntent('local','creation_job',job.id,digest,key,SchedulePolicy()),case.actor)
+    from app.creation.execution_control import CreationExecutionControl
+    control=CreationExecutionControl(case.repo,case.execution,SimpleNamespace(valid=lambda *_:False),lambda _:'ready')
+    runtime=SimpleNamespace(scheduler=case.scheduler,registrations={
+        'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)},wake=lambda:None)
+    job,queued=control.submit_narration_edit('local',task,proposal,case.actor,runtime)
+    binding=case.repo.creation_narration_source_binding('local',job.id)
+    assert binding.payload['business_input_digest']==job.input_digest
+    assert binding.payload['basis']=='current_bytes_at_adoption'
+    if interrupt_final == 'dependency_changed':
+        from app.device_scheduler import RecoveryBlocked
+        _replace_fixed_voice_file(SimpleNamespace(**{**vars(case),'job':job}))
+        original_audio=case.repo.resolve_authorized_narration_audio_reference('local',segments[1].audio_reference)
+        original_audio.write_bytes(original_audio.read_bytes())
+        with pytest.raises(RecoveryBlocked,match='其他产物或依赖已变化'):
+            control.submit_narration_edit('local',task,proposal,case.actor,runtime)
+        assert case.scheduler._get(queued.id).state=='waiting'
+        assert case.repo.creation_narration_source_binding('local',job.id)==binding
+        return
+    if not interrupt_final:
+        _replace_fixed_voice_file(SimpleNamespace(**{**vars(case),'job':job}))
+        same,revalidated=control.submit_narration_edit('local',task,proposal,case.actor,runtime)
+        assert same.id==job.id and revalidated.id!=queued.id
+        assert revalidated.first_ready_at_utc==queued.first_ready_at_utc
+        assert case.repo.creation_narration_source_binding('local',job.id)==binding
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     assert case.repo.get_narration_segment('local',task.id,segments[0].id).audio_reference==segments[0].audio_reference
     assert case.repo.narration_edit_generated('local',job.id)
@@ -3162,16 +3195,27 @@ def _submit_section_revision(case):
     return current,result,runtime
 
 
-def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_path,monkeypatch):
+@pytest.mark.parametrize('revalidate_source',[False,True])
+def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_path,monkeypatch,revalidate_source):
     case = _segment_units_case(tmp_path,monkeypatch)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     before,request,runtime = _submit_section_revision(case)
+    revision_job=case.repo.get_job_run('local',request['job_id'])
+    binding=case.repo.creation_narration_source_binding('local',revision_job.id)
+    assert binding.payload['business_input_digest']==revision_job.input_digest
+    assert binding.id!=case.repo.creation_narration_source_binding('local',case.job.id).id
+    if revalidate_source:
+        _replace_fixed_voice_file(SimpleNamespace(**{**vars(case),'job':revision_job}))
+        resumed=case.segments.resume_request('local',case.task_id,'revision_1',case.actor,runtime=runtime)
+        assert resumed['job_id']==revision_job.id
+        assert case.repo.creation_narration_source_binding('local',revision_job.id)==binding
     audio = case.scheduler.pick_and_grant()
     assert audio.unit_key.startswith('segment_revision:')
     case.executor.execute(audio,case.scheduler)
     video = case.scheduler.pick_and_grant()
+    assert video is not None, (case.repo.get_job_run('local', request['job_id']).failure_reason, case.repo.list_creation_job_request_states('local',request['job_id']))
     assert video.unit_key.startswith('segment_video:section_1:')
     case.executor.execute(video,case.scheduler)
     receipt = case.segments.read_request('local',case.task_id,'revision_1',case.actor)
@@ -3182,6 +3226,15 @@ def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_
     assert case.repo.list_narration_segments('local',case.task_id,case.script_id)[1].status=='pending'
     assert case.segments.video_path('local',case.task_id,'section_1',before['segment_version'],case.actor).is_file()
     assert case.segments.list_segments('local',case.task_id,case.actor)['revision_requests']['items'][0]['status']=='succeeded'
+    if revalidate_source:
+        from app.creation_execution import migrate_creation_narration_request
+        from app.device_scheduler import RecoveryBlocked
+        # The initial production has already run; changing its physical source
+        # cannot borrow the separate, never-granted rewrite's revalidation.
+        with pytest.raises(RecoveryBlocked,match='已有授予'):
+            migrate_creation_narration_request(case.repo,case.scheduler,case.job,case.actor)
+        assert case.scheduler.pick_and_grant() is None
+        return
     for prefix in ('narration:segment:v1:section_2:','segment_video:section_2:','narration:merge:v1:'):
         grant = case.scheduler.pick_and_grant()
         assert grant.unit_key.startswith(prefix)
@@ -3625,7 +3678,11 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     assert job.input_digest != case.job.input_digest and job.status == 'queued' and job.attempt == 0
     assert job.idempotency_key == case.job.idempotency_key and job.created_at == case.job.created_at
     assert case.repo.get_task_event('local', start.id) == start
-    assert case.repo.creation_execution_input('local', job.id) == {**start.payload, 'input_digest': job.input_digest}
+    effective = case.repo.creation_execution_input('local', job.id)
+    source = case.repo.creation_narration_source_binding('local', job.id)
+    assert effective == {**start.payload, 'input_digest': job.input_digest, 'source_binding_event_id': source.id}
+    assert source.id != start.payload['source_binding_event_id']
+    assert source.payload['voice_id'] == 'voice_2' and source.payload['basis'] == 'current_bytes_at_adoption'
     assert case.repo.creation_narration_usage('local', job.id) == usage
     replaced = case.scheduler._get(old.id)
     assert replaced.state == 'cancelled' and replaced.wait_reason.startswith('replaced_by:')
@@ -4075,3 +4132,175 @@ def test_native_queued_script_change_never_launches_and_origin_cancel_drains_all
     settled=case.native.cancel_origin(case.actor,{'task_id':case.task_id,'turn_id':'turn_native','session_id':'session_native'},
         case.runtime,deadline_monotonic=time.monotonic()+10)
     assert settled['cancellation_complete'] and settled['processed_count']==105 and settled['total_count']==0,settled
+
+
+def _replace_fixed_voice_file(case, *, changed=False):
+    source = case.repo.creation_narration_source_binding('local', case.job.id)
+    path = Path(source.payload['narration_reference']['reference']['source_path'])
+    before = path.stat()
+    content = bytearray(path.read_bytes())
+    if changed:
+        content[-1] ^= 1
+    replacement = path.with_name(path.stem + '-replacement.wav')
+    replacement.write_bytes(content)
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    os.replace(replacement, path)
+    assert path.stat().st_ino != before.st_ino
+    return source, path
+
+
+@pytest.mark.parametrize('legacy', [False, True, 'device_only'])
+def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp_path, monkeypatch, legacy):
+    from app.creation_execution import creation_stage_facts, migrate_creation_narration_request
+    from app.device_scheduler import SubmissionIntent, SchedulePolicy
+    case = _narration_units_case(tmp_path)
+    if legacy:
+        task = case.repo.get_creation_task('local', case.task_id)
+        script = case.repo.get_creation_task_script('local', case.script_id)
+        plan = case.repo.get_creation_plan('local', task.plan_id)
+        key, _ = creation_stage_facts(case.repo, task, script, plan, 'narration', case.owner.narration_budget, None)
+        old = case.scheduler.submit(SubmissionIntent('local', 'creation_job', case.job.id,
+            case.job.input_digest, key, SchedulePolicy()), case.actor)
+    else:
+        old = case.scheduler._get(submit_creation_stage(case.execution, case.scheduler, case.job, case.actor))
+    start = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    if legacy == 'device_only':
+        source = case.repo.creation_narration_source_binding('local',case.job.id)
+        previous = json.loads(json.dumps(source.payload))
+        previous['narration_reference']['reference']['device'] -= 4
+        task = case.repo.get_creation_task('local',case.task_id)
+        script = case.repo.get_creation_task_script('local',case.script_id)
+        plan = case.repo.get_creation_plan('local',task.plan_id)
+        old_key,_ = creation_stage_facts(case.repo,task,script,plan,'narration',case.owner.narration_budget,None,
+            comparison_reference=previous['narration_reference'])
+        # Simulate the persisted pre-remount snapshot; only st_dev differs, and
+        # the original host-produced SHA is retained unchanged.
+        with case.repo._connect() as conn:
+            conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',(json.dumps(previous),source.id))
+            conn.execute('UPDATE device_work_requests SET unit_key=? WHERE id=?',(old_key,old.id))
+        source = case.repo.creation_narration_source_binding('local',case.job.id)
+        path = Path(source.payload['narration_reference']['reference']['source_path'])
+    else:
+        source, path = _replace_fixed_voice_file(case)
+    _assert_wav_reads_outside_writer(monkeypatch, case)
+    new = migrate_creation_narration_request(case.repo, case.scheduler, case.job, case.actor)
+    assert new.id != old.id and new.owner_id == old.owner_id and new.input_digest == old.input_digest
+    assert new.first_ready_at_utc == old.first_ready_at_utc and new.policy == old.policy
+    assert (new.eligible_since_utc, new.eligible_wait_seconds) == (old.eligible_since_utc, old.eligible_wait_seconds)
+    assert new.resources['parent_max_output_bytes'] == old.resources.get('parent_max_output_bytes', old.resources['max_output_bytes'])
+    assert new.resources['parent_timeout_seconds'] == old.resources.get('parent_timeout_seconds', old.resources['timeout_seconds'])
+    assert case.repo.get_job_run('local', case.job.id).idempotency_key == case.job.idempotency_key
+    assert case.repo.get_task_event('local', start.id) == start
+    assert case.repo.creation_narration_source_binding('local', case.job.id) == source
+    assert case.repo.creation_narration_usage('local', case.job.id) == usage
+    assert source.payload['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert case.repo.get_task_event('local', f'event_{new.id}_source_revalidated').payload['source_binding_event_id'] == source.id
+    assert migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor).id == new.id
+    assert submit_creation_stage(case.execution, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor) == new.id
+    with case.repo._connect() as conn:
+        assert case.owner.check_current(new, conn) == 'ready'
+    grant = case.scheduler.pick_and_grant()
+    assert grant.request_id == new.id
+    case.executor.execute(grant, case.scheduler)
+    assert case.repo.list_narration_segments('local', case.task_id, case.script_id)[0].status == 'ready'
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+
+
+@pytest.mark.parametrize('failure', ['changed_bytes', 'missing_anchor', 'granted', 'unknown'])
+def test_unstarted_narration_revalidation_refuses_without_new_baseline(tmp_path, failure):
+    from app.creation_execution import migrate_creation_narration_request
+    from app.device_scheduler import RecoveryBlocked
+    case = _narration_units_case(tmp_path)
+    old = case.scheduler._get(submit_creation_stage(case.execution, case.scheduler, case.job, case.actor))
+    source, _ = _replace_fixed_voice_file(case, changed=failure == 'changed_bytes')
+    if failure == 'missing_anchor':
+        with case.repo._connect() as conn:
+            start = case.repo.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
+            payload = dict(start.payload); payload.pop('source_binding_event_id')
+            conn.execute('UPDATE task_events SET payload_json=? WHERE id=?', (json.dumps(payload), start.id))
+        # Original start replay cannot turn the unrelated saved source event into
+        # historical proof, even though the file currently has exactly its bytes.
+        assert case.execution.start('local', case.task_id, case.script_id, case.job.input_digest, actor=case.actor).id == case.job.id
+    elif failure in {'granted', 'unknown'}:
+        with case.scheduler._connect() as conn:
+            conn.execute("UPDATE device_work_requests SET last_grant_generation=7,state=? WHERE id=?",
+                ('granted' if failure == 'granted' else 'blocked', old.id))
+    reason = {'changed_bytes': 'original_source_content_changed', 'missing_anchor': 'original_source_content_proof_missing',
+        'granted': '已有授予', 'unknown': '已有授予'}[failure]
+    with pytest.raises(RecoveryBlocked, match=reason):
+        migrate_creation_narration_request(case.repo, case.scheduler, case.job, case.actor)
+    with case.repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_revalidated'").fetchone()[0] == 0
+    assert case.repo.get_task_event('local', source.id) == source
+    assert case.repo.get_job_run('local', case.job.id) == case.job
+
+
+def test_unstarted_source_revalidation_revocation_during_prepare_keeps_original_request(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from app.creation_execution import migrate_creation_narration_request
+    import app.creation.narration_pcm as sources
+    case = _queued_narration_voice_selection_case(tmp_path)
+    source, _ = _replace_fixed_voice_file(case)
+    original = sources.prepare_narration_source
+    @contextmanager
+    def revoke(*args, **kwargs):
+        with original(*args, **kwargs) as prepared:
+            current = case.repo.get_task_authorization('local', case.task_id)
+            case.repo.save_task_authorization(replace(current, revision=current.revision+1,
+                revoked_at=datetime.now(timezone.utc)), expected_revision=current.revision)
+            yield prepared
+    monkeypatch.setattr(sources, 'prepare_narration_source', revoke)
+    with pytest.raises(PermissionError, match='授权不可核实'):
+        migrate_creation_narration_request(case.repo, case.scheduler, case.job, case.actor)
+    assert case.scheduler._get(case.request_id).state == 'waiting'
+    assert case.repo.get_job_run('local', case.job.id) == case.job
+    assert case.repo.creation_narration_source_binding('local', case.job.id) == source
+    with case.repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 1
+
+
+def test_new_voice_adoption_reuses_only_exact_received_sampling_sha(tmp_path):
+    case = _queued_narration_voice_selection_case(tmp_path)
+    service = case.repo.voice_sampling
+    sample = service.create('local', case.actor.member_id, request_id='sample-for-adoption', display_name='本人采样')
+    received = service.receive('local', case.actor.member_id, sample.id, request_id='sample-receive',
+        text_version=sample.text_version, purpose=sample.purpose, source_device='import',
+        content=synthetic_wav_bytes(), model_id='test')
+    voice = case.repo.get_versioned_voice_profile('local', received.voice_profile_id, received.voice_version)
+    proof = service.received_source_evidence(voice)
+    assert proof['sha256'] == received.audio_sha256
+    assert service.received_source_evidence(replace(voice, version='other-version')) is None
+    assert service.received_source_evidence(replace(voice, owner_user_id='other-member')) is None
+    assert service.received_source_evidence(replace(voice, reference=replace(voice.reference, asset_id='other-source'))) is None
+    selection = {**case.selection, 'voice_profile_id': voice.id, 'voice_version': voice.version}
+    case.control.select_narration_voice(runtime=case.runtime, **selection)
+    binding = case.repo.creation_narration_source_binding('local', case.job.id)
+    assert binding.payload['basis'] == 'prior_sampling_receipt'
+    assert binding.payload['sampling_receipt'] == proof
+    assert binding.payload['sha256'] == received.audio_sha256
+    assert binding.payload['actor'] == case.actor.identity_payload()
+
+
+def test_unsealed_original_job_without_device_request_cannot_resume_as_fresh_input(tmp_path):
+    from app.device_scheduler import RecoveryBlocked
+    case = _narration_units_case(tmp_path)
+    with case.repo._connect() as conn:
+        start = case.repo.get_task_event('local',f'event_{case.job.id}_start',connection=conn)
+        payload = dict(start.payload); payload.pop('source_binding_event_id')
+        conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',(json.dumps(payload),start.id))
+    # Idempotent start remains a read of the original request. First admission
+    # and an old failed request's retry must not establish a fresh byte baseline.
+    assert case.execution.start('local',case.task_id,case.script_id,case.job.input_digest,actor=case.actor).id == case.job.id
+    with pytest.raises(RecoveryBlocked,match='original_source_content_proof_missing'):
+        submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    with case.repo._connect() as conn:
+        conn.execute("UPDATE job_runs SET status='failed' WHERE id=?",(case.job.id,))
+    with pytest.raises(RecoveryBlocked,match='original_source_content_proof_missing'):
+        case.execution.retry('local',case.task_id,member_id=case.actor.member_id)
+    assert len(case.execution.jobs('local',case.task_id)) == 1
+    with case.repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0] == 1

@@ -9542,62 +9542,12 @@ def _submit_person_edit(workspace_id, task, proposal, request):
 def _submit_narration_edit(workspace_id, task, proposal, request):
     actor = _require_permit_actor(request, workspace_id)
     runtime = _creation_runtime()
-    owner = runtime.registrations["creation_job"].owner
-    script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
-    plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
-    digest = narration_edit_digest(proposal.operation)
-    candidate = JobRun(id=f"job_{uuid4().hex}", workspace_id=workspace_id, task_id=task.id,
-        kind=NARRATION_EDIT_KIND, input_digest=digest,
-        idempotency_key=f"narration-edit:{task.id}:{actor.member_id}:{digest}:{proposal.id}")
-    event_payload = {**actor.identity_payload(), "script_id": script.id, "plan_id": plan.id,
-        "revision_digest": revision_digest(script, plan), "input_digest": digest,
-        "edit_proposal_id": proposal.id}
-    job = None
     try:
-        key, _ = owner.narration_edit_facts(candidate, task, event_payload, plan)
-        with production_repo._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            prior = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?",
-                (workspace_id, candidate.idempotency_key)).fetchone()
-            if prior is not None and prior["status"] not in {"queued", "running", "interrupted"}:
-                raise ValueError("这次配音编辑已结束，请查看作业结果后重新预览")
-            active = conn.execute(
-                "SELECT j.* FROM job_runs j JOIN task_events e ON e.job_id=j.id AND e.workspace_id=j.workspace_id "
-                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND j.input_digest=? "
-                "AND j.status IN ('queued','running','interrupted') AND e.event_type='narration_edit_requested' "
-                "AND json_extract(e.payload_json,'$.member_id')=? ORDER BY j.created_at DESC LIMIT 1",
-                (workspace_id, task.id, NARRATION_EDIT_KIND, digest, actor.member_id)).fetchone()
-            if active is not None:
-                job = production_repo._job_run_from_row(active)
-            else:
-                job = production_repo.create_job_run(candidate, connection=conn)
-                production_repo.append_task_event(TaskEvent(
-                    id=f"event_{job.id}_start", workspace_id=workspace_id, task_id=task.id,
-                    job_id=job.id, event_type="narration_edit_requested", payload=event_payload,
-                    created_at=job.created_at), connection=conn)
-        usage=production_repo.creation_narration_usage(workspace_id,job.id)
-        if usage['unsettled']:
-            queued=runtime.scheduler._get(usage['unsettled'][0]['request_id'])
-            if (queued.workspace_id,queued.owner_id,queued.member_id)!=(workspace_id,job.id,actor.member_id):
-                raise PermissionError('局部配音原请求与当前成员不一致')
-        else:
-            key,_=owner.narration_edit_facts(job,task,event_payload,plan)
-            queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, "creation_job", job.id,
-                digest, key, SchedulePolicy()), actor)
-    except (PermissionError, KeyError, StopIteration, ValueError) as exc:
-        if job is not None:
-            with production_repo._connect() as conn:
-                conn.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,"
-                    "finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status='queued'",
-                    (str(exc), "配音编辑未安排成功，当前版本保持不变。", "修复原因后重新预览配音修改。",
-                     utc_now().isoformat(), utc_now().isoformat(), workspace_id, job.id))
+        job, queued = _creation_execution_control().submit_narration_edit(workspace_id, task, proposal, actor, runtime)
+    except (PermissionError, KeyError, StopIteration, ValueError, RecoveryBlocked) as exc:
         raise HTTPException(status_code=403 if isinstance(exc, PermissionError) else 409, detail=str(exc)) from exc
-    runtime.wake()
     return JSONResponse(status_code=202, content=CreationTaskEditQueuedResponse(
         job_id=job.id, request_id=queued.id).model_dump())
-
-
-
 
 
 

@@ -494,7 +494,13 @@ class DeviceScheduler:
         return self._request(new_row)
 
     def replace_unstarted_narration_voice(self, job, *, connection, replacement_write):
-        """Replace only a never-granted narration request during atomic voice selection."""
+        return self._replace_unstarted_narration(job, connection=connection,
+            replacement_write=replacement_write, reason='voice_selected')
+
+    def _replace_unstarted_narration(self, job, *, connection, replacement_write, reason):
+        """One finite never-granted boundary for voice adoption/source revalidation."""
+        if reason not in {'voice_selected', 'source_revalidated'}:
+            raise ValueError('不支持的原配音替换原因')
         if not connection.in_transaction:
             raise ValueError('声音改选必须与原作业和设备请求在同一事务提交')
         rows = connection.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
@@ -512,8 +518,9 @@ class DeviceScheduler:
             raise RecoveryBlocked('原配音请求已有授予、结果或归属不唯一，不能改选声音')
         old_row = current[0]
         old = self._request(old_row)
-        if (not old.unit_key.startswith('narration:') or old.input_digest != job.input_digest
-                or old.source_refs or old.work_class != 'normal_make'
+        source_edit = reason == 'source_revalidated' and old.unit_key.startswith(('narration_edit:', 'segment_revision:'))
+        if (not (old.unit_key.startswith('narration:') or source_edit) or old.input_digest != job.input_digest
+                or old.source_refs or old.work_class != ('preview_dependency' if source_edit else 'normal_make')
                 or old.state not in {'waiting', 'blocked'} and not (
                     old.state == 'failed' and old_row['last_failure_reason'] == 'declared_resources_exceed_budget')):
             raise RecoveryBlocked('原配音请求不在可安全改选的未执行边界')
@@ -521,11 +528,12 @@ class DeviceScheduler:
         actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key)
         if (actual != (intent.workspace_id, intent.owner_type, intent.owner_id, intent.input_digest, intent.unit_key)
                 or actual[:3] != (old.workspace_id, old.owner_type, old.owner_id)
-                or not trusted.unit_key.startswith('narration:segment:v1:')
+                or not (trusted.unit_key.startswith('narration:segment:v1:') or source_edit
+                    and trusted.unit_key.startswith(old.unit_key.split(':', 1)[0]+':'))
                 or trusted.member_id != old.member_id or trusted.work_class != old.work_class
                 or trusted.source_refs != old.source_refs or intent.policy != old.policy
-                or trusted.resources['parent_timeout_seconds'] != old.resources.get('parent_timeout_seconds', old.resources['timeout_seconds'])
-                or trusted.resources['parent_max_output_bytes'] != old.resources.get('parent_max_output_bytes', old.resources['max_output_bytes'])):
+                or trusted.resources.get('parent_timeout_seconds', trusted.resources['timeout_seconds']) != old.resources.get('parent_timeout_seconds', old.resources['timeout_seconds'])
+                or trusted.resources.get('parent_max_output_bytes', trusted.resources['max_output_bytes']) != old.resources.get('parent_max_output_bytes', old.resources['max_output_bytes'])):
             raise PermissionError('声音改选不能改变原作业、成员、文案归属或等待策略')
         new_id = uuid.uuid4().hex
         now = _stamp(self._now())
@@ -537,65 +545,39 @@ class DeviceScheduler:
              trusted.unit_key, old_row['source_refs_json'], trusted.work_class, old_row['policy'], old_row['not_before_utc'],
              old_row['window_json'], old_row['first_ready_at_utc'], old_row['eligible_since_utc'],
              old_row['eligible_wait_seconds'], json.dumps(trusted.resources, sort_keys=True), now, now))
-        self._record_event(connection, old_row, 'deferred', f'superseded_by:{new_id}:voice_reselection', trusted.member_id, now)
+        self._record_event(connection, old_row, 'deferred', f'superseded_by:{new_id}:{reason}', trusted.member_id, now)
         connection.execute("UPDATE device_work_requests SET state='cancelled',wait_reason=?,updated_at=? WHERE id=?",
             (f'replaced_by:{new_id}', now, old.id))
         row = connection.execute('SELECT * FROM device_work_requests WHERE id=?', (new_id,)).fetchone()
-        self._record_event(connection, row, 'deferred', f'replaces:{old.id}:voice_reselection', trusted.member_id, now)
+        self._record_event(connection, row, 'deferred', f'replaces:{old.id}:{reason}', trusted.member_id, now)
         return self._request(row)
 
-    def replace_ungranted_creation_narration(self, old_request_id, *, replacement_write):
-        """Keep one original Job and wait age across the verified narration contract change."""
-        now = _stamp(self._now())
+    def replace_ungranted_creation_narration(self, old_request_id, *, replacement_write, replacement_audit=None):
+        """Preserve original Job, allowance and wait age; never cross a grant."""
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             old_row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (old_request_id,)).fetchone()
             if old_row is None:
                 raise KeyError(old_request_id)
             old = self._request(old_row)
-            if old.owner_type != 'creation_job' or not re.fullmatch(r'narration:[0-9a-f]{64}', old.unit_key):
-                raise ValueError('仅支持原整阶段配音请求的执行契约转换')
-            if old.state == 'cancelled' and old.wait_reason and old.wait_reason.startswith('replaced_by:'):
+            if old.owner_type != 'creation_job' or not old.unit_key.startswith(('narration:', 'narration_edit:', 'segment_revision:')):
+                raise ValueError('仅支持原配音请求的来源重验证')
+            if old.state == 'cancelled' and (old.wait_reason or '').startswith('replaced_by:'):
                 row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (old.wait_reason.split(':', 1)[1],)).fetchone()
                 if row is None or (row['workspace_id'], row['owner_id'], row['input_digest']) != (old.workspace_id, old.owner_id, old.input_digest):
                     raise RecoveryBlocked('原配音请求的替代指针不可核实')
                 return self._request(row)
-            static_refused = old.state == 'failed' and old_row['last_failure_reason'] == 'declared_resources_exceed_budget'
-            if (old.state not in {'waiting', 'blocked'} and not static_refused
-                    or old.last_grant_generation is not None or old.attempt_number != 1
-                    or old_row['checkpoint_ref'] is not None):
-                raise RecoveryBlocked('原配音已有授予或结果未知，须先按原请求核对')
-            if conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
-                    "AND owner_id=? AND (last_grant_generation IS NOT NULL OR checkpoint_ref IS NOT NULL)",
-                    (old.workspace_id, old.owner_id)).fetchone():
-                raise RecoveryBlocked('原作业有执行结果或授予记录，不能按未执行转换')
-            intent, trusted = replacement_write(conn, old)
-            actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key)
-            if (actual != (intent.workspace_id, intent.owner_type, intent.owner_id, intent.input_digest, intent.unit_key)
-                    or actual[:4] != (old.workspace_id, old.owner_type, old.owner_id, old.input_digest)
-                    or not trusted.unit_key.startswith('narration:segment:v1:')
-                    or trusted.member_id != old.member_id or trusted.work_class != old.work_class
-                    or trusted.source_refs != old.source_refs or intent.policy != old.policy):
-                raise PermissionError('配音转换不能改变原身份、输入、归属或等待策略')
-            existing = conn.execute('SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type=? '
-                'AND owner_id=? AND input_digest=? AND unit_key=?', actual).fetchone()
-            if existing is not None:
-                raise RecoveryBlocked('原配音已有未关联的逐段请求，须先核对而非创建第二请求')
-            new_id = uuid.uuid4().hex
-            conn.execute("INSERT INTO device_work_requests (id,workspace_id,member_id,owner_type,owner_id,input_digest,unit_key,"
-                "source_refs_json,work_class,policy,not_before_utc,window_json,first_ready_at_utc,eligible_since_utc,"
-                "eligible_wait_seconds,state,resources_json,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'waiting',?,?,?)",
-                (new_id, *actual[:1], trusted.member_id, trusted.owner_type, trusted.owner_id, trusted.input_digest,
-                 trusted.unit_key, old_row['source_refs_json'], trusted.work_class, old_row['policy'], old_row['not_before_utc'],
-                 old_row['window_json'], old_row['first_ready_at_utc'], old_row['eligible_since_utc'],
-                 old_row['eligible_wait_seconds'], json.dumps(trusted.resources, sort_keys=True), now, now))
-            self._record_event(conn, old_row, 'deferred', f'superseded_by:{new_id}:narration_single_call_v1', None, now)
-            conn.execute("UPDATE device_work_requests SET state='cancelled',wait_reason=?,updated_at=? WHERE id=?",
-                (f'replaced_by:{new_id}', now, old.id))
-            row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (new_id,)).fetchone()
-            self._record_event(conn, row, 'deferred', f'replaces:{old.id}:narration_single_call_v1', None, now)
-        return self._request(row)
+            # Only identity fields are consumed by the shared boundary. Job facts
+            # and its zero-consumption invariant remain the creation owner's work.
+            from types import SimpleNamespace
+            job = SimpleNamespace(workspace_id=old.workspace_id, id=old.owner_id, input_digest=old.input_digest)
+            new = self._replace_unstarted_narration(job, connection=conn,
+                replacement_write=replacement_write, reason='source_revalidated')
+            if new.input_digest != old.input_digest:
+                raise PermissionError('来源重验证不能更换业务输入')
+            if replacement_audit is not None:
+                replacement_audit(conn, old, new)
+            return new
 
     def resume_creation_narration(self, request_id, *, resume_write):
         """Explicit continuation keeps the released unit, identity and original allowance."""

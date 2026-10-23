@@ -5051,7 +5051,7 @@ class ProductionRepository:
             'failure': json.loads(refusal['payload_json']) if refusal is not None and operation is None else None}
 
     def create_creation_execution_job(self, run, *, start_payload, event_type="creation_execution_started",
-                                      write_guard=None, execution_source=None):
+                                      write_guard=None, execution_source=None, source_preparation=None):
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
@@ -5061,9 +5061,14 @@ class ProductionRepository:
             try:
                 event=self.get_task_event(run.workspace_id,event_id,connection=conn)
             except KeyError:
+                if source_preparation is not None:
+                    source_id = self.seal_creation_narration_source(current, source_preparation,
+                        input_digest=run.input_digest, origin_event_id=event_id, connection=conn)
+                    start_payload = {**start_payload, 'source_binding_event_id': source_id}
                 event=self.append_task_event(TaskEvent(event_id,run.workspace_id,run.task_id,current.id,
                     event_type,start_payload,created_at=current.created_at),connection=conn)
-            if event.payload != start_payload:
+            if {key:value for key,value in event.payload.items() if key != 'source_binding_event_id'} != {
+                    key:value for key,value in start_payload.items() if key != 'source_binding_event_id'}:
                 raise PermissionError("已有制作任务的原输入与身份不同")
             if execution_source is not None:
                 self.bind_creation_execution_source(current,execution_source,connection=conn)
@@ -5527,6 +5532,13 @@ class ProductionRepository:
             task_id=job.task_id,job_id=job.id,event_type='native_execution_released',payload={'release_state':'released'}))
 
     def create_segment_revision_job(self, task, actor, command, rules_check, *, write_guard=None):
+        from app.creation.narration_pcm import prepare_narration_source
+        plan = self.get_creation_plan(task.workspace_id, task.plan_id)
+        with prepare_narration_source(self, task, plan, actor) as prepared:
+            return self._create_segment_revision_job(task, actor, command, rules_check,
+                prepared, write_guard=write_guard)
+
+    def _create_segment_revision_job(self, task, actor, command, rules_check, prepared, *, write_guard=None):
         encoded = json.dumps(command, ensure_ascii=False, sort_keys=True, default=str)
         input_digest = hashlib.sha256(encoded.encode()).hexdigest()
         run = JobRun(id=f'job_{uuid4().hex}', workspace_id=task.workspace_id, task_id=task.id,
@@ -5546,8 +5558,12 @@ class ProductionRepository:
                     or hashlib.sha256(section.content.encode()).hexdigest() != command['source_text_sha256']):
                 raise ValueError('提交前段版本已变化，原采用成果保持不变')
             job = self.create_job_run(run, connection=conn)
+            if job.id != run.id:
+                return job  # The concurrent original commit owns its baseline.
+            source_id = self.seal_creation_narration_source(job, prepared, input_digest=input_digest,
+                origin_event_id=f'event_{job.id}_start', connection=conn)
             payload = {**actor.identity_payload(), 'command': command, 'rules_check': rules_check,
-                'input_digest': input_digest, 'script_id': command['script_id'], 'plan_id': current.plan_id}
+                'input_digest': input_digest, 'script_id': command['script_id'], 'plan_id': current.plan_id, 'source_binding_event_id': source_id}
             self.append_task_event(TaskEvent(id=f'event_{job.id}_start', workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type='segment_revision_requested', payload=payload,
                 created_at=job.created_at), connection=conn)
@@ -6078,9 +6094,64 @@ class ProductionRepository:
             if row is None or json.loads(row['payload_json'])['start_event_id'] != start.id:
                 from app.device_scheduler import RecoveryBlocked
                 raise RecoveryBlocked('原作业有效输入缺少声音改选回执，不能继续')
-            return {**start.payload, 'input_digest': job.input_digest}
+            rebound = json.loads(row['payload_json'])
+            return {**start.payload, 'input_digest': job.input_digest,
+                'source_binding_event_id': rebound.get('source_binding_event_id')}
 
-    def rebind_unstarted_creation_voice(self, job, input_digest, selection_event_id, *, connection):
+    def creation_narration_source_binding(self, workspace_id, job_id, *, connection=None):
+        from app.device_scheduler import RecoveryBlocked
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            job = self.get_job_run(workspace_id, job_id, connection=conn)
+            inputs = self.creation_execution_input(workspace_id, job_id, connection=conn)
+            source_id = inputs.get('source_binding_event_id')
+            if source_id is None:
+                raise RecoveryBlocked('original_source_content_proof_missing: 原作业未封存来源字节，须实际重新选择声音')
+            event = self.get_task_event(workspace_id, source_id, connection=conn)
+            payload = event.payload
+            if (event.event_type != 'creation_narration_source_bound' or event.task_id != job.task_id
+                    or payload.get('version') != 1 or payload.get('business_input_digest') != job.input_digest
+                    or payload.get('workspace_id') != workspace_id or payload.get('task_id') != job.task_id):
+                raise RecoveryBlocked('原作业来源封存引用不可核实')
+            origin = self.get_task_event(workspace_id, payload['origin_event_id'], connection=conn)
+            if origin.job_id != event.job_id or origin.payload.get('source_binding_event_id') != source_id:
+                raise RecoveryBlocked('原作业来源缺少同事务采用关联')
+            return event
+
+    def seal_creation_narration_source(self, job, prepared, *, input_digest, origin_event_id, connection):
+        from app.creation.narration_pcm import verify_narration_source, source_binding_payload
+        from app.creation_execution import revision_digest
+        task = self._require_creation_task(connection, job.workspace_id, job.task_id)
+        plan_row = connection.execute('SELECT payload,visibility FROM creation_plans WHERE workspace_id=? AND id=?',
+            (job.workspace_id, task.plan_id)).fetchone()
+        plan_payload = json.loads(plan_row['payload'])
+        plan_payload['visibility'] = str(plan_row['visibility'])
+        plan = self._creation_plan_from_payload(plan_payload)
+        script = self._creation_task_script_from_payload(json.loads(connection.execute(
+            'SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?',
+            (job.workspace_id, task.confirmed_script_id)).fetchone()['payload']))
+        if revision_digest(script, plan) != prepared['adoption_revision_digest']:
+            raise ValueError('文案或方案在来源准备后变化，未封存新输入')
+        if job.kind == 'creation_task_execution' and input_digest != prepared['adoption_revision_digest']:
+            raise ValueError('原制作输入摘要与采用来源不一致')
+        verify_narration_source(self, task, plan, prepared, connection=connection)
+        source_id = f'{origin_event_id}_source'
+        self.append_task_event(TaskEvent(source_id, job.workspace_id, job.task_id, job.id,
+            'creation_narration_source_bound', source_binding_payload(prepared,
+                input_digest=input_digest, origin_event_id=origin_event_id)), connection=connection)
+        return source_id
+
+    def creation_narration_reference(self, workspace_id, job_id, *, connection):
+        inputs = self.creation_execution_input(workspace_id, job_id, connection=connection)
+        if not inputs.get('source_binding_event_id'):
+            return None  # Legacy started work retains its existing physical fences.
+        source = self.creation_narration_source_binding(workspace_id, job_id, connection=connection)
+        row = connection.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+            "AND event_type='creation_narration_source_revalidated' "
+            "AND json_extract(payload_json,'$.source_binding_event_id')=? ORDER BY rowid DESC LIMIT 1",
+            (workspace_id, job_id, source.id)).fetchone()
+        return json.loads(row['payload_json'])['narration_reference'] if row else source.payload['narration_reference']
+
+    def rebind_unstarted_creation_voice(self, job, input_digest, selection_event_id, *, connection, source_binding_event_id=None):
         usage = self.creation_narration_usage(job.workspace_id, job.id, connection=connection)
         if (job.kind != 'creation_task_execution' or job.status != 'queued' or job.attempt != 0
                 or job.started_at is not None or not usage['consumption_known']
@@ -6103,7 +6174,8 @@ class ProductionRepository:
         self.append_task_event(TaskEvent(id=f'{selection_event_id}_execution', workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type='creation_execution_input_rebound',
             payload={'start_event_id': f'event_{job.id}_start', 'selection_event_id': selection_event_id,
-                'previous_input_digest': job.input_digest, 'input_digest': input_digest}), connection=connection)
+                'previous_input_digest': job.input_digest, 'input_digest': input_digest,
+                'source_binding_event_id': source_binding_event_id}), connection=connection)
         return self.get_job_run(job.workspace_id, job.id, connection=connection)
 
     def start_creation_narration_unit(self, grant, resources, pending_segments):
@@ -9868,6 +9940,7 @@ class ProductionRepository:
         expected_plan_updated_at: datetime | str,
         expected_task_updated_at: datetime | str,
         queued_job_rebind=None,
+        voice_source_preparation=None,
     ) -> dict[str, object]:
         """Select one fixed voice and record its original request in the same transaction."""
         if not request_id.strip():
@@ -9913,8 +9986,13 @@ class ProductionRepository:
             if active_jobs and (queued_job_rebind is None or len(active_jobs) != 1):
                 raise ValueError("此任务仍有未结束的制作作业；先等作业结算或取消，再选择配音声音。")
             try:
-                selected_voice = self.creation_plan_voice_reference(workspace_id, voice_profile_id, voice_version,
-                    viewer_user_id=member_id)
+                if voice_source_preparation is None:
+                    selected_voice = self.creation_plan_voice_reference(workspace_id, voice_profile_id, voice_version,
+                        viewer_user_id=member_id)
+                else:
+                    selected_voice = voice_source_preparation['selected_voice']
+                    if (selected_voice.profile_id, selected_voice.version) != (voice_profile_id, voice_version):
+                        raise ValueError('本次来源准备不属于所选声音')
                 entries = self.list_applicable_pronunciation_entries(workspace_id=workspace_id,
                     person_profile_id=selected_voice.person_profile_id, episode_id=task.id)
             except (KeyError, ValueError, PermissionError, OSError) as exc:
