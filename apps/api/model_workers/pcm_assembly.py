@@ -13,7 +13,6 @@ import struct
 import sys
 import time
 from datetime import datetime, timezone
-import uuid
 import wave
 
 
@@ -86,7 +85,9 @@ def exists(directory: int, name: str) -> bool:
 
 
 def publish_json(directory: int, name: str, value: dict) -> None:
-    temporary = f".{name}.{uuid.uuid4().hex}.tmp"
+    # The monitor can identify this one permitted hard-link publication window.
+    # An abandoned pending file is evidence for host reconciliation, not replaceable.
+    temporary = f".{name}.pending"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
     try:
         data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
