@@ -523,51 +523,49 @@ class CreationExecutionControl:
         runtime.wake()
         return job, queued
 
-    def select_narration_voice(self, *, runtime, **inputs):
+    def select_narration_voice(self, *, runtime, actor=None, **inputs):
         with ExitStack() as stack:
-            return self._select_narration_voice(runtime=runtime, stack=stack, **inputs)
+            return self._select_narration_voice(runtime=runtime, stack=stack, actor=actor, **inputs)
 
-    def _select_narration_voice(self, *, runtime, stack, **inputs):
-        voice_authorization = None
-        source_preparation = None
+    def _select_narration_voice(self, *, runtime, stack, actor, **inputs):
         try:
             self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
                 inputs['request_id'], member_id=inputs['member_id'])
         except KeyError:
-            job = self.execution.latest(inputs['workspace_id'], inputs['task_id'])
-            if job is not None and job.status == 'queued':
-                owner = runtime.registrations['creation_job'].owner if runtime is not None else None
-                if owner is None:
-                    raise ValueError('原排队配音需要原设备调度器')
-                with self.repository._connect() as conn:
-                    _job, task, start, _script, plan = owner._facts(conn, job.workspace_id, job.id)
-                original = CreationExecutionActor.from_event(job.workspace_id, start)
-                if original.member_id != inputs['member_id']:
-                    raise TaskAuthorizationDenied('声音选择不属于原作业成员')
-                if plan.selected_voice is not None and (plan.selected_voice.profile_id, plan.selected_voice.version) == (
-                        inputs['voice_profile_id'], inputs['voice_version']):
-                    raise ValueError('原作业相同声音不能通过重新选择补建来源证据')
-                selected_voice = self.repository.creation_plan_voice_reference(job.workspace_id,
-                    inputs['voice_profile_id'], inputs['voice_version'], viewer_user_id=inputs['member_id'])
-                from app.creation.narration_pcm import prepare_narration_source
-                source_preparation = stack.enter_context(prepare_narration_source(self.repository, task,
-                    replace(plan, selected_voice=selected_voice), original))
-                source_preparation['selected_voice'] = selected_voice
-        if runtime is not None and runtime.registrations['creation_job'].owner.task_authorizations is not None:
-            try:
-                self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
-                    inputs['request_id'], member_id=inputs['member_id'])
-            except KeyError:
-                job = self.execution.latest(inputs['workspace_id'], inputs['task_id'])
-                if job is not None and job.status == 'queued':
-                    owner = runtime.registrations['creation_job'].owner
-                    with self.repository._connect() as conn:
-                        job, task, start, _script, _plan = owner._facts(conn, job.workspace_id, job.id)
-                    original = CreationExecutionActor.from_event(job.workspace_id, start)
-                    if original.member_id != inputs['member_id']:
-                        raise TaskAuthorizationDenied('声音选择不属于原作业成员')
-                    voice_authorization = owner.task_authorizations.prepare_voice_selection(task, original,
-                        inputs['voice_profile_id'], inputs['voice_version'])
+            pass
+        else:
+            # The repository verifies the original input fingerprint before
+            # returning its receipt; replay never prepares/rebinds execution.
+            return self.repository.select_creation_task_narration_voice(**inputs)
+
+        def require_same_actor(original):
+            if (not isinstance(actor, CreationExecutionActor) or original != actor
+                    or inputs['member_id'] != (actor.user_id or actor.member_id)):
+                raise TaskAuthorizationDenied('声音选择不属于原作业成员')
+
+        voice_authorization = None
+        source_preparation = None
+        job = self.execution.latest(inputs['workspace_id'], inputs['task_id'])
+        if job is not None and job.status == 'queued':
+            owner = runtime.registrations['creation_job'].owner if runtime is not None else None
+            if owner is None:
+                raise ValueError('原排队配音需要原设备调度器')
+            with self.repository._connect() as conn:
+                _job, task, start, _script, plan = owner._facts(conn, job.workspace_id, job.id)
+            original = CreationExecutionActor.from_event(job.workspace_id, start)
+            require_same_actor(original)
+            if plan.selected_voice is not None and (plan.selected_voice.profile_id, plan.selected_voice.version) == (
+                    inputs['voice_profile_id'], inputs['voice_version']):
+                raise ValueError('原作业相同声音不能通过重新选择补建来源证据')
+            selected_voice = self.repository.creation_plan_voice_reference(job.workspace_id,
+                inputs['voice_profile_id'], inputs['voice_version'], viewer_user_id=inputs['member_id'])
+            from app.creation.narration_pcm import prepare_narration_source
+            source_preparation = stack.enter_context(prepare_narration_source(self.repository, task,
+                replace(plan, selected_voice=selected_voice), actor))
+            source_preparation['selected_voice'] = selected_voice
+            if owner.task_authorizations is not None:
+                voice_authorization = owner.task_authorizations.prepare_voice_selection(task, actor,
+                    inputs['voice_profile_id'], inputs['voice_version'])
 
         def rebind(conn, original_job, previous_plan, selection_event_id):
             if runtime is None or runtime.scheduler.database_path != self.repository.database_path.resolve():
@@ -577,8 +575,9 @@ class CreationExecutionControl:
             owner = runtime.registrations['creation_job'].owner
             job, task, start, script, plan = owner._facts(conn, original_job.workspace_id, original_job.id)
             original = CreationExecutionActor.from_event(job.workspace_id, start)
-            if (original.member_id != inputs['member_id'] or job != original_job
-                    or owner._check_facts(job, task, start, script, previous_plan, 'narration', original.member_id) != 'ready'):
+            require_same_actor(original)
+            if (job != original_job
+                    or owner._check_facts(job, task, start, script, previous_plan, 'narration', actor.member_id) != 'ready'):
                 raise ValueError('原排队作业身份、确认文案或方案版本已变化，不能改选声音')
 
             def replace_input(connection, old):
@@ -597,7 +596,7 @@ class CreationExecutionControl:
                 preparation = {'_narration_reference': source_preparation['narration_reference']}
                 key, _resources = owner.narration_unit_facts(connection, rebound, task, script, plan, pcm_preparation=preparation)
                 intent = SubmissionIntent(job.workspace_id, 'creation_job', job.id, rebound.input_digest, key, old.policy)
-                return intent, owner.verify_submission(intent, original, connection=connection, pcm_preparation=preparation)
+                return intent, owner.verify_submission(intent, actor, connection=connection, pcm_preparation=preparation)
 
             runtime.scheduler.replace_unstarted_narration_voice(job, connection=conn, replacement_write=replace_input)
 

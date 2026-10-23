@@ -1,4 +1,5 @@
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -13,6 +14,8 @@ from test_narration_voice_selection_receipts import state, command
 @pytest.fixture
 def http_state(state, monkeypatch):
     monkeypatch.setattr(main, 'production_repo', state.repo)
+    monkeypatch.setattr(main, 'creation_execution', SimpleNamespace(latest=lambda *_:None))
+    monkeypatch.setattr(main, 'device_runtime', None)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'workspace')
     monkeypatch.setattr(main, '_content_reader', lambda request, workspace: ('owner', False))
     monkeypatch.setattr(main, '_exact_edit_access', lambda task_id, request, **kwargs:
@@ -76,3 +79,14 @@ def test_pi_cannot_select_voice_with_another_tasks_turn(http_state):
     response = state.client.post('/api/creation-tasks/task/narration/voice', json={**body(state), 'assistant_turn_id': turn['id']})
     assert response.status_code == 409
     assert state.repo.get_creation_plan('workspace', 'plan').selected_voice is None
+
+
+def test_jobless_voice_selection_and_replay_do_not_require_device_execution_permission(http_state, monkeypatch):
+    for name in ('_request_permit_actor','_require_permit_actor','_verify_creation_identity'):
+        monkeypatch.setattr(main, name, lambda *_:pytest.fail('无Job的内容选声不依赖设备执行许可'))
+    route = '/api/creation-tasks/task/narration/voice'
+    original = body(http_state)
+    first = http_state.client.post(route,json=original)
+    assert first.status_code == 200, first.text
+    assert http_state.client.post(route,json=original).json() == first.json()
+    assert http_state.repo.get_creation_plan('workspace','plan').selected_voice.profile_id == 'voice-1'

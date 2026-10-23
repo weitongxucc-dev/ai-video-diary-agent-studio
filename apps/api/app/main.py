@@ -8419,7 +8419,15 @@ def select_creation_task_narration_voice(
     if payload.assistant_turn_id is not None:
         _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     try:
-        receipt = _creation_execution_control().select_narration_voice(runtime=device_runtime,
+        actor = None
+        try:
+            production_repo.get_creation_task_narration_voice_selection(task.workspace_id, task.id,
+                str(payload.request_id), member_id=member_id)
+        except KeyError:
+            job = creation_execution.latest(task.workspace_id, task.id)
+            if job is not None and job.status == 'queued':
+                actor = _request_permit_actor(request, task.workspace_id)
+        receipt = _creation_execution_control().select_narration_voice(runtime=device_runtime, actor=actor,
             workspace_id=task.workspace_id, task_id=task.id, member_id=member_id, request_id=str(payload.request_id),
             voice_profile_id=payload.voice_profile_id,
             voice_version=payload.voice_version,

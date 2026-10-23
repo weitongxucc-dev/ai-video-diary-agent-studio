@@ -3668,7 +3668,7 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     start = case.repo.get_task_event('local', f'event_{case.job.id}_start')
     usage = case.repo.creation_narration_usage('local', case.job.id)
     old = case.scheduler._get(case.request_id)
-    receipt = case.control.select_narration_voice(runtime=case.runtime, **case.selection)
+    receipt = case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
     authorization = case.repo.get_task_authorization('local', case.task_id)
     assert authorization.resource_scope == {**case.original_authorization.resource_scope, 'voices': ['voice_2:v1']}
     assert replace(authorization, resource_scope=case.original_authorization.resource_scope,
@@ -3706,7 +3706,7 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     assert after['budget']['parent_max_output_bytes'] == new.resources['parent_max_output_bytes']
     with case.repo._connect() as conn:
         count = conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0]
-    assert case.control.select_narration_voice(runtime=case.runtime, **case.selection) == receipt
+    assert case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection) == receipt
     assert case.repo.creation_narration_usage('local', job.id) == after
     assert len(case.execution.jobs('local', case.task_id)) == 1
     with case.repo._connect() as conn:
@@ -3752,7 +3752,7 @@ def test_queued_voice_selection_refuses_races_or_unknown_and_rolls_back_all_writ
             return select(**kwargs)
         monkeypatch.setattr(case.repo, 'select_creation_task_narration_voice', revoke_between_observation_and_commit)
     with pytest.raises((ValueError, RecoveryBlocked, sqlite3.IntegrityError)):
-        case.control.select_narration_voice(runtime=case.runtime, **case.selection)
+        case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
     assert snapshot() == before
     assert case.repo.get_job_run('local', case.job.id).input_digest == case.job.input_digest
     assert len(case.execution.jobs('local', case.task_id)) == 1
@@ -4276,7 +4276,7 @@ def test_new_voice_adoption_reuses_only_exact_received_sampling_sha(tmp_path):
     assert service.received_source_evidence(replace(voice, owner_user_id='other-member')) is None
     assert service.received_source_evidence(replace(voice, reference=replace(voice.reference, asset_id='other-source'))) is None
     selection = {**case.selection, 'voice_profile_id': voice.id, 'voice_version': voice.version}
-    case.control.select_narration_voice(runtime=case.runtime, **selection)
+    case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **selection)
     binding = case.repo.creation_narration_source_binding('local', case.job.id)
     assert binding.payload['basis'] == 'prior_sampling_receipt'
     assert binding.payload['sampling_receipt'] == proof
@@ -4304,3 +4304,161 @@ def test_unsealed_original_job_without_device_request_cannot_resume_as_fresh_inp
     with case.repo._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0] == 1
+
+
+def _account_voice_selection_case(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from fastapi import FastAPI
+    from app.auth import AuthPrincipal
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
+    workspace, device, user = (str(uuid4()) for _ in range(3))
+    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id=workspace)
+    actor = CreationExecutionActor.account(workspace, device, user)
+    _qualify_start_voice(repo, task_id, user, workspace_id=workspace)
+    register_synthetic_profiles(repo, workspace_id=workspace, member_id=user,
+        person_id='person_2', voice_id='voice_2', voice_version='v1', language='zh', model_id='test')
+    with repo._connect() as conn:
+        row = conn.execute('SELECT id,payload FROM creation_plans WHERE workspace_id=?', (workspace,)).fetchone()
+        plan_payload = json.loads(row['payload']); plan_payload['owner_user_id'] = user
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(plan_payload), row['id']))
+    task = repo.get_creation_task(workspace, task_id)
+    calls = []
+    def verify(identity):
+        assert identity == TaskAuthorizationUseCase.identity(actor)
+        with repo._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE'); conn.rollback()
+        calls.append(identity)
+        return 'ready'
+    authorizations = TaskAuthorizationUseCase(repo, verify)
+    authorization = authorizations.ensure(task, actor)
+    execution = _execution(repo)
+    script = repo.get_creation_task_script(workspace, script_id)
+    plan = repo.get_creation_plan(workspace, task.plan_id)
+    job = execution.start(workspace, task_id, script_id, revision_digest(script, plan), actor=actor)
+    narration = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
+        input_scope='single_call_experiment_v1')
+    audio = CpuAudioBudget(2, 32*1024*1024, 30, 30, 48000, 2, 3*1024*1024, 1, 30, 1024, 16, .1, 2048, 1024)
+    owner = CreationJobOwnerVerifier(repo, narration_budget=narration, narration_audio_budget=audio,
+        task_authorizations=authorizations)
+    resources = SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}, None))
+    scheduler = DeviceScheduler(repo.database_path, tmp_path/'account-selection.lock', owners=owner,
+        resources=resources, processes=HostProcessProbe())
+    request_id = submit_creation_stage(execution, scheduler, job, actor)
+    control = CreationExecutionControl(repo, execution, None, lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=scheduler, registrations={'creation_job':SimpleNamespace(owner=owner)},
+        last_error=None, wake=lambda:None)
+    selection = dict(workspace_id=workspace, task_id=task_id, member_id=user, request_id=str(uuid4()),
+        voice_profile_id='voice_2', voice_version='v1', expected_plan_updated_at=plan.updated_at,
+        expected_task_updated_at=task.updated_at)
+    principal = AuthPrincipal(user_id=user, workspace_id=workspace)
+    monkeypatch.setattr(main_module, 'production_repo', repo)
+    monkeypatch.setattr(main_module, 'creation_execution', execution)
+    monkeypatch.setattr(main_module, '_creation_execution_control', lambda:control)
+    monkeypatch.setattr(main_module, 'device_runtime', runtime)
+    monkeypatch.setattr(main_module, 'auth_context', SimpleNamespace(enabled=True))
+    monkeypatch.setattr(main_module, 'current_workspace_id', lambda request:request.state.principal.workspace_id)
+    monkeypatch.setattr(main_module, 'trusted_device_credential', lambda:SimpleNamespace(device_id=device))
+    monkeypatch.setattr(main_module, '_verify_creation_identity', lambda _:pytest.fail('选声适配器不能额外调用执行许可'))
+    app = FastAPI()
+    @app.middleware('http')
+    async def authenticated(request, call_next):
+        request.state.principal = principal
+        return await call_next(request)
+    app.add_api_route('/api/creation-tasks/{task_id}/narration/voice', main_module.select_creation_task_narration_voice,
+        methods=['POST'])
+    client = TestClient(app)
+    return SimpleNamespace(repo=repo, actor=actor, job=job, task_id=task_id, script_id=script_id,
+        owner=owner, scheduler=scheduler, execution=execution, control=control, runtime=runtime,
+        request_id=request_id, selection=selection, client=client, authorization=authorization, identity_calls=calls)
+
+
+def _voice_selection_snapshot(case):
+    with case.repo._connect() as conn:
+        return {table:[tuple(row) for row in conn.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+            for table in ('creation_tasks','creation_plans','job_runs','task_events','task_authorizations',
+                'device_work_requests','device_request_events','device_permit')}
+
+
+def test_account_voice_http_uses_content_owner_and_full_current_actor_then_replays(tmp_path, monkeypatch):
+    from app.schemas import CreationTaskNarrationVoiceSelectionRequest
+    from uuid import uuid4
+    case = _account_voice_selection_case(tmp_path, monkeypatch)
+    body = CreationTaskNarrationVoiceSelectionRequest.model_validate({key:value for key,value in case.selection.items()
+        if key not in {'workspace_id','task_id','member_id'}}).model_dump(mode='json')
+    old = case.scheduler._get(case.request_id)
+    start = case.repo.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
+    usage = case.repo.creation_narration_usage(case.actor.workspace_id,case.job.id)
+    route = f'/api/creation-tasks/{case.task_id}/narration/voice'
+    before = _voice_selection_snapshot(case)
+    monkeypatch.setattr(main_module,'trusted_device_credential',lambda:SimpleNamespace(device_id=str(uuid4())))
+    refused = case.client.post(route,json=body)
+    assert refused.status_code == 403 and '声音选择不属于原作业成员' in refused.text
+    assert _voice_selection_snapshot(case) == before
+    monkeypatch.setattr(main_module,'trusted_device_credential',lambda:SimpleNamespace(device_id=case.actor.device_id))
+    checks_before = len(case.identity_calls)
+    response = case.client.post(route,json=body)
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    assert receipt['member_id'] == case.actor.user_id != case.actor.member_id
+    assert receipt['selected_voice']['profile_id'] == 'voice_2'
+    assert case.repo.get_task_event(case.actor.workspace_id,start.id) == start
+    updated = case.repo.get_job_run(case.actor.workspace_id,case.job.id)
+    assert updated.id == case.job.id and updated.idempotency_key == case.job.idempotency_key and updated.attempt == 0
+    source = case.repo.creation_narration_source_binding(case.actor.workspace_id,case.job.id)
+    assert source.payload['actor'] == case.actor.identity_payload()
+    new = case.scheduler._get(case.scheduler._get(old.id).wait_reason.split(':',1)[1])
+    assert new.member_id == case.actor.member_id and new.first_ready_at_utc == old.first_ready_at_utc
+    assert new.resources['parent_timeout_seconds'] == old.resources['parent_timeout_seconds']
+    assert new.resources['parent_max_output_bytes'] == old.resources['parent_max_output_bytes']
+    assert case.repo.creation_narration_usage(case.actor.workspace_id,case.job.id) == usage
+    assert len(case.identity_calls) > checks_before
+    checks_after = len(case.identity_calls)
+    before = _voice_selection_snapshot(case)
+    monkeypatch.setattr(main_module,'_request_permit_actor',lambda *_:pytest.fail('成功原请求重放不解析执行actor'))
+    assert case.client.post(route,json=body).json() == receipt
+    changed = case.client.post(route,json={**body,'voice_profile_id':'voice_1'})
+    assert changed.status_code == 409
+    assert _voice_selection_snapshot(case) == before
+    assert len(case.identity_calls) == checks_after
+    case.scheduler.close()
+
+
+@pytest.mark.parametrize('different', ['device','user','workspace','missing'])
+def test_account_queued_voice_selection_refuses_current_actor_mismatch(tmp_path, monkeypatch, different):
+    from uuid import uuid4
+    from app.creation.task_authorization import TaskAuthorizationDenied
+    case = _account_voice_selection_case(tmp_path, monkeypatch)
+    actor = case.actor
+    current = None if different == 'missing' else CreationExecutionActor.account(
+        str(uuid4()) if different == 'workspace' else actor.workspace_id,
+        str(uuid4()) if different == 'device' else actor.device_id,
+        str(uuid4()) if different == 'user' else actor.user_id)
+    before = _voice_selection_snapshot(case)
+    with pytest.raises(TaskAuthorizationDenied,match='声音选择不属于原作业成员'):
+        case.control.select_narration_voice(runtime=case.runtime,actor=current,**case.selection)
+    assert _voice_selection_snapshot(case) == before
+    case.scheduler.close()
+
+
+def test_account_queued_voice_selection_rechecks_original_actor_in_writer(tmp_path, monkeypatch):
+    from uuid import uuid4
+    from app.creation.task_authorization import TaskAuthorizationDenied
+    case = _account_voice_selection_case(tmp_path, monkeypatch)
+    select = case.repo.select_creation_task_narration_voice
+    before = None
+    def changed_original(**inputs):
+        nonlocal before
+        other = CreationExecutionActor.account(case.actor.workspace_id,str(uuid4()),case.actor.user_id)
+        start = case.repo.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
+        with case.repo._connect() as conn:
+            conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',
+                (json.dumps({**start.payload,**other.identity_payload()}),start.id))
+        before = _voice_selection_snapshot(case)
+        return select(**inputs)
+    monkeypatch.setattr(case.repo,'select_creation_task_narration_voice',changed_original)
+    with pytest.raises(TaskAuthorizationDenied,match='声音选择不属于原作业成员'):
+        case.control.select_narration_voice(runtime=case.runtime,actor=case.actor,**case.selection)
+    assert _voice_selection_snapshot(case) == before
+    case.scheduler.close()
