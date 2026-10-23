@@ -106,3 +106,88 @@ describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
     expect(screen.queryByRole("button", { name: resumeName })).not.toBeInTheDocument();
   });
 });
+
+function visualDecision(adopted = false): import('@/lib/types/creation-tasks').SegmentVisualDecision {
+  return { task_id: 'task-1', job_id: 'job-1', section_id: 'section-1', decision_digest: 'a'.repeat(64),
+    status: adopted ? 'adopted' : 'waiting_for_user', adopted, audio: { persisted: true, artifact_reference: 'narration://original' },
+    usage: { settled: true, used_seconds: 1, used_output_bytes: 24000 },
+    candidate_clips: [{ id: 'clip-original', label: '实际段落的原画面', preview_url: '/api/production/materials/original/media#t=0,2',
+      needs_confirmation: true, source_start_seconds: 0, source_end_seconds: 2, timeline_start_seconds: 0, timeline_end_seconds: 2 }],
+    candidate_total_count: 1, candidate_offset: 0, next_offset: null, required_confirmation_ids: ['clip-original'],
+    confirmed_clip_ids: adopted ? ['clip-original'] : [], device_request_id: adopted ? 'video-request-original' : null };
+}
+
+it('shows concrete candidates and requires a visible choice before confirming the original job', async () => {
+  const user = userEvent.setup();
+  const adopt = vi.fn(); const resume = vi.fn(); const read = vi.fn();
+  const state = execution('queued', 'waiting_for_visual_decision');
+  state.visual_decisions = { items: [{ job_id: 'job-1', section_id: 'section-1', section_title: '第一段', adopted: false,
+    phase: 'segment_video', decision_digest: 'a'.repeat(64), detail_url: '/original/decision' }], total_count: 1, truncated: false };
+  const props = { taskStage: 'montage' as const, taskReason: null, voice: null, availableVoices: [], preview: null,
+    execution: state, busy: false, onStart: vi.fn(), onResume: resume, onCancel: vi.fn(), onOpenMontage: vi.fn(),
+    visualDecision: visualDecision(), onAdoptVisualDecision: adopt, onReadVisualDecision: read, onCloseVisualDecision: vi.fn() };
+  const { rerender } = render(<CreationExecutionPanel {...props} />);
+  const confirm = screen.getByRole('button', { name: '确认画面并继续原作业' });
+  expect(confirm).toBeDisabled();
+  expect(screen.getByText('实际段落的原画面')).toBeVisible();
+  expect(screen.getByLabelText('画面 1 预览')).toHaveAttribute('src', '/api/production/materials/original/media#t=0,2');
+  expect(adopt).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('checkbox', { name: '明确采用画面 1' }));
+  await user.click(confirm);
+  expect(adopt).toHaveBeenCalledWith(['clip-original']);
+  expect(resume).not.toHaveBeenCalled();
+  rerender(<CreationExecutionPanel {...props} visualDecision={visualDecision(true)} />);
+  expect(screen.getByRole('button', { name: '确认画面并继续原作业' })).toBeDisabled();
+  expect(screen.getByText('画面采用已保存；沿原作业查看排队与完成状态。')).toBeVisible();
+});
+
+it('keeps stale decisions non-adoptable and exposes only original-receipt readback after an unknown queue result', async () => {
+  const user = userEvent.setup(); const adopt = vi.fn(); const read = vi.fn();
+  const decision = { ...visualDecision(), status: 'stale' as const };
+  render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null} availableVoices={[]} preview={null}
+    execution={execution('queued', 'waiting_for_visual_decision')} busy={false} onStart={vi.fn()} onResume={vi.fn()}
+    onCancel={vi.fn()} onOpenMontage={vi.fn()} visualDecision={decision} visualError="原作业排队状态未知，请回查原决定"
+    onReadVisualDecision={read} onAdoptVisualDecision={adopt} onCloseVisualDecision={vi.fn()} />);
+  expect(screen.getByRole('checkbox')).toBeDisabled();
+  expect(screen.getByRole('button', { name: '确认画面并继续原作业' })).toBeDisabled();
+  await user.click(screen.getByRole('button', { name: '回查原决定' }));
+  expect(read).toHaveBeenCalledWith(decision);
+  expect(adopt).not.toHaveBeenCalled();
+});
+
+it('continues a saved adoption only after a user action using the recorded original choices', async () => {
+  const user=userEvent.setup(); const adopt=vi.fn();
+  const decision={...visualDecision(true),device_request_id:null};
+  render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null} availableVoices={[]} preview={null}
+    execution={execution('queued','')} busy={false} onStart={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()}
+    visualDecision={decision} onAdoptVisualDecision={adopt} onReadVisualDecision={vi.fn()} onCloseVisualDecision={vi.fn()} />);
+  expect(adopt).not.toHaveBeenCalled();
+  expect(screen.getByRole('button',{name:'确认画面并继续原作业'})).toBeDisabled();
+  await user.click(screen.getByRole('button',{name:'继续已采用的原作业'}));
+  expect(adopt).toHaveBeenCalledWith(['clip-original']);
+});
+
+it.each([{compact:false,status:'running'},{compact:true,status:'queued'},{compact:false,status:'interrupted'}] as const)(
+  'does not expose initial-job controls for a revision ($compact, $status)', ({compact,status}) => {
+    const state=execution(status,status==='queued'?'waiting_for_user':'');
+    state.job!.kind='creation_task_segment_revision';
+    render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null} availableVoices={[]} preview={null}
+      execution={state} busy={false} compact={compact} onStart={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
+    expect(screen.queryByRole('button',{name:'停止制作'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:/继续制作/})).not.toBeInTheDocument();
+  });
+
+it('requires original-result readback before either visual submission button can be used again', async () => {
+  const user=userEvent.setup(); const adopt=vi.fn();
+  const props={taskStage:'montage' as const,taskReason:null,voice:null,availableVoices:[],preview:null,
+    execution:execution('queued','waiting_for_user'),busy:false,onStart:vi.fn(),onResume:vi.fn(),onCancel:vi.fn(),onOpenMontage:vi.fn(),
+    onReadVisualDecision:vi.fn(),onAdoptVisualDecision:adopt,onCloseVisualDecision:vi.fn()};
+  const {rerender}=render(<CreationExecutionPanel {...props} visualDecision={visualDecision()} />);
+  await user.click(screen.getByRole('checkbox'));
+  rerender(<CreationExecutionPanel {...props} visualDecision={visualDecision()} visualReadRequired />);
+  expect(screen.getByRole('button',{name:'确认画面并继续原作业'})).toBeDisabled();
+  rerender(<CreationExecutionPanel {...props} visualDecision={{...visualDecision(true),device_request_id:null}} visualReadRequired />);
+  expect(screen.getByRole('button',{name:'继续已采用的原作业'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'回查原决定'})).toBeEnabled();
+  expect(adopt).not.toHaveBeenCalled();
+});

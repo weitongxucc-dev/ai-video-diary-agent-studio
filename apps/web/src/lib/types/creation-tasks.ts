@@ -427,7 +427,28 @@ export type CreationExecutionPreview = {
     };
     input_digest: string;
 };
+export type SegmentVisualDecisionLocator = {
+  job_id: string; section_id: string; phase: "segment_video"; section_title: string; adopted: boolean;
+  decision_digest: string; detail_url: string;
+};
+export type SegmentVisualDecisionPage = { items: SegmentVisualDecisionLocator[]; total_count: number; truncated: boolean };
+export type SegmentVisualDecision = {
+  task_id: string; job_id: string; section_id: string; decision_digest: string;
+  status: "waiting_for_user" | "adopted" | "stale"; adopted: boolean;
+  audio: { artifact_reference: string; persisted: boolean };
+  usage: { settled: boolean; used_seconds: number; used_output_bytes: number };
+  candidate_clips: { id: string; label: string; preview_url: string; needs_confirmation: boolean;
+    source_start_seconds: number; source_end_seconds: number; timeline_start_seconds: number; timeline_end_seconds: number }[];
+  candidate_total_count: number; candidate_offset: number; next_offset: number | null;
+  required_confirmation_ids: string[]; confirmed_clip_ids: string[];
+  device_request_id: string | null;
+};
+export type SegmentVisualDecisionAdoption = {
+  decision: SegmentVisualDecision; queue: { request_id: string; replayed: boolean } | null; execution: CreationExecutionStatus;
+};
+
 export type CreationExecutionStatus = {
+  visual_decisions?: SegmentVisualDecisionPage;
     task_id: string;
     job: {
         id: string;

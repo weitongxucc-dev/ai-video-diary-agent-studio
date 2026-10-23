@@ -211,3 +211,15 @@ export function initializeCreationTaskTimeline(taskId: string): Promise<{
 export function redoCreationTaskTimeline(taskId: string, input: TimelineRestoreInput): Promise<CreationTaskEditConfirmResponse> {
     return creationPlanRequest<CreationTaskEditConfirmResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/redo`, { method: "POST", body: JSON.stringify(input) });
 }
+
+
+export function getSegmentVisualDecision(taskId: string, jobId: string, sectionId: string, offset = 0) {
+  return creationPlanRequest<import('../types/creation-tasks').SegmentVisualDecision>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/jobs/${encodeURIComponent(jobId)}/sections/${encodeURIComponent(sectionId)}/visual-decision?offset=${offset}&limit=8`);
+}
+export function adoptSegmentVisualDecision(taskId: string, jobId: string, sectionId: string,
+  input: { decision_digest: string; confirmed_clip_ids: string[] }) {
+  return creationPlanRequest<import('../types/creation-tasks').SegmentVisualDecisionAdoption>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/jobs/${encodeURIComponent(jobId)}/sections/${encodeURIComponent(sectionId)}/visual-decision`,
+    { method: 'POST', body: JSON.stringify(input) });
+}

@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { getCreationExecution, getCreationTaskWorkspace, previewCreationExecution } from "@/lib/api";
 import type { CreationExecutionPreview, CreationExecutionStatus, CreationTaskWorkspace } from "@/lib/types";
 import { errorDetails } from './request-errors';
+import { getSegmentVisualDecision, adoptSegmentVisualDecision } from '@/lib/api/creation-tasks';
+import type { SegmentVisualDecision, SegmentVisualDecisionLocator } from '@/lib/types/creation-tasks';
 type ExecutionInput = {
     taskId: string;
     confirmedScriptId: string | null;
@@ -19,6 +21,18 @@ function executionSnapshot(execution: CreationExecutionStatus) {
 // Production facts own a separate lifecycle from selection, chat, and unsaved inputs.
 export function useCreationExecution({ taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
     const viewActive = useWorkspacePage()?.active ?? true;
+    const [visualDecision, setVisualDecision] = useState<SegmentVisualDecision | null>(null);
+    const [visualError, setVisualError] = useState<string | null>(null);
+    const [visualBusy, setVisualBusy] = useState(false);
+    const [visualReadRequired, setVisualReadRequired] = useState(false);
+    const visualReadRequiredRef = useRef(false);
+    const visualEpoch = useRef(0);
+    const visualPending = useRef<number | null>(null);
+    useEffect(() => {
+        visualEpoch.current++; visualPending.current = null;
+        setVisualDecision(null); setVisualError(null); setVisualBusy(false);
+        visualReadRequiredRef.current = false; setVisualReadRequired(false);
+    }, [taskId]);
     const [executionPreview, setExecutionPreview] = useState<CreationExecutionPreview | null>(null);
     const [execution, setExecution] = useState<CreationExecutionStatus | null>(null);
     const [executionError, setExecutionError] = useState<ReturnType<typeof errorDetails> | null>(null);
@@ -144,5 +158,54 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
             }
         }
     }
-    return { executionPreview, execution, executionError, acceptExecution, changeExecution, recheckRequirements, pollExecution: () => pollExecution.current() };
+    function closeVisualDecision() {
+        visualEpoch.current++; visualPending.current = null;
+        setVisualDecision(null); setVisualError(null); setVisualBusy(false);
+    }
+    async function readVisualDecision(locator: Pick<SegmentVisualDecisionLocator, 'job_id' | 'section_id'>, more = false) {
+        if (visualPending.current !== null) return;
+        const epoch = ++visualEpoch.current;
+        visualPending.current = epoch; setVisualBusy(true); setVisualError(null);
+        try {
+            const value = await getSegmentVisualDecision(taskId, locator.job_id, locator.section_id,
+                more ? visualDecision?.next_offset ?? 0 : 0);
+            if (epoch !== visualEpoch.current || currentTask.current !== taskId) return;
+            if (more) {
+                if (!visualDecision || value.decision_digest !== visualDecision.decision_digest) throw new Error('原画面决定已变化，请关闭后重新查看；未重新提交采用。');
+                setVisualDecision({ ...value, candidate_clips: [...visualDecision.candidate_clips, ...value.candidate_clips] });
+            } else {
+                setVisualDecision(value);
+                visualReadRequiredRef.current = false; setVisualReadRequired(false);
+            }
+        } catch (cause) {
+            if (epoch === visualEpoch.current && currentTask.current === taskId) setVisualError(cause instanceof Error ? cause.message : '原画面决定回读失败');
+        } finally {
+            if (visualPending.current === epoch) { visualPending.current = null; setVisualBusy(false); }
+        }
+    }
+    async function adoptVisualDecision(confirmedClipIds: string[]) {
+        if (visualPending.current !== null || visualReadRequiredRef.current || !visualDecision || visualDecision.task_id !== taskId) return;
+        const saved = visualDecision;
+        const epoch = ++visualEpoch.current;
+        visualPending.current = epoch; setVisualBusy(true); setVisualError(null);
+        try {
+            await changeExecution(async () => {
+                try {
+                    const value = await adoptSegmentVisualDecision(taskId, saved.job_id, saved.section_id,
+                        { decision_digest: saved.decision_digest, confirmed_clip_ids: confirmedClipIds });
+                    if (epoch === visualEpoch.current && currentTask.current === taskId) setVisualDecision(value.decision);
+                    return value.execution;
+                } catch (cause) {
+                    if (epoch === visualEpoch.current && currentTask.current === taskId) {
+                        visualReadRequiredRef.current = true; setVisualReadRequired(true);
+                        setVisualError(`${cause instanceof Error ? cause.message : '原作业排队状态未知'}。请回查原决定，不要更换作业或重生成配音。`);
+                    }
+                    throw cause;
+                }
+            });
+        } finally {
+            if (visualPending.current === epoch) { visualPending.current = null; setVisualBusy(false); }
+        }
+    }
+    return { visualDecision, visualBusy, visualError, visualReadRequired, readVisualDecision, adoptVisualDecision, closeVisualDecision, executionPreview, execution, executionError, acceptExecution, changeExecution, recheckRequirements, pollExecution: () => pollExecution.current() };
 }

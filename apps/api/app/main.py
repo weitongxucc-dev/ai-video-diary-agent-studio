@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.schemas import SegmentVisualDecisionAdoptRequest
 from app.assistant.task_business import TaskBusiness, TaskBusinessRejected
 from app.creation.script_draft_use_case import ScriptDraftUseCase, ScriptDraftRejected
 from app.creation.execution_control import CreationExecutionControl, DesktopShutdownUseCase, ExecutionControlRejected
@@ -13417,7 +13418,8 @@ def _creation_render_is_valid(
 
 
 def _creation_execution_control():
-    return CreationExecutionControl(production_repo, creation_execution, _render_stage_use_case(), _verify_creation_identity)
+    return CreationExecutionControl(production_repo, creation_execution, _render_stage_use_case(), _verify_creation_identity,
+        segments=_segment_production_use_case())
 
 
 def _new_creation_execution(repository: ProductionRepository) -> CreationExecution:
@@ -13533,11 +13535,15 @@ def _require_permit_actor(request: Request, workspace_id: str) -> CreationExecut
 
 
 
-def _creation_execution_status(workspace_id: str, task_id: str) -> dict[str, object]:
+def _creation_execution_status(workspace_id: str, task_id: str, *, actor=None) -> dict[str, object]:
     try:
-        return _creation_execution_control().status(workspace_id, task_id, verify_media=device_runtime is None)
+        return _creation_execution_control().status(workspace_id, task_id, verify_media=device_runtime is None,actor=actor)
     except ExecutionControlRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
 @app.get("/api/creation-tasks/{task_id}/execution/preview")
@@ -13559,7 +13565,36 @@ def get_creation_execution(task_id: str, request: Request, job_id: str | None = 
             raise HTTPException(status_code=404, detail="原制作作业不存在") from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _creation_execution_status(current_workspace_id(request), task_id)
+    return _creation_execution_status(current_workspace_id(request),task_id,
+        actor=_request_permit_actor(request,current_workspace_id(request)))
+
+
+@app.get('/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision')
+def get_segment_visual_decision(task_id: str, job_id: str, section_id: str, request: Request,
+        offset: int=Query(default=0,ge=0),limit: int=Query(default=8,ge=1,le=8)):
+    _readable_creation_task(request,task_id)
+    ws=current_workspace_id(request)
+    try:
+        return _creation_execution_control().read_visual_decision(ws,task_id,job_id,section_id,
+            _require_permit_actor(request,ws),offset=offset,limit=limit)
+    except PermissionError as exc: raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except KeyError as exc: raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
+    except ValueError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+
+
+@app.post('/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision')
+def adopt_segment_visual_decision(task_id: str, job_id: str, section_id: str, request: Request,
+        payload: SegmentVisualDecisionAdoptRequest):
+    _readable_creation_task(request,task_id)
+    ws=current_workspace_id(request)
+    _require_automation_task_open(request,ws,task_id)
+    try:
+        return _creation_execution_control().adopt_visual_decision(ws,task_id,job_id,section_id,
+            _require_permit_actor(request,ws),payload,runtime=_creation_runtime())
+    except ExecutionControlRejected as exc: raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except PermissionError as exc: raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except KeyError as exc: raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
+    except (ValueError,OSError,RecoveryBlocked) as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
 @app.get(

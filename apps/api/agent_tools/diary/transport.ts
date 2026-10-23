@@ -215,6 +215,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (voiceRequest && !search) return result('read_narration_voice_request', {...args, request_id: decodeURIComponent(voiceRequest[1])});
     if (suffix === '/media-jobs' && only('cursor','limit')) return result('read_task_media_jobs',
       {...args, ...(query.has('cursor') ? {cursor:query.get('cursor')} : {}), limit:Number(query.get('limit') || 20)});
+    const visualDecision=suffix.match(/^\/execution\/jobs\/([^/]+)\/sections\/([^/]+)\/visual-decision$/);
+    if (visualDecision && only('offset','limit')) return result('read_segment_visual_decision', {...args,
+      job_id:decodeURIComponent(visualDecision[1]),section_id:decodeURIComponent(visualDecision[2]),
+      offset:Number(query.get('offset') || 0),limit:Number(query.get('limit') || 8)});
     const mediaJob = suffix.match(/^\/media-jobs\/([^/]+)$/);
     if (mediaJob && !search) return result('read_task_media_job', {...args, job_id: decodeURIComponent(mediaJob[1])});
   }

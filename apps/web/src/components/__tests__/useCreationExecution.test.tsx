@@ -3,13 +3,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CreationExecutionStatus, CreationTaskWorkspace } from "@/lib/types";
 import { useCreationExecution } from "../creation-task/useCreationExecution";
 
-const api = vi.hoisted(() => ({ readExecution: vi.fn(), readWorkspace: vi.fn(), preview: vi.fn() }));
+const api = vi.hoisted(() => ({ readExecution: vi.fn(), readWorkspace: vi.fn(), preview: vi.fn(), readVisual: vi.fn(), adoptVisual: vi.fn() }));
 vi.mock("@/lib/api", () => ({
   getCreationExecution: api.readExecution,
   getCreationTaskWorkspace: api.readWorkspace,
   previewCreationExecution: api.preview,
   CreationPlanApiError: class extends Error {},
 }));
+
+vi.mock('@/lib/api/creation-tasks', () => ({ getSegmentVisualDecision: api.readVisual, adoptSegmentVisualDecision: api.adoptVisual }));
 
 function execution(taskId: string): CreationExecutionStatus {
   return { task_id: taskId, job: null, stages: [], current_stage: null, waiting_reason: null,
@@ -173,4 +175,55 @@ it("ignores an old full-read failure after a newer parent receipt and still retr
   await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
   expect(apply).toHaveBeenCalledWith(readback("新事实"), 1);
   expect(result.current.executionError).toBeNull();
+});
+
+
+function visual() {
+  return { task_id:'task-a',job_id:'job-a',section_id:'section-a',decision_digest:'original-digest',status:'waiting_for_user',
+    adopted:false,audio:{persisted:true},usage:{settled:true},candidate_clips:[],candidate_total_count:0,candidate_offset:0,
+    next_offset:null,required_confirmation_ids:['original-clip'],confirmed_clip_ids:[],device_request_id:null };
+}
+
+it('does not attach a late visual decision to the next task', async () => {
+  let resolve!: (value: unknown) => void;
+  api.readVisual.mockImplementation(() => new Promise(done => { resolve=done; }));
+  const { result,rerender }=renderHook(({taskId})=>useCreationExecution({taskId,confirmedScriptId:null,timelineVersionId:null,
+    voiceId:undefined,voiceVersion:undefined,workspaceReadRevision:0,onWorkspaceRead:vi.fn(()=>true)}),{initialProps:{taskId:'task-a'}});
+  let pending!: Promise<void>;
+  act(()=>{pending=result.current.readVisualDecision({job_id:'job-a',section_id:'section-a'});});
+  rerender({taskId:'task-b'});
+  await act(async()=>{resolve(visual());await pending;});
+  expect(result.current.visualDecision).toBeNull();
+});
+
+it('submits a visible choice once with the original digest and never automatically retries an unknown queue result', async () => {
+  api.readVisual.mockResolvedValue(visual());
+  let reject!: (cause: Error) => void;
+  api.adoptVisual.mockImplementation(()=>new Promise((_,fail)=>{reject=fail;}));
+  const {result}=mountReadback();
+  await act(async()=>{await result.current.readVisualDecision({job_id:'job-a',section_id:'section-a'});});
+  let pending!: Promise<void>;
+  act(()=>{pending=result.current.adoptVisualDecision(['original-clip']); void result.current.adoptVisualDecision(['original-clip']);});
+  expect(api.adoptVisual).toHaveBeenCalledTimes(1);
+  expect(api.adoptVisual).toHaveBeenCalledWith('task-a','job-a','section-a',{decision_digest:'original-digest',confirmed_clip_ids:['original-clip']});
+  await act(async()=>{reject(new Error('原采用可能已保存'));await pending;});
+  expect(result.current.visualError).toContain('回查原决定');
+  expect(api.adoptVisual).toHaveBeenCalledTimes(1);
+  expect(api.readVisual).toHaveBeenCalledTimes(1);
+  expect(result.current.visualDecision?.decision_digest).toBe('original-digest');
+  expect(result.current.visualReadRequired).toBe(true);
+  await act(async()=>{await result.current.adoptVisualDecision(['original-clip']);});
+  expect(api.adoptVisual).toHaveBeenCalledTimes(1);
+  api.readVisual.mockRejectedValueOnce(new Error('读取原决定失败'));
+  await act(async()=>{await result.current.readVisualDecision({job_id:'job-a',section_id:'section-a'});});
+  await act(async()=>{await result.current.adoptVisualDecision(['original-clip']);});
+  expect(api.adoptVisual).toHaveBeenCalledTimes(1);
+  const recorded={...visual(),adopted:true,status:'adopted',confirmed_clip_ids:['original-clip']};
+  api.readVisual.mockResolvedValueOnce(recorded);
+  await act(async()=>{await result.current.readVisualDecision({job_id:'job-a',section_id:'section-a'});});
+  expect(result.current.visualReadRequired).toBe(false);
+  expect(api.adoptVisual).toHaveBeenCalledTimes(1);
+  api.adoptVisual.mockResolvedValueOnce({decision:recorded,execution:execution('task-a')});
+  await act(async()=>{await result.current.adoptVisualDecision(['original-clip']);});
+  expect(api.adoptVisual).toHaveBeenCalledTimes(2);
 });

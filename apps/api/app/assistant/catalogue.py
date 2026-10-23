@@ -20,10 +20,10 @@ ASSISTANT_BUSINESS_TOOLS = {
     "task_edit": ("record_input_understanding", "read_narration_segment_context", "read_narration_segment_sources", "revise_narration_segment", "read_narration_revision", "resume_narration_revision", "read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
-                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "regenerate_storyboard"),
+                  "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
 }
 
-TASK_READ_PREVIEW_TOOLS = ("read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -104,6 +104,7 @@ _PI_TOOL_LABELS = {
     "resume_creation_execution": "继续连续制作",
     "cancel_creation_execution": "取消连续制作",
     "read_creation_execution": "读取原制作作业",
+    "read_segment_visual_decision": "读取原段落画面候选",
     "read_selected_reference": "读取选中引用",
     "read_selected_profile": "读取所引用档案",
     "read_selected_knowledge": "读取所引用知识",

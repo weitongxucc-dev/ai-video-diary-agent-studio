@@ -4328,3 +4328,9 @@ class HomeAggregationResponse(BaseModel):
     storage: HomeStorageResponse
     entries: HomeEntriesResponse
     unknown: list[HomeUnknownFact] = Field(default_factory=list)
+
+
+class SegmentVisualDecisionAdoptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmed_clip_ids: list[str] = Field(min_length=1,max_length=100)

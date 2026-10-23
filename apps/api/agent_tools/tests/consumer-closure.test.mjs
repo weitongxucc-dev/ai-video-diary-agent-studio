@@ -201,3 +201,30 @@ console.log('common host calls: PASS');`, pathToFileURL(join(tree.root,'Resource
     {cwd:tree.root,env:tree.environment,timeout:10000});
   assert.match(stdout,/common host calls: PASS/);
 });
+
+test('segment visual decision tools read the original receipt and cannot auto-adopt over the business host', async t => {
+  const tree=await resourceTree(t);
+  const {stdout}=await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`
+import assert from 'node:assert/strict';
+const {createBusinessRequest,RequestNotSubmitted}=await import(process.argv[1]);
+const {registerExecutionTools}=await import(process.argv[2]);
+const calls=[],tools=new Map();
+const request=createBusinessRequest({taskId:'task',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw new Error('credentials forbidden')},getSignal:()=>undefined,fetchRequest(){throw new Error('HTTP forbidden')},
+ businessCall:async(operation,args)=>{calls.push({operation,args});return {ok:true,value:{status:'waiting_for_user',task_id:args.task_id,job_id:args.job_id,section_id:args.section_id}}}});
+registerExecutionTools({registerTool:tool=>tools.set(tool.name,tool)}, {request,taskId:'task',isTaskRead:true,hasCreationAction:true,
+ markCreationAction(){},json:value=>value,getTurnId:()=> 'original-turn',getInputId:()=> 'original-input'});
+await tools.get('read_segment_visual_decision').execute('read',{job_id:'job:original',section_id:'section:original'});
+assert.deepEqual(calls,[{operation:'read_segment_visual_decision',args:{task_id:'task',job_id:'job:original',section_id:'section:original',offset:0,limit:8}}]);
+assert.equal(tools.has('adopt_segment_visual_decision'),false);
+let refused=false;
+try{await request('/api/creation-tasks/task/execution/jobs/job%3Aoriginal/sections/section%3Aoriginal/visual-decision',
+ {method:'POST',body:JSON.stringify({decision_digest:'original',confirmed_clip_ids:['clip:original'],confirmed:true})});}
+catch(error){refused=error instanceof RequestNotSubmitted;}
+assert.equal(refused,true);assert.equal(calls.length,1);
+console.log('segment visual read-only host: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','execution-tools.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/segment visual read-only host: PASS/);
+});

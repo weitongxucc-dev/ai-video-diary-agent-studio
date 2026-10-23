@@ -870,3 +870,154 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
         assert repo.get_creation_task('local',task.id).current_timeline_version_id==base.id
     finally:
         assert runtime.stop(1)
+
+
+@pytest.mark.parametrize('case_kind',['adopt','revision','stale','revoked','cancelled','queue_gap'])
+def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypatch,case_kind):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.creation.execution_control import CreationExecutionControl
+    from app.assistant.task_business import TaskBusiness
+    from test_creation_execution import _visual_decision_case,_require_section_visual_decision,submit_creation_stage,_submit_section_revision
+    root=tmp_path/'visual-http';root.mkdir()
+    case=_visual_decision_case(root,monkeypatch)
+    submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
+    if case_kind=='revision':
+        for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+        _,revision,_=_submit_section_revision(case)
+        job=case.repo.get_job_run('local',revision['job_id'])
+    else: job=case.job
+    _require_section_visual_decision(case,monkeypatch)
+    grant=case.scheduler.pick_and_grant()
+    assert grant.owner_id==job.id
+    case.executor.execute(grant,case.scheduler)
+    control=CreationExecutionControl(case.repo,case.execution,SimpleNamespace(valid=lambda *a,**kw:False),
+        case.owner.verify_identity,segments=case.segments)
+    runtime=SimpleNamespace(scheduler=case.scheduler,wake=lambda:None,
+        registrations={'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)})
+    monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
+    monkeypatch.setattr(main,'_readable_creation_task',lambda request,task_id:case.repo.get_creation_task('local',task_id))
+    monkeypatch.setattr(main,'_request_permit_actor',lambda request,workspace:case.actor)
+    monkeypatch.setattr(main,'_verify_creation_identity',case.owner.verify_identity)
+    def current_actor(request,workspace):
+        from fastapi import HTTPException
+        if case.owner.verify_identity(case.actor)!='ready': raise HTTPException(403,'原成员授权已撤销')
+        return case.actor
+    monkeypatch.setattr(main,'_require_permit_actor',current_actor)
+    monkeypatch.setattr(main,'_creation_execution_control',lambda:control)
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main,'_require_automation_task_open',lambda *args:None)
+    app=FastAPI()
+    app.add_api_route('/api/creation-tasks/{task_id}/execution',main.get_creation_execution,methods=['GET'])
+    path='/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision'
+    app.add_api_route(path,main.get_segment_visual_decision,methods=['GET'])
+    app.add_api_route(path,main.adopt_segment_visual_decision,methods=['POST'])
+    client=TestClient(app)
+    root_url=f'/api/creation-tasks/{case.task_id}/execution'
+    try:
+        status=client.get(root_url)
+        assert status.status_code==200,status.text
+        locators=status.json()['visual_decisions']
+        assert locators['total_count']==1 and not locators['truncated'],locators
+        locator=locators['items'][0]
+        detail=client.get(locator['detail_url'])
+        assert detail.status_code==200,detail.text
+        decision=detail.json()
+        assert decision['audio']['persisted'] and decision['usage']['settled']
+        assert decision['candidate_clips'][0]['preview_url'].startswith('/api/production/materials/')
+        business=object.__new__(TaskBusiness)
+        business.execution=control
+        business.visual_job_belongs_to_goal=lambda goal,actor,job_id:job_id==job.id
+        read=business.execute('read_segment_visual_decision',{'job_id':job.id,'section_id':'section_1'},
+            case.actor,case.repo.get_creation_task('local',case.task_id),{}, {},{},None)
+        assert read==decision
+        with pytest.raises(PermissionError):
+            control.read_visual_decision('local',case.task_id,job.id,'section_1',replace(case.actor,member_id='other-member'))
+        payload={'decision_digest':decision['decision_digest'],'confirmed_clip_ids':decision['required_confirmation_ids']}
+        assert client.post(locator['detail_url'],json={**payload,'automatically_confirm':True}).status_code==422
+        audio_path=case.repo.resolve_authorized_narration_audio_reference('local',decision['audio']['artifact_reference'])
+        before_audio=audio_path.read_bytes()
+        before_segments=case.repo.list_narration_segments('local',case.task_id,case.script_id)
+        before_usage=case.repo.creation_narration_usage('local',job.id)
+        monkeypatch.setattr(case.stage,'prepare_segment',lambda *a,**kw:pytest.fail('不能重新生成已保留配音'))
+        if case_kind=='stale': payload['decision_digest']='0'*64
+        elif case_kind=='revoked': monkeypatch.setattr(case.owner,'verify_identity',lambda actor:'unauthorized')
+        elif case_kind=='cancelled':
+            case.repo.finish_job_run('local',job.id,status='cancelled',failure_reason='user_cancelled',impact='保留音频',repair_action='核对原任务')
+        elif case_kind=='queue_gap':
+            original_submit=case.scheduler.submit
+            monkeypatch.setattr(case.scheduler,'submit',lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('after adoption before queue')))
+        response=client.post(locator['detail_url'],json=payload)
+        if case_kind in {'adopt','revision'}:
+            assert response.status_code==200,response.text
+            assert response.json()['decision']['adopted']
+            assert response.json()['decision']['usage']==decision['usage']
+            assert response.json()['execution']['job']['id']==job.id
+            replay=client.post(locator['detail_url'],json=payload)
+            assert replay.status_code==200 and replay.json()['queue']['request_id']==response.json()['queue']['request_id'],replay.text
+            assert replay.json()['queue']['replayed']
+            assert not client.get(root_url).json()['visual_decisions']['items']
+        elif case_kind=='queue_gap':
+            assert response.status_code==409 and response.json()['detail']['submission_effect']=='unknown',response.text
+            assert client.get(locator['detail_url']).json()['adopted']
+            assert client.get(root_url).json()['visual_decisions']['items'][0]['adopted']
+            monkeypatch.setattr(case.scheduler,'submit',original_submit)
+            resumed=client.post(locator['detail_url'],json=payload)
+            assert resumed.status_code==200 and resumed.json()['queue']['replayed'],resumed.text
+        else:
+            assert response.status_code in {403,409},response.text
+            assert case.segments.video_preparation_id(case.job,'section_1') not in [e.id for e in case.repo.list_task_events('local',case.task_id)]
+        assert audio_path.read_bytes()==before_audio
+        assert case.repo.list_narration_segments('local',case.task_id,case.script_id)==before_segments
+        assert case.repo.creation_narration_usage('local',job.id)==before_usage
+    finally:
+        case.scheduler.close()
+
+
+def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_boolean(tmp_path,monkeypatch):
+    from app.creation.contracts import JobRun,TaskEvent
+    from app.creation.execution_control import CreationExecutionControl
+    from app.assistant.task_business import TaskBusiness,TaskBusinessRejected
+    from app.conversation_repository import ConversationRepository
+    from test_creation_execution import _visual_decision_case
+    root=tmp_path/'visual-origin';root.mkdir()
+    case=_visual_decision_case(root,monkeypatch)
+    conversations=ConversationRepository(case.repo.database_path)
+    chat=conversations.create('local',case.actor.member_id,'task',case.task_id)
+    conversations.save_draft(chat['id'],'local',case.actor.member_id,'继续修改当前段',0)
+    turn,_=conversations.create_turn_idempotent(chat['id'],'local',case.actor.member_id,'继续修改当前段',str(uuid4()),1,
+        {'kind':'task','task_id':case.task_id})
+    goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'workspace_id':'local',
+        'task_id':case.task_id,'member_id':case.actor.member_id,'status':'waiting_result'}
+    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    source={'assistant_turn_id':turn['id'],'input_id':turn['id'],'conversation_id':chat['id']}
+    case.repo.append_task_event(TaskEvent('visual-review','local',case.task_id,None,'narration_semantic_review',{'source':source}))
+    job=case.repo.create_job_run(JobRun('visual-revision','local',case.task_id,'creation_task_segment_revision','visual-revision','original-digest'))
+    task=case.repo.get_creation_task('local',case.task_id)
+    case.repo.append_task_event(TaskEvent(f'event_{job.id}_start','local',case.task_id,job.id,'segment_revision_requested',
+        {**case.actor.identity_payload(),'input_digest':job.input_digest,'script_id':case.script_id,'plan_id':task.plan_id,
+            'command':{'input_id':turn['id'],'semantic_review_ref':'visual-review'}}))
+    business=object.__new__(TaskBusiness)
+    business.production,business.conversations=case.repo,conversations
+    business.execution=CreationExecutionControl(case.repo,case.execution,SimpleNamespace(valid=lambda *a,**kw:False),
+        case.owner.verify_identity,segments=case.segments)
+    try:
+        assert business.visual_job_belongs_to_goal(goal,case.actor,job.id)
+        assert business.read_execution(goal,case.actor)['job']['id']==job.id
+        foreign={**goal,'original_turn_id':'another-goal'}
+        assert not business.visual_job_belongs_to_goal(foreign,case.actor,job.id)
+        with pytest.raises(TaskBusinessRejected): business.read_execution(foreign,case.actor,job_id=job.id)
+    finally:
+        case.scheduler.close()
+
+
+def test_segment_visual_empty_locator_does_not_require_a_generated_script(tmp_path):
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    from app.creation_execution import CreationExecutionActor
+    from test_metadata_edit_use_case import metadata_state
+    root=tmp_path/'no-visual-job';root.mkdir()
+    s=metadata_state(root)
+    service=SegmentProductionUseCase(s.repo,narration_stage=None,renderer=None,artifact_store=s.store,output_root=root)
+    assert s.task.confirmed_script_id is None
+    assert service.visual_decision_locators('ws',s.task.id,CreationExecutionActor('ws',s.member.member_id))=={
+        'items':[],'total_count':0,'truncated':False}

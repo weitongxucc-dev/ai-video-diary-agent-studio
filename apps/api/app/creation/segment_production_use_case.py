@@ -399,7 +399,45 @@ class SegmentProductionUseCase:
             if (stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns) != (source['size'],source['mtime_ns'],source['ctime_ns']):
                 raise ValueError('原画面决定的媒体来源已变化')
 
-    def read_visual_decision(self, workspace_id, task_id, job_id, section_id, actor):
+    def visual_decision_locators(self, workspace_id, task_id, actor, *, job_id=None, limit=24):
+        from urllib.parse import quote
+        self.require_actor(workspace_id,task_id,actor)
+        parameters=[workspace_id,task_id,actor.member_id]
+        where=''
+        if job_id is not None:
+            where=' AND j.id=?'
+            parameters.append(job_id)
+        sql=(" FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id AND j.id=e.job_id "
+            "JOIN task_events start ON start.workspace_id=j.workspace_id AND start.id='event_' || j.id || '_start' "
+            "WHERE e.workspace_id=? AND e.task_id=? AND e.event_type='segment_visual_decision_required' "
+            "AND j.status IN ('queued','running','interrupted') AND json_extract(start.payload_json,'$.member_id')=? "
+            "AND (NOT EXISTS (SELECT 1 FROM task_events p WHERE p.workspace_id=e.workspace_id "
+            "AND p.id='event_' || j.id || '_video_prepared_' || json_extract(e.payload_json,'$.section_id')) "
+            "OR NOT EXISTS (SELECT 1 FROM device_work_requests w WHERE w.workspace_id=e.workspace_id "
+            "AND w.owner_type='creation_job' AND w.owner_id=j.id AND w.unit_key=json_extract(e.payload_json,'$.unit_key')))"+where)
+        with self.repository._connect() as conn:
+            rows=conn.execute("SELECT e.payload_json,e.job_id,start.payload_json AS start_json,EXISTS(SELECT 1 FROM task_events p "
+                "WHERE p.workspace_id=e.workspace_id AND p.id='event_' || j.id || '_video_prepared_' || json_extract(e.payload_json,'$.section_id')) AS adopted"+sql+
+                ' ORDER BY e.created_at DESC,e.id DESC LIMIT ?',[*parameters,limit]).fetchall()
+            total=conn.execute('SELECT COUNT(*)'+sql,parameters).fetchone()[0]
+        if not rows:
+            return {'items':[],'total_count':total,'truncated':False}
+        script=self.repository.effective_creation_script(workspace_id,task_id)
+        titles={item.id:item.title for item in script.sections}
+        items=[]
+        for row in rows:
+            if self.actor_from_event(workspace_id,json.loads(row['start_json']))!=actor:
+                continue
+            value=json.loads(row['payload_json'])
+            section=value['section_id']
+            items.append({'job_id':row['job_id'],'section_id':section,'phase':'segment_video',
+                'section_title':titles.get(section,'待确认段落'),'adopted':bool(row['adopted']),'decision_digest':value['decision_digest'],
+                'detail_url':f'/api/creation-tasks/{quote(task_id,safe="")}/execution/jobs/{quote(row["job_id"],safe="")}/sections/{quote(section,safe="")}/visual-decision'})
+        return {'items':items,'total_count':total,'truncated':total>len(items)}
+
+    def read_visual_decision(self, workspace_id, task_id, job_id, section_id, actor, *, offset=0, limit=8):
+        if offset<0 or not 1<=limit<=8:
+            raise ValueError('画面候选分页范围无效')
         task = self.require_actor(workspace_id,task_id,actor)
         job = self.repository.get_job_run(workspace_id,job_id)
         if job.task_id != task_id:
@@ -437,11 +475,20 @@ class SegmentProductionUseCase:
                 'used_output_bytes':measured['used_output_bytes'],'remaining_budget':None if budget is None else {
                     'seconds':budget['parent_timeout_seconds']-measured['used_seconds'],
                     'output_bytes':budget['parent_max_output_bytes']-measured['used_output_bytes']}}
-        return {'status':status,'decision_digest':payload['decision_digest'],'job_id':job_id,
+        clips=payload['montage']['clips']
+        cues={item['id']:item['text'] for item in payload['montage']['cues']}
+        from urllib.parse import quote
+        candidates=[{**clip,'label':cues.get(clip['cue_id'],'候选画面'),
+            'preview_url':(f'/api/creation-tasks/{quote(task_id,safe="")}/person-renders/{quote(clip["person_render_id"],safe="")}/media' if clip.get('person_render_id')
+                else f'/api/production/materials/{quote(clip["asset_id"],safe="")}/media')+f'#t={clip["source_start_seconds"]},{clip["source_end_seconds"]}'}
+            for clip in clips[offset:offset+limit]]
+        return {'task_id':task_id,'status':status,'adopted':prepared is not None,'decision_digest':payload['decision_digest'],'job_id':job_id,
             'request_id':payload['request_id'],'revision_request_id':start.get('command',{}).get('request_id'),
             'section_id':section_id,'expected_segment_version':payload['expected_segment_version'],
             'audio':{'artifact_reference':payload['audio_reference'],'persisted':True},'usage':usage,
-            'candidate_clips':payload['montage']['clips'],
+            'candidate_clips':candidates,'candidate_total_count':len(clips),'candidate_offset':offset,
+            'next_offset':offset+limit if offset+limit<len(clips) else None,
+            'confirmed_clip_ids':prepared.payload['confirmed_clip_ids'] if prepared is not None else [],
             'required_confirmation_ids':[clip['id'] for clip in payload['montage']['clips'] if clip['needs_confirmation']],
             'device_request_id':video_requests[0]['id'] if video_requests else None,
             'recovery':{'action':'revalidate' if status == 'stale' else 'await_confirmation' if status == 'waiting_for_user'

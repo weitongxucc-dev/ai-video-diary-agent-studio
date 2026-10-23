@@ -1,14 +1,16 @@
 "use client";
+import { PreviewVideo } from "./EditPreviewCard";
 import { ExecutionQueueStatus } from "../ExecutionQueueStatus";
 import { creationTaskFailureReason } from "@/lib/creation-task-status";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { Button } from "@/components/ui/button";
 import type { CreationTaskWorkspace as WorkspaceState, CreationExecutionPreview, CreationExecutionStatus } from "@/lib/types";
+import type { SegmentVisualDecision, SegmentVisualDecisionLocator } from "@/lib/types/creation-tasks";
 import styles from "../CreationTaskWorkspace.module.css";
 import editorUi from "../VideoEditor.module.css";
 import { executionStageLabels } from './execution-labels';
-export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
+export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
     taskReason: string | null;
     taskStage: WorkspaceState["task"]["stage"];
     voice: WorkspaceState["plan"]["selected_voice"];
@@ -16,6 +18,9 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     preview: CreationExecutionPreview | null;
     execution: CreationExecutionStatus | null;
     busy: boolean;
+    visualDecision?: SegmentVisualDecision | null; visualBusy?: boolean; visualError?: string | null; visualReadRequired?: boolean;
+    onReadVisualDecision?: (locator: Pick<SegmentVisualDecisionLocator, 'job_id' | 'section_id'>, more?: boolean) => void;
+    onAdoptVisualDecision?: (ids: string[]) => void; onCloseVisualDecision?: () => void;
     compact?: boolean;
     onStart: () => void;
     onResume: () => void;
@@ -23,19 +28,59 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     onOpenMontage: () => void;
 }) {
     const [detailsOpen, setDetailsOpen] = useState(false);
+    const visualMedia = useRef<HTMLDivElement>(null);
+    const [selected, setSelected] = useState<string[]>([]);
+    useEffect(() => setSelected([]), [visualDecision?.job_id, visualDecision?.section_id, visualDecision?.decision_digest]);
+    const locators = execution?.visual_decisions;
+    const required = visualDecision?.required_confirmation_ids ?? [];
+    const canAdopt = visualDecision?.status === 'waiting_for_user' && !visualDecision.adopted
+        && required.length > 0 && required.every(id => selected.includes(id)) && !visualBusy && !busy && !visualReadRequired;
+    const visualControls = <>
+      {locators && locators.items.length > 0 && <section className={styles.visualDecisionNotice} aria-label="段落画面待确认">
+        <strong>{locators.items.every(item => item.adopted) ? "画面采用已保存，原作业待继续" : "配音已保留，画面待确认"}</strong><p>明确确认原候选后继续原作业，不会重新生成这段配音。</p>
+        {locators.items.map(item => <Button key={`${item.job_id}:${item.section_id}`} variant="outline"
+          disabled={visualBusy || busy} onClick={() => onReadVisualDecision?.(item)}>{item.section_title} · {item.adopted ? "查看已保存采用" : "查看画面"}</Button>)}
+        {locators.truncated && <p>当前显示 {locators.items.length} / {locators.total_count} 项等待决定；处理后继续回读。</p>}
+      </section>}
+      {visualError && !visualDecision && <p role="alert">{visualError}</p>}
+      {visualDecision && <HomeCardDialog kind="config" title="确认段落画面" onClose={() => { if (!visualBusy) onCloseVisualDecision?.(); }}
+        footer={<><Button variant="ghost" disabled={visualBusy} onClick={onCloseVisualDecision}>关闭</Button>
+          <Button disabled={!canAdopt} onClick={() => onAdoptVisualDecision?.(selected)}>确认画面并继续原作业</Button></>}>
+        <p>原配音已保存{visualDecision.usage.settled ? '，用量已对账' : '，用量仍待核对'}；本次只确认画面，不重新配音。</p>
+        {visualDecision.adopted && <p role="status">画面采用已保存；沿原作业查看排队与完成状态。</p>}
+        {visualDecision.adopted && visualDecision.status !== 'stale' && !visualDecision.device_request_id &&
+          <Button disabled={visualBusy || busy || visualReadRequired} onClick={() => onAdoptVisualDecision?.(visualDecision.confirmed_clip_ids)}>继续已采用的原作业</Button>}
+        {visualDecision.status === 'stale' && <p role="alert">原候选或权限已变化，不能采用；请核对原作业，不自动重试。</p>}
+        <div className={styles.visualCandidates} ref={visualMedia}>{visualDecision.candidate_clips.map((clip, index) => <article key={clip.id}>
+          <PreviewVideo url={clip.preview_url} label={`画面 ${index + 1} 预览`} muted
+            pauseOthers={current => visualMedia.current?.querySelectorAll<HTMLMediaElement>('video,audio').forEach(media => { if (media !== current) media.pause(); })} />
+          <p>{clip.label}</p><small>源片段 {clip.source_start_seconds.toFixed(1)}–{clip.source_end_seconds.toFixed(1)} 秒；
+            段内 {clip.timeline_start_seconds.toFixed(1)}–{clip.timeline_end_seconds.toFixed(1)} 秒</small>
+          {required.includes(clip.id) ? <label><input type="checkbox" checked={selected.includes(clip.id)}
+            disabled={visualBusy || visualDecision.adopted || visualDecision.status !== 'waiting_for_user'}
+            onChange={event => setSelected(ids => event.target.checked ? [...ids, clip.id] : ids.filter(id => id !== clip.id))} />明确采用画面 {index + 1}</label> : <p>原画面已确认</p>}
+        </article>)}</div>
+        <p>已展示 {visualDecision.candidate_clips.length} / {visualDecision.candidate_total_count} 个候选；已明确确认 {selected.length} / {required.length} 个待决定画面。</p>
+        {visualDecision.next_offset !== null && <Button variant="outline" disabled={visualBusy} onClick={() => onReadVisualDecision?.(visualDecision, true)}>查看更多原候选</Button>}
+        {visualError && <p role="alert">{visualError}</p>}
+        <Button variant="ghost" disabled={visualBusy} onClick={() => onReadVisualDecision?.(visualDecision)}>回查原决定</Button>
+      </HomeCardDialog>}
+    </>;
+    const stageLabels: Record<string, string> = { ...executionStageLabels, segment_video: "段落画面", segment_revision: "段落修改" };
     const selectedVoice = voice && preview?.requirements.selected_voice === voice.profile_id
         ? availableVoices.find(item => item.profile_id === voice.profile_id && item.version === voice.version) : null;
     const voiceLabel = selectedVoice?.person_display_name || (preview?.requirements.selected_voice ? "已选择声音参考" : "尚未选择");
     const job = execution?.job;
+    const hasInitialExecutionControls = !job || job.kind === "creation_task_execution";
     const failureReason = job && (job.status === "failed" || job.status === "interrupted" || job.status === "cancelled")
         ? job.failure_reason : null;
     const waitingForUser = job?.status === "queued" && job.failure_reason === "waiting_for_user";
-    const awaitingMontageConfirmation = waitingForUser && execution?.current_stage === "montage_plan" && Boolean(execution.waiting_reason);
-    const resumeWaiting = waitingForUser && !execution?.waiting_reason && preview?.requirements.can_continue === true;
-    const needsOutput = job?.status === "succeeded" && !execution?.video_ready;
+    const awaitingMontageConfirmation = hasInitialExecutionControls && waitingForUser && execution?.current_stage === "montage_plan" && Boolean(execution.waiting_reason);
+    const resumeWaiting = hasInitialExecutionControls && waitingForUser && !execution?.waiting_reason && preview?.requirements.can_continue === true;
+    const needsOutput = hasInitialExecutionControls && job?.status === "succeeded" && !execution?.video_ready;
     const active = job?.status === "queued" || job?.status === "running" || job?.status === "interrupted";
-    const resumable = resumeWaiting || needsOutput || job?.status === "failed" || job?.status === "cancelled" || job?.status === "interrupted";
-    const statusText = job?.status === "queued" ? "已排队" : job?.status === "running" ? "后台制作中"
+    const resumable = hasInitialExecutionControls && (resumeWaiting || needsOutput || job?.status === "failed" || job?.status === "cancelled" || job?.status === "interrupted");
+    const statusText = locators?.items.some(item => !item.adopted) ? "等待画面确认" : locators?.items.some(item => item.adopted) ? "采用已保存，待继续原作业" : job?.status === "queued" ? "已排队" : job?.status === "running" ? "后台制作中"
         : job?.status === "failed" ? "制作停在失败步骤" : job?.status === "cancelled" ? "已在安全边界停止"
             : job?.status === "interrupted" ? "应用中断，等待继续" : job?.status === "succeeded" ? execution?.video_ready ? "成片已生成，等待检查" : "成片产物需要检查" : "等待开始";
     const content = <section aria-label="连续制作" className={styles.workSection}>
@@ -62,29 +107,30 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
       <details className={styles.traceDetails}><summary>步骤与后台记录</summary>
         <ExecutionQueueStatus status={job.status} currentStage={execution?.current_stage ?? null} waitingReason={execution?.waiting_reason ?? null} statusUpdatedAt={execution?.status_updated_at ?? null}/>
         {failureReason ? <p>原始原因：{failureReason}</p> : null}{job.repair_action ? <p>后台处理原文：{job.repair_action}</p> : null}
-        <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{executionStageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
+        <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{stageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
       </details>
       {execution?.video_ready ? <p>成片可检查；{execution.cover_status === "ready" ? "封面已准备好。" : execution.cover_message}</p> : null}
-      {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
-      {active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy} onClick={onCancel} type="button">停止制作</button> : null}
-      {awaitingMontageConfirmation ? <Button variant="outline" disabled={busy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
+      {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
+      {hasInitialExecutionControls && active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy || visualBusy} onClick={onCancel} type="button">停止制作</button> : null}
+      {awaitingMontageConfirmation ? <Button variant="outline" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
       {resumable ? <Button className="modern-primary-button" disabled={busy || !preview?.requirements.can_continue} onClick={onResume} type="button">{needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</Button> : null}
     </div> : null}
   </section>;
     if (!compact)
-        return content;
+        return <>{content}{visualControls}</>;
     return <>
     <section aria-label="制作状态" className={editorUi.productionSummary}>
-      <div>{job && job.status !== "succeeded" ? <strong>连续制作 · {statusText}{execution?.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</strong> : !job ? <strong>制作要求</strong> : null}
+      <div>{job && job.status !== "succeeded" ? <strong>连续制作 · {statusText}{execution?.current_stage ? ` · ${stageLabels[execution.current_stage]}` : ""}</strong> : !job ? <strong>制作要求</strong> : null}
         {execution?.waiting_reason ? <p>{creationTaskFailureReason(execution.waiting_reason, taskStage)}</p> : null}
         {failureReason ? <p>{creationTaskFailureReason(failureReason, taskStage)}</p> : null}
         {needsOutput ? <p>原成片不再对应当前时间线，请核对文案和要求后重新输出。</p> : null}
       </div>
       <button className={editorUi.button} type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>{job ? "查看制作详情" : "核对制作要求"}</button>
-      {awaitingMontageConfirmation && !detailsOpen ? <Button variant="outline" className={editorUi.button} disabled={busy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
-      {resumeWaiting && !detailsOpen ? <Button className={editorUi.button} disabled={busy} onClick={onResume} type="button">继续制作</Button> : null}
-      {active && job?.status !== "interrupted" && !detailsOpen ? <button className={editorUi.button} type="button" disabled={busy} onClick={onCancel}>停止制作</button> : null}
+      {awaitingMontageConfirmation && !detailsOpen ? <Button variant="outline" className={editorUi.button} disabled={busy || visualBusy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
+      {resumeWaiting && !detailsOpen ? <Button className={editorUi.button} disabled={busy || visualBusy} onClick={onResume} type="button">继续制作</Button> : null}
+      {hasInitialExecutionControls && active && job?.status !== "interrupted" && !detailsOpen ? <button className={editorUi.button} type="button" disabled={busy || visualBusy} onClick={onCancel}>停止制作</button> : null}
     </section>
+    {visualControls}
     <HomeCardDialog kind="detail" title="制作文案与要求" open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
       <div className={styles.productionDetails}>{content}</div>
     </HomeCardDialog>

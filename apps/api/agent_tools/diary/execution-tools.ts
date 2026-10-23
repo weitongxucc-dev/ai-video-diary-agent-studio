@@ -138,6 +138,19 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       }});
     pi.registerTool({
+      name: "read_segment_visual_decision", label: "读取原段落画面候选",
+      description: "只读原作业等待的画面候选、已保留音频和采用后状态。明确采用须由用户在制作面板确认；本工具不采用、不重配音、不换作业。",
+      parameters: {type:"object",properties:{job_id:{type:"string",minLength:1},section_id:{type:"string",minLength:1},
+        offset:{type:"integer",minimum:0},limit:{type:"integer",minimum:1,maximum:8}},
+        required:["job_id","section_id"],additionalProperties:false},
+      async execute(_id: string,params: {job_id:string;section_id:string;offset?:number;limit?:number}) {
+        const result=await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/execution/jobs/${encodeURIComponent(params.job_id)}/sections/${encodeURIComponent(params.section_id)}/visual-decision?offset=${params.offset || 0}&limit=${params.limit || 8}`);
+        if (result.task_id!==taskId || result.job_id!==params.job_id || result.section_id!==params.section_id) throw new Error("原画面决定响应身份不一致");
+        const details={kind:"segment_visual_decision",decision:result};
+        return {content:[{type:"text",text:JSON.stringify(details)}],details};
+      },
+    });
+    pi.registerTool({
       name: "read_creation_execution", label: "读取原制作作业",
       description: "只读指定普通制作作业，使用原 job_id，不走媒体预览作业接口。最多20秒有限GET等待，不重启或恢复制作；若任务已有新作业明确拒绝，不把新作业当原结果。job succeeded仍须video_ready才是当前有效成片。",
       parameters: {type: "object", properties: {job_id: {type: "string", minLength: 1, maxLength: 120},

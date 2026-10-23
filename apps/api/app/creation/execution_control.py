@@ -110,11 +110,12 @@ _EXECUTION_WAITING_TEXT = {
 
 
 class CreationExecutionControl:
-    def __init__(self, repository, execution, render_stage, verify_identity):
+    def __init__(self, repository, execution, render_stage, verify_identity, *, segments=None):
         self.repository = repository
         self.execution = execution
         self.render_stage = render_stage
         self.verify_identity = verify_identity
+        self.segments = segments
 
     def preview(self, workspace_id: str, task_id: str) -> dict[str, object]:
         task = self.task_or_missing(workspace_id, task_id)
@@ -177,9 +178,21 @@ class CreationExecutionControl:
             "input_digest": digest,
         }
 
-    def status(self, workspace_id: str, task_id: str, *, verify_media: bool) -> dict[str, object]:
+    def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
         task = self.task_or_missing(workspace_id, task_id)
-        job = self.execution.latest(workspace_id, task_id)
+        job = self.execution.latest(workspace_id, task_id) if job_id is None else self.repository.get_job_run(workspace_id,job_id)
+        if actor is not None and job_id is None and task.owner_user_id==(actor.user_id or actor.member_id):
+            with self.repository._connect() as conn:
+                row=conn.execute("SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id "
+                    "AND e.id='event_' || j.id || '_start' WHERE j.workspace_id=? AND j.task_id=? "
+                    "AND j.kind='creation_task_segment_revision' AND json_extract(e.payload_json,'$.member_id')=? "
+                    "ORDER BY j.created_at DESC,j.id DESC LIMIT 1",(workspace_id,task_id,actor.member_id)).fetchone()
+            if row is not None:
+                revision=self.repository._job_run_from_row(row)
+                start=self.repository.get_task_event(workspace_id,f'event_{revision.id}_start').payload
+                if CreationExecutionActor.from_event(workspace_id,start)==actor and (job is None or revision.created_at>job.created_at):
+                    job=revision
+
         task_events=self.repository.list_task_events(workspace_id,task_id) if job else []
         events = (
             [
@@ -218,7 +231,14 @@ class CreationExecutionControl:
         if job and job.status == "queued" and montage_waiting_for_confirmation(self.repository, task):
             current_stage = "montage_plan"
             waiting_reason = "故事板仍有镜头等待确认；确认后点击继续制作。"
+        decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job.id if job else None) if (
+            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
+        if decisions['items']:
+            waiting_reason=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
+                else '段落配音已保存，画面候选需要用户明确确认。')
+            current_stage='segment_video'
         return {
+            "visual_decisions":decisions,
             "task_id": task_id,
             "job": asdict(job) if job else None,
             "stages": events,
@@ -673,17 +693,42 @@ class CreationExecutionControl:
             runtime.wake()
         return receipt
 
+    def read_visual_decision(self, workspace_id, task_id, job_id, section_id, actor, *, offset=0, limit=8):
+        return self.segments.read_visual_decision(workspace_id,task_id,job_id,section_id,actor,offset=offset,limit=limit)
+
+    def adopt_visual_decision(self, workspace_id, task_id, job_id, section_id, actor, payload, *, runtime):
+        try:
+            receipt=self.segments.adopt_visual_decision(workspace_id,task_id,job_id,section_id,actor,
+                decision_digest=payload.decision_digest,confirmed_clip_ids=payload.confirmed_clip_ids,runtime=runtime)
+        except PermissionError:
+            raise
+        except Exception as exc:
+            # Adoption commits before queue submission; classify only a matching durable receipt.
+            view=self.read_visual_decision(workspace_id,task_id,job_id,section_id,actor)
+            if (view['status']=='adopted' and view['adopted'] and view['decision_digest']==payload.decision_digest
+                    and len(payload.confirmed_clip_ids)==len(set(payload.confirmed_clip_ids))
+                    and set(view['confirmed_clip_ids'])==set(payload.confirmed_clip_ids)):
+                raise ExecutionControlRejected(status_code=409,detail={'error':'visual_decision_queue_unknown',
+                    'reason':'画面采用已保存，原作业排队状态需回查；不要重新生成配音或更换作业。',
+                    'submission_effect':'unknown','job_id':job_id}) from exc
+            raise
+        view=self.read_visual_decision(workspace_id,task_id,job_id,section_id,actor)
+        return {'decision':view,'queue':{'request_id':receipt['device_request_id'],'replayed':receipt['replayed']},
+            'execution':self.read_bound(workspace_id,task_id,job_id,actor,verify_media=False)}
+
     def read_bound(self, workspace_id, task_id, job_id, actor, *, verify_media: bool):
-        job = self.repository.get_job_run(workspace_id, job_id)
-        start = self.repository.creation_execution_input(workspace_id, job.id)
-        if (job.kind != "creation_task_execution" or job.task_id != task_id
-                or CreationExecutionActor.from_event(workspace_id, start) != actor
-                or start["input_digest"] != job.input_digest):
-            raise ValueError("原制作作业身份或任务不可核验")
-        result = self.status(workspace_id, task_id, verify_media=verify_media)
-        if result["job"] is None or result["job"]["id"] != job_id:
-            raise ValueError("原制作作业已被新的制作请求替代")
-        return result
+        job=self.repository.get_job_run(workspace_id,job_id)
+        if job.kind=='creation_task_segment_revision':
+            start=self.repository.get_task_event(workspace_id,f'event_{job.id}_start').payload
+        else:
+            start=self.repository.creation_execution_input(workspace_id,job.id)
+            latest=self.execution.latest(workspace_id,task_id)
+            if latest is None or latest.id!=job.id:
+                raise ValueError('原制作作业已被新的制作请求替代')
+        if (job.kind not in {'creation_task_execution','creation_task_segment_revision'} or job.task_id!=task_id
+                or CreationExecutionActor.from_event(workspace_id,start)!=actor or start['input_digest']!=job.input_digest):
+            raise ValueError('原制作作业身份或任务不可核验')
+        return self.status(workspace_id,task_id,verify_media=verify_media,actor=actor,job_id=job.id)
 
     def job_for_request(self, workspace_id: str, request_id: str):
         """这条设备许可背后是不是一个制作作业；不是就返回 ``None``。"""

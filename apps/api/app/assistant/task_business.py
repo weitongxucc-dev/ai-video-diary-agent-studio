@@ -158,14 +158,47 @@ class TaskBusiness:
                 raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',status_code=409)
         return actor,task,root['goal'],origin,sealed
 
+    def visual_job_belongs_to_goal(self, goal, actor, job_id):
+        from app.assistant_goal_continuation import GoalResultProjection
+        job=self.production.get_job_run(goal['workspace_id'],job_id)
+        if job.task_id!=goal['task_id']:
+            return False
+        if job.kind=='creation_task_execution':
+            return any(event.job_id==job_id for event in self.execution_sources(goal))
+        if job.kind!='creation_task_segment_revision':
+            return False
+        start=self.production.get_task_event(goal['workspace_id'],f'event_{job_id}_start')
+        if CreationExecutionActor.from_event(job.workspace_id,start.payload)!=actor:
+            return False
+        command=start.payload['command']
+        review=self.production.get_task_event(job.workspace_id,command['semantic_review_ref'])
+        if review.task_id!=goal['task_id'] or review.event_type!='narration_semantic_review':
+            return False
+        source=review.payload['source']
+        if source['input_id']!=command['input_id']:
+            return False
+        if source['input_id']==source['assistant_turn_id'] and not source.get('input_turn_id'):
+            source={key:value for key,value in source.items() if key!='input_id'}
+        return GoalResultProjection(self.production,self.conversations).source_belongs_to_goal(goal,source)
+
     def read_execution(self, goal, actor, *, job_id=None):
         ws,task_id=goal['workspace_id'],goal['task_id']
         located=self.execution_sources(goal)
         if job_id is None:
-            if not located:
-                return {"task_id":task_id,"job":None,"stages":[],"video_ready":False,"waiting_reason":"原目标尚未提交制作"}
-            job_id=located[-1].job_id
-        if not any(event.job_id==job_id for event in located):
+            candidates={event.job_id for event in located}
+            with self.production._connect() as conn:
+                revisions=conn.execute("SELECT j.id FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id "
+                    "AND e.id='event_' || j.id || '_start' WHERE j.workspace_id=? AND j.task_id=? "
+                    "AND j.kind='creation_task_segment_revision' AND json_extract(e.payload_json,'$.member_id')=? "
+                    "ORDER BY j.created_at DESC,j.id DESC LIMIT 24",(ws,task_id,actor.member_id)).fetchall()
+            candidates.update(row['id'] for row in revisions if self.visual_job_belongs_to_goal(goal,actor,row['id']))
+            if candidates:
+                job_id=max((self.production.get_job_run(ws,key) for key in candidates),key=lambda job:(job.created_at,job.id)).id
+            else:
+                return {'task_id':task_id,'job':None,'stages':[],'video_ready':False,
+                    'waiting_reason':'原目标没有可核验的制作作业定位，请按原回执查询。',
+                    'visual_decisions':{'items':[],'total_count':0,'truncated':False}}
+        if not self.visual_job_belongs_to_goal(goal,actor,job_id):
             raise TaskBusinessRejected('制作作业不属于原目标来源')
         return self.execution.read_bound(ws,task_id,job_id,actor,verify_media=False)
 
@@ -179,7 +212,7 @@ class TaskBusiness:
         entered=False
         try:
             binding=dict(source_binding)
-            reconcile_original=(operation in {'read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','apply_task_edit','preview_task_edit','select_narration_voice'}
+            reconcile_original=(operation in {'read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
                 or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
             # Section owners validate the frozen target and dependency digest at
             # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -371,6 +404,11 @@ class TaskBusiness:
 
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
+        if operation=='read_segment_visual_decision':
+            if not self.visual_job_belongs_to_goal(goal,actor,args['job_id']):
+                raise TaskBusinessRejected('画面决定不属于原目标来源')
+            return self.execution.read_visual_decision(ws,task_id,args['job_id'],args['section_id'],actor,
+                offset=args.get('offset',0),limit=args.get('limit',8))
         if operation in {'apply_task_edit','preview_task_edit'}:
             from app.schemas import CreationTaskExactEditRequest
             payload=CreationTaskExactEditRequest.model_validate({**args['payload'], 'assistant_turn_id':origin['assistant_turn_id']})

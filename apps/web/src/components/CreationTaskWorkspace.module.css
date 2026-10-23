@@ -591,3 +591,10 @@
 .segmentUsage { margin-top:16px; border-top:1px solid var(--border-1); padding-top:12px; }
 .segmentUsage summary { cursor:pointer; font-size:13px; font-weight:500; }
 .segmentUsage p { margin-top:8px; }
+
+.visualDecisionNotice { padding:12px 0; display:flex; flex-wrap:wrap; align-items:center; gap:8px; border-top:1px solid var(--border-1); }
+.visualDecisionNotice p { flex-basis:100%; margin:0; }
+.visualCandidates { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+.visualCandidates article { display:grid; gap:8px; min-width:0; padding:12px; border:1px solid var(--border-1); border-radius:var(--radius-md); }
+.visualCandidates video { width:100%; max-height:220px; background:var(--surface-2); }
+.visualCandidates label { display:flex; gap:8px; align-items:center; }
