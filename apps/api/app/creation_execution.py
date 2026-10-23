@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.canvas import canvas_size
 from app.graphic_overlays import validate_overlays
-from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork, WorkRequest
+from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedRetry, VerifiedWork, WorkRequest
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity, audio_resource_refusal
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
@@ -1329,6 +1329,29 @@ class CreationJobOwnerVerifier:
                 return "dependency"
         return "ready"
 
+    def _completed_narration(self, job, task, script, conn):
+        if not task.narration_cache_key:
+            return False
+        artifact = self.repository.get_narration_artifact(job.workspace_id, task.narration_cache_key, connection=conn)
+        segments = self.repository.list_narration_segments(job.workspace_id, task.id, script.id, connection=conn)
+        return (artifact is not None and artifact.task_id == task.id and artifact.script_id == script.id
+            and Path(artifact.audio_path).is_file() and bool(script.sections)
+            and len(segments) == len(script.sections)
+            and {item.source_section_id for item in segments} == {item.id for item in script.sections}
+            and all(item.status == 'ready' and item.audio_reference for item in segments))
+
+    def _resumable_montage_request(self, request, job, task, script, conn):
+        if (job.kind != KIND or job.status != 'failed' or task.stage != 'montage'
+                or request.state != 'failed' or not request.unit_key.startswith('montage_plan:')
+                or request.owner_type != DEVICE_OWNER_TYPE or request.owner_id != job.id
+                or request.workspace_id != job.workspace_id or request.input_digest != job.input_digest
+                or not self._completed_narration(job, task, script, conn)):
+            return False
+        rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type=? "
+            "AND owner_id=? AND state='failed' AND unit_key LIKE 'montage_plan:%'",
+            (job.workspace_id, DEVICE_OWNER_TYPE, job.id)).fetchall()
+        return len(rows) == 1 and rows[0]['id'] == request.id
+
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
         if request.unit_key.startswith('native_command:') and self.native_case is not None:
             return self.native_case.check_current(request,conn,self)
@@ -1351,7 +1374,9 @@ class CreationJobOwnerVerifier:
         if request.input_digest != job.input_digest:
             return "stale"
         stage = request.unit_key.split(":", 1)[0]
-        verdict = self._check_facts(job, task, event, script, plan, stage, request.member_id)
+        observed_job = (replace(job, status='interrupted')
+            if self._resumable_montage_request(request, job, task, script, conn) else job)
+        verdict = self._check_facts(observed_job, task, event, script, plan, stage, request.member_id)
         if verdict != "ready":
             return verdict
         try:
@@ -1555,6 +1580,20 @@ class CreationJobOwnerVerifier:
             self.verify_identity is None or self.verify_identity(actor) == "ready")
 
     def verify_retry(self, request: WorkRequest, actor: object, reason: str, conn: sqlite3.Connection):
+        if reason == 'failed' and request.unit_key.startswith('montage_plan:'):
+            def verify(current):
+                job, task, event, script, _plan = self._facts(current, request.workspace_id, request.owner_id)
+                if (actor != CreationExecutionActor.from_event(job.workspace_id, event)
+                        or actor.member_id != request.member_id
+                        or not self._resumable_montage_request(request, job, task, script, current)
+                        or self.check_current(request, current) != 'ready'):
+                    raise PermissionError('原总轨、作业来源或当前镜头阶段不允许继续')
+                return job
+            verify(conn)
+            def resume(current):
+                job = verify(current)
+                self.repository.resume_creation_narration_job(job.workspace_id, job.id, connection=current)
+            return VerifiedRetry(actor.member_id, owner_write=resume)
         if request.unit_key.startswith("cover:") and self.cover is not None:
             raise PermissionError("封面只能续交原请求的固定回执，不能盲重试生成")
         if request.unit_key.startswith("task_media:") and self.task_media is not None:
@@ -1689,6 +1728,25 @@ def resume_original_narration(repository, scheduler, job, actor, *, write_guard=
         return False
     if usage['unsettled']:
         raise RecoveryBlocked('原配音单元消耗未知，继续前须核对原请求，不能创建新作业重置')
+    owner = scheduler.owners
+    if hasattr(owner, 'registrations'):
+        owner = owner.registrations[DEVICE_OWNER_TYPE].owner
+    with repository._connect() as conn:
+        current, task, _event, script, _plan = owner._facts(conn, job.workspace_id, job.id)
+        if current.kind == KIND and task.stage == 'montage':
+            if current.status != 'failed' or not owner._completed_narration(current, task, script, conn):
+                raise RecoveryBlocked('当前镜头阶段缺少原已完成配音，不能回退重配音')
+            rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type=? "
+                "AND owner_id=? AND state='failed' AND unit_key LIKE 'montage_plan:%'",
+                (job.workspace_id, DEVICE_OWNER_TYPE, job.id)).fetchall()
+            if len(rows) != 1:
+                raise RecoveryBlocked('当前镜头阶段没有唯一可继续的原请求')
+            montage_request = rows[0]['id']
+        else:
+            montage_request = None
+    if montage_request is not None:
+        scheduler.retry_existing(montage_request, actor, reason='failed', write_guard=write_guard)
+        return True
     with repository._connect() as conn:
         rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
             "AND owner_id=? AND state IN ('failed','cancelled') AND (unit_key LIKE 'narration:segment:v1:%' "

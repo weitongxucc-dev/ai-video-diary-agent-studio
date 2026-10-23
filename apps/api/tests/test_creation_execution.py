@@ -4830,3 +4830,53 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
     assert case.repo.get_task_event('local', case.settled.id) == case.settled
     assert case.scheduler._get(case.grant.request_id).state == 'failed'
     assert case.scheduler.pick_and_grant() is None
+
+
+@pytest.mark.parametrize('blocked', [None, 'guard', 'incomplete'])
+def test_completed_narration_resumes_current_montage_not_historical_failed_tts(tmp_path, monkeypatch, blocked):
+    from app.creation.execution_control import CreationExecutionControl, ExecutionControlRejected
+    case = _narration_units_case(tmp_path)
+    def refused(*args, **kwargs):
+        raise ValueError('current montage audio mix budget refused')
+    case.executor.montage_stage = SimpleNamespace(generate=refused)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    first = case.scheduler.pick_and_grant()
+    case.executor.execute(first, case.scheduler)
+    for _ in range(3):
+        case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    task = case.repo.get_creation_task('local', case.task_id)
+    assert task.stage == 'montage' and task.stage_status == 'failed'
+    assert case.repo.get_narration_artifact('local', task.narration_cache_key)
+    before = case.repo.creation_narration_usage('local', case.job.id)
+    rows = case.repo.list_creation_job_request_states('local', case.job.id)
+    montage = next(row for row in rows if row['unit_key'].startswith('montage_plan:'))
+    assert montage['state'] == 'failed'
+    # Legacy audio recovery preserves its original failed request as audit history.
+    with case.repo._connect() as conn:
+        conn.execute("UPDATE device_work_requests SET state='failed' WHERE id=?", (first.request_id,))
+        if blocked == 'incomplete':
+            conn.execute("UPDATE narration_segments SET status='pending' WHERE task_id=? AND source_section_id='section_2'", (case.task_id,))
+    monkeypatch.setattr(case.executor, 'recover_generated_segment', lambda *a, **kw: pytest.fail('historical TTS recovery chosen'))
+    monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', lambda **kw: pytest.fail('TTS invoked'))
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={
+        'creation_job': SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
+    observed = []
+    def guard(conn):
+        assert conn.in_transaction
+        observed.append(conn)
+        if blocked == 'guard':
+            raise PermissionError('original source revoked')
+    if blocked:
+        with pytest.raises(ExecutionControlRejected):
+            control.resume('local', case.task_id, case.actor, runtime, verify_media=False, write_guard=guard)
+        assert case.scheduler._get(montage['id']).state == 'failed'
+        assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    else:
+        control.resume('local', case.task_id, case.actor, runtime, verify_media=False, write_guard=guard)
+        current = case.scheduler._get(montage['id'])
+        assert current.state == 'waiting' and current.attempt_number == 2
+        assert case.repo.get_job_run('local', case.job.id).status == 'interrupted'
+        assert observed and len(case.execution.jobs('local', case.task_id)) == 1
+    assert case.scheduler._get(first.request_id).state == 'failed'
+    assert case.repo.creation_narration_usage('local', case.job.id) == before

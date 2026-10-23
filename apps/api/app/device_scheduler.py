@@ -1509,7 +1509,7 @@ class DeviceScheduler:
             conn.commit()
         self._finish_host_release(data)
 
-    def retry_existing(self, request_id: str, actor: object, *, reason: RetryReason) -> dict[str, object]:
+    def retry_existing(self, request_id: str, actor: object, *, reason: RetryReason, write_guard=None) -> dict[str, object]:
         """Explicitly reopen a terminal request after trusted business validation."""
         if reason not in {"failed", "cancelled", "result_invalid"}:
             raise ValueError("重试原因无效")
@@ -1528,6 +1528,8 @@ class DeviceScheduler:
             observation = request, local, self.owners.check_current(request, reader)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             if row is None:
                 raise KeyError(request_id)
