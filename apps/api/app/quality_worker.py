@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import marshal
 from pathlib import Path
 import sys
 import time
-from types import FunctionType
 
 from app import quality_checks
 from app import quality_worker_runtime
@@ -16,25 +14,21 @@ from app.quality_worker_runtime import (
 )
 
 
-def worker_identity() -> str:
-    """Fingerprint deployed executable code, including frozen-module code objects."""
+def worker_identity(*, check=None) -> str:
+    """Pin the deployed binary, or the ordered three source files in development."""
+    paths = ([Path(sys.executable)] if getattr(sys, 'frozen', False) else
+        [Path(module.__file__) for module in (quality_checks, quality_worker_runtime, sys.modules[__name__])])
     digest = hashlib.sha256()
-    for module in (quality_checks, quality_worker_runtime, sys.modules[__name__]):
-        digest.update(module.__name__.encode())
-        for name, value in sorted(vars(module).items()):
-            if isinstance(value, FunctionType) and value.__module__ == module.__name__:
-                digest.update(name.encode())
-                digest.update(marshal.dumps(value.__code__))
-            elif isinstance(value, type) and value.__module__ == module.__name__:
-                for member, method in sorted(vars(value).items()):
-                    if isinstance(method, (staticmethod, classmethod)):
-                        method = method.__func__
-                    if isinstance(method, FunctionType):
-                        digest.update((name + '.' + member).encode())
-                        digest.update(marshal.dumps(method.__code__))
-            elif name.isupper() and isinstance(value, (str, int, float, tuple)):
-                digest.update(json.dumps([name, value], ensure_ascii=False).encode())
-    digest.update(quality_checks._BLACK_PATTERN.pattern.encode())
+    if check is not None:
+        check()
+    for path in paths:
+        with path.open('rb') as stream:
+            while chunk := stream.read(65536):
+                if check is not None:
+                    check()
+                digest.update(chunk)
+    if check is not None:
+        check()
     return digest.hexdigest()
 
 
@@ -42,7 +36,7 @@ def inspect_request(request: dict) -> dict:
     budget = QualityBudget(**request["budget"])
     context = QualityWorkerContext(budget, min(float(request["deadline_monotonic"]),
                                              time.monotonic() + budget.max_timeout_seconds))
-    identity = worker_identity()
+    identity = worker_identity(check=context.check)
     if identity != budget.worker_sha256:
         raise QualityWorkerError("质检 worker 与独立标定版本不一致")
     source, check_id = request["source"], request["check_id"]

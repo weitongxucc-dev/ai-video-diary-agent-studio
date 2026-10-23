@@ -262,3 +262,21 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
                 "recovery_current_profile": None, "reconciliation_extra_admissions": len(resources.admissions) - admissions_before}, indent=2))
     finally:
         assert runtime.stop(1)
+
+
+def test_frozen_worker_identity_hashes_binary_content_and_honors_deadline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app import quality_worker
+    from app.quality_worker_runtime import QualityWorkerError
+    binary = tmp_path/'api-server'
+    contents = b'final-signed-binary' * 5000
+    binary.write_bytes(contents)
+    monkeypatch.setattr(quality_worker, 'sys', SimpleNamespace(frozen=True, executable=str(binary)))
+    expected = hashlib.sha256(contents).hexdigest()
+    assert quality_worker.worker_identity() == expected
+    binary.write_bytes(contents + b'changed')
+    assert quality_worker.worker_identity() == hashlib.sha256(contents + b'changed').hexdigest() != expected
+    def expired():
+        raise QualityWorkerError('original deadline expired')
+    with pytest.raises(QualityWorkerError, match='original deadline expired'):
+        quality_worker.worker_identity(check=expired)
