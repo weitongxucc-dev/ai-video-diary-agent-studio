@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cancelCreationTaskMediaJob, getCreationTaskMediaJob, listenCreationTaskAudio, resolveCreationTaskMediaResponse, TaskMediaJobError, listCreationTaskMediaJobs, taskMediaJobMatchesContext, taskMediaJobLabel, taskMediaResourceCheckLabel } from "../api";
+import { getCreationTaskAudioWaveform, cancelCreationTaskMediaJob, getCreationTaskMediaJob, listenCreationTaskAudio, resolveCreationTaskMediaResponse, TaskMediaJobError, listCreationTaskMediaJobs, taskMediaJobMatchesContext, taskMediaJobLabel, taskMediaResourceCheckLabel } from "../api";
 import type { ResourceAdmissionReceipt, TaskMediaJob } from "../types";
 import { LOCAL_MEMBER_TOKEN_HEADER, LOCAL_MEMBER_TOKEN_STORAGE_KEY } from "../local-member-auth";
 
@@ -73,6 +73,39 @@ it("keeps the 202 receipt and only returns playable media after an authorized pe
   expect(fetch).toHaveBeenLastCalledWith(queued.result_url, expect.objectContaining({ headers: expect.objectContaining({ [LOCAL_MEMBER_TOKEN_HEADER]: "member-token" }), cache: "no-store" }));
 });
 
+it("reads a succeeded waveform receipt from the same authorized job without resubmitting waveform", async () => {
+  window.localStorage.setItem(LOCAL_MEMBER_TOKEN_STORAGE_KEY, "member-token");
+  const receipt: TaskMediaJob = { ...queued, operation: "audio_waveform", result_kind: "waveform", status: "succeeded" };
+  const waveform = { peaks: [.1, .4], seconds_per_peak: .1 };
+  const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(receipt), { status: 202 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ...receipt, result: waveform })));
+  vi.stubGlobal("fetch", fetch);
+  const response = await getCreationTaskAudioWaveform("task-one", "clip-one");
+  const update = vi.fn();
+  expect(await resolveCreationTaskMediaResponse("task-one", response, "waveform", {
+    signal: new AbortController().signal, baseVersionId: "version-one", onUpdate: update,
+  })).toEqual(waveform);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch).toHaveBeenLastCalledWith(receipt.result_url, expect.objectContaining({
+    headers: expect.objectContaining({ [LOCAL_MEMBER_TOKEN_HEADER]: "member-token" }), cache: "no-store",
+  }));
+  expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ result: waveform }));
+});
+
+it.each(["succeeded", "failed", "stale"] as const)("rejects a persisted %s job without a result after one receipt read", async status => {
+  const receipt: TaskMediaJob = { ...queued, status: "succeeded" };
+  const persisted = { ...receipt, status, failure_reason: "actual-reason" };
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(persisted)));
+  vi.stubGlobal("fetch", fetch);
+  const result = resolveCreationTaskMediaResponse("task-one", receipt, "audio_listen", {
+    signal: new AbortController().signal, baseVersionId: "version-one", onUpdate: vi.fn(),
+  });
+  if (status === "succeeded") await expect(result).rejects.toThrow("未返回可用结果");
+  else await expect(result).rejects.toMatchObject({ job: persisted });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledWith(receipt.result_url, expect.anything());
+});
+
 it.each(["failed", "cancelled", "stale"] as const)("rejects %s without a media result", async status => {
   const response = { ...queued, status, failure_reason: "actual-reason" };
   await expect(resolveCreationTaskMediaResponse("task-one", response, "audio_listen", {
@@ -88,14 +121,20 @@ it("stops reading when the selection is invalidated instead of cancelling or res
   const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
   controller.abort(); await rejected;
   await vi.advanceTimersByTimeAsync(5000);
+  await expect(resolveCreationTaskMediaResponse("task-one", { ...queued, status: "succeeded" }, "audio_listen", {
+    signal: controller.signal, baseVersionId: "version-one", onUpdate: vi.fn(),
+  })).rejects.toMatchObject({ name: "AbortError" });
   expect(fetch).not.toHaveBeenCalled();
 });
 
 it("does not consume a different base or result kind", async () => {
+  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const receipt: TaskMediaJob = { ...queued, status: "succeeded" };
   const options = { signal: new AbortController().signal, baseVersionId: "new-version", onUpdate: vi.fn() };
-  await expect(resolveCreationTaskMediaResponse("task-one", queued, "audio_listen", options)).rejects.toThrow("本次输入不一致");
-  await expect(resolveCreationTaskMediaResponse("task-one", queued, "waveform", { ...options, baseVersionId: "version-one" })).rejects.toThrow("本次输入不一致");
+  await expect(resolveCreationTaskMediaResponse("task-one", receipt, "audio_listen", options)).rejects.toThrow("本次输入不一致");
+  await expect(resolveCreationTaskMediaResponse("task-one", receipt, "waveform", { ...options, baseVersionId: "version-one" })).rejects.toThrow("本次输入不一致");
   expect(options.onUpdate).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it("reads and cancels only the fixed task job route", async () => {

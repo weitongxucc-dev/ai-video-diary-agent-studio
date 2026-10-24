@@ -149,14 +149,20 @@ export async function resolveCreationTaskMediaResponse<K extends keyof TaskMedia
     if (!("job_id" in response))
         return response;
     let job = response;
+    let receiptResultPending = job.status === "succeeded" && !job.result;
     while (true) {
         options.signal.throwIfAborted();
         if (job.result_kind !== kind || job.base_version_id !== options.baseVersionId)
             throw new Error("预览结果与本次输入不一致，请重新预览。");
         options.onUpdate(job);
         if (job.status === "succeeded") {
-            if (!job.result)
-                throw new Error("预览作业未返回可用结果，请重新读取。");
+            if (!job.result) {
+                if (!receiptResultPending)
+                    throw new Error("预览作业未返回可用结果，请重新读取。");
+                receiptResultPending = false;
+                job = await getCreationTaskMediaJob(taskId, job.job_id, options.signal);
+                continue;
+            }
             return job.result as TaskMediaResultMap[K];
         }
         if (["failed", "cancelled", "stale"].includes(job.status))
