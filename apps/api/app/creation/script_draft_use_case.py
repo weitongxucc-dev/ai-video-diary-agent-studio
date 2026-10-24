@@ -28,7 +28,6 @@ class ScriptDraftUseCase:
         self.route_snapshot,self.record_adoption=route_snapshot,record_adoption
 
     def confirm(self, workspace_id, task_id, script_id, payload, *, member_id, origin=None, write_guard=None):
-        from app.speech_timing import estimate_speech_seconds
         task=self.repository.get_creation_task(workspace_id,task_id)
         plan=self.repository.get_creation_plan(workspace_id,task.plan_id)
         script=self.repository.get_creation_task_script(workspace_id,script_id)
@@ -37,9 +36,6 @@ class ScriptDraftUseCase:
         if script.run_id and not script.reused_from_entry_id:
             run=self.repository.get_script_generation_run(workspace_id,script.run_id)
             self.validate_inputs(workspace_id,plan,run.input_references)
-        seconds=estimate_speech_seconds("\n".join(section.content for section in payload.sections))
-        if seconds>plan.duration_target_seconds:
-            raise ScriptDraftRejected(status_code=422,detail=f"文案预计约 {seconds:.1f} 秒，超过方案 {plan.duration_target_seconds} 秒上限；请压缩正文后再确认。")
         task,script=self.repository.confirm_creation_task_script(workspace_id,task_id,script_id,title=payload.title,
             sections=[CreationTaskScriptSection(**section.model_dump()) for section in payload.sections],
             expected_updated_at=payload.expected_updated_at,adoption_kind=payload.adoption_kind,
@@ -97,8 +93,7 @@ class ScriptDraftUseCase:
             current_instruction=instruction_origin["raw_command"] if instruction_origin else "",
             sources=tuple(sources), style_instruction=str(plan.template_settings.get("style_instruction", "")),
             script_structure=tuple(plan.template_settings.get("script_structure", [])),
-            script_section_count=(plan.template_settings.get("script_section_count")
-                                  or (5 if 0 < plan.presenter_share_target < 100 else None)),
+            script_section_count=plan.template_settings.get("script_section_count"),
         )
         candidate = CreationTaskGeneratedScript(title=payload.title, language=plan.language, sections=tuple(
             CreationTaskGeneratedScriptSection(title=section.title, content=section.content,

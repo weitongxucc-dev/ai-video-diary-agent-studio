@@ -6993,8 +6993,7 @@ def _assistant_script_context_facts(workspace_id,task_id,reader_id):
         "presenter_share_target": plan.presenter_share_target,
         "style_instruction": str(plan.template_settings.get("style_instruction", "")),
         "script_structure": list(plan.template_settings.get("script_structure", [])),
-        "script_section_count": (plan.template_settings.get("script_section_count")
-                                 or (5 if 0 < plan.presenter_share_target < 100 else None)),
+        "script_section_count": plan.template_settings.get("script_section_count"),
         "topic": {"title": topic.title, "angle": topic.angle, "audience": topic.audience,
                   "outline": topic.outline},
         "sources": [{"reference_id": source.reference_id, "title": source.title,
@@ -8238,8 +8237,7 @@ def generate_creation_task_script(
                     sources=provider_sources,
                     style_instruction=str(plan.template_settings.get("style_instruction", "")),
                     script_structure=tuple(plan.template_settings.get("script_structure", [])),
-                    script_section_count=(plan.template_settings.get("script_section_count")
-                                          or (5 if 0 < plan.presenter_share_target < 100 else None)),
+                    script_section_count=plan.template_settings.get("script_section_count"),
                 )
             )
         )

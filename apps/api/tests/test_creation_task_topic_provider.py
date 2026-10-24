@@ -659,7 +659,7 @@ def test_script_generation_prompt_is_compact_without_overriding_template_section
     assert len(result.sections) == (section_count or 1) and len(calls) == 2
     instruction = calls[0]["messages"][0]["content"]
     if section_count is None:
-        assert "建议整合为3–5" in instruction
+        assert "不预设段数" in instruction
         sections = calls[0]["tools"][0]["function"]["parameters"]["properties"]["script"]["properties"]["sections"]
         assert f"本次工具schema允许{sections['minItems']}–{sections['maxItems']}段正文" in instruction
     else:
@@ -670,7 +670,7 @@ def test_script_generation_prompt_is_compact_without_overriding_template_section
     assert calls[1]["max_tokens"] == 8192
     assert [call["tools"][0]["function"]["name"] for call in calls] == ["submit_script_draft", "submit_script_review"]
     sections_schema = calls[0]["tools"][0]["function"]["parameters"]["properties"]["script"]["properties"]["sections"]
-    assert sections_schema["minItems"] == (section_count or 1) and sections_schema["maxItems"] == (section_count or 5)
+    assert sections_schema["minItems"] == (section_count or 1) and sections_schema["maxItems"] == (section_count or 20)
 
 
 @pytest.mark.parametrize("override,expected", [(None, 120.0), (7.5, 7.5)])
@@ -733,7 +733,7 @@ def test_m3_topic_request_is_not_changed_by_script_thinking_control():
 
 @pytest.mark.parametrize("language,section_count", [("zh-CN", None), ("zh-CN", 2), ("zh-CN", 6), ("zh-CN", 7),
                                                    ("en-US", None), ("zh-CN/en-US", None)])
-def test_chinese_generation_schema_allocates_only_existing_total_duration_budget(language, section_count):
+def test_generation_schema_does_not_derive_section_caps_from_duration(language, section_count):
     from dataclasses import replace
 
     seen = []
@@ -753,23 +753,15 @@ def test_chinese_generation_schema_allocates_only_existing_total_duration_budget
     assert len(seen) == 2
     schema = seen[0]["tools"][0]["function"]["parameters"]["properties"]["script"]["properties"]["sections"]
     req = json.loads(seen[0]["messages"][1]["content"])["requirements"]
-    if language == "zh-CN":
-        count = section_count or 5
-        maximum = schema["items"]["properties"]["content"]["maxLength"]
-        assert schema["maxItems"] == count and maximum == 480 // count
-        assert maximum * count <= req["total_content_character_budget"] == 480
-        assert req["section_character_budgets"] == [{"index": i, "content_max_characters": maximum} for i in range(1, count + 1)]
-        assert schema["minItems"] == (section_count or 1)
-    else:
-        assert schema["minItems"] == 1 and schema["maxItems"] == 20
-        assert schema["items"]["properties"]["content"]["maxLength"] == 4000
-        assert req["section_count"] == "1-20"
-        assert "total_content_character_budget" not in req and "section_character_budgets" not in req
+    assert schema["minItems"] == (section_count or 1) and schema["maxItems"] == (section_count or 20)
+    assert schema["items"]["properties"]["content"]["maxLength"] == 4000
+    assert req["section_count"] == (section_count or "1-20")
+    assert "total_content_character_budget" not in req and "section_character_budgets" not in req
     assert seen[0]["max_tokens"] == seen[1]["max_tokens"] == 8192
 
 
 @pytest.mark.parametrize("returned_sections", [1, 6])
-def test_chinese_output_exceeding_section_request_suggestion_still_uses_existing_runtime_total_gate(returned_sections):
+def test_chinese_output_is_not_restricted_by_implicit_section_or_equal_character_caps(returned_sections):
     from dataclasses import replace
 
     document = _script_document(evidence_ids=["evidence_1"])

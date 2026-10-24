@@ -554,7 +554,7 @@ def test_review_must_cover_every_section_with_exact_support(malformed):
             problem['properties']['issues']['items']['anyOf']] == [['unsupported_fact'], ['goal_conflict']]
 
 
-@pytest.mark.parametrize('invalid', ['language', 'references', 'duration', 'sections'])
+@pytest.mark.parametrize('invalid', ['language', 'references', 'sections'])
 def test_invalid_generated_draft_never_reaches_review(invalid):
     document = draft()
     source = inputs()
@@ -562,9 +562,6 @@ def test_invalid_generated_draft_never_reaches_review(invalid):
         document['script']['language'] = 'en-US'
     elif invalid == 'references':
         document['script']['sections'][0]['evidence_reference_ids'] = ['not-an-alias']
-    elif invalid == 'duration':
-        document['script']['sections'][0]['content'] = '字' * 1000
-        source = replace(source, duration_target_seconds=15)
     else:
         source = replace(source, script_section_count=2)
     calls = []
@@ -1746,3 +1743,96 @@ def test_generation_section_prompt_and_requirements_follow_actual_schema(languag
     assert minimum <= len(result.sections) <= maximum
     if template_count:
         assert len(result.sections) == template_count
+
+
+@pytest.mark.parametrize('language', ['zh-CN', 'en-US'])
+def test_estimated_speech_above_delivery_target_still_receives_full_source_review(language):
+    from app.speech_timing import estimate_speech_seconds
+    content = FACT * 8 if language == 'zh-CN' else ('Set material use. ' * 30).strip()
+    assert estimate_speech_seconds(content) > 15
+    document = draft(content=content)
+    document['script']['language'] = language
+    calls = []
+    result = provider(document, reviewed(document), calls).generate(replace(inputs(), language=language, duration_target_seconds=15))
+    assert result.sections[0].content == content
+    assert len(calls) == 2
+    assert '文字估算仅用于规划' in calls[0][1]['messages'][0]['content']
+
+
+@pytest.mark.parametrize('endpoint', ['scripts/generate', 'assistant/script-draft'])
+@pytest.mark.parametrize('template_count', [None, 2])
+def test_mixed_presentation_uses_only_explicit_template_section_count(api_state, monkeypatch, endpoint, template_count):
+    state = api_state
+    with state.repository._connect() as conn:
+        row = conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()
+        plan = json.loads(row['payload'])
+        plan['presenter_share_target'] = 40
+        plan['duration_target_seconds'] = 15
+        plan['template_settings'] = {'script_section_count': template_count} if template_count else {}
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'", (json.dumps(plan),))
+    context = state.client.get('/api/creation-tasks/task/assistant/script-context')
+    assert context.status_code == 200, context.text
+    assert context.json()['script_section_count'] == template_count
+    document = draft()
+    document['script']['sections'] *= 6
+    from app.speech_timing import estimate_speech_seconds
+    assert estimate_speech_seconds(''.join(section['content'] for section in document['script']['sections'])) > 15
+    calls = []
+    set_api_provider(monkeypatch, document, reviewed(document), calls)
+    if endpoint == 'scripts/generate':
+        body = {}
+    else:
+        body = agent_payload(state)
+        original = body['sections'][0]
+        body['sections'] = [{**original, 'id': f'section-{index}'} for index in range(6)]
+        # Saving an Agent draft calls review directly, without a generation request.
+        calls.clear()
+        def review_only(request):
+            payload = json.loads(request.content)
+            calls.append((request, payload))
+            return _review_tool_response(bound_review(reviewed(document), json.loads(payload['messages'][1]['content'])))
+        generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+            transport=httpx.MockTransport(review_only))
+        monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
+    response = state.client.post('/api/creation-tasks/task/' + endpoint, json=body)
+    if template_count:
+        assert response.status_code in (422, 502), response.text
+        assert '模板要求 2 段' in response.text
+        assert state.repository.list_creation_task_scripts('local', 'task') == []
+    else:
+        assert response.status_code == 200, response.text
+        scripts = state.repository.list_creation_task_scripts('local', 'task')
+        assert len(scripts) == 1 and len(scripts[0].sections) == 6
+        review_input = json.loads(calls[-1][1]['messages'][1]['content'])
+        assert len(review_input['script']['sections']) == 6
+        assert review_input['requirements']['presenter_share_target'] == 40
+
+
+def test_confirm_does_not_treat_estimated_speech_as_real_delivery_duration(api_state, monkeypatch):
+    state = api_state
+    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
+        main.confirm_creation_task_script, methods=['POST'])
+    content = FACT * 8
+    with state.repository._connect() as conn:
+        plan = json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()['payload'])
+        plan['duration_target_seconds'] = 15
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'", (json.dumps(plan),))
+    document = draft(content)
+    calls = []
+    set_api_provider(monkeypatch, document, reviewed(document), calls)
+    generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
+    assert generated.status_code == 200, generated.text
+    script = state.repository.list_creation_task_scripts('local', 'task')[0]
+    body = {'title': script.title, 'sections': [vars(section) for section in script.sections],
+        'expected_updated_at': script.updated_at.isoformat()}
+    url = f'/api/creation-tasks/task/scripts/{script.id}/confirm'
+    rejected_body = {**body, 'expected_updated_at': '2000-01-01T00:00:00+00:00'}
+    stale = state.client.post(url, json=rejected_body)
+    assert stale.status_code == 409, stale.text
+    assert state.repository.get_creation_task('local', 'task').confirmed_script_id is None
+    confirmed = state.client.post(url, json=body)
+    assert confirmed.status_code == 200, confirmed.text
+    persisted = state.repository.get_creation_task_script('local', script.id)
+    assert persisted.selection_status == 'confirmed' and persisted.sections[0].content == content
+    assert state.repository.get_creation_task('local', 'task').confirmed_script_id == script.id
+    assert len(calls) == 2

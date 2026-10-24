@@ -25,7 +25,7 @@ from app.product_hunt import (
 )
 from app.sources import ObsidianVault
 from app.source_types import TopicSourceItem
-from app.speech_timing import estimate_speech_seconds, CHINESE_CHARACTERS_PER_SECOND, LATIN_WORDS_PER_SECOND
+from app.speech_timing import CHINESE_CHARACTERS_PER_SECOND, LATIN_WORDS_PER_SECOND
 
 
 class TopicGenerationConfigurationError(RuntimeError):
@@ -771,23 +771,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "presenter_share_target": input.presenter_share_target,
             "every_section_requires_evidence": True}
         sections_schema = report_schema["properties"]["script"]["properties"]["sections"]
-        chinese_budget_instruction = ""
-        if input.language == "zh-CN":
-            requested_sections = input.script_section_count or 5
-            total_characters = int(input.duration_target_seconds * CHINESE_CHARACTERS_PER_SECOND)
-            section_characters = total_characters // requested_sections
-            sections_schema["maxItems"] = requested_sections
-            if input.script_section_count is not None:
-                sections_schema["minItems"] = requested_sections
-            sections_schema["items"]["properties"]["content"]["maxLength"] = section_characters
-            generation_requirements.update(total_content_character_budget=total_characters,
-                section_character_budgets=[{"index": index, "content_max_characters": section_characters}
-                    for index in range(1, requested_sections + 1)])
-            chinese_budget_instruction = (
-                f"本次中文正文总字符预算为{total_characters}，按{requested_sections}段分配，每段content最多{section_characters}字符。"
-                "正文中的标点、空格和其他文字也计入字符预算，标题和画面意图不占正文预算。"
-                "每段只写该段必要的有据内容，尽量低于上限以保留停顿余量，不用长段替代请求预算。"
-            )
+        if input.script_section_count is not None:
+            sections_schema["minItems"] = input.script_section_count
+            sections_schema["maxItems"] = input.script_section_count
         section_range = f"{sections_schema['minItems']}–{sections_schema['maxItems']}"
         generation_requirements["section_count"] = input.script_section_count or section_range.replace("–", "-")
         payload = {
@@ -812,15 +798,13 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             "选题提纲是内容要点，不是一项对应一个段落；须将要点整合进指定段数。"
                             "同一段落可以包含多个短句，不要把每个句子单独拆成 sections 项。"
                             if input.script_section_count is not None else
-                            "未指定模板段数时，建议整合为3–5个较少但完整的段落，不为凑段拆句。"
+                            "未指定模板段数时，按内容与画面需要组织完整段落，不预设段数，不为凑段拆句。"
                         )
                         + f"本次工具schema允许{section_range}段正文。"
-                        + chinese_budget_instruction
-                        + f"全部口播正文总时长不能超过 {input.duration_target_seconds} 秒。"
+                        + f"本次作品目标时长为 {input.duration_target_seconds} 秒。"
                         f"按中文每秒 {CHINESE_CHARACTERS_PER_SECOND:g} 字、英文每秒 {LATIN_WORDS_PER_SECOND:g} 词估算，混合时两部分相加。"
-                        f"为停顿留出余量：纯英文正文尽量不超过 {int(input.duration_target_seconds * LATIN_WORDS_PER_SECOND * .8)} 词，"
-                        f"纯中文尽量不超过 {int(input.duration_target_seconds * CHINESE_CHARACTERS_PER_SECOND * .8)} 字。"
-                        "只保留最重要的要点，不必逐项复述完整提纲；这些限制针对全部段落合计。"
+                        "文字估算仅用于规划，不是真实配音或成片时长，不据此截断正文或强制旁白占满全片。"
+                        "按目标与有据内容组织文案，实际时长由后续真实音频和最终成片校验。"
                         "visual_prompt只用一句简短画面意图，不重复正文、资料全文或制作步骤。"
                         "报告只包含最终候选，不附分析过程，不逐项复述全部资料和提纲，不在段间重复相同内容。"
                     ),
@@ -909,12 +893,6 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             raise self._schema_failure(
                 f"文字模型返回 {len(script.sections)} 段，模板要求 {input.script_section_count} 段；"
                 "段落数量不符合所选模板，请重新生成。"
-            )
-        estimated_seconds = estimate_speech_seconds("\n".join(section.content for section in script.sections))
-        if estimated_seconds > input.duration_target_seconds:
-            raise self._schema_failure(
-                f"文案预计约 {estimated_seconds:.1f} 秒，超过方案 {input.duration_target_seconds} 秒上限；"
-                "请压缩文案后重新生成。"
             )
         return script
 
