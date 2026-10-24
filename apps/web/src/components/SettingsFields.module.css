@@ -9,7 +9,7 @@
   padding: 8px 0 4px;
   color: var(--text-2);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .row { display:grid;grid-template-columns:110px minmax(0,1fr);align-items:center;gap:4px 12px;min-width:0;padding:6px 0;border-bottom:1px solid var(--border-1); }

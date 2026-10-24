@@ -47,7 +47,7 @@
   border-color: var(--accent);
   background: var(--surface-2);
   color: var(--accent);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .useStateImpact {
@@ -55,21 +55,21 @@
   margin-top: 6px;
   color: var(--text-2);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 18px;
 }
 
 .segmentRange {
   margin: 0;
   color: var(--text-2);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 18px;
 }
 
 .analysisMessage {
   margin: 4px 0 10px;
   color: var(--warning);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 18px;
   overflow-wrap: anywhere;
 }
 
@@ -104,11 +104,11 @@
 .intakeHeading strong { color: var(--text-1); font-size: 13px; }
 .intakeHeading span { color: var(--text-2); font-size: 12px; }
 .intakeRow { justify-content: space-between; min-width: 0; }
-.intakeDescription { min-width: 0; margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.45; }
-.intakeDescription code { color: var(--text-1); font: inherit; font-weight: 600; overflow-wrap: anywhere; }
+.intakeDescription { min-width: 0; margin: 0; color: var(--text-2); font-size: 12px; line-height: 18px; }
+.intakeDescription code { color: var(--text-1); font: inherit; font-weight: 400; overflow-wrap: anywhere; }
 .intakeDescription a { color: var(--accent); text-decoration: underline; }
-.intakeCounts { flex-wrap: wrap; color: var(--text-3); font-size: 11px; }
-.intakeDetails { color: var(--text-2); font-size: 11px; line-height: 1.45; }
+.intakeCounts { flex-wrap: wrap; color: var(--text-3); font-size: 12px; }
+.intakeDetails { color: var(--text-2); font-size: 12px; line-height: 18px; }
 .intakeDetails summary { width: fit-content; cursor: pointer; }
 .intakeDetails code { display: block; margin-top: 4px; color: var(--text-1); font: inherit; overflow-wrap: anywhere; }
 .intakeDetails p { margin: 4px 0 0; }
@@ -176,7 +176,7 @@
 .collectionPicker > label {
   color: var(--text-1);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .tagChips,
@@ -228,7 +228,7 @@
   margin: 0;
   color: var(--danger);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 18px;
 }
 
 .collectionOptions {
@@ -256,7 +256,7 @@
 }
 
 .notesEditor { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); font-size: 12px; }
-.notesEditor summary { cursor: pointer; font-weight: 500; }
+.notesEditor summary { cursor: pointer; font-weight: 400; }
 .notesEditor > label { display: grid; gap: 5px; }
 .notesEditor textarea { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--border-1); border-radius: 5px; background: var(--surface-2); color: var(--text-1); font: inherit; resize: vertical; }
 .notesEditor p { margin: 0; color: var(--text-2); line-height: 1.5; }
@@ -280,9 +280,9 @@
 .intakeNotice { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:0 0 10px; padding:8px 0; color:var(--text-2); font-size:12px; }
 .intakeNotice button { min-height:28px; padding:0 7px; border:0; border-radius:5px; background:var(--surface-2); color:var(--text-1); font:inherit; cursor:pointer; }
 .workspace .results { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }
-.workspace .results .materialCard { display:grid; min-width:0; padding:0; overflow:hidden; border:0; border-radius:9px; background:var(--surface-2); color:var(--text-1); text-align:left; box-shadow:0 0 0 1px color-mix(in srgb,var(--border-1) 55%,transparent); }
-.workspace .results .materialCard:hover { transform:none; box-shadow:0 0 0 1px var(--border-2); }
-.workspace .results .materialCard:global(.is-selected) { box-shadow:0 0 0 2px var(--focus); }
+.workspace .results .materialCard { display:grid; min-width:0; padding:0; overflow:hidden; border:0; border-radius:9px; background:var(--surface-2); color:var(--text-1); text-align:left; box-shadow:none; border:1px solid var(--border-1); }
+.workspace .results .materialCard:hover { transform:none; box-shadow:none; border-color:var(--border-2); }
+.workspace .results .materialCard:global(.is-selected) { box-shadow:none; border-color:var(--focus); }
 .workspace .materialCard :global(.library-card__poster) { aspect-ratio:16/10; border:0; background:var(--surface-2); }
 .workspace .materialCard :global(.library-card__poster) img, .workspace .materialCard :global(.library-card__poster) video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
 .workspace .materialCard :global(.library-card__fallback-icon) { top:50%; left:50%; translate:-50% -50%; opacity:.65; }
@@ -310,10 +310,10 @@
 .statTags small { color:var(--text-2); white-space:nowrap; }
 .inspector { min-width:0; font-size:13px; }
 .inspector .preview { width:100%; height:180px; min-height:0; }
-.inspector :global(.library-inspector__title) strong { font-size:13px; font-weight:500; }
+.inspector :global(.library-inspector__title) strong { font-size:13px; font-weight:400; }
 .inspector :global(.library-inspector__title) span { font-size:12px; }
 .inspector :global(.library-segments) { margin:8px 0 14px; }
-.inspector :global(.library-segments) h3 { font-size:13px; font-weight:500; }
+.inspector :global(.library-segments) h3 { font-size:13px; font-weight:400; }
 .inspector :global(.library-segments) button { min-width:0; min-height:56px; }
 .inspector :global(.library-segments) button p { overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-size:12px; }
 .inspector :global(.library-inspector__meta) > div { display:grid; grid-template-columns:80px minmax(0,1fr); gap:8px; padding:8px 0; }
@@ -325,7 +325,7 @@
 .inspector :global(.library-segment-organizer) [data-app-select-trigger] { min-width:0; width:100%; max-width:100%; min-height:32px; padding-right:24px; }
 .rangeHeading { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; min-height:32px; gap:6px; color:var(--text-2); font-size:12px; }
 .rangeHeading button { min-height:28px; padding:0 6px; border:0; border-radius:5px; background:var(--surface-2); color:var(--text-1); font:inherit; cursor:pointer; }
-.modalitySummary { margin:6px 0 10px; color:var(--text-2); font-size:12px; line-height:1.6; }
+.modalitySummary { margin:6px 0 10px; color:var(--text-2); font-size:12px; line-height:18px; }
 .detailSection { min-width:0; margin:8px 0; color:var(--text-2); font-size:12px; }
 .detailSection summary { min-height:32px; line-height:32px; color:var(--text-1); cursor:pointer; }
 .detailSection p { margin:4px 0; overflow-wrap:anywhere; line-height:1.6; }
@@ -339,10 +339,10 @@
 .workspace .objectList .materialCard :global(.library-card__copy) small + small::before { content:" · "; }
 
 .tagSuggestions { margin-block: 12px; color: var(--text-1); font-size: 13px; }
-.tagSuggestions summary { cursor: pointer; font-weight: 500; }
+.tagSuggestions summary { cursor: pointer; font-weight: 400; }
 .tagSuggestions p { color: var(--text-2); margin: 6px 0; font-size: 12px; }
 .tagSuggestions > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 6px; }
-.tagSuggestions strong { font-weight: 500; }
+.tagSuggestions strong { font-weight: 400; }
 .tagSuggestions small { display: block; color: var(--text-2); font-size: 12px; }
 .tagSuggestions button { flex-shrink: 0; min-height: 28px; padding: 3px 10px; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .tagSuggestions button:hover { background: var(--surface-2); }

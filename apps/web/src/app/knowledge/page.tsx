@@ -2,9 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { type KnowledgeItem, listKnowledgeItems, sourceErrorMessage } from "@/lib/source-api";
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 import { KnowledgeWorkspace } from "./KnowledgeWorkspace";
 
 export default function KnowledgePage() {
+  return <WorkspaceRoute label="知识库"><KnowledgePageContent/></WorkspaceRoute>;
+}
+
+function KnowledgePageContent() {
   const [items, setItems] = useState<KnowledgeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

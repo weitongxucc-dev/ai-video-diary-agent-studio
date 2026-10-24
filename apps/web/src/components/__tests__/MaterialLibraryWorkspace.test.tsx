@@ -1727,7 +1727,8 @@ it("publishes only explicit material references with actual versions and leaves 
   await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"整条素材 · local.mp4", selection:{scope:"asset", asset_id:"asset", expected_updated_at:fractional.updated_at}}));
   fireEvent.click(screen.getByRole("button", { name:/^0:01.25.*0:03.75/ }));
   await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"local.mp4 · 片段 0:01.25–0:03.75", selection:{scope:"segment", asset_id:"asset", segment_id:"segment", expected_updated_at:fractional.updated_at, expected_segment_updated_at:"2026-10-10T02:00:00Z"}}));
-  fireEvent.click(screen.getByRole("button", { name:/^取消素材引用：/ }));
+  fireEvent.click(screen.getByRole("button", { name:"查看本轮 1 项引用" }));
+  fireEvent.click(await screen.findByRole("button", { name:/^取消素材引用：/ }));
   await waitFor(() => expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null"));
   fireEvent.click(screen.getByRole("button", { name:"对象列表" }));
   expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");

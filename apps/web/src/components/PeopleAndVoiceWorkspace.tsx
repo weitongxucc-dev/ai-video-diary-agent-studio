@@ -3,7 +3,7 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AudioLines, Plus, MessageSquarePlus, RefreshCw, ShieldCheck, UserRound, Upload } from "lucide-react";
 import { type FormEvent, type SyntheticEvent, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
 import { referenceAssistantProfile, readAssistantLocateReference, ASSISTANT_LOCATE_REFERENCE_EVENT, type SelectedAssistantReference } from "@/lib/assistant-reference";
 import { getMaterialIntakeStatus, bindMaterialIntake } from "@/lib/api";
 import type { MaterialIntakeStatus } from "@/lib/types";

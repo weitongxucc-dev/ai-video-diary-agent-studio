@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Clapperboard, FileStack, X } from "lucide-react";
 import { AppShellFrame, type AppShellProps } from "../AppShell";
@@ -18,14 +18,14 @@ const WorkbenchViewStates = createContext(new Map<string, Map<string, unknown>>(
 
 // This cache owns only view lifetime. Business objects, task progress, versions,
 // conversation drafts and receipts keep their existing API/repository owners.
-const PageMount = memo(function PageMount({ page, active, updateShell }: {
-  page: WorkspacePage; active: boolean; updateShell: (id: string, props: AppShellProps) => void;
+const PageMount = memo(function PageMount({ page, active, auxiliary, updateShell }: {
+  page: WorkspacePage; active: boolean; auxiliary: boolean; updateShell: (id: string, props: AppShellProps) => void;
 }) {
   const node = useRef<HTMLDivElement>(null);
   const viewStates = useContext(WorkbenchViewStates);
   const viewState = viewStates.get(page.id) ?? new Map<string, unknown>();
   viewStates.set(page.id, viewState);
-  const context = useMemo(() => ({ id: page.id, href: page.href, active, updateShell, viewState }), [page.id, page.href, active, updateShell, viewState]);
+  const context = useMemo(() => ({ id: page.id, href: page.href, active, auxiliary, updateShell, viewState }), [page.id, page.href, active, auxiliary, updateShell, viewState]);
   useLayoutEffect(() => {
     if (!active) return;
     node.current?.querySelectorAll<HTMLElement>("[data-workspace-scroll]").forEach(element => {
@@ -43,14 +43,20 @@ const PageMount = memo(function PageMount({ page, active, updateShell }: {
     document.addEventListener("visibilitychange", pause);
     return () => document.removeEventListener("visibilitychange", pause);
   }, [active]);
-  return <TabsContent value={page.id} keepMounted hidden={!active} className={styles.page} ref={node}
+  const content = <div role="region" aria-label={page.label} hidden={!active} className={`${styles.page}${auxiliary ? ` ${styles.resourcePage}` : ""}`} ref={node}
     data-workspace-scroll="page" onScrollCapture={event => {
       const element = event.target;
       if (element instanceof HTMLElement && element.dataset.workspaceScroll) viewState.set(`scroll:${element.dataset.workspaceScroll}`, { top: element.scrollTop, left: element.scrollLeft });
     }}
-    onPlayCapture={event => { if (!active && event.target instanceof HTMLMediaElement) event.target.pause(); }}>
+    onPlayCapture={event => {
+      if (!(event.target instanceof HTMLMediaElement)) return;
+      if (!active) event.target.pause();
+    }}>
     <WorkspacePageContext.Provider value={context}>{page.content}</WorkspacePageContext.Provider>
-  </TabsContent>;
+  </div>;
+  return page.id.startsWith("/tasks/") || page.id === "/"
+    ? <TabsContent value={page.id} keepMounted className={styles.page}>{content}</TabsContent>
+    : content;
 });
 
 function MemberWorkbench({ children }: { children: ReactNode }) {
@@ -62,6 +68,10 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
   const [shells, setShells] = useState<Record<string, AppShellProps>>({});
   const [targetId, setTargetId] = useState<string | null>(null);
   const [closeError, setCloseError] = useState<string | null>(null);
+  const playingMedia = useRef<HTMLMediaElement | null>(null);
+  const releasePlaying = (event: SyntheticEvent) => {
+    if (playingMedia.current === event.target) playingMedia.current = null;
+  };
   const viewStates = useRef(new Map<string, Map<string, unknown>>());
   const selection = useAssistantSelection();
   const currentSelection = useRef(selection);
@@ -83,17 +93,21 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
     if (selected?.items.some(item => "task_id" in item)) selected.select(selected.items.filter(item => !("task_id" in item)));
   }, [newVideo]);
   const activePage = pages.find(page => page.id === activeId && page.open);
-  const managed = pathname === "/" || pathname === "/library" || pathname.startsWith("/tasks/");
-  const shell = shells[activeId] ?? {};
-  const activeViewState = viewStates.current.get(activeId);
-  const pageScope = activePage && activeViewState ? { id: activeId, href: activePage.href, active: managed, updateShell, viewState: activeViewState } : null;
+  const resourceIds = ["/library", "/knowledge", "/profiles"];
+  const managed = pathname === "/" || resourceIds.includes(pathname) || pathname.startsWith("/tasks/");
+  const dockedTask = resourceIds.includes(activeId) && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
+  const shell = shells[dockedTask?.id ?? activeId] ?? {};
+  const resourceShell = shells[activeId] ?? {};
+  const shellPage = dockedTask ?? activePage;
+  const activeViewState = viewStates.current.get(shellPage?.id ?? activeId);
+  const pageScope = shellPage && activeViewState ? { id: shellPage.id, href: shellPage.href, active: managed, auxiliary: false, updateShell, viewState: activeViewState } : null;
   const scoped = (content: ReactNode) => pageScope ? <WorkspacePageContext.Provider value={pageScope}>{content}</WorkspacePageContext.Provider> : content;
   const scopedShell: AppShellProps = { ...shell, children: null, inspector: shell.inspector && scoped(shell.inspector),
     inspectorConfirmation: shell.inspectorConfirmation && scoped(shell.inspectorConfirmation), toolbar: shell.toolbar && scoped(shell.toolbar),
     toolbarActions: shell.toolbarActions && scoped(shell.toolbarActions), quickInspector: shell.quickInspector ? openDetails => scoped(shell.quickInspector?.(openDetails)) : undefined };
   const target = targetId ? shells[targetId]?.assistantContext : undefined;
-  const resource = shell.assistantContext;
-  const tabs = pages.filter(page => page.open);
+  const resource = resourceShell.assistantContext;
+  const tabs = pages.filter(page => page.open && !resourceIds.includes(page.id));
   const activate = (id: string) => {
     const page = pages.find(item => item.id === id);
     if (page) { setPages(current => current.map(item => item.id === id ? { ...item, open: true } : item)); router.push(page.href); }
@@ -121,25 +135,32 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       router.push(next?.href ?? "/");
     }
   };
-  const tabstrip = <ScrollArea className={styles.tabScroll}><TabsList variant="line" aria-label="工作区页签" className={styles.tabList}>
+  const tabstrip = tabs.length ? <ScrollArea className={styles.tabScroll}><TabsList variant="line" aria-label="工作区页签" className={styles.tabList}>
     {tabs.map(page => <div key={page.id} className={styles.tab} data-active={page.id === activeId || undefined}>
       <TabsTrigger value={page.id} title={page.label} className={styles.tabTrigger}>
         {page.id.startsWith("/tasks/") ? <Clapperboard aria-hidden /> : <FileStack aria-hidden />}<span>{page.label}</span>
       </TabsTrigger>
       <Button variant="ghost" size="icon" className={styles.close} aria-label={`关闭${page.label}页签`} title={`关闭${page.label}页签`} onClick={() => close(page.id)}><X /></Button>
     </div>)}
-  </TabsList></ScrollArea>;
+  </TabsList></ScrollArea> : undefined;
   return <WorkbenchRegistry.Provider value={registry}><WorkbenchViewStates.Provider value={viewStates.current}>
     {children}
-    <div hidden={!managed} className={styles.host}>
-      <Tabs value={activePage?.id ?? null} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
-        <AppShellFrame {...scopedShell} workspaceTabs={tabstrip} conversation={<>
+    <div hidden={!managed} className={styles.host} onPlayCapture={event => {
+      if (!(event.target instanceof HTMLMediaElement)) return;
+      if (playingMedia.current && playingMedia.current !== event.target) playingMedia.current.pause();
+      playingMedia.current = event.target;
+    }} onPauseCapture={releasePlaying} onEndedCapture={releasePlaying}>
+      <Tabs value={dockedTask?.id ?? (resourceIds.includes(activeId) ? null : activePage?.id ?? null)} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
+        <AppShellFrame {...scopedShell} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversation={<>
           <div className={styles.target} aria-label="当前操作目标">
             {target?.task ? <><Clapperboard size={14} /><button type="button" title={target.task.name} onClick={() => targetId && activate(targetId)}>{target.task.name}</button><Button variant="ghost" size="icon" aria-label="取消当前作品目标" title="取消当前作品目标" onClick={() => { setTargetId(null); selection?.select(selection.items.filter(item => !("task_id" in item))); }}><X /></Button></> : <span>工作区对话</span>}
           </div>
           <HomeCommandComposer {...resource} {...target} pageContext={undefined} assignLocation={href => router.push(href)} />
         </>}>
-          {pages.filter(page => page.open && page.content !== null).map(page => <PageMount key={page.id} page={page} active={managed && page.id === activeId} updateShell={updateShell} />)}
+          <div data-workbench-pages className={`${styles.pages}${dockedTask ? ` ${styles.withResource}` : ""}`}>
+            {dockedTask ? <div className={styles.resourceHeader}><span>{activePage?.label}</span><Button variant="ghost" size="icon" aria-label="返回作品" title="返回作品" onClick={() => activate(dockedTask.id)}><X/></Button></div> : null}
+            {pages.filter(page => page.open && page.content !== null).map(page => <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={Boolean(dockedTask && page.id === activeId)} updateShell={updateShell} />)}
+          </div>
           {closeError ? <div role="alert" className={styles.closeError}>{closeError}<Button variant="ghost" onClick={() => setCloseError(null)}>知道了</Button></div> : null}
           {!activePage?.content ? <p className={styles.loading} role="status">正在打开工作区…</p> : null}
         </AppShellFrame>

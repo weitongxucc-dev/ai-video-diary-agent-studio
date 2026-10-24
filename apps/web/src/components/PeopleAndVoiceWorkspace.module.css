@@ -1,7 +1,7 @@
 .page { width: min(100%, 1160px); margin: 0 auto; padding: 16px 20px 24px; container-type: inline-size; }
 .optionalSetup { margin: 8px 0 14px; color: var(--text-2); font-size: 13px; }
-.sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 400; }
+.secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 400; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
 .secondaryButton:disabled, .primaryButton:disabled { cursor: not-allowed; opacity: .5; }
@@ -12,54 +12,54 @@
 .tabs { display: flex; min-height: 32px; align-items: flex-end; gap: 24px; border-bottom: 1px solid var(--border-1); }
 .tabs button { min-height: 39px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 13px; }
 .tabs button:hover { color: var(--text-1); }
-.tabs button.activeTab { border-bottom-color: var(--accent); color: var(--text-1); font-weight: 500; }
+.tabs button.activeTab { border-bottom-color: var(--accent); color: var(--text-1); font-weight: 400; }
 
 .notice { margin: 0 0 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border-1)); border-radius: 8px; background: color-mix(in srgb, var(--success) 5%, var(--surface-1)); color: var(--success); font-size: 12px; }
 .error { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 0 0 12px; padding: 13px; border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border-1)); border-radius: 9px; background: color-mix(in srgb, var(--danger) 4%, var(--surface-1)); color: var(--danger); }
-.error strong { font-size: 13px; font-weight: 500; }
+.error strong { font-size: 13px; font-weight: 400; }
 .error p { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
 .error button, .serviceEmpty button { min-height: 34px; padding: 0 11px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .loading, .serviceEmpty { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 10px; color: var(--text-2); }
 .serviceEmpty > div { max-width: 520px; }
-.serviceEmpty strong { display: block; color: var(--text-1); font-size: 15px; font-weight: 500; }
+.serviceEmpty strong { display: block; color: var(--text-1); font-size: 13px; font-weight: 400; }
 .serviceEmpty p { margin: 4px 0 0; font-size: 13px; }
 
-.workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; margin-top: 14px; overflow: hidden; border: 1px solid var(--border-1); border-radius:0; background:var(--surface-1); }
 .singleStage { width: min(100%, 900px); min-height: 0; grid-template-columns: minmax(0, 1fr); margin-right: auto; margin-left: auto; }
-.objectRail { display: flex; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--border-1); background: color-mix(in srgb, var(--surface-2) 62%, var(--surface-1)); }
-.objectRail > header { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-1); }
+.objectRail { display: flex; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--border-1); background:var(--surface-1); }
+.objectRail > header { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border-1); }
 .objectRail > header > div { display: grid; }
 .objectRail > header span { color: var(--text-3); font-size:12px; }
-.objectRail > header strong { margin-top: 2px; font-size: 13px; font-weight: 500; }
+.objectRail > header strong { margin-top: 2px; font-size: 13px; font-weight: 400; }
 .objectRail > header button, .editor header button { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border: 1px solid var(--border-1); border-radius: 8px; background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .objectList { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; align-content: start; padding: 8px; }
 .objectList > button { display: grid; grid-template-columns: 34px minmax(0, 1fr) 16px; align-items: center; gap: 8px; min-width: 0; min-height:56px; padding:9px; border:1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-1); cursor: pointer; text-align: left; }
 .objectList > button:hover { background: var(--surface-1); }
-.objectList > button.selectedObject { border-color: var(--border-1); background: var(--surface-1); box-shadow: 0 1px 2px rgb(20 20 18 / 4%); }
+.objectList > button.selectedObject { border-color: var(--border-1); background: var(--surface-1); box-shadow:none; }
 .objectList > button > span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
 .objectList button > div { display: grid; min-width: 0; }
-.objectList strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.objectList strong { overflow: hidden; font-size: 13px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .objectList small { overflow: hidden; color: var(--text-3); font-size:12px; text-overflow: ellipsis; white-space: nowrap; }
 .objectList button > svg { color: var(--text-3); }
 
 .stage { min-width: 0; background: var(--surface-1); }
 .preview { display: grid; align-content: start; justify-items: center; gap: 8px; padding: 24px; text-align: center; }
 .previewIcon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); color: var(--accent); }
-.preview > strong { font-size: 14px; font-weight: 500; }
+.preview > strong { font-size: 13px; font-weight: 400; }
 .preview > p { max-width: 520px; margin: 0; color: var(--text-2); font-size: 13px; }
-.mediaPlaceholder { display: grid; width: min(100%, 520px); padding: 16px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, var(--surface-2)), var(--surface-2) 58%); color: var(--text-3); }
+.mediaPlaceholder { display: grid; width: min(100%, 520px); padding: 16px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-2); color: var(--text-3); }
 .preview video { width: min(100%, 520px); max-height: 320px; margin: 16px 0 8px; border-radius: 10px; background: #111; }
 .preview audio { width: min(100%, 520px); margin: 20px 0 12px; }
 .previewActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
 .previewActions small { max-width: 300px; color: var(--text-2); font-size: 12px; text-align: left; }
 .previewStatus { margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: var(--surface-2); font-size:12px; }
 .previewHistory { width: min(100%, 520px); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-1); text-align: left; }
-.previewHistory h4 { margin: 0; font-size: 12px; font-weight: 500; }
+.previewHistory h4 { margin: 0; font-size: 12px; font-weight: 400; }
 .previewHistory p { margin: 5px 0 0; color: var(--text-3); font-size:12px; }
 
 .editor { min-height: 0; padding: 18px; }
 .editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-1); }
-.editor h2 { margin: 0 0 4px; font-size: 14px; font-weight: 500; }
+.editor h2 { margin: 0 0 4px; font-size: 13px; font-weight: 400; }
 .editor header p { margin: 0; color: var(--text-2); font-size: 12px; }
 .editorForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 14px; }
 .editorForm label, .inlineForm label, .voiceReference { display: grid; gap: 5px; min-width: 0; }
@@ -73,21 +73,21 @@
 .editorForm > .primaryButton { grid-column: 2; justify-self: end; }
 .voiceReference small { color: var(--text-3); font-size:12px; }
 .blockedEditor { display: flex; min-height: 360px; align-items: center; justify-content: center; gap: 12px; color: var(--warning); }
-.blockedEditor strong { color: var(--text-1); font-size: 14px; font-weight: 500; }
+.blockedEditor strong { color: var(--text-1); font-size: 13px; font-weight: 400; }
 .blockedEditor p { margin: 4px 0 0; color: var(--text-2); font-size: 12px; }
 
 .empty { display: flex; align-items: flex-start; gap: 9px; padding: 18px 12px; color: var(--text-3); }
-.empty strong { color: var(--text-1); font-size: 13px; font-weight: 500; }
+.empty strong { color: var(--text-1); font-size: 13px; font-weight: 400; }
 .empty p { margin: 3px 0 0; color: var(--text-2); font-size:12px; }
 .fullStage { margin-top: 14px; padding: 18px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .sectionHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
-.sectionHeader h2 { margin: 3px 0 2px; font-size: 14px; font-weight: 500; }
+.sectionHeader h2 { margin: 3px 0 2px; font-size: 13px; font-weight: 400; }
 .sectionHeader p { margin: 0; color: var(--text-2); font-size: 12px; }
 .sectionHeader em { color: var(--text-3); font-size: 12px; font-style: normal; }
 .records { display: grid; }
 .records article { display: flex; align-items: flex-start; gap: 10px; padding: 15px 4px; border-bottom: 1px solid var(--border-1); }
 .records article > div { min-width: 0; flex: 1; }
-.records strong { font-size: 13px; font-weight: 500; }
+.records strong { font-size: 13px; font-weight: 400; }
 .records p, .records small { display: block; margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
 .inlineForm { display: grid; grid-template-columns: 1fr 1fr 140px auto; gap: 10px; align-items: end; margin-top: 18px; }
 @container (max-width: 680px) {
@@ -103,14 +103,14 @@
 .danger { color: var(--danger); }
 
 .inspector { display: grid; align-content: start; }
-.inspector h3 { margin: 5px 0 12px; font-size: 14px; font-weight: 500; }
-.inspector > p, .inspector section p { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.inspector h3 { margin: 5px 0 12px; font-size: 13px; font-weight: 400; }
+.inspector > p, .inspector section p { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 21px; }
 .inspector dl { margin: 0; }
 .inspector dl > div { padding: 10px 0; border-top: 1px solid var(--border-1); }
 .inspector dt { color: var(--text-3); font-size: 12px; }
 .inspector dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 13px; }
 .inspector section { margin-top: 16px; padding: 13px; border-radius: 8px; background: var(--surface-2); }
-.inspector h4 { margin: 0; font-size: 13px; font-weight: 500; }
+.inspector h4 { margin: 0; font-size: 13px; font-weight: 400; }
 
 .spinning { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -154,18 +154,18 @@
 .objectIcon { display:grid; place-items:center; width:32px; height:32px; border-radius:8px; background:var(--surface-2); color:var(--text-2); }
 .objectInfo { display:grid; min-width:0; gap:4px; }
 .objectInfo strong, .objectInfo small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.objectInfo strong { font-size:13px; font-weight:500; }
+.objectInfo strong { font-size:13px; font-weight:400; }
 .objectInfo small { font-size:12px; color:var(--text-3); }
 .stage { padding:16px 0; }
-.stage h3 { font-size:14px; font-weight:500; }
-.stage p { color:var(--text-2); line-height:1.55; }
+.stage h3 { font-size:13px; font-weight:400; }
+.stage p { color:var(--text-2); line-height:21px; }
 .stage section { margin-top:14px; }
 .stage audio, .stage video, .stage img { width:min(100%,520px); }
 .stage textarea { max-width:520px; min-height:64px; padding:8px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); resize:vertical; }
 .stage [data-app-select-trigger] { width:fit-content; min-height:32px; border:1px solid var(--border-2); border-radius:8px; padding:5px 8px; }
 .stage button:disabled, .importActions button:disabled { opacity:.5; cursor:not-allowed; }
 .editorForm { display:flex; flex-direction:column; padding-top:0; gap:12px; }
-.editorForm p { margin:0; font-size:12px; color:var(--text-2); line-height:1.5; }
+.editorForm p { margin:0; font-size:12px; color:var(--text-2); line-height:18px; }
 .editorForm p[role="alert"] { color:var(--danger); }
 .editorForm input, .editorForm [data-app-select-trigger], .inlineForm [data-app-select-trigger] { min-height:32px; }
 .editorForm input[type="range"] { min-height:20px; padding:0; accent-color:var(--accent); }
@@ -182,7 +182,7 @@
 .profileHeading h3 { margin-right:auto; }
 .profileHeading button { display:grid; place-items:center; width:32px; height:32px; padding:0; }
 .intakeRepair { display:grid; gap:12px; font-size:13px; }
-.intakeRepair p { margin:0; overflow-wrap:anywhere; line-height:1.5; color:var(--text-2); }
+.intakeRepair p { margin:0; overflow-wrap:anywhere; line-height:21px; color:var(--text-2); }
 .intakeRepair button { min-height:32px; padding:6px 10px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); }
 
 .profileSearch { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--text-2); margin-top:12px; white-space:nowrap; }

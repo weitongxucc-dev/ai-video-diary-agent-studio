@@ -1,9 +1,8 @@
 "use client";
 import { useWorkspaceViewState } from "./workbench/context";
-import { WorkspaceVideo } from "./workbench/WorkspaceMedia";
 import NextImage from "next/image";
 import { useEffect, useMemo, useRef } from "react";
-import { Languages, Play, Save, Undo2, Redo2, Settings2 } from "lucide-react";
+import { Languages, Save, Undo2, Redo2, Settings2 } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskExactEditInput, CreationTaskSubtitleCue, CreationTaskSubtitleTrack, CreationTaskMontage, CreationTaskCoverAsset, CreationTaskCapability } from "@/lib/types";
 import { AppSelect, AppSelectOption } from "./AppSelect";
@@ -171,6 +170,7 @@ export function SubtitleWorkspace({
   busy,
   onDraftChange,
   onPreviewExact,
+  onSeekPreview,
   onSelectCover,
   onSelectCue,
   onSelectTrack,
@@ -186,6 +186,7 @@ export function SubtitleWorkspace({
   busy: boolean;
   onDraftChange: () => void;
   onPreviewExact: (input: CreationTaskExactEditInput) => void;
+  onSeekPreview: (seconds: number) => void;
   onSelectCover: () => void;
   onSelectCue: (cueId: string) => void;
   onSelectTrack: (trackId: string) => void;
@@ -211,7 +212,6 @@ export function SubtitleWorkspace({
   const [saveSubtitleMode, setSaveSubtitleMode] = useWorkspaceViewState<"zh" | "en" | "zh-en">("subtitle.saveSubtitleMode",
     activeTrack.language === "en-US" ? "en" : "zh",
   );
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [view, setView] = useWorkspaceViewState<"subtitle" | "style" | "cover">("subtitle.view", "subtitle");
   const chineseVisible = sourceTrack.language === "zh-CN" && sourceTrack.status === "valid" && sourceTrack.style.enabled !== false;
   const englishVisible = translationTrack?.status === "valid" && translationTrack.style.enabled !== false;
@@ -227,7 +227,7 @@ export function SubtitleWorkspace({
   function seekFrame(next: number) {
     const bounded = Math.max(0, Math.min(duration, next));
     setFrameTime(bounded);
-    if (videoRef.current) videoRef.current.currentTime = bounded;
+    onSeekPreview(bounded);
   }
 
   const cuePosition = `${versionId}:${activeTrack.id}:${selectedCueId}:${currentCue?.start_seconds}`;
@@ -266,10 +266,7 @@ export function SubtitleWorkspace({
           </div> : null}
         </div>
         <div className={styles.columns}>
-          <section className={styles.mediaPanel}>
-            <header><span><Play size={15}/>{montage?.output_url ? "当前成片" : "草稿字幕"}</span><small>{duration.toFixed(1)} 秒</small></header>
-            {montage?.output_url ? <WorkspaceVideo key={versionId} aria-label="字幕成片预览" controls onLoadedMetadata={() => seekFrame(frameTime)} preload="metadata" ref={videoRef} style={{aspectRatio:(montage.aspect_ratio ?? planAspectRatio).replace(":","/")}} src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)}/> : <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p>}
-          </section>
+          {!montage?.output_url ? <p role="status">当前草稿尚无有效成片；字幕可继续编辑，画面预览需重新生成后查看。</p> : null}
           <div className={styles.editor}>
             {view === "subtitle" ? <div className={styles.trackChoice}><span>编辑轨道</span><AppSelect aria-label="当前编辑字幕轨道" disabled={busy} value={activeTrack.id} onValueChange={onSelectTrack}>{tracks.map(track=><AppSelectOption key={track.id} value={track.id}>{track.language === "zh-CN" ? "中文轨" : "英文轨"} · {track.cues.length} 条</AppSelectOption>)}</AppSelect></div> : null}
             <Tabs.Panel value="subtitle" keepMounted className={styles.panel}>
@@ -280,7 +277,7 @@ export function SubtitleWorkspace({
                 {translationTrack?.status !== "valid" ? <button className={styles.secondaryButton} type="button" disabled={busy || !translationCapability.available} onClick={enableBilingual}><Languages size={15}/>生成英文字幕</button> : null}
               </div>
               {!translationCapability.available && !translationTrack ? <details className={styles.propertySection}><summary>翻译暂不可用</summary><p>{translationCapability.message}{translationCapability.repair_action ? ` 处理方式：${translationCapability.repair_action}` : ""}</p></details> : null}
-              <label className={styles.cueSelection}><span>选择字幕</span><AppSelect aria-label="选择字幕" disabled={busy} onValueChange={newValue => { const cue=activeTrack.cues.find(item=>item.id===newValue);if(cue){onSelectCue(cue.id);if(videoRef.current)videoRef.current.currentTime=cue.start_seconds;} }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue,index)=><AppSelectOption key={cue.id} value={cue.id}>{index+1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</AppSelectOption>)}</AppSelect></label>
+              <label className={styles.cueSelection}><span>选择字幕</span><AppSelect aria-label="选择字幕" disabled={busy} onValueChange={newValue => { const cue=activeTrack.cues.find(item=>item.id===newValue);if(cue){onSelectCue(cue.id);seekFrame(cue.start_seconds);} }} value={currentCue?.id ?? ""}>{activeTrack.cues.map((cue,index)=><AppSelectOption key={cue.id} value={cue.id}>{index+1} · {cue.start_seconds.toFixed(1)}–{cue.end_seconds.toFixed(1)} 秒 · {cue.text}</AppSelectOption>)}</AppSelect></label>
               <div aria-label={`${activeTrack.language === "zh-CN" ? "中文" : "英文"}字幕列表`} className={styles.subtitleCueList}>{currentCue ? <SubtitleCueEditor versionId={versionId} key={`${taskId}:${versionId}:${activeTrack.id}:${currentCue.id}`} busy={busy} cue={currentCue} index={currentCueIndex} onDraftChange={onDraftChange} onPreview={onPreviewExact} onSelect={() => onSelectCue(currentCue.id)} selected={selectedCueId === currentCue.id} track={activeTrack}/> : <p>当前轨道没有字幕条目。</p>}</div>
               <details className={styles.propertySection}><summary>全文查找替换</summary><label className={styles.field}>查找<input aria-label="字幕查找文字" maxLength={96} value={findText} disabled={busy} onChange={event=>{setFindText(event.target.value);onDraftChange();}}/></label><label className={styles.field}>替换为<input aria-label="字幕替换文字" maxLength={96} value={replaceText} disabled={busy} onChange={event=>{setReplaceText(event.target.value);onDraftChange();}}/></label><button className={styles.secondaryButton} type="button" disabled={busy || !findText || findText===replaceText} onClick={()=>onPreviewExact({operation_type:"ReplaceSubtitleText",track_id:activeTrack.id,find_text:findText,replacement_text:replaceText})}>应用全文替换</button></details>
             </Tabs.Panel>

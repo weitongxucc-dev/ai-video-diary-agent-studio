@@ -1,8 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Workbench } from "../workbench/Workbench";
-import { useWorkspaceViewState } from "../workbench/context";
+import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
+import { useWorkspacePage, useWorkspaceViewState } from "../workbench/context";
 import { WorkspaceRoute } from "../workbench/WorkspaceRoute";
 import { AppShell, type AppShellProps } from "../AppShell";
 import type { HomeCommandComposerProps } from "../HomeCommandComposer";
@@ -15,17 +17,19 @@ vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () =>
 vi.mock("../AssistantConversationProvider", () => ({ useAssistantSelection: () => null }));
 vi.mock("../AppShell", async importOriginal => {
   const original = await importOriginal<typeof import("../AppShell")>();
-  return { ...original, AppShellFrame: ({ children, conversation, workspaceTabs }: AppShellProps) => <>{workspaceTabs}{conversation}<main>{children}</main></> };
+  return { ...original, AppShellFrame: ({ children, conversation, workspaceTabs, inspector }: AppShellProps) => <>{workspaceTabs}{conversation}<main>{children}</main>{inspector}</> };
 });
 vi.mock("../HomeCommandComposer", () => ({ HomeCommandComposer: ({ task }: HomeCommandComposerProps) => {
   const [draft, setDraft] = useState(() => { composerMount(); return ""; });
   return <><output aria-label="发送目标">{task?.id ?? "home"}</output><input aria-label="持续对话草稿" value={draft} onChange={event => setDraft(event.target.value)} /></>;
 } }));
 
+function Inspector() { return createPortal(<><output aria-label="检查器页面">{useWorkspacePage()?.id}</output><WorkspaceVideo aria-label="检查器预览" src="/inspector.mp4" /></>, document.body); }
+
 function Page({ id }: { id: string }) {
   const [draft, setDraft] = useWorkspaceViewState("test.draft", "");
   const task = id.startsWith("/tasks/") ? { id: id.split("/").at(-1), name: `作品 ${id.at(-1)}` } as CreationTask : null;
-  return <AppShell assistantContext={task ? { task } : undefined}><input aria-label={`页面草稿 ${id}`} value={draft} onChange={event => setDraft(event.target.value)} /><video aria-label={`预览 ${id}`} /></AppShell>;
+  return <AppShell inspector={<Inspector />} assistantContext={task ? { task } : undefined}><input aria-label={`页面草稿 ${id}`} value={draft} onChange={event => setDraft(event.target.value)} /><WorkspaceVideo aria-label={`预览 ${id}`} src={`${id}/preview.mp4`} /></AppShell>;
 }
 function route() {
   const path = navigation.path;
@@ -43,16 +47,31 @@ it("keeps one conversation and explicit task target while browsing, isolates two
   await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" });
   fireEvent.change(screen.getByLabelText("持续对话草稿"), { target: { value: "还未发送的要求" } });
   fireEvent.change(screen.getByLabelText("页面草稿 /tasks/a"), { target: { value: "A 的裁剪输入" } });
+  const player = screen.getByLabelText("预览 /tasks/a") as HTMLVideoElement;
+  player.currentTime = 4; fireEvent.timeUpdate(player); fireEvent.play(player);
   navigation.path = "/library"; view.rerender(fixture(route()));
-  await screen.findByRole("tab", { name: "素材库" });
+  await screen.findByRole("region", { name: "素材库" });
   expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
   expect(screen.getByLabelText("持续对话草稿")).toHaveValue("还未发送的要求");
-  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+  expect(screen.getByRole("region", { name: "作品 a" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "素材库" })).toBeVisible();
+  expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts).not.toContain(player);
+  expect(screen.getByLabelText("预览 /tasks/a")).toBe(player);
+  expect(player).toHaveAttribute("src", "/tasks/a/preview.mp4");
+  expect(player.currentTime).toBe(4);
+  expect(screen.getByLabelText("检查器页面")).toHaveTextContent("/library");
+  fireEvent.play(screen.getByLabelText("预览 /library"));
+  expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts.at(-1)).toBe(player);
+  fireEvent.play(player);
+  fireEvent.play(screen.getByLabelText("检查器预览"));
+  expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts.at(-1)).toBe(player);
+  expect(player).toHaveAttribute("src", "/tasks/a/preview.mp4");
   view.rerender(fixture(route()));
-  expect(screen.getAllByRole("tab", { name: "素材库" })).toHaveLength(1);
+  expect(screen.getAllByRole("region", { name: "素材库" })).toHaveLength(1);
   navigation.path = "/tasks/b"; view.rerender(fixture(route()));
   await waitFor(() => expect(screen.getByLabelText("发送目标")).toHaveTextContent("b"));
   expect(screen.getByLabelText("页面草稿 /tasks/b")).toHaveValue("");
+  expect(player).not.toHaveAttribute("src");
   fireEvent.change(screen.getByLabelText("页面草稿 /tasks/b"), { target: { value: "B 的字幕输入" } });
   navigation.path = "/tasks/a"; view.rerender(fixture(route()));
   await waitFor(() => expect(screen.getByLabelText("发送目标")).toHaveTextContent("a"));

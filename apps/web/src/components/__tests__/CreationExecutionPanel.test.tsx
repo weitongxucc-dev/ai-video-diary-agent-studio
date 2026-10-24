@@ -107,7 +107,7 @@ describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
   });
 });
 
-function visualDecision(adopted = false): Exclude<import('@/lib/types/creation-tasks').SegmentVisualDecision, { status: 'planning_conflict' }> {
+function visualDecision(adopted = false): Extract<import('@/lib/types/creation-tasks').SegmentVisualDecision, { decision_digest: string }> {
   return { task_id: 'task-1', job_id: 'job-1', section_id: 'section-1', decision_digest: 'a'.repeat(64),
     status: adopted ? 'adopted' : 'waiting_for_user', adopted, audio: { persisted: true, artifact_reference: 'narration://original' },
     usage: { settled: true, used_seconds: 1, used_output_bytes: 24000 },
@@ -231,7 +231,8 @@ it("shows a real planning conflict and preserved audio without candidate selecti
     required_confirmation_ids: [], confirmed_clip_ids: [], device_request_id: null,
     recovery: { action: "resume_original", requires_revalidation: true, detail: "请处理时长或合法素材冲突后恢复原请求。" },
   };
-  render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null} availableVoices={[]} preview={null}
+  const props = {taskStage:"montage" as const,taskReason:null,voice:null,availableVoices:[],preview:null,execution:null,busy:false,onReadVisualDecision:read,onAdoptVisualDecision:adopt,onStart:vi.fn(),onResume:vi.fn(),onCancel:vi.fn(),onOpenMontage:vi.fn()};
+  const {rerender} = render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null} availableVoices={[]} preview={null}
     execution={null} busy={false} visualDecision={conflict} onReadVisualDecision={read} onAdoptVisualDecision={adopt}
     onStart={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
   expect(screen.getByRole("alert")).toHaveTextContent(conflict.reason);
@@ -242,5 +243,18 @@ it("shows a real planning conflict and preserved audio without candidate selecti
   expect(screen.queryByRole("button", { name: "查看更多原候选" })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "回查原决定" }));
   expect(read).toHaveBeenCalledWith(conflict);
+  expect(adopt).not.toHaveBeenCalled();
+  const recovered: import('@/lib/types/creation-tasks').SegmentVisualPlanningRecovery = {
+    ...conflict, status:"adopted",adopted:true,reason:"合法画面已准备，原请求继续执行",
+  };
+  rerender(<CreationExecutionPanel {...props} visualDecision={recovered}/>);
+  expect(screen.getByRole("dialog", {name:"原画面准备记录"})).toBeVisible();
+  expect(screen.getByText(recovered.reason)).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", {name:"确认画面并继续原作业"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", {name:"继续已采用的原作业"})).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", {name:"回查原决定"}));
+  expect(read).toHaveBeenLastCalledWith(recovered);
   expect(adopt).not.toHaveBeenCalled();
 });

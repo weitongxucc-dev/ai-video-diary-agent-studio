@@ -449,11 +449,14 @@ export type SegmentVisualPlanningConflict = {
   decision_digest: null; adopted: false;
   audio: { artifact_reference: string; persisted: boolean };
   usage: SegmentVisualCandidateDecision["usage"];
-  candidate_clips: []; candidate_total_count: 0; candidate_offset: 0; next_offset: null;
+  candidate_clips: []; candidate_total_count: 0; candidate_offset: number; next_offset: null;
   required_confirmation_ids: []; confirmed_clip_ids: []; device_request_id: null;
   recovery: { action: "resume_original"; requires_revalidation: true; detail: string };
 };
-export type SegmentVisualDecision = SegmentVisualCandidateDecision | SegmentVisualPlanningConflict;
+export type SegmentVisualPlanningRecovery = Omit<SegmentVisualPlanningConflict, "status" | "adopted"> & {
+  status: "adopted"; adopted: true;
+};
+export type SegmentVisualDecision = SegmentVisualCandidateDecision | SegmentVisualPlanningConflict | SegmentVisualPlanningRecovery;
 export type SegmentVisualDecisionAdoption = {
   decision: SegmentVisualDecision; queue: { request_id: string; replayed: boolean } | null; execution: CreationExecutionStatus;
 };

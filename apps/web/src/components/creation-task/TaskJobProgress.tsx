@@ -1,6 +1,7 @@
 "use client";
 import { WorkspaceAudio, WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { useWorkspacePage } from "../workbench/context";
+import { MediaVisibilityContext } from "../ui/media-visibility";
 import type { TaskMediaJob, TaskMediaJobPage, TaskMediaResultMap } from "@/lib/types";
 import NextImage from "next/image";
 import { creationTaskFailureReason, creationTaskRepairAction } from "@/lib/creation-task-status";
@@ -18,6 +19,7 @@ import type { CreationTaskNativeArtifact, CreationTaskNativeOperations } from '@
 export function NativeOperationsPanel({taskId,adoptedRefs,onPreviewImage,canPrepare}:{taskId:string;adoptedRefs:string[];
     onPreviewImage:(artifact:CreationTaskNativeArtifact)=>void;canPrepare:boolean}) {
     const viewActive=useWorkspacePage()?.active ?? true;
+    const [historyOpen,setHistoryOpen]=useState(false);
     const [page,setPage]=useState<CreationTaskNativeOperations|null>(null),[offset,setOffset]=useState(0);
     const [error,setError]=useState<string|null>(null),[retry,setRetry]=useState(0);
     const [selected,setSelected]=useState<CreationTaskNativeArtifact|null>(null),[url,setUrl]=useState<string|null>(null);
@@ -54,9 +56,12 @@ export function NativeOperationsPanel({taskId,adoptedRefs,onPreviewImage,canPrep
     const statuses:Record<string,string>={queued:'等待执行',waiting:'等待资源',running:'正在执行',succeeded:'执行成功',failed:'执行失败',cancel_requested:'正在停止',cancelled:'已取消',interrupted:'已中断'};
     const processStates:Record<string,string>={not_started:'未启动',running:'运行中',exited:'已退出',unknown:'待核对'};
     const releaseStates:Record<string,string>={not_acquired:'未占用',released:'已释放',unknown:'待核对'};
-    return <section className={styles.workSection} aria-label="任务执行与工作产物">
-        <div className={styles.sectionHeading}><div><h2>工作产物</h2><p>登记后先作为候选，采用到时间线后才成为作品的一部分。</p></div><Button variant="outline" onClick={()=>setRetry(value=>value+1)}>刷新产物</Button></div>
-        {error?<p role="alert">{error}</p>:null}
+    return <section aria-label="任务执行与工作产物">
+        {error?<p role="alert">{error}<Button variant="outline" onClick={()=>setRetry(value=>value+1)}>重新读取产物</Button></p>:null}
+        <details className={styles.runDetails} open={historyOpen} onToggle={event=>setHistoryOpen(event.currentTarget.open)}>
+        <summary>工作产物与执行记录{current ? ` · ${current.total_count} 条` : ""}{current?.items.some(item=>['failed','interrupted'].includes(item.status)) ? " · 有失败或中断" : ""}</summary>
+        <MediaVisibilityContext.Provider value={historyOpen}>
+        <div className={styles.sectionHeading}><span>工作产物候选</span><Button variant="outline" onClick={()=>setRetry(value=>value+1)}>刷新产物</Button></div>
         {selected?<div className={styles.segmentVideoPreview}>
             {url && selected.media_type.startsWith('image/')?<NextImage unoptimized width={640} height={360} style={{width:'100%',height:'auto',objectFit:'contain'}} src={url} alt="实际登记的工作产物候选"/>:null}
             {url && selected.media_type.startsWith('video/')?<WorkspaceVideo controls preload="metadata" src={url} aria-label="实际登记的视频候选"/>:null}
@@ -78,6 +83,7 @@ export function NativeOperationsPanel({taskId,adoptedRefs,onPreviewImage,canPrep
             </div>)}
         </article>)}</div>
         {current && (current.offset>0 || current.truncated)?<div><p>当前显示 {current.offset+1}–{current.offset+current.items.length} / {current.total_count} 条</p><Button variant="outline" disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>上一页</Button><Button variant="outline" disabled={!current.truncated} onClick={()=>setOffset(offset+30)}>下一页</Button></div>:null}
+        </MediaVisibilityContext.Provider></details>
     </section>;
 }
 /**

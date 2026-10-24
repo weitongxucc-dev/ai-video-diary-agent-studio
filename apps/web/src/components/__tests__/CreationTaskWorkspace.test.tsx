@@ -358,7 +358,7 @@ describe("persisted final video quality checks", () => {
     fireEvent.click(getWorkspaceViewControl(/^检查与输出：/));
     expect(await screen.findByText("成片发现问题")).toBeInTheDocument();
     expect(screen.getByText("检测不可用：音频无法测量")).toBeInTheDocument();
-    const player = screen.getByLabelText("成片预览") as HTMLVideoElement;
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
     const pause = vi.spyOn(player, "pause").mockImplementation(() => undefined);
     fireEvent.click(screen.getByRole("button", { name: "定位 3.25–4.10 秒" }));
     expect(pause).toHaveBeenCalled();
@@ -1488,7 +1488,7 @@ describe("CreationTaskWorkspace", () => {
     initial.montage!.clips = [clip, { ...clip, id: "clip-2", timeline_start_seconds: 3, timeline_end_seconds: 6 }];
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl(/^检查与输出：/));
-    const player = screen.getByLabelText("成片预览") as HTMLVideoElement;
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
     player.currentTime = 3;
     fireEvent.seeked(player);
     expect(screen.getByLabelText("局部修改要求")).toBeInTheDocument();
@@ -1642,7 +1642,7 @@ describe("CreationTaskWorkspace", () => {
     });
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl("字幕与封面：待补封面"));
-    const player = screen.getByLabelText("字幕成片预览") as HTMLVideoElement;
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
     await chooseSelectValue(screen.getByLabelText("选择字幕"), "subtitle-cue-2");
     await waitFor(() => expect(player.currentTime).toBe(4.5));
     expect(screen.getByRole("button", { name: "选择中文字幕 2" })).toHaveAttribute("aria-pressed", "true");
@@ -2177,7 +2177,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(getWorkspaceViewControl("字幕与封面：待补封面"));
 
     expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument();
-    expect(screen.getByLabelText("字幕成片预览")).toHaveAttribute("src", "/api/creation-tasks/task-1/output?version=timeline-version-6");
+    expect(screen.getByLabelText("剪辑成片预览")).toHaveAttribute("src", "/api/creation-tasks/task-1/output?version=timeline-version-6");
     expect(screen.queryByLabelText("当前选择")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /AI 生成封面/ })).not.toBeInTheDocument();
 
@@ -2274,7 +2274,7 @@ describe("CreationTaskWorkspace", () => {
 
     // 字幕草稿仍可编辑，但失效的成片不能冒充新预览；回到剪辑阶段仍能撤销。
     expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument();
-    expect(screen.queryByLabelText("字幕成片预览")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
     expect(screen.getByText("未出片")).toBeInTheDocument();
     expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
@@ -2308,7 +2308,7 @@ describe("CreationTaskWorkspace", () => {
 
     // 成片仍有效时不得乱跳：仍停在字幕与封面页，预览器照旧
     await waitFor(() => expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument());
-    expect(screen.getByLabelText("字幕成片预览")).toHaveAttribute("src", "/api/creation-tasks/task-1/output?version=timeline-version-7");
+    expect(screen.getByLabelText("剪辑成片预览")).toHaveAttribute("src", "/api/creation-tasks/task-1/output?version=timeline-version-7");
   });
 
   it("applies a valid transition edit when the field is committed", async () => {
@@ -3009,7 +3009,7 @@ describe("CreationTaskWorkspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(mocks.undoTimeline).toHaveBeenCalledWith("task-1", {
-      expected_timeline_version_id: "timeline-version-4", expected_timeline_sequence: 4,
+      expected_timeline_version_id: "timeline-version-4", expected_timeline_sequence: 4, request_id: expect.any(String),
     }));
     await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledWith("task-1"));
     await waitFor(() => expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled());
@@ -3596,11 +3596,15 @@ describe("CreationTaskWorkspace", () => {
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
     const input = await readyInput("局部修改要求");
+    fireEvent.click(await screen.findByRole("button",{name:"查看本轮 1 项引用"}));
     await screen.findByRole("button",{name:"取消素材引用：旧素材参考"});
+    fireEvent.click(screen.getByRole("button",{name:"关闭引用列表"}));
     fireEvent.change(input,{target:{value:"把当前镜头改为完整显示"}});
     fireEvent.click(screen.getByRole("button",{name:"选择镜头 1"}));
-    expect(screen.getByRole("button",{name:"取消素材引用：旧素材参考"})).toBeVisible();
-    expect(screen.getByRole("button",{name:"取消镜头引用：镜头 1"})).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"查看本轮 2 项引用"}));
+    expect(await screen.findByRole("button",{name:"取消素材引用：旧素材参考"})).toBeVisible();
+    expect(screen.getByRole("button",{name:/^取消镜头引用：镜头 1/})).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"关闭引用列表"}));
     expect(mocks.setMaterialReference).not.toHaveBeenCalled();
     expect(input).toHaveValue("把当前镜头改为完整显示");
     await waitFor(()=>expect(screen.getByRole("button",{name:"发送"})).toBeEnabled());
@@ -3608,7 +3612,9 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(()=>expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id,expect.objectContaining({message:"把当前镜头改为完整显示",context_stage:"montage",selected_object_refs:[],expected_reference_version:1,expected_timeline_version_id:initial.task.current_timeline_version_id}),expect.any(Function)));
     expect(mocks.materialTurn).not.toHaveBeenCalled();
     const conversationId=mocks.askAssistant.mock.calls[0][1].conversation_id;
-    fireEvent.click(screen.getByRole("button",{name:"取消镜头引用：镜头 1"}));
+    fireEvent.click(screen.getByRole("button",{name:"查看本轮 2 项引用"}));
+    fireEvent.click(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/}));
+    fireEvent.click(screen.getByRole("button",{name:"关闭引用列表"}));
     const selection={scope:"segment" as const,asset_id:"new-material",segment_id:"new-segment",expected_updated_at:"asset-v2",expected_segment_updated_at:"segment-v2"};
     act(()=>referenceAssistantMaterial({label:"主动选择的素材",selection}));
     await screen.findByRole("button",{name:"取消素材引用：主动选择的素材"});
@@ -3630,7 +3636,8 @@ describe("CreationTaskWorkspace", () => {
     const input=await readyInput("局部修改要求");
     fireEvent.click(screen.getByRole("button",{name:"选择镜头 1"}));
     await waitFor(()=>expect(mocks.saveReference).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button",{name:"取消镜头引用：镜头 1"}));
+    fireEvent.click(screen.getByRole("button",{name:"查看本轮 1 项引用"}));
+    fireEvent.click(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/}));
     fireEvent.change(input,{target:{value:"给这条素材添加空镜头"}});
     await waitFor(()=>expect(screen.getByRole("button",{name:"发送"})).toBeEnabled());
     const state=mocks.assistantActions!.assistantState;
@@ -3646,7 +3653,8 @@ describe("CreationTaskWorkspace", () => {
     await act(async()=>finishCheckpoint!());
     expect(mocks.materialTurn).not.toHaveBeenCalled();expect(mocks.askAssistant).not.toHaveBeenCalled();
     expect(input).toHaveValue("给这条素材添加空镜头");
-    expect(screen.getByRole("button",{name:"取消镜头引用：镜头 1"})).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"查看本轮 1 项引用"}));
+    expect(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/})).toBeVisible();
   });
 
   it("sends a frozen material reference from the task dialogue without an active editor target", async () => {
@@ -3671,7 +3679,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(getWorkspaceViewControl(/^字幕与封面：/));
     fireEvent.click(screen.getByRole("button",{name:"重做"}));
     await waitFor(()=>expect(mocks.redoTimeline).toHaveBeenCalledWith("task-1", {
-      expected_timeline_version_id: "timeline-version-6", expected_timeline_sequence: 6,
+      expected_timeline_version_id: "timeline-version-6", expected_timeline_sequence: 6, request_id: expect.any(String),
     }));
   });
 
@@ -3691,7 +3699,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText("需人工试听确认，当前无自动音量校验")).toBeInTheDocument();
     expect(screen.getAllByText("已就绪")).toHaveLength(2);
     expect(screen.queryByText("画面、声音和尺寸检查已通过。")).not.toBeInTheDocument();
-    expect(screen.getByText("请逐项检查字幕、声音和封面。")).toBeInTheDocument();
+    expect(screen.getByLabelText("剪辑成片预览")).toBeVisible();
   });
 
   // WIL-56 遗留：箭头叠加层选中后，编辑上下文芯片不能叫「标题」。
@@ -3870,7 +3878,7 @@ describe("CreationTaskWorkspace", () => {
 
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
 
-    expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument());
     expect(mocks.listTimelineVersions).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
@@ -3906,7 +3914,7 @@ describe("CreationTaskWorkspace", () => {
     const body = within(panel).getByRole("region", { name: "历史时间线版本" }).parentElement!;
     body.scrollTop = 120;
     fireEvent.click(within(panel).getByRole("button", { name: "收起历史版本" }));
-    expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument());
     expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
     expect(player.currentTime).toBe(1.25);
     expect(player).toHaveAttribute("src", playerSource);
@@ -3929,7 +3937,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.listTimelineVersions).toHaveBeenCalledTimes(2);
     expect(mocks.getTimelineVersion).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "历史时间线版本" })).not.toBeInTheDocument());
 
     // 查看、收起与重开都不触发写时间线或替换当前工作区。
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
@@ -4251,16 +4259,16 @@ it("switches review and production preparation without replacing the saved playe
   const result = screen.getByRole("tab", { name: "成片检查" });
   const prepare = screen.getByRole("tab", { name: "制作准备" });
   expect(result).toHaveAttribute("aria-selected", "true");
-  const player = screen.getByLabelText("成片预览");
+  const player = screen.getByLabelText("剪辑成片预览");
   expect(screen.queryByRole("button", { name: "确认以上文案和要求，开始制作" })).not.toBeInTheDocument();
   fireEvent.click(prepare);
   expect(prepare).toHaveAttribute("aria-selected", "true");
-  expect(player).not.toBeVisible();
+  expect(player).toBeVisible();
   expect(await productionAction("确认以上文案和要求，开始制作")).toBeVisible();
   expect(screen.queryByRole("button", { name: "保存到本地" })).not.toBeInTheDocument();
   fireEvent.keyDown(prepare, { key: "ArrowRight" });
   expect(result).toHaveFocus();
-  expect(screen.getByLabelText("成片预览")).toBe(player);
+  expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
   expect(player).toBeVisible();
   expect(mocks.startExecution).not.toHaveBeenCalled();
   expect(mocks.renderMontage).not.toHaveBeenCalled();
@@ -4273,7 +4281,7 @@ it("opens production preparation when the reviewed output no longer matches the 
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
   expect(screen.getByRole("tab", { name: "制作准备" })).toHaveAttribute("aria-selected", "true");
   expect(screen.queryByRole("button", { name: "保存到本地" })).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("成片预览")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
   expect(mocks.renderMontage).not.toHaveBeenCalled();
 });
 
@@ -4311,7 +4319,7 @@ describe("作品视图与真实版本",()=>{
   const last=within(nav).getByRole("tab",{name:/^文案：/});
   if (last.getAttribute("aria-disabled") !== "true") expect(last).toHaveFocus();
   const publish=getWorkspaceViewControl(/^发布与数据：/);fireEvent.click(publish);
-  expect(screen.getByRole("heading",{name:"发布与数据",level:2})).toBeVisible();expect(screen.getByRole("link",{name:"打开发布工作区"})).toHaveAttribute("href","/history");
+  expect(screen.getByLabelText("剪辑成片预览")).toBeVisible();expect(screen.getByRole("link",{name:"打开发布工作区"})).toHaveAttribute("href","/history");
  });
  it("distinguishes the actual confirmed script and the unconfirmed latest draft",async()=>{
   const initial=subtitleCoverWorkspace();const original={id:"original-script",task_id:initial.task.id,run_id:"fixture-run",topic_id:"fixture-topic",title:"文案",language:"zh-CN" as const,selection_status:"confirmed" as const,created_at:initial.task.created_at,updated_at:initial.task.updated_at,confirmed_at:initial.task.updated_at,estimated_duration_seconds:3,sections:[{id:"fixture-section",title:"正文",content:"固定正文",visual_prompt:"已有测试画面",evidence_reference_ids:[]}],warnings:[]};
@@ -4599,6 +4607,9 @@ it('native registration waits for real artifacts and previews candidates before 
   segmentApi.native.mockResolvedValue(page as never);segmentApi.content.mockResolvedValue(new Blob(['fixture']));
   const preview=vi.fn();
   const view=render(<NativeOperationsPanel taskId="task" adoptedRefs={[]} onPreviewImage={preview} canPrepare/>);
+  await screen.findByText(/^工作产物与执行记录/);
+  expect(screen.getByText(/^工作产物与执行记录/).closest("details")).not.toHaveAttribute("open");
+  fireEvent.click(screen.getByText(/^工作产物与执行记录/));
   await screen.findByText('产物登记 · 等待执行');
   expect(screen.getByText('等待原因：当前设备正在完成其他制作任务')).toBeTruthy();
   expect(screen.getByText('恢复方式：等待当前执行释放资源后继续')).toBeTruthy();

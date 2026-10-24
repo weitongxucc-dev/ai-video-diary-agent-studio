@@ -318,3 +318,18 @@ it("uses the existing execution poll to read the same storyboard receipt when th
   expect(api.readStoryboard).toHaveBeenCalledWith("task-a", requestId);
   expect(result.current.storyboard.canSubmit).toBe(true);
 });
+
+
+it("never posts adoption for a recovered planning record without a decision digest", async () => {
+  const recovered = { ...visual(), status:"adopted",adopted:true,can_adopt:false,decision_digest:null,
+    required_confirmation_ids:[],reason:"合法画面已准备，原请求继续执行",
+    recovery:{action:"resume_original",requires_revalidation:true,detail:"保留原请求"} };
+  api.readVisual.mockResolvedValue(recovered);
+  const {result} = renderHook(() => useCreationExecution({taskId:"task-a",confirmedScriptId:null,
+    timelineVersionId:"version-1",voiceId:undefined,voiceVersion:undefined,workspaceReadRevision:0,onWorkspaceRead:vi.fn(()=>true)}));
+  await act(async()=>{await result.current.readVisualDecision({job_id:"job-a",section_id:"section-a"});});
+  expect(result.current.visualDecision?.decision_digest).toBeNull();
+  await act(async()=>{await result.current.adoptVisualDecision([]);});
+  expect(api.adoptVisual).not.toHaveBeenCalled();
+  expect(api.readWorkspace).not.toHaveBeenCalled();
+});

@@ -59,13 +59,13 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
         {locators.truncated && <p>当前显示 {locators.items.length} / {locators.total_count} 项等待决定；处理后继续回读。</p>}
       </section>}
       {visualError && !visualDecision && <p role="alert">{visualError}</p>}
-      {visualDecision && <HomeCardDialog kind="config" title={visualDecision.status === "planning_conflict" ? "画面安排暂时冲突" : "确认段落画面"} onClose={() => { if (!visualBusy) onCloseVisualDecision?.(); }}
+      {visualDecision && <HomeCardDialog kind="config" title={visualDecision.status === "planning_conflict" ? "画面安排暂时冲突" : visualDecision.decision_digest === null ? "原画面准备记录" : "确认段落画面"} onClose={() => { if (!visualBusy) onCloseVisualDecision?.(); }}
         footer={<><Button variant="ghost" disabled={visualBusy} onClick={onCloseVisualDecision}>关闭</Button>
-          {visualDecision.status !== "planning_conflict" && <Button disabled={!canAdopt} onClick={() => onAdoptVisualDecision?.(selected)}>确认画面并继续原作业</Button>}</>}>
-        {visualDecision.status === "planning_conflict" ? <>
-          <p role="alert">{visualDecision.reason}</p>
+          {visualDecision.decision_digest !== null && <Button disabled={!canAdopt} onClick={() => onAdoptVisualDecision?.(selected)}>确认画面并继续原作业</Button>}</>}>
+        {visualDecision.decision_digest === null ? <>
+          <p role={visualDecision.adopted ? "status" : "alert"}>{visualDecision.reason}</p>
           <p>{visualDecision.audio.persisted ? "原配音已保留，不会重新生成已就绪配音。" : "原配音保存状态尚未核实，不会自动重新配音。"}</p>
-          <p>当前没有可采用的画面候选，请先处理以上冲突。</p>
+          <p>{visualDecision.adopted ? "这是已恢复的原请求记录，无需再次采用画面。请沿原作业查看执行状态。" : "当前没有可采用的画面候选，请先处理以上冲突。"}</p>
           <p>{visualDecision.recovery.detail}</p>
         </> : <>
         <p>原配音已保存{visualDecision.usage.settled ? '，用量已对账' : '，用量仍待核对'}；本次只确认画面，不重新配音。</p>

@@ -6,7 +6,7 @@ import type { AppShellProps } from "../AppShell";
 
 export type WorkspacePage = { id: string; href: string; label: string; content: ReactNode; open: boolean };
 export type WorkspacePageSlot = {
-  id: string; href: string; active: boolean;
+  id: string; href: string; active: boolean; auxiliary?: boolean;
   updateShell: (id: string, props: AppShellProps) => void;
   viewState: Map<string, unknown>;
 };

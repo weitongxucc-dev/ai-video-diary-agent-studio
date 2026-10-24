@@ -8,8 +8,8 @@
 .shell :global(.desktop-main-scroll) { overflow: auto; scrollbar-gutter: stable; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { overflow: hidden; scrollbar-gutter: auto; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { position: relative; }
-.shell :global(.desktop-brand) { font-size: 13px; font-weight: 500; white-space: nowrap; }
-.shell :global(.new-production-button) { height: 32px; min-height: 32px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-2); font-weight: 500; font-size: 13px; }
+.shell :global(.desktop-brand) { font-size: 13px; font-weight: 400; white-space: nowrap; }
+.shell :global(.new-production-button) { height: 32px; min-height: 32px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-2); font-weight: 400; font-size: 13px; }
 .shell :global(.new-production-button kbd) { display: none; }
 .shell :global(.desktop-nav-row) { min-height: 32px; font-size: 13px; }
 .shell :global(.desktop-creation-task[aria-current="page"]) { background: var(--surface-3); box-shadow: none; }
@@ -51,7 +51,7 @@
 .tabbed.workspaceCollapsed .workspaceTabs { display:none; }
 .conversation { grid-column: 1; grid-row: 1 / span 2; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface-2); border: 0; border-right: 1px solid var(--border-1); border-radius: 0; }
 .conversationHeader { display: flex; justify-content: space-between; align-items: center; height:56px; padding:0 14px; flex-shrink:0; border-bottom: 1px solid var(--border-1); }
-.conversationHeader span { display: flex; align-items: center; gap: 9px; font-weight: 500; }
+.conversationHeader span { display: flex; align-items: center; gap: 9px; font-weight: 400; }
 .conversationHeader small { color: var(--text-3); font-size: 12px; }
 .conversationBody { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 .conversationBody :global(.home-composer) { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0; padding: 12px; border: 0; background: transparent; }
@@ -92,7 +92,7 @@
 .shell :global(.desktop-sidebar__scroll) {padding:4px 8px 12px;gap:12px;}
 .shell :global(.desktop-nav-group) {display:grid;gap:2px;}
 .shell :global(.desktop-nav-row) {border-radius:6px;color:var(--text-2);font-weight:400;}
-.shell :global(.desktop-nav-row.is-active) {background:var(--surface-3);color:var(--text-1);font-weight:500;}
+.shell :global(.desktop-nav-row.is-active) {background:var(--surface-3);color:var(--text-1);font-weight:400;}
 .shell :global(.desktop-nav-heading) {font-size:12px;font-weight:400;}
 .shell :global(.desktop-nav-section--creation-tasks) {border:0;}
 .shell :global(.desktop-sidebar__footer) {border:0;padding:8px;}

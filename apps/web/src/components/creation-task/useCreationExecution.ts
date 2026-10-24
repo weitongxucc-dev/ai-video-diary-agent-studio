@@ -245,7 +245,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
                 more ? visualDecision?.next_offset ?? 0 : 0);
             if (epoch !== visualEpoch.current || currentTask.current !== taskId) return;
             if (more) {
-                if (!visualDecision || value.status === "planning_conflict" || visualDecision.status === "planning_conflict" || value.decision_digest !== visualDecision.decision_digest) throw new Error('原画面决定已变化，请关闭后重新查看；未重新提交采用。');
+                if (!visualDecision || value.decision_digest === null || visualDecision.decision_digest === null || value.decision_digest !== visualDecision.decision_digest) throw new Error('原画面决定已变化，请关闭后重新查看；未重新提交采用。');
                 setVisualDecision({ ...value, candidate_clips: [...visualDecision.candidate_clips, ...value.candidate_clips] });
             } else {
                 setVisualDecision(value);
@@ -258,7 +258,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
         }
     }
     async function adoptVisualDecision(confirmedClipIds: string[]) {
-        if (visualPending.current !== null || visualReadRequiredRef.current || !visualDecision || visualDecision.status === "planning_conflict" || visualDecision.task_id !== taskId) return;
+        if (visualPending.current !== null || visualReadRequiredRef.current || !visualDecision || !visualDecision.decision_digest || visualDecision.task_id !== taskId) return;
         const saved = visualDecision;
         const epoch = ++visualEpoch.current;
         visualPending.current = epoch; setVisualBusy(true); setVisualError(null);

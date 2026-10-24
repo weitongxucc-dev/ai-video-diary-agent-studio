@@ -19,7 +19,7 @@ function fixture():WorkspaceState {
  subtitle_translation_capability:{available:true,message:"本轮fixture",repair_action:null},cover_frame_capability:{available:true,message:"本轮fixture",repair_action:null}} as WorkspaceState;
 }
 function mount(workspace=fixture(),activeTrack=workspace.subtitle_tracks[0],busy=false,slot?:WorkspacePageSlot){
- const callbacks={onDraftChange:vi.fn(),onPreviewExact:vi.fn(),onSelectCover:vi.fn(),onSelectCue:vi.fn(),onSelectTrack:vi.fn(),onSaveCover:vi.fn(),onSaveSubtitle:vi.fn(),onUndo:vi.fn(),onRedo:vi.fn()};
+ const callbacks={onSeekPreview:vi.fn(),onDraftChange:vi.fn(),onPreviewExact:vi.fn(),onSelectCover:vi.fn(),onSelectCue:vi.fn(),onSelectTrack:vi.fn(),onSaveCover:vi.fn(),onSaveSubtitle:vi.fn(),onUndo:vi.fn(),onRedo:vi.fn()};
  const content=<SubtitleWorkspace {...callbacks} taskId={workspace.task.id} versionId={workspace.task.current_timeline_version_id} canUndo={workspace.task.can_undo} canRedo={workspace.task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} activeTrack={activeTrack} busy={busy} selectedCover={false} selectedCueId={null}/>;
  const result=render(slot?<WorkspacePageContext.Provider value={slot}>{content}</WorkspacePageContext.Provider>:content);return {...result,...callbacks};
 }
@@ -38,17 +38,17 @@ describe("compact subtitle workspace real callbacks",()=>{
   reopened.unmount();const next=fixture();next.task.current_timeline_version_id="version-2";mount(next,next.subtitle_tracks[0],false,slot);
   expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("自建字幕第一条");fireEvent.click(screen.getByRole("tab",{name:"样式"}));expect(screen.getByLabelText("字幕字号")).toHaveValue(40);fireEvent.click(screen.getByRole("tab",{name:"封面"}));expect(screen.getByLabelText("封面标题")).toHaveValue("自建封面");
  });
- it("keeps preview and playhead across view-only navigation without a mutation",async()=>{
-  const c=mount();const user=userEvent.setup();const video=screen.getByLabelText("字幕成片预览") as HTMLVideoElement;video.currentTime=2.4;
+ it("uses the shared preview without mounting another player or seeking on view-only navigation",async()=>{
+  const c=mount();const user=userEvent.setup();expect(document.querySelector("video")).toBeNull();
   await user.click(screen.getByRole("tab",{name:"样式"}));expect(screen.queryByLabelText("当前编辑字幕轨道")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("tab",{name:"封面"}));expect(screen.getByLabelText("字幕成片预览")).toBe(video);expect(video.currentTime).toBe(2.4);expect(screen.queryByRole("button",{name:"保存字幕"})).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab",{name:"封面"}));expect(document.querySelector("video")).toBeNull();expect(c.onSeekPreview).not.toHaveBeenCalled();expect(screen.queryByRole("button",{name:"保存字幕"})).not.toBeInTheDocument();
   await user.click(screen.getByRole("tab",{name:"字幕"}));expect(c.onPreviewExact).not.toHaveBeenCalled();
  });
  it("preserves the original blur auto-save when a real focused cue draft leaves for another view",async()=>{
-  const c=mount();const user=userEvent.setup();const video=screen.getByLabelText("字幕成片预览") as HTMLVideoElement;
-  const text=screen.getByLabelText("字幕 1 文本");await user.click(text);await user.clear(text);await user.type(text,"待保存草稿");video.currentTime=2.4;
+  const c=mount();const user=userEvent.setup();
+  const text=screen.getByLabelText("字幕 1 文本");await user.click(text);await user.clear(text);await user.type(text,"待保存草稿");
   await user.click(screen.getByRole("tab",{name:"样式"}));expect(c.onPreviewExact).toHaveBeenCalledWith(expect.objectContaining({operation_type:"UpdateSubtitleCue",track_id:"zh",cue_id:"zh-cue-1",text:"待保存草稿"}));
-  expect(screen.getByLabelText("字幕成片预览")).toBe(video);expect(video.currentTime).toBe(2.4);
+  expect(document.querySelector("video")).toBeNull();expect(c.onSeekPreview).not.toHaveBeenCalled();
   await user.click(screen.getByRole("tab",{name:"字幕"}));expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("待保存草稿");
  });
  it("counts Unicode code points and blocks over96 or invalid times before real preview",()=>{
@@ -84,7 +84,7 @@ describe("compact subtitle workspace real callbacks",()=>{
   const trigger=screen.getByRole("button",{name:"字幕导出设置"});await user.click(trigger);expect(await screen.findByLabelText("保存字幕语言")).toHaveAttribute("data-selected-value","en");await user.keyboard("{Escape}");await waitFor(()=>expect(trigger).toHaveFocus());
  });
  it("keeps cover drafts across views and routes generation and saving to the actual existing callbacks",()=>{
-  const c=mount();fireEvent.click(screen.getByRole("tab",{name:"封面"}));fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"新的自建标题"}});fireEvent.change(screen.getByLabelText("封面画面时间"),{target:{value:"4"}});fireEvent.click(screen.getByRole("tab",{name:"字幕"}));fireEvent.click(screen.getByRole("tab",{name:"封面"}));expect(screen.getByLabelText("封面标题")).toHaveValue("新的自建标题");fireEvent.click(screen.getByRole("button",{name:"从画面生成封面"}));expect(c.onPreviewExact).toHaveBeenLastCalledWith({operation_type:"GenerateCoverFromFrame",frame_time_seconds:4,title:"新的自建标题",title_position:"bottom"});fireEvent.click(screen.getByRole("button",{name:"保存封面"}));expect(c.onSaveCover).toHaveBeenCalledOnce();
+  const c=mount();fireEvent.click(screen.getByRole("tab",{name:"封面"}));fireEvent.change(screen.getByLabelText("封面标题"),{target:{value:"新的自建标题"}});fireEvent.change(screen.getByLabelText("封面画面时间"),{target:{value:"4"}});expect(c.onSeekPreview).toHaveBeenLastCalledWith(4);fireEvent.click(screen.getByRole("tab",{name:"字幕"}));fireEvent.click(screen.getByRole("tab",{name:"封面"}));expect(screen.getByLabelText("封面标题")).toHaveValue("新的自建标题");fireEvent.click(screen.getByRole("button",{name:"从画面生成封面"}));expect(c.onPreviewExact).toHaveBeenLastCalledWith({operation_type:"GenerateCoverFromFrame",frame_time_seconds:4,title:"新的自建标题",title_position:"bottom"});fireEvent.click(screen.getByRole("button",{name:"保存封面"}));expect(c.onSaveCover).toHaveBeenCalledOnce();
  });
  it("retains translation and the genuine busy or missing-frame capability gates",()=>{
   const w=fixture();w.subtitle_tracks=[w.subtitle_tracks[0]];const c=mount(w);fireEvent.click(screen.getByRole("button",{name:"生成英文字幕"}));expect(c.onSelectTrack).toHaveBeenCalledWith("zh");expect(c.onPreviewExact).toHaveBeenCalledWith({operation_type:"ConfigureSubtitleTrack",track_id:"zh",target_language:"en-US"});c.unmount();
@@ -93,7 +93,7 @@ describe("compact subtitle workspace real callbacks",()=>{
  it("keeps focused cue and style drafts when the same saved projection is reread as new objects",()=>{
   const w=fixture();const c=mount(w);const input=screen.getByLabelText("字幕 1 文本");input.focus();fireEvent.change(input,{target:{value:"未提交文字"}});
   const next=JSON.parse(JSON.stringify(w)) as WorkspaceState;
-  const props={onDraftChange:c.onDraftChange,onPreviewExact:c.onPreviewExact,onSelectCover:c.onSelectCover,onSelectCue:c.onSelectCue,onSelectTrack:c.onSelectTrack,onSaveCover:c.onSaveCover,onSaveSubtitle:c.onSaveSubtitle,onUndo:c.onUndo,onRedo:c.onRedo,busy:false,selectedCover:false,selectedCueId:null};
+  const props={onSeekPreview:c.onSeekPreview,onDraftChange:c.onDraftChange,onPreviewExact:c.onPreviewExact,onSelectCover:c.onSelectCover,onSelectCue:c.onSelectCue,onSelectTrack:c.onSelectTrack,onSaveCover:c.onSaveCover,onSaveSubtitle:c.onSaveSubtitle,onUndo:c.onUndo,onRedo:c.onRedo,busy:false,selectedCover:false,selectedCueId:null};
   c.rerender(<SubtitleWorkspace {...props} taskId={next.task.id} versionId={next.task.current_timeline_version_id} canUndo={next.task.can_undo} canRedo={next.task.can_redo} cover={next.cover_asset} montage={next.montage} planAspectRatio={next.plan.aspect_ratio} subtitleTracks={next.subtitle_tracks} translationCapability={next.subtitle_translation_capability} frameCapability={next.cover_frame_capability} activeTrack={next.subtitle_tracks[0]}/>);
   expect(input).toHaveValue("未提交文字");expect(input).toHaveFocus();expect(c.onPreviewExact).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab",{name:"样式"}));const size=screen.getByLabelText("字幕字号");size.focus();fireEvent.change(size,{target:{value:"48"}});
@@ -105,7 +105,7 @@ describe("compact subtitle workspace real callbacks",()=>{
   const w=fixture();const c=mount(w);fireEvent.change(screen.getByLabelText("字幕 1 文本"),{target:{value:"旧版本输入"}});
   fireEvent.click(screen.getByRole("tab",{name:"样式"}));fireEvent.change(screen.getByLabelText("字幕字号"),{target:{value:"48"}});
   const next=JSON.parse(JSON.stringify(w)) as WorkspaceState;next.task.current_timeline_version_id="version-2";next.subtitle_tracks[0].timeline_version_id="version-2";
-  c.rerender(<SubtitleWorkspace taskId={next.task.id} versionId={next.task.current_timeline_version_id} canUndo={next.task.can_undo} canRedo={next.task.can_redo} cover={next.cover_asset} montage={next.montage} planAspectRatio={next.plan.aspect_ratio} subtitleTracks={next.subtitle_tracks} translationCapability={next.subtitle_translation_capability} frameCapability={next.cover_frame_capability} activeTrack={next.subtitle_tracks[0]} busy={false} selectedCover={false} selectedCueId={null} onDraftChange={c.onDraftChange} onPreviewExact={c.onPreviewExact} onSelectCover={c.onSelectCover} onSelectCue={c.onSelectCue} onSelectTrack={c.onSelectTrack} onSaveCover={c.onSaveCover} onSaveSubtitle={c.onSaveSubtitle} onUndo={c.onUndo} onRedo={c.onRedo}/>);
+  c.rerender(<SubtitleWorkspace onSeekPreview={c.onSeekPreview} taskId={next.task.id} versionId={next.task.current_timeline_version_id} canUndo={next.task.can_undo} canRedo={next.task.can_redo} cover={next.cover_asset} montage={next.montage} planAspectRatio={next.plan.aspect_ratio} subtitleTracks={next.subtitle_tracks} translationCapability={next.subtitle_translation_capability} frameCapability={next.cover_frame_capability} activeTrack={next.subtitle_tracks[0]} busy={false} selectedCover={false} selectedCueId={null} onDraftChange={c.onDraftChange} onPreviewExact={c.onPreviewExact} onSelectCover={c.onSelectCover} onSelectCue={c.onSelectCue} onSelectTrack={c.onSelectTrack} onSaveCover={c.onSaveCover} onSaveSubtitle={c.onSaveSubtitle} onUndo={c.onUndo} onRedo={c.onRedo}/>);
   expect(screen.getByLabelText("字幕字号")).toHaveValue(40);fireEvent.click(screen.getByRole("tab",{name:"字幕"}));expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("自建字幕第一条");
  });
 });
