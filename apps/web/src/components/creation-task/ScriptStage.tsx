@@ -4,17 +4,54 @@ import { Tabs } from "@base-ui/react/tabs";
 import Link from "next/link";
 import { Check, LoaderCircle } from "lucide-react";
 import { Button } from "../ui/button";
-import { useEffect, useState } from "react";
-import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan } from "@/lib/api";
-import type { CreationTask, CreationTaskScript, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
+import { useEffect, useRef, useState } from "react";
+import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan, getCreationTaskScriptSections } from "@/lib/api";
+import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 export function ConfirmedScriptView({ script }: {
     script: CreationTaskScript;
 }) {
-    return (<section className={styles.workSection}>
-      <div className={styles.sectionHeading}><h2>{script.title}</h2><span className={styles.artifactStatus}>{script.selection_status === "confirmed" ? "已确认" : "待确认草稿"}</span></div>
-      <div className={styles.scriptSections}>{script.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><p className={styles.scriptCopy}>{section.content}</p><p><strong>画面建议：</strong>{section.visual_prompt}</p><details className={styles.traceDetails}><summary>来源证据</summary><p>{section.evidence_reference_ids.join("、") || "未单独标注"}</p></details></article>)}</div>
-    </section>);
+    return <ScriptSectionReader key={`${script.task_id}:${script.id}:${script.updated_at}`} script={script}/>;
+}
+function ScriptSectionReader({ script }: { script: CreationTaskScript }) {
+    const [cursors, setCursors] = useState([0]);
+    const [reload, setReload] = useState(0);
+    const revision = useRef<string | undefined>(undefined);
+    const [read, setRead] = useState<
+        { status: "loading" } | { status: "failed"; message: string }
+        | { status: "ready"; page: CreationTaskScriptSectionWindow }
+    >({ status: "loading" });
+    const after = cursors[cursors.length - 1];
+    useEffect(() => {
+        let active = true;
+        setRead({ status: "loading" });
+        void getCreationTaskScriptSections(script.task_id, script.id, {
+            after_ordinal: after, expected_updated_at: revision.current,
+        }).then((page) => {
+            if (!active) return;
+            revision.current = page.updated_at;
+            setRead({ status: "ready", page });
+        }).catch((cause) => {
+            if (active) setRead({ status: "failed", message: cause instanceof Error ? cause.message : "文案段落没有读回。" });
+        });
+        return () => { active = false; };
+    }, [script.task_id, script.id, after, reload]);
+    function restart() {
+        revision.current = undefined;
+        setCursors([0]);
+        setReload((value) => value + 1);
+    }
+    const page = read.status === "ready" ? read.page : null;
+    return <section className={styles.workSection}>
+        <div className={styles.sectionHeading}><h2>{page?.title ?? script.title}</h2><span className={styles.artifactStatus}>{(page?.selection_status ?? script.selection_status) === "confirmed" ? "已确认" : "待确认草稿"}</span></div>
+        {read.status === "loading" ? <p role="status">正在读取文案段落…</p> : null}
+        {read.status === "failed" ? <><p role="alert">{read.message}</p><Button variant="outline" onClick={restart}>重新读取文案</Button></> : null}
+        {page ? <>
+            <p>共 {page.total_count} 段{page.items.length ? ` · 第 ${page.items[0].ordinal}–${page.items[page.items.length - 1].ordinal} 段` : ""}</p>
+            <div className={styles.scriptSections}>{page.items.map(({ ordinal, section }) => <article key={section.id}><header><span>第 {ordinal} 段</span><strong>{section.title}</strong></header><p className={styles.scriptCopy}>{section.content}</p><p><strong>画面建议：</strong>{section.visual_prompt}</p><details className={styles.traceDetails}><summary>来源证据</summary><p>{section.evidence_reference_ids.join("、") || "未单独标注"}</p></details></article>)}</div>
+            {page.total_count > page.items.length ? <div><Button variant="outline" disabled={cursors.length === 1} onClick={() => setCursors((current) => current.slice(0, -1))}>上一页文案</Button><Button variant="outline" disabled={page.next_after_ordinal === null} onClick={() => setCursors((current) => [...current, page.next_after_ordinal!])}>下一页文案</Button></div> : null}
+        </> : null}
+    </section>;
 }
 export function ReadonlyScriptsView({ scripts, confirmedScriptId }: {
     scripts: WorkspaceState["scripts"];
@@ -128,18 +165,54 @@ export function PlanReplyDraftAction({ task, busy = false, onComplete }: {
         return error ? <p role="alert">{error}</p> : null;
     return <section className={styles.workSection} aria-label="已选择的首页回复">
     <h3>已选择的对话回复</h3>
-    <p>保存为待确认文案草稿后，仍需逐段补充当前资料引用和画面建议；不会跳过选题确认。</p>
+    <p>保存为待确认文案草稿后，可继续补充画面建议；确认时会核查正文、画面建议及相关事实依据。</p>
     <button className={styles.secondaryButton} disabled={pending || busy} onClick={() => void transfer()} type="button">{pending ? "正在核对并保存…" : "保存这条回复为文案草稿"}</button>
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }
-export function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: {
+type LoadedScript = Extract<CreationTaskScript, { sections_loaded: true }>;
+type ScriptEditorProps = {
     taskId: string;
     script: CreationTaskScript;
     busy: boolean;
     repairing: boolean;
-    onConfirm: (script: CreationTaskScript) => void;
-}) {
+    onConfirm: (script: LoadedScript) => void;
+};
+export function ScriptEditor(props: ScriptEditorProps) {
+    if (props.script.sections_loaded) return <CompleteScriptEditor {...props} script={props.script}/>;
+    return <ScriptEditorLoader key={`${props.taskId}:${props.script.id}:${props.script.updated_at}`} {...props}/>;
+}
+function ScriptEditorLoader(props: ScriptEditorProps) {
+    const [loaded, setLoaded] = useState<LoadedScript | null>(null);
+    const [reading, setReading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const active = useRef(true);
+    useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+    async function loadCompleteDraft() {
+        setReading(true);
+        setError(null);
+        try {
+            const page = await getCreationTaskScriptSections(props.taskId, props.script.id, { expected_updated_at: props.script.updated_at });
+            if (!active.current) return;
+            if (page.total_count === 0 || page.next_after_ordinal !== null || page.items.length !== page.total_count) {
+                throw new Error("本稿尚未完整载入，不能将当前窗口保存或确认为全文。请逐页查看文案。");
+            }
+            setLoaded({ ...props.script, title: page.title, language: page.language, selection_status: page.selection_status,
+                updated_at: page.updated_at, sections_loaded: true, sections_total_count: page.total_count,
+                sections: page.items.map(item => item.section) });
+        } catch (cause) {
+            if (active.current) setError(cause instanceof Error ? cause.message : "文案没有完整读回，当前不可保存或确认。");
+        } finally { if (active.current) setReading(false); }
+    }
+    if (loaded) return <CompleteScriptEditor {...props} script={loaded}/>;
+    return <>
+        <p>文案共 {props.script.sections_total_count} 段，正文尚未完整载入；当前不可保存或确认。</p>
+        {props.script.sections_total_count <= 20 ? <Button variant="outline" disabled={props.busy || reading} onClick={() => void loadCompleteDraft()}>{reading ? '正在读取完整文案…' : '读取完整文案以编辑'}</Button> : <p>当前可逐页查看，分段修改尚未开放。</p>}
+        {error ? <p role="alert">{error}</p> : null}
+        <ConfirmedScriptView script={props.script}/>
+    </>;
+}
+function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Omit<ScriptEditorProps, 'script'> & { script: LoadedScript }) {
     const [draft, setDraft] = useWorkspaceViewState(`script:${script.id}:${script.updated_at}`+".draft", script);
     const [sourceRead, setSourceRead] = useState<
         { status: "loading" } | { status: "failed"; message: string }
@@ -178,14 +251,14 @@ export function ScriptEditor({ taskId, script, busy, repairing, onConfirm }: {
         }
     }
     return (<section className={styles.workSection}>
-      <div className={styles.sectionHeading}><div><h2>{repairing ? "修订文案" : "检查文案"}</h2><p>确认后使用这份正文和画面建议制作。</p></div></div>
+      <div className={styles.sectionHeading}><div><h2>{repairing ? "修订文案" : "检查文案"}</h2><p>确认时会核查正文、画面建议及相关事实依据；通过后使用这份文案制作。</p></div></div>
       {script.reused_from_entry_id ? <p>从文案库复用的新稿，尚未确认；没有调用模型或复制旧成片。<Link href="/knowledge">查看文案来源</Link></p> : null}
-      {script.source_reply_reference ? <p>来自已完成对话回复。当前内容是待确认草稿；来源和画面建议需要你逐段核对补充。</p> : null}
+      {script.source_reply_reference ? <p>来自已完成对话回复。当前内容是待确认草稿；可继续编辑画面建议和相关资料，确认时会核查完整内容。</p> : null}
       <label className={styles.field}><span>标题</span><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })}/></label>
-      <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })}/><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })}/></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sourceRead.status === "loading" ? <p role="status">正在读取当前任务资料…</p> : sourceRead.status === "failed" ? <p>资料尚未读回，请检查读取错误。</p> : sourceRead.sources.length ? sourceRead.sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })}/>{source.title}</label>) : <p>当前任务没有可选资料；请先补充并确认有效来源。</p>}</fieldset></article>)}</div>
+      <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })}/><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })}/></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sourceRead.status === "loading" ? <p role="status">正在读取当前任务资料…</p> : sourceRead.status === "failed" ? <p>资料尚未读回，请检查读取错误。</p> : sourceRead.sources.length ? sourceRead.sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })}/>{source.title}</label>) : <p>当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。</p>}</fieldset></article>)}</div>
       {sourceRead.status === "failed" ? <p role="alert">{sourceRead.message}</p> : null}
       {draftError ? <p role="alert">{draftError}</p> : null}
       {script.selection_status === "draft" ? <Button variant="outline" className={styles.secondaryButton} disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => void saveDraft()} type="button">{savingDraft ? "正在保存草稿…" : "保存草稿"}</Button> : null}
-      <div className={styles.primaryAction}><Button className="modern-primary-button" disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim() || !section.evidence_reference_ids.length)} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}{repairing ? "确认修订文案" : "确认文案"}</Button></div>
+      <div className={styles.primaryAction}><Button className="modern-primary-button" disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim())} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}{repairing ? "确认修订文案" : "确认文案"}</Button></div>
     </section>);
 }

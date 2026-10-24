@@ -113,7 +113,7 @@ export type CreationTaskScript = {
     topic_id: string;
     title: string;
     language: "zh-CN" | "en-US" | "zh-CN/en-US";
-    sections: CreationTaskScriptSection[];
+    sections_total_count: number;
     selection_status: "draft" | "confirmed";
     created_at: string;
     updated_at: string;
@@ -124,6 +124,19 @@ export type CreationTaskScript = {
         turn_id: string;
         response_digest: string;
     } | null;
+} & ({ sections_loaded: true; sections: CreationTaskScriptSection[] }
+    | { sections_loaded: false; sections: null });
+export type CreationTaskScriptSectionWindow = {
+    task_id: string;
+    script_id: string;
+    updated_at: string;
+    title: string;
+    language: CreationTaskScript["language"];
+    selection_status: CreationTaskScript["selection_status"];
+    total_count: number;
+    items: { ordinal: number; section: CreationTaskScriptSection; digest: string }[];
+    next_after_ordinal: number | null;
+    truncated: boolean;
 };
 export type CreationTaskScriptsResponse = {
     task: CreationTask;
@@ -569,6 +582,29 @@ export type CreationTaskSegments = {
 };
 export type CreationTaskBudget = {
     task_id: string;
+    authorization_coverage: "tts_pcm_only" | "scope_unbound";
+    scopes: {
+        authorization: {
+            scope_id: string;
+            revision: number;
+            limits: { execution_seconds: number | null; generated_bytes: number | null };
+            policy_kind: "local_goal" | "explicit_total";
+            revoked: boolean;
+            target_task_ids: string[];
+            source_ref: string;
+        };
+        usage: {
+            execution_seconds: number;
+            generated_bytes: number;
+            reserved_seconds: number;
+            reserved_bytes: number;
+            unknown_unit_count: number;
+            unit_count: number;
+        };
+        remaining: { execution_seconds: number | null; generated_bytes: number | null };
+        status: "available" | "revoked" | "usage_unknown" | "exhausted";
+        coverage: "tts_pcm_only";
+    }[];
     status: string;
     waiting_reason: string | null;
     resources: {

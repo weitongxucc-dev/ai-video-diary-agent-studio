@@ -100,7 +100,21 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
             {receipt.recovery?.action==='resume_original' && !receiptUnknown?<Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(receipt.request_id,true)}>恢复原段修改</Button>:null}
         </div>:null}
         <details className={styles.segmentUsage}><summary>费用与资源记录</summary>
-            <p>任务级预算范围与剩余额度：当前接口未提供。</p>
+            {usage ? <>
+                <p>{usage.authorization_coverage === 'tts_pcm_only' ? '累计授权仅覆盖 TTS/PCM，不代表 render/native 或整个目标已计量。' : '当前任务未绑定累计授权范围。'}</p>
+                {usage.status === 'authorization_scope_mixed' ? <p role="status">各累计授权范围的状态不一致，请逐项查看；不代表当前作业可以切换授权范围继续。</p> : null}
+                {usage.scopes.map(scope => <section key={scope.authorization.scope_id} aria-label={`累计授权 ${scope.authorization.scope_id}`}>
+                    <h3>累计授权范围 {scope.authorization.scope_id}</h3>
+                    <p>授权策略：{scope.authorization.policy_kind === 'local_goal' ? '本地目标授权，未设置累计上限' : '显式累计限额'} · 修订 {scope.authorization.revision}</p>
+                    <p>状态：{{available:'当前范围未显示预算阻断',revoked:'授权已撤销',usage_unknown:'用量未知，须核对原回执；预留未释放',exhausted:'累计额度已用尽'}[scope.status]}</p>
+                    <p>累计上限：执行 {scope.authorization.limits.execution_seconds === null ? '未设置' : `${scope.authorization.limits.execution_seconds.toLocaleString()} 秒`} · 生成 {scope.authorization.limits.generated_bytes === null ? '未设置' : `${scope.authorization.limits.generated_bytes.toLocaleString()} 字节`}</p>
+                    <p>本范围已结算：执行 {scope.usage.execution_seconds.toLocaleString()} 秒 · 生成 {scope.usage.generated_bytes.toLocaleString()} 字节</p>
+                    <p>本范围预留：执行 {scope.usage.reserved_seconds.toLocaleString()} 秒 · 生成 {scope.usage.reserved_bytes.toLocaleString()} 字节</p>
+                    <p>剩余额度：{scope.status === 'usage_unknown' ? '待核对原回执，当前不能确定' : `执行 ${scope.remaining.execution_seconds === null ? '未提供数值（未设置累计上限）' : `${scope.remaining.execution_seconds.toLocaleString()} 秒`} · 生成 ${scope.remaining.generated_bytes === null ? '未提供数值（未设置累计上限）' : `${scope.remaining.generated_bytes.toLocaleString()} 字节`}`}</p>
+                    {scope.usage.unknown_unit_count > 0 ? <p>有 {scope.usage.unknown_unit_count} 个执行单元用量待核对。</p> : null}
+                    <details><summary>授权来源与目标</summary><p>来源：{scope.authorization.source_ref}</p><p>目标任务：{scope.authorization.target_task_ids.join('、')}</p></details>
+                </section>)}
+            </> : <p>累计授权范围：待读回。</p>}
             <p>实际费用：{actualKnown?`${paid!.amount} ${paid!.currency??''}`:'待核对供应商用量或账单'}</p>
             <p>费用估算：{typeof usage?.estimates.cost==='number'?usage.estimates.cost:'暂无估算'} · 完成时间估算：{typeof usage?.estimates.eta_seconds==='number'?`${usage.estimates.eta_seconds} 秒`:'暂无估算'}</p>
             {usage?<><p>已记录执行 {usage.resources.settled_execution_seconds.toFixed(1)} 秒 · 生成 {(usage.resources.settled_generated_bytes/1048576).toFixed(1)} MB</p><p>{usage.resources.coverage==='complete'?'已列出当前执行回执，不代表整个任务已计量':'用量记录尚待核对，当前数字为已记录部分'}</p>{usage.status==='unit_budget_blocked'?<p role="status">单次请求的资源声明超出预算。请核对该请求声明和适用额度。</p>:null}</>:<p>资源消耗：待核对</p>}

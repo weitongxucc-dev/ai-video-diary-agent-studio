@@ -8,7 +8,7 @@ import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, C
 import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
-import { ScriptEditor } from "../creation-task/ScriptStage";
+import { ScriptEditor, ConfirmedScriptView } from "../creation-task/ScriptStage";
 vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
   getCreationTaskNarrationVoiceSelection: (...args: unknown[]) => mocks.getVoiceSelection(...args),
@@ -731,7 +731,7 @@ describe("CreationTaskWorkspace", () => {
       id: "draft-1", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
       title: "待确认文案", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections: [{ id: "section-1", title: "开头", content: "真实草稿正文。",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "真实草稿正文。",
         visual_prompt: "现场画面", evidence_reference_ids: ["knowledge:one:v1"] }],
     };
     mocks.getWorkspace.mockResolvedValue({ ...initial, scripts: [draft], task: {
@@ -761,7 +761,7 @@ describe("CreationTaskWorkspace", () => {
     const draft = { id: "late-A", task_id: task.id, run_id: "run-A", topic_id: "topic-1",
       title: "旧A稿", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections: [{ id: "section-A", title: "旧A段落", content: "旧A回读正文", visual_prompt: "画面",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-A", title: "旧A段落", content: "旧A回读正文", visual_prompt: "画面",
         evidence_reference_ids: ["knowledge:one:v1"] }] };
     let finishReadA!: (value: WorkspaceState) => void;
     mocks.getWorkspace.mockResolvedValueOnce(initial)
@@ -803,7 +803,7 @@ describe("CreationTaskWorkspace", () => {
     const draft = { id: "current-script", task_id: task.id, run_id: "run", topic_id: "topic",
       title: "当前已保存文案", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: "2026-10-10T04:26:40Z", confirmed_at: null,
-      sections: [{ id: "section", title: "当前段落", content: "当前API真实文案", visual_prompt: "当前画面",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section", title: "当前段落", content: "当前API真实文案", visual_prompt: "当前画面",
         evidence_reference_ids: ["knowledge:one:v1"] }] };
     mocks.getWorkspace.mockResolvedValue({ ...initial, task: { ...task, stage: "script",
       stage_status: "waiting_for_user", status: "waiting_for_user", stage_reason: null,
@@ -820,7 +820,7 @@ describe("CreationTaskWorkspace", () => {
     const draft = { id: "local-script", task_id: task.id, run_id: "run", topic_id: "topic",
       title: "已保存稿", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections: [{ id: "section", title: "段落", content: "原文", visual_prompt: "原画面",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section", title: "段落", content: "原文", visual_prompt: "原画面",
         evidence_reference_ids: ["knowledge:one:v1"] }] };
     initial.scripts = [draft];
     let finish!: (value: WorkspaceState) => void;
@@ -927,7 +927,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("heading", { name: "迟到A任务" })).not.toBeInTheDocument();
   });
 
-  it("requires a deliberate current-source choice before confirming a reply-origin draft", async () => {
+  it("preserves explicit current-source choices when confirming a reply-origin draft", async () => {
     const task = { ...baseTask, stage: "script" as const, stage_status: "waiting_for_user" as const,
       status: "waiting_for_user" as const, confirmed_script_id: null };
     const draft: WorkspaceState["scripts"][number] = {
@@ -935,7 +935,7 @@ describe("CreationTaskWorkspace", () => {
       title: "回复草稿", language: "zh-CN", selection_status: "draft",
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
       source_reply_reference: { conversation_id: "conversation-id", turn_id: "turn-id", response_digest: "a".repeat(64) },
-      sections: [{ id: "reply-section", title: "回复", content: "这是来自对话的正文。",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "reply-section", title: "回复", content: "这是来自对话的正文。",
         visual_prompt: "", evidence_reference_ids: [] }],
     };
     const initial = workspace(task);
@@ -973,6 +973,59 @@ describe("CreationTaskWorkspace", () => {
     })));
   });
 
+  it.each([false, true])("submits empty-reference content for server review and respects its rejection (%s)", async rejected => {
+    const task = { ...baseTask, stage: "script" as const, stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const, confirmed_script_id: null };
+    const draft: WorkspaceState["scripts"][number] = {
+      id: "empty-reference-draft", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
+      title: "开场", language: "zh-CN", selection_status: "draft",
+      created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "你想从哪里开始？",
+        visual_prompt: "淡入标题。", evidence_reference_ids: [] }],
+    };
+    const initial = { ...workspace(task), scripts: [draft] };
+    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [] });
+    mocks.getWorkspace.mockResolvedValue(initial);
+    if (rejected) mocks.confirmScript.mockRejectedValue(new mocks.MockCreationPlanApiError(
+      422, "unsupported_fact", "正文包含尚无依据的事实，请修订。"));
+    else mocks.confirmScript.mockResolvedValue({});
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await screen.findByText("当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。");
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段正文" }), {
+      target: { value: rejected ? "这是全国第一。" : "一起开始吧。" },
+    });
+    expect(screen.getByRole("button", { name: "确认文案" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "确认文案" }));
+    await waitFor(() => expect(mocks.confirmScript).toHaveBeenCalledWith(task.id, draft.id, {
+      title: draft.title, expected_updated_at: draft.updated_at,
+      sections: [{ ...draft.sections[0], content: rejected ? "这是全国第一。" : "一起开始吧。" }],
+    }));
+    if (rejected) {
+      expect(await screen.findByText("正文包含尚无依据的事实，请修订。")).toBeInTheDocument();
+      expect(screen.queryByText("文案已确认，可以生成配音。")).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "第 1 段正文" })).toHaveValue("这是全国第一。");
+    } else expect(await screen.findByText("文案已确认，可以生成配音。")).toBeInTheDocument();
+  });
+
+  it("keeps body and visual requirements when references are empty", async () => {
+    const script: WorkspaceState["scripts"][number] = {
+      id: "empty-reference-fields", task_id: "task-1", run_id: "run", topic_id: "topic", title: "开场",
+      language: "zh-CN", selection_status: "draft", created_at: baseTask.created_at,
+      updated_at: baseTask.updated_at, confirmed_at: null,
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "一起开始吧。",
+        visual_prompt: "淡入标题。", evidence_reference_ids: [] }],
+    };
+    const confirm = vi.fn();
+    render(<ScriptEditor taskId="task-1" script={script} busy={false} repairing={false} onConfirm={confirm} />);
+    await screen.findByText("当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。");
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段正文" }), { target: { value: " " } });
+    expect(screen.getByRole("button", { name: "确认文案" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段正文" }), { target: { value: "一起开始吧。" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "第 1 段画面建议" }), { target: { value: " " } });
+    expect(screen.getByRole("button", { name: "确认文案" })).toBeDisabled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("keeps edits made during draft save and uses the returned version for the next save", async () => {
     const task = { ...baseTask, stage: "script" as const, stage_status: "waiting_for_user" as const,
       status: "waiting_for_user" as const, confirmed_script_id: null };
@@ -980,7 +1033,7 @@ describe("CreationTaskWorkspace", () => {
       id: "late-edit-draft", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
       title: "待确认文案", language: "zh-CN", selection_status: "draft",
       created_at: task.created_at, updated_at: "v1", confirmed_at: null,
-      sections: [{ id: "section-1", title: "开头", content: "提交时正文",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "提交时正文",
         visual_prompt: "提交时画面", evidence_reference_ids: ["source:one"] }],
     };
     const initial = workspace(task);
@@ -1697,7 +1750,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.exactPreview).not.toHaveBeenCalled();
   });
 
-  it("lets the user review persisted topic and script results without rerunning them", () => {
+  it("lets the user review persisted topic and script results without rerunning them", async () => {
     const initial = workspace(baseTask);
     initial.selected_topic = {
       id: "topic-1", run_id: "run-1", title: "真实选题", angle: "从一次真实失败说起",
@@ -1713,9 +1766,11 @@ describe("CreationTaskWorkspace", () => {
       id: "script-1", task_id: baseTask.id, run_id: "run-2", topic_id: "topic-1", title: "真实文案",
       language: "zh-CN", selection_status: "confirmed", created_at: baseTask.created_at,
       updated_at: baseTask.updated_at, confirmed_at: baseTask.updated_at,
-      sections: [{ id: "section-1", title: "开头", content: "这是已经确认的口播正文。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "这是已经确认的口播正文。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
     }];
 
+    stubLoadedScriptWindows(initial.scripts);
+    initial.scripts=initial.scripts.map(script=>({...script,sections_loaded:false,sections:null}));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl("选题：已完成"));
     expect(screen.getByRole("heading", { name: "真实选题" })).toBeInTheDocument();
@@ -1723,7 +1778,7 @@ describe("CreationTaskWorkspace", () => {
 
     fireEvent.click(getWorkspaceViewControl("文案：已完成"));
     expect(screen.getByRole("heading", { name: "真实文案" })).toBeInTheDocument();
-    expect(screen.getByText("这是已经确认的口播正文。")).toBeInTheDocument();
+    expect(await screen.findByText("这是已经确认的口播正文。")).toBeInTheDocument();
   });
 
   it("does not offer a doomed generation action when no authorized voice exists", () => {
@@ -1750,7 +1805,7 @@ describe("CreationTaskWorkspace", () => {
       id: "script-1", task_id: failedTask.id, run_id: "run-2", topic_id: "topic-1", title: "原文案",
       language: "zh-CN", selection_status: "confirmed", created_at: failedTask.created_at,
       updated_at: failedTask.updated_at, confirmed_at: failedTask.updated_at,
-      sections: [{ id: "section-1", title: "正文", content: "原来的正文过长。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "正文", content: "原来的正文过长。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
     }];
     const repaired = workspace({
       ...failedTask,
@@ -1883,21 +1938,21 @@ describe("CreationTaskWorkspace", () => {
     const script: WorkspaceState["scripts"][number] = {
       id:"script-source-read", task_id:"task-1", run_id:"run", topic_id:"topic", title:"已有文案", language:"zh-CN",
       selection_status:"confirmed", created_at:baseTask.created_at, updated_at:baseTask.updated_at, confirmed_at:baseTask.updated_at,
-      sections:[{id:"section-1", title:"正文", content:"原正文", visual_prompt:"原画面", evidence_reference_ids:["knowledge:fixed:v1"]}],
+      sections_loaded: true as const, sections_total_count: 1, sections:[{id:"section-1", title:"正文", content:"原正文", visual_prompt:"原画面", evidence_reference_ids:["knowledge:fixed:v1"]}],
     };
     const confirm = vi.fn();
     render(<ScriptEditor taskId="task-1" script={script} busy={false} repairing={false} onConfirm={confirm} />);
     expect(screen.getByText("正在读取当前任务资料…")).toBeInTheDocument();
-    expect(screen.queryByText("当前任务没有可选资料；请先补充并确认有效来源。")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", {name:"第 1 段正文"}), {target:{value:"正在编辑的正文"}});
     if (outcome === "failed") {
       await act(async () => reject(new Error("当前资料读取暂不可用")));
       expect(screen.getByRole("alert")).toHaveTextContent("当前资料读取暂不可用");
-      expect(screen.queryByText("当前任务没有可选资料；请先补充并确认有效来源。")).not.toBeInTheDocument();
+      expect(screen.queryByText("当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。")).not.toBeInTheDocument();
     } else {
       await act(async () => resolve({sources:outcome === "populated" ? [{reference_id:"knowledge:fixed:v1", title:"已采用资料", text:"资料正文"}] : []}));
       if (outcome === "populated") expect(screen.getByRole("checkbox", {name:"已采用资料"})).toBeChecked();
-      else expect(screen.getByText("当前任务没有可选资料；请先补充并确认有效来源。")).toBeInTheDocument();
+      else expect(screen.getByText("当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。")).toBeInTheDocument();
     }
     expect(screen.queryByText("正在读取当前任务资料…")).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", {name:"第 1 段正文"})).toHaveValue("正在编辑的正文");
@@ -2782,7 +2837,7 @@ describe("CreationTaskWorkspace", () => {
       id: "script-1", task_id: task.id, run_id: "run-1", topic_id: "topic-1", title: "已确认文案",
       language: "zh-CN", selection_status: "confirmed", created_at: task.created_at,
       updated_at: task.updated_at, confirmed_at: task.updated_at,
-      sections: [{ id: "section-1", title: "开场", content: "当前文案",
+      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "当前文案",
         visual_prompt: "现场", evidence_reference_ids: [] }],
     }];
     const recording = {
@@ -2794,6 +2849,8 @@ describe("CreationTaskWorkspace", () => {
     mocks.adoptRecording.mockResolvedValue({ source_kind: "recorded" });
     mocks.getWorkspace.mockResolvedValue(initial);
 
+    stubLoadedScriptWindows(initial.scripts);
+    initial.scripts=initial.scripts.map(script=>({...script,sections_loaded:false,sections:null}));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: "录一段旁白" }));
     fireEvent.click(await screen.findByRole("button", { name: "提交录音" }));
@@ -4343,12 +4400,14 @@ describe("作品视图与真实版本",()=>{
   expect(screen.getByLabelText("剪辑成片预览")).toBeVisible();expect(screen.getByRole("link",{name:"打开发布工作区"})).toHaveAttribute("href","/history");
  });
  it("distinguishes the actual confirmed script and the unconfirmed latest draft",async()=>{
-  const initial=subtitleCoverWorkspace();const original={id:"original-script",task_id:initial.task.id,run_id:"fixture-run",topic_id:"fixture-topic",title:"文案",language:"zh-CN" as const,selection_status:"confirmed" as const,created_at:initial.task.created_at,updated_at:initial.task.updated_at,confirmed_at:initial.task.updated_at,estimated_duration_seconds:3,sections:[{id:"fixture-section",title:"正文",content:"固定正文",visual_prompt:"已有测试画面",evidence_reference_ids:[]}],warnings:[]};
+  const initial=subtitleCoverWorkspace();const original={id:"original-script",task_id:initial.task.id,run_id:"fixture-run",topic_id:"fixture-topic",title:"文案",language:"zh-CN" as const,selection_status:"confirmed" as const,created_at:initial.task.created_at,updated_at:initial.task.updated_at,confirmed_at:initial.task.updated_at,estimated_duration_seconds:3,sections_loaded: true as const, sections_total_count: 1, sections:[{id:"fixture-section",title:"正文",content:"固定正文",visual_prompt:"已有测试画面",evidence_reference_ids:[]}],warnings:[]};
   const confirmed={...original,id:"confirmed-script",title:"实际确认稿",selection_status:"confirmed" as const,sections:[{...original.sections[0],content:"已经确认的正文"}]};
   const draft={...confirmed,id:"new-draft",title:"实际新草稿",selection_status:"draft" as const,sections:[{...confirmed.sections[0],content:"尚未确认的新正文"}]};
   initial.scripts=[draft,confirmed];initial.task={...initial.task,confirmed_script_id:confirmed.id,can_revise_script:false};mocks.getWorkspace.mockResolvedValue(initial);
+  stubLoadedScriptWindows(initial.scripts);
+    initial.scripts=initial.scripts.map(script=>({...script,sections_loaded:false,sections:null}));
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);fireEvent.click(getWorkspaceViewControl("文案：有新草稿待确认"));
-  expect(screen.getByText("已经确认的正文")).toBeVisible();expect(screen.getByText("尚未确认的新正文")).not.toBeVisible();
+  expect(await screen.findByText("已经确认的正文")).toBeVisible();expect(screen.getByText("尚未确认的新正文")).not.toBeVisible();
   fireEvent.click(screen.getByRole("tab",{name:"新草稿"}));expect(screen.getByText("尚未确认的新正文")).toBeVisible();expect(screen.getByText("待确认草稿")).toBeVisible();
   expect(mocks.confirmScript).not.toHaveBeenCalled();
  });
@@ -4596,7 +4655,7 @@ it('segment preview keeps the playing version and presents unknown cost as pendi
     narration_segment_id:null,audio:null,video:null,adopted:false};
   const initial={task_id:'task',total_count:2,available_video_count:1,segments:[segment,pending],offset:0,truncated:false,revision_requests:{items:[],total_count:0,truncated:false}};
   segmentApi.read.mockResolvedValue(initial as never);
-  segmentApi.budget.mockResolvedValue({task_id:'task',status:'local_work_authorized',waiting_reason:null,
+  segmentApi.budget.mockResolvedValue({task_id:'task',status:'authorization_scope_unbound',waiting_reason:null,scopes:[],authorization_coverage:'scope_unbound',
     resources:{settled_execution_seconds:2,settled_generated_bytes:1024,total_execution_seconds:null,total_generated_bytes:null,coverage:'partial',receipt_count:1},
     actual_cost:{status:'pending_verification',amount:null,currency:null,supplier_usage_refs:[],pricing_or_invoice_refs:[]},estimates:{eta_seconds:null,cost:null}} as never);
   render(<SegmentProductionPanel taskId="task"/>);
@@ -4680,4 +4739,259 @@ it('shows the actual review protocol failure and recovery without hiding them as
     const visible=within(alert).getByText(text);
     expect(visible.closest('details')).toBeNull();
   }
+});
+
+function sectionReaderScript(id = 'reader-script'): import('@/lib/types').CreationTaskScript {
+  return {id, task_id:'reader-task', run_id:'run', topic_id:'topic', title:'窗口文案', language:'zh-CN',
+    sections_loaded: true as const, sections_total_count: 1, sections:[{id:'cached',title:'旧首屏',content:'不可用旧首屏替代窗口读取',visual_prompt:'旧画面',evidence_reference_ids:[]}],
+    selection_status:'confirmed',created_at:'2026-10-24T00:00:00Z',updated_at:'2026-10-24T00:00:00Z',confirmed_at:'2026-10-24T00:00:00Z'};
+}
+function sectionReaderPage(script: import('@/lib/types').CreationTaskScript, after = 0, version = script.updated_at): import('@/lib/types').CreationTaskScriptSectionWindow {
+  const items = Array.from({length:Math.min(20,45-after)},(_,index)=>{
+    const ordinal=after+index+1;
+    return {ordinal,digest:`digest-${ordinal}`,section:{id:`${script.id}-${ordinal}`,title:`窗口段落 ${ordinal}`,
+      content:`窗口正文 ${script.id} ${ordinal}`,visual_prompt:`画面 ${ordinal}`,evidence_reference_ids:[]}};
+  });
+  return {task_id:script.task_id,script_id:script.id,updated_at:version,title:script.title,language:script.language,
+    selection_status:script.selection_status,total_count:45,items,next_after_ordinal:after+items.length<45?after+items.length:null,truncated:after+items.length<45};
+}
+
+it('reads 45 script sections through bounded versioned HTTP pages and returns to previous pages',async()=>{
+  const script=sectionReaderScript();
+  const fetch=vi.fn(async(url:string)=>{
+    const params=new URL(url,'http://local').searchParams;
+    const after=Number(params.get('after_ordinal'));
+    expect(new URL(url,'http://local').pathname).toBe(`/api/creation-tasks/${script.task_id}/scripts/${script.id}/sections`);
+    expect(params.get('expected_updated_at')).toBe(after===0 && fetch.mock.calls.length===1?null:script.updated_at);
+    return new Response(JSON.stringify(sectionReaderPage(script,after)));
+  });
+  vi.stubGlobal('fetch',fetch);
+  render(<ConfirmedScriptView script={script}/>);
+  await screen.findByText('窗口正文 reader-script 1');
+  expect(screen.queryByText('不可用旧首屏替代窗口读取')).not.toBeInTheDocument();
+  expect(screen.getAllByRole('article')).toHaveLength(20);
+  expect(screen.getByRole('button',{name:'上一页文案'})).toBeDisabled();
+  fireEvent.click(screen.getByRole('button',{name:'下一页文案'}));
+  await screen.findByText('窗口正文 reader-script 21');
+  expect(screen.queryByText('窗口正文 reader-script 1')).not.toBeInTheDocument();
+  expect(screen.getAllByRole('article')).toHaveLength(20);
+  fireEvent.click(screen.getByRole('button',{name:'下一页文案'}));
+  await screen.findByText('窗口正文 reader-script 45');
+  expect(screen.getAllByRole('article')).toHaveLength(5);
+  expect(screen.getByRole('button',{name:'下一页文案'})).toBeDisabled();
+  fireEvent.click(screen.getByRole('button',{name:'上一页文案'}));
+  await screen.findByText('窗口正文 reader-script 21');
+  expect(screen.queryByText('窗口正文 reader-script 45')).not.toBeInTheDocument();
+});
+
+it('clears a stale script page after HTTP 409 and explicitly restarts without mixing revisions',async()=>{
+  const script=sectionReaderScript();
+  const nextVersion='2026-10-24T00:01:00Z';
+  const fetch=vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify(sectionReaderPage(script))))
+    .mockResolvedValueOnce(new Response(JSON.stringify({detail:'文案已变化，请重新读取窗口'}),{status:409}))
+    .mockResolvedValueOnce(new Response(JSON.stringify(sectionReaderPage(script,0,nextVersion))))
+    .mockResolvedValueOnce(new Response(JSON.stringify(sectionReaderPage(script,20,nextVersion))));
+  vi.stubGlobal('fetch',fetch);
+  render(<ConfirmedScriptView script={script}/>);
+  await screen.findByText('窗口正文 reader-script 1');
+  fireEvent.click(screen.getByRole('button',{name:'下一页文案'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('文案已变化');
+  expect(screen.queryByRole('article')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'下一页文案'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'重新读取文案'}));
+  await screen.findByText('窗口正文 reader-script 1');
+  const restart=new URL(fetch.mock.calls[2][0],'http://local').searchParams;
+  expect(restart.get('after_ordinal')).toBe('0');
+  expect(restart.has('expected_updated_at')).toBe(false);
+  fireEvent.click(screen.getByRole('button',{name:'下一页文案'}));
+  await screen.findByText('窗口正文 reader-script 21');
+  expect(new URL(fetch.mock.calls[3][0],'http://local').searchParams.get('expected_updated_at')).toBe(nextVersion);
+});
+
+it('ignores a late script-window response after switching script identity',async()=>{
+  const scriptA=sectionReaderScript('script-a'),scriptB=sectionReaderScript('script-b');
+  let finishA!: (response:Response)=>void;
+  vi.stubGlobal('fetch',vi.fn().mockReturnValueOnce(new Promise<Response>(resolve=>{finishA=resolve;}))
+    .mockResolvedValueOnce(new Response(JSON.stringify(sectionReaderPage(scriptB)))));
+  const view=render(<ConfirmedScriptView script={scriptA}/>);
+  view.rerender(<ConfirmedScriptView script={scriptB}/>);
+  await screen.findByText('窗口正文 script-b 1');
+  await act(async()=>{finishA(new Response(JSON.stringify(sectionReaderPage(scriptA))));});
+  expect(screen.queryByText('窗口正文 script-a 1')).not.toBeInTheDocument();
+  expect(screen.getByText('窗口正文 script-b 1')).toBeInTheDocument();
+});
+
+function scopeBudget(scopes:import('@/lib/types/creation-tasks').CreationTaskBudget['scopes']=[],taskId='task'):import('@/lib/types/creation-tasks').CreationTaskBudget {
+  return {task_id:taskId,authorization_coverage:scopes.length?'tts_pcm_only':'scope_unbound',scopes,
+    status:scopes.length?'local_work_authorized':'authorization_scope_unbound',waiting_reason:null,
+    resources:{settled_execution_seconds:0,settled_generated_bytes:0,total_execution_seconds:null,total_generated_bytes:null,coverage:'complete',receipt_count:0},
+    actual_cost:{status:'pending_verification',amount:null,currency:null,supplier_usage_refs:[],pricing_or_invoice_refs:[]},estimates:{eta_seconds:null,cost:null}};
+}
+function budgetScope(id='scope-local'):import('@/lib/types/creation-tasks').CreationTaskBudget['scopes'][number] {
+  return {authorization:{scope_id:id,revision:2,limits:{execution_seconds:null,generated_bytes:null},policy_kind:'local_goal',revoked:false,target_task_ids:['task'],source_ref:'approval:local'},
+    usage:{execution_seconds:2,generated_bytes:128,reserved_seconds:3,reserved_bytes:256,unknown_unit_count:0,unit_count:1},
+    remaining:{execution_seconds:null,generated_bytes:null},status:'available',coverage:'tts_pcm_only'};
+}
+function emptySegments(taskId='task') {
+  return {task_id:taskId,total_count:0,available_video_count:0,segments:[],offset:0,truncated:false,revision_requests:{items:[],total_count:0,truncated:false}};
+}
+
+it('shows an unbound budget scope without inventing task coverage or budget actions',async()=>{
+  const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');
+  segmentApi.read.mockResolvedValue(emptySegments() as never);
+  segmentApi.budget.mockResolvedValue(scopeBudget() as never);
+  render(<SegmentProductionPanel taskId="task"/>);
+  await screen.findByText('当前任务未绑定累计授权范围。');
+  const details=screen.getByText('费用与资源记录').closest('details')!;
+  fireEvent.click(screen.getByText('费用与资源记录'));
+  expect(within(details).getByText(/不代表整个任务已计量/)).toBeInTheDocument();
+  expect(within(details).getByText('实际费用：待核对供应商用量或账单')).toBeInTheDocument();
+  expect(within(details).queryByText(/剩余额度：/)).not.toBeInTheDocument();
+  expect(within(details).queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('distinguishes uncapped local scope values from finite scope limits and remaining quantities',async()=>{
+  const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');
+  const local=budgetScope(),finite=budgetScope('scope-finite');
+  finite.authorization={...finite.authorization,policy_kind:'explicit_total',limits:{execution_seconds:10,generated_bytes:1024}};
+  finite.remaining={execution_seconds:5,generated_bytes:640};
+  segmentApi.read.mockResolvedValue(emptySegments() as never);
+  segmentApi.budget.mockResolvedValue(scopeBudget([local,finite]) as never);
+  render(<SegmentProductionPanel taskId="task"/>);
+  await screen.findByText(/累计授权仅覆盖 TTS\/PCM/);
+  fireEvent.click(screen.getByText('费用与资源记录'));
+  const localView=within(screen.getByRole('region',{name:'累计授权 scope-local'}));
+  expect(localView.getByText('累计上限：执行 未设置 · 生成 未设置')).toBeInTheDocument();
+  expect(localView.getByText('剩余额度：执行 未提供数值（未设置累计上限） · 生成 未提供数值（未设置累计上限）')).toBeInTheDocument();
+  const finiteView=within(screen.getByRole('region',{name:'累计授权 scope-finite'}));
+  expect(finiteView.getByText('累计上限：执行 10 秒 · 生成 1,024 字节')).toBeInTheDocument();
+  expect(finiteView.getByText('本范围已结算：执行 2 秒 · 生成 128 字节')).toBeInTheDocument();
+  expect(finiteView.getByText('本范围预留：执行 3 秒 · 生成 256 字节')).toBeInTheDocument();
+  expect(finiteView.getByText('剩余额度：执行 5 秒 · 生成 640 字节')).toBeInTheDocument();
+  fireEvent.click(finiteView.getByText('授权来源与目标'));
+  expect(finiteView.getByText('来源：approval:local')).toBeInTheDocument();
+  expect(finiteView.getByText('目标任务：task')).toBeInTheDocument();
+});
+
+it.each([
+  ['usage_unknown','状态：用量未知，须核对原回执；预留未释放'],
+  ['exhausted','状态：累计额度已用尽'],
+  ['revoked','状态：授权已撤销'],
+] as const)('shows scope status %s without offering budget recovery or releasing unknown reservations',async(status,label)=>{
+  const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');
+  const scope=budgetScope();
+  scope.status=status;
+  scope.authorization={...scope.authorization,policy_kind:'explicit_total',limits:{execution_seconds:5,generated_bytes:null},revoked:status==='revoked'};
+  scope.usage.unknown_unit_count=status==='usage_unknown'?1:0;
+  scope.remaining={execution_seconds:0,generated_bytes:null};
+  segmentApi.read.mockResolvedValue(emptySegments() as never);
+  segmentApi.budget.mockResolvedValue(scopeBudget([scope]) as never);
+  render(<SegmentProductionPanel taskId="task"/>);
+  await screen.findByText(label);
+  fireEvent.click(screen.getByText('费用与资源记录'));
+  const details=screen.getByText('费用与资源记录').closest('details')!;
+  expect(within(details).getByText('本范围预留：执行 3 秒 · 生成 256 字节')).toBeInTheDocument();
+  if(status==='usage_unknown') {
+    expect(within(details).getByText('剩余额度：待核对原回执，当前不能确定')).toBeInTheDocument();
+    expect(within(details).getByText('有 1 个执行单元用量待核对。')).toBeInTheDocument();
+    expect(within(details).queryByText(/剩余额度：执行 0/)).not.toBeInTheDocument();
+  } else expect(within(details).getByText(/剩余额度：执行 0 秒/)).toBeInTheDocument();
+  expect(within(details).queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('ignores a late budget-scope response after the task changes',async()=>{
+  const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');
+  let finishA!:(value:import('@/lib/types/creation-tasks').CreationTaskBudget)=>void;
+  segmentApi.read.mockResolvedValueOnce(emptySegments('task-a')).mockResolvedValueOnce(emptySegments('task-b'));
+  segmentApi.budget.mockReturnValueOnce(new Promise(resolve=>{finishA=resolve;}) as never)
+    .mockResolvedValueOnce(scopeBudget([budgetScope('scope-b')],'task-b') as never);
+  const view=render(<SegmentProductionPanel taskId="task-a"/>);
+  view.rerender(<SegmentProductionPanel taskId="task-b"/>);
+  await screen.findByText('累计授权范围 scope-b');
+  await act(async()=>{finishA(scopeBudget([budgetScope('scope-a')],'task-a'));});
+  expect(screen.queryByText('累计授权范围 scope-a')).not.toBeInTheDocument();
+  expect(screen.getByText('累计授权范围 scope-b')).toBeInTheDocument();
+});
+
+function stubLoadedScriptWindows(scripts:import('@/lib/types').CreationTaskScript[]) {
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
+    const path=new URL(url,'http://local').pathname;
+    const script=scripts.find(script=>path.endsWith(`/scripts/${script.id}/sections`));
+    if(!script?.sections_loaded) throw new Error(`Unconfigured script window: ${path}`);
+    return new Response(JSON.stringify({...sectionReaderPage(script),total_count:script.sections_total_count,
+      items:script.sections.map((section,index)=>({ordinal:index+1,digest:`digest-${index+1}`,section})),
+      next_after_ordinal:null,truncated:false}));
+  }));
+}
+
+it('keeps a 45-section unloaded header readable without enabling partial replacement or confirmation',async()=>{
+  const script:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),sections_loaded:false,sections:null,sections_total_count:45};
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>new Response(JSON.stringify(sectionReaderPage(script,Number(new URL(url,'http://local').searchParams.get('after_ordinal')))))));
+  const confirm=vi.fn();
+  render(<ScriptEditor taskId={script.task_id} script={script} busy={false} repairing={false} onConfirm={confirm}/>);
+  await screen.findByText('窗口正文 reader-script 1');
+  expect(screen.getByText('文案共 45 段，正文尚未完整载入；当前不可保存或确认。')).toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'下一页文案'}));
+  await screen.findByText('窗口正文 reader-script 21');
+  expect(confirm).not.toHaveBeenCalled();
+});
+
+it('requires an explicit complete read of a small header before editing and confirming its original version',async()=>{
+  const script:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),selection_status:'draft',sections_loaded:false,sections:null,sections_total_count:1};
+  const section={id:'only-section',title:'正文',content:'完整正文',visual_prompt:'完整画面',evidence_reference_ids:[]};
+  const fetch=vi.fn(async(_url:string)=>new Response(JSON.stringify({...sectionReaderPage(script),total_count:1,
+    items:[{ordinal:1,digest:'digest-only',section}],next_after_ordinal:null,truncated:false})));
+  vi.stubGlobal('fetch',fetch);
+  const confirm=vi.fn();
+  render(<ScriptEditor taskId={script.task_id} script={script} busy={false} repairing={false} onConfirm={confirm}/>);
+  await screen.findByText('完整正文');
+  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'读取完整文案以编辑'}));
+  await screen.findByLabelText('第 1 段正文');
+  const params=new URL(fetch.mock.calls[1][0],'http://local').searchParams;
+  expect(params.get('expected_updated_at')).toBe(script.updated_at);
+  fireEvent.click(screen.getByRole('button',{name:'确认文案'}));
+  expect(confirm).toHaveBeenCalledWith(expect.objectContaining({sections_loaded:true,sections_total_count:1,sections:[section],updated_at:script.updated_at}));
+});
+
+it('rejects a partial window as a complete edit even when the header count was small',async()=>{
+  const script:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),sections_loaded:false,sections:null,sections_total_count:1};
+  vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify(sectionReaderPage(script)))));
+  const confirm=vi.fn();
+  render(<ScriptEditor taskId={script.task_id} script={script} busy={false} repairing={false} onConfirm={confirm}/>);
+  await screen.findByText('窗口正文 reader-script 1');
+  fireEvent.click(screen.getByRole('button',{name:'读取完整文案以编辑'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('不能将当前窗口保存或确认为全文');
+  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
+  expect(confirm).not.toHaveBeenCalled();
+});
+
+it.each(['authorization_scope_mixed','unit_budget_blocked'])('keeps mixed scope details separate from the authoritative budget summary %s',async(status)=>{
+  const {SegmentProductionPanel}=await import('../creation-task/NarrationStage');
+  const exhausted=budgetScope('old-scope'),available=budgetScope('new-scope');
+  exhausted.status='exhausted';
+  exhausted.authorization={...exhausted.authorization,policy_kind:'explicit_total',limits:{execution_seconds:2,generated_bytes:128}};
+  exhausted.remaining={execution_seconds:0,generated_bytes:0};
+  const budget={...scopeBudget([exhausted,available]),status};
+  segmentApi.read.mockResolvedValue(emptySegments() as never);
+  segmentApi.budget.mockResolvedValue(budget as never);
+  render(<SegmentProductionPanel taskId="task"/>);
+  await screen.findByText('累计授权范围 new-scope');
+  fireEvent.click(screen.getByText('费用与资源记录'));
+  const details=screen.getByText('费用与资源记录').closest('details')!;
+  expect(within(screen.getByRole('region',{name:'累计授权 old-scope'})).getByText('状态：累计额度已用尽')).toBeInTheDocument();
+  expect(within(screen.getByRole('region',{name:'累计授权 new-scope'})).getByText('状态：当前范围未显示预算阻断')).toBeInTheDocument();
+  const summary=within(details).getByRole('status');
+  if(status==='authorization_scope_mixed') {
+    expect(summary).toHaveTextContent('各累计授权范围的状态不一致，请逐项查看');
+    expect(summary).toHaveTextContent('不代表当前作业可以切换授权范围继续');
+  } else {
+    expect(summary).toHaveTextContent('单次请求的资源声明超出预算');
+    expect(within(details).queryByText(/各累计授权范围的状态不一致/)).not.toBeInTheDocument();
+  }
+  expect(within(details).queryByRole('button')).not.toBeInTheDocument();
 });

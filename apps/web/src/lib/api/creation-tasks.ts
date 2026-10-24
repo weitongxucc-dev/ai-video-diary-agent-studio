@@ -3,7 +3,7 @@ import type { TaskMediaJob } from '../types/task-edits';
 import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse } from '../types/creation-tasks';
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
-import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
+import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptSectionWindow, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
 import type { CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
 import type { CreationTaskAssistantTurnResponse, CreationTaskAssistantHistory, AssistantStreamEvent } from '../types/assistant';
 import type { CreationTaskTimelineVersionDetail, CreationTaskTimelineVersionList } from '../types/timeline-history';
@@ -68,6 +68,15 @@ export function cancelCreationExecution(taskId: string): Promise<CreationExecuti
 export function getCreationTaskScripts(taskId: string): Promise<CreationTaskScriptsResponse> {
     return creationPlanRequest<CreationTaskScriptsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts`);
 }
+export function getCreationTaskScriptSections(taskId: string, scriptId: string, input: {
+    after_ordinal?: number;
+    expected_updated_at?: string;
+} = {}): Promise<CreationTaskScriptSectionWindow> {
+    const query = new URLSearchParams();
+    if (input.after_ordinal !== undefined) query.set("after_ordinal", String(input.after_ordinal));
+    if (input.expected_updated_at !== undefined) query.set("expected_updated_at", input.expected_updated_at);
+    return creationPlanRequest<CreationTaskScriptSectionWindow>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/sections${query.size ? `?${query}` : ""}`);
+}
 export function generateCreationTaskScript(taskId: string): Promise<CreationTaskScriptsResponse> {
     return creationPlanRequest<CreationTaskScriptsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`, { method: "POST", body: JSON.stringify({}) });
 }
@@ -97,7 +106,10 @@ export function getAssistantScriptContext(taskId: string): Promise<{
         title: string;
         text: string;
     }[];
-    draft: CreationTaskScript | null;
+    draft: (Pick<CreationTaskScript, "id" | "title" | "updated_at" | "sections_total_count"> & {
+        sections: null;
+        sections_loaded: false;
+    }) | null;
     reply_origin: {
         conversation_id: string;
         turn_id: string;
@@ -110,8 +122,8 @@ export function saveAssistantScriptDraft(taskId: string, input: {
     title: string;
     sections: CreationTaskScriptSection[];
     expected_updated_at?: string;
-}): Promise<CreationTaskScript> {
-    return creationPlanRequest<CreationTaskScript>(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, { method: "POST", body: JSON.stringify(input) });
+}): Promise<Extract<CreationTaskScript, { sections_loaded: true }>> {
+    return creationPlanRequest<Extract<CreationTaskScript, { sections_loaded: true }>>(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, { method: "POST", body: JSON.stringify(input) });
 }
 export function selectCreationTaskNarrationVoice(taskId: string, input: CreationTaskNarrationVoiceSelectionRequest): Promise<CreationTaskNarrationVoiceSelectionResponse> {
     return creationPlanRequest<CreationTaskNarrationVoiceSelectionResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/narration/voice`, { method: "POST", body: JSON.stringify(input) });
