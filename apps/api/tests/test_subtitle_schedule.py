@@ -86,7 +86,7 @@ def test_overlapping_same_track_rejected():
 
 
 def test_initial_subtitles_use_narration_clock_even_without_shots():
-    cues=[SimpleNamespace(text=text,duration_seconds=duration,subtitle_style={},
+    cues=[SimpleNamespace(text=text,duration_seconds=duration,timeline_start_seconds=None,subtitle_style={},
         subtitle_emphasis=[],subtitle_emphasis_ranges=None) for text,duration in [("first",2),("second",3)]]
     schedule=narration_schedule(cues,5)
     assert [(c.start_seconds,c.end_seconds,c.text) for c in schedule]==[(0,2,"first"),(2,5,"second")]
@@ -118,3 +118,22 @@ def test_retime_rejects_missing_cue_or_outside_old_clock():
         retime_subtitle_tracks([track(start=1,end=4)],before,after)
     with pytest.raises(ValueError,match="一致"):
         retime_subtitle_tracks([track()],before,[])
+
+
+@pytest.mark.parametrize('start,duration', [(-.001, .1), (.999, .1), (.999999999999, .1), (float('nan'), .1),
+    (float('inf'), .1), (1, float('nan')), (1, float('inf')), (1, 0), (1, 1.031)])
+def test_narration_clock_still_rejects_real_invalid_or_overlapping_intervals(start, duration):
+    from app.montage import NarrationCue
+    cues = [NarrationCue('first', 'section', 'first', 1, timeline_start_seconds=0),
+        NarrationCue('second', 'section', 'second', duration, timeline_start_seconds=start)]
+    with pytest.raises(ValueError):
+        narration_schedule(cues, 2)
+
+
+def test_narration_clock_preserves_explicit_high_precision_without_quantizing():
+    from app.montage import NarrationCue
+    start, duration = .123456789, .000000123
+    cues = [NarrationCue('cue', 'section', 'precise', duration, timeline_start_seconds=start)]
+    caption = narration_schedule(cues, 1)[0]
+    assert caption.start_seconds == start
+    assert caption.end_seconds == .123456912

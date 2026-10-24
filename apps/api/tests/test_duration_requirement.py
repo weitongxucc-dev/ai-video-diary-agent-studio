@@ -75,3 +75,53 @@ def test_visual_delivery_30_keeps_all_real_voice_and_caption_durations(task_inpu
         assert all(clip.source_end_seconds - clip.source_start_seconds == pytest.approx(
             clip.timeline_end_seconds - clip.timeline_start_seconds) for clip in plan.clips), [(c.source_start_seconds,c.source_end_seconds,c.timeline_start_seconds,c.timeline_end_seconds) for c in plan.clips]
     assert any(clip.needs_confirmation for clip in plan.clips)
+
+
+@pytest.mark.parametrize('adopted', [False, True])
+def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inputs, monkeypatch, adopted):
+    from app.montage import NarrationCue
+    import app.montage as montage
+    # Persisted EN cue durations; candidate text is deliberately not a real script.
+    measured = {'open-ground-en': [3.332, 1.772, 3.331, 2.765],
+        'work-and-bags-en': [2.458, 3.398, 1.084, 2.82],
+        'outdoor-scene-en': [3.215, .547, 3.009, 2.189]}
+    sections = [CreationTaskScriptSection(key, key, 'Declared English caption facts.', '', []) for key in measured]
+    cues = [NarrationCue(f'{section}-{i}', section, f'declared caption {i}', duration)
+            for section, durations in measured.items() for i, duration in enumerate(durations)]
+    old = narration_schedule(cues, 29.92)
+    assert old[-1].end_seconds == pytest.approx(29.92)
+    monkeypatch.setattr(montage, '_build_creation_task_cues', lambda *args, **kwargs: cues)
+    windows = [SectionWindow(sections[0].id, 0, 11.2), SectionWindow(sections[1].id, 11.2, 629 / 30),
+        SectionWindow(sections[2].id, 629 / 30, 30)]
+    plan = MontagePlanner().build_for_creation_task(**{**task_inputs,
+        'script': replace(task_inputs['script'], sections=sections)}, duration_target_seconds=30,
+        narration_duration_seconds=29.92, delivery_windows=windows)
+    if adopted:
+        from dataclasses import asdict
+        from app.creation.montage_stage_use_case import MontageStageUseCase
+        audio = [SimpleNamespace(id=section, source_section_id=section, audio_reference=f'narration://artifact/{section}',
+            duration_seconds=total, status='ready') for section, total in zip(measured, [11.2, 9.76, 8.96])]
+        states = {}
+        for window, segment in zip(windows, audio):
+            local_cues = [replace(cue, timeline_start_seconds=None) for cue in plan.cues
+                          if cue.source_section_id == window.section_id]
+            ids = {cue.id for cue in local_cues}
+            local = replace(plan, cues=local_cues, duration_seconds=window.duration_seconds,
+                delivery_window=asdict(window), clips=[replace(clip,
+                    timeline_start_seconds=clip.timeline_start_seconds-window.start_seconds,
+                    timeline_end_seconds=clip.timeline_end_seconds-window.start_seconds)
+                    for clip in plan.clips if clip.cue_id in ids])
+            states[window.section_id] = {'narration_reference': segment.audio_reference,
+                'montage': montage.creation_task_montage_plan_to_payload(local)}
+        repository = SimpleNamespace(effective_creation_script=lambda *args: replace(task_inputs['script'], sections=sections),
+            list_narration_segments=lambda *args: audio, get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30),
+            stage_segment_state=lambda ws, task, section: states[section])
+        task = SimpleNamespace(workspace_id='workspace', id='task', plan_id='plan')
+        plan = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=repository), task, plan)
+    schedule = narration_schedule(plan.cues, plan.duration_seconds)
+    assert len(schedule) == 12
+    assert [(cue.text, cue.duration_seconds) for cue in plan.cues] == [(cue.text, cue.duration_seconds) for cue in cues]
+    assert schedule[3].end_seconds == schedule[4].start_seconds == 11.2
+    assert schedule[8].start_seconds == 20.967
+    assert sum(item.end_seconds - item.start_seconds for item in schedule) == pytest.approx(29.92)
+    assert plan.duration_seconds == 30

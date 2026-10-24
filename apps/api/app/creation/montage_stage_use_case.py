@@ -234,6 +234,10 @@ class MontageStageUseCase:
         audio = {item.source_section_id:item for item in self.repository.list_narration_segments(task.workspace_id,task.id,script.id)}
         requirement, windows = delivery_windows_for_task(self.repository, task, script, list(audio.values()))
         windows = {window.section_id: window for window in windows}
+        from fractions import Fraction
+        from app.subtitle_schedule import narration_schedule
+        global_captions = {cue.id: caption for cue, caption in zip(montage.cues,
+            narration_schedule(montage.cues, montage.duration_seconds))}
         cues,clips,cursor = [],[],0.0
         for section in script.sections:
             state = self.repository.stage_segment_state(task.workspace_id,task.id,section.id)
@@ -256,9 +260,14 @@ class MontageStageUseCase:
                 duration = window.duration_seconds
             if not section_cues or not section_clips:
                 raise ValueError('完整故事板缺少实际段落镜头，未发布半条作品')
-            cues.extend(replace(cue, timeline_start_seconds=(
-                cue.timeline_start_seconds if cue.timeline_start_seconds is not None else 0) - origin + cursor)
-                for cue in section_cues)
+            if state is not None:
+                captions = narration_schedule(section_cues, duration)
+                shift = Fraction(round(cursor * 1000), 1000)
+            else:
+                captions = [global_captions[cue.id] for cue in section_cues]
+                shift = Fraction(0)
+            cues.extend(replace(cue, timeline_start_seconds=float(Fraction(str(caption.start_seconds)) + shift))
+                for cue, caption in zip(section_cues, captions))
             clips.extend(replace(clip,timeline_start_seconds=clip.timeline_start_seconds-origin+cursor,
                 timeline_end_seconds=clip.timeline_end_seconds-origin+cursor) for clip in section_clips)
             cursor = window.end_seconds

@@ -1,5 +1,6 @@
 """Read-only render schedule derived from versioned subtitle tracks, never shots."""
 from dataclasses import dataclass,field,replace
+from fractions import Fraction
 import math
 import re
 
@@ -95,17 +96,25 @@ def subtitle_schedule(tracks, duration_seconds: float) -> list[TimedCaption]:
 
 def narration_schedule(cues, duration_seconds: float) -> list[TimedCaption]:
     """Initial captions use the narration clock, independent of shot selection/order."""
+    if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+        raise ValueError("旁白字幕区间必须位于成片内")
     result = []
-    cursor = 0.0
+    cursor = Fraction(0)
+    duration = Fraction(str(duration_seconds))
     for cue in cues:
         if cue.timeline_start_seconds is not None:
-            if not math.isfinite(cue.timeline_start_seconds) or cue.timeline_start_seconds < cursor:
+            if not math.isfinite(cue.timeline_start_seconds):
                 raise ValueError("旁白字幕起点无效或重叠")
-            cursor = cue.timeline_start_seconds
-        end = cursor + cue.duration_seconds
-        if not math.isfinite(end) or end <= cursor or end > duration_seconds + .03:
+            start = Fraction(str(cue.timeline_start_seconds))
+            if start < cursor:
+                raise ValueError("旁白字幕起点无效或重叠")
+            cursor = start
+        if not math.isfinite(cue.duration_seconds):
             raise ValueError("旁白字幕区间必须位于成片内")
-        result.append(TimedCaption(cursor, min(end, duration_seconds), cue.text,
+        end = cursor + Fraction(str(cue.duration_seconds))
+        if end <= cursor or end > duration + Fraction(3, 100):
+            raise ValueError("旁白字幕区间必须位于成片内")
+        result.append(TimedCaption(float(cursor), float(min(end, duration)), cue.text,
             dict(cue.subtitle_style), list(cue.subtitle_emphasis), cue.subtitle_emphasis_ranges))
         cursor = end
     return result

@@ -469,10 +469,12 @@ class MontagePlanner:
                 speech = sum(cue.duration_seconds for cue in section_cues)
                 if speech > window.duration_seconds + .001:
                     raise DurationConflict("真实配音超过本段画面窗口，须按实测重新规划未采用窗口或重确认受影响画面。")
-                at = window.start_seconds
+                # Caption durations are emitted on the millisecond clock above;
+                # audio_timeline places these same sections using integer milliseconds.
+                at_ms = round(window.start_seconds * 1000)
                 for cue in section_cues:
-                    shifted.append(replace(cue, timeline_start_seconds=at))
-                    at += cue.duration_seconds
+                    shifted.append(replace(cue, timeline_start_seconds=at_ms / 1000))
+                    at_ms += round(cue.duration_seconds * 1000)
             cues = shifted
             visual_cues = [replace(cue, duration_seconds=windows[cue.source_section_id].duration_seconds)
                            for cue in visual_cues]
