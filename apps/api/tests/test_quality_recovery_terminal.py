@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from dataclasses import replace
+from app.device_scheduler import RecoveryBlocked, SourceRef, VerifiedWork
 
 import pytest
 
@@ -13,7 +15,7 @@ from app.creation_execution import CreationExecutionActor
 from app.production import CreationPlan, CreationTask, ProductionRepository
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
-from test_quality_resource_owner import build_metadata_runtime, fixture_budget, metadata_result, seed_source
+from test_quality_resource_owner import build_metadata_runtime, fixture_budget, metadata_result, seed_source, stage_metadata_prefix
 
 
 def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tmp_path, monkeypatch):
@@ -43,9 +45,12 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         check_id = service.start(runtime, actor, "local", "task", force=True)
         job_id = f"job_quality_{check_id}"
         event_id = f"event_{job_id}_quality_terminal"
-        repository.claim_job_run("local", job_id)
-        _, _, _, sealed = service.read("local", job_id)
+        sealed = stage_metadata_prefix(runtime, service, actor, check_id)
         result = metadata_result(sealed)  # Explicit already-returned metadata port receipt.
+        with pytest.raises(ValueError, match="完整文件 SHA"):
+            service.validate_result(sealed, {key: value for key, value in result.items() if key != "file_sha256"})
+        with pytest.raises(ValueError, match="当前阶段"):
+            service.validate_result(sealed, {**result, "phase": "clipping"})
         checks.store_worker_result("local", "task", check_id, result)
         service.budget = None
 
@@ -56,7 +61,20 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
                                   "device_permit", "device_work_requests", "device_request_events")}
 
         before = facts()
-        original_attempt = next(row["attempt_number"] for row in before["device_work_requests"] if row["owner_id"] == job_id)
+        generation = runtime.scheduler.reconcile_released()
+        source = sealed["source"]
+        expected = VerifiedWork("local", "quality_check", job_id, repository.get_job_run("local", job_id).input_digest,
+            f"quality:{check_id}:finalize", actor.member_id, "normal_make", sealed["resources"],
+            (SourceRef("local", "artifact", source["artifact_id"], source["render_ref"]),))
+        for candidate, candidate_generation in [(replace(expected, unit_key=f"quality:{check_id}:missing"), generation),
+                                                (expected, generation - 1)]:
+            with repository._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                with pytest.raises(RecoveryBlocked):
+                    runtime.scheduler.complete_recovered_quality(conn, candidate, generation=candidate_generation,
+                        checkpoint_ref=event_id, status="succeeded")
+        assert facts() == before  # Wrong phase/generation cannot settle another unit.
+        original_attempt = next(row["attempt_number"] for row in before["device_work_requests"] if row["owner_id"] == job_id and row["unit_key"].endswith(":finalize"))
         trace = []
         original_connect = service._connect
 
@@ -98,7 +116,7 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         assert checks.get("local", "task")["check_id"] == check_id
         assert repository.get_task_event("local", event_id).payload == {"check_id": check_id, "status": "succeeded"}
         with repository._connect() as conn:
-            request = dict(conn.execute("SELECT * FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchone())
+            request = dict(conn.execute("SELECT * FROM device_work_requests WHERE owner_id=? AND unit_key LIKE '%:finalize'", (job_id,)).fetchone())
             events = [dict(row) for row in conn.execute("SELECT * FROM device_request_events WHERE request_id=?", (request["id"],))]
             permit = dict(conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone())
         assert (request["state"], request["wait_reason"], request["checkpoint_ref"]) == ("done", None, event_id)

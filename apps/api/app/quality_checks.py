@@ -28,7 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 from pathlib import Path
 
@@ -690,67 +690,79 @@ def inspect_media_quality(
     四类都量成且没检出问题时 `status == "clean"`；任何一类量不成就是
     `unavailable`、`is_clean` 为 False：未知不会被说成通过。
     """
-    target = Path(path)
-    payload = _probe(target, context=context)
+    thresholds = dict(min_black_seconds=min_black_seconds, black_pixel_threshold=black_pixel_threshold,
+        clip_full_scale_duty_threshold=clip_full_scale_duty_threshold,
+        truncation_tolerance_seconds=truncation_tolerance_seconds,
+        start_offset_tolerance_seconds=start_offset_tolerance_seconds)
+    checkpoints = {}
+    for phase in ("metadata", "black_frames", "truncation", "clipping"):
+        checkpoints[phase] = inspect_quality_phase(path, phase, checkpoints, context=context, **thresholds)
+    return _report_from_phases(path, checkpoints, **thresholds)
+
+
+def inspect_quality_phase(path, phase, checkpoints, *, context=None,
+        min_black_seconds=DEFAULT_BLACK_MIN_SECONDS, black_pixel_threshold=DEFAULT_BLACK_PIXEL_THRESHOLD,
+        clip_full_scale_duty_threshold=DEFAULT_CLIP_FULL_SCALE_DUTY,
+        truncation_tolerance_seconds=DEFAULT_TAIL_GAP_TOLERANCE_SECONDS,
+        start_offset_tolerance_seconds=DEFAULT_START_OFFSET_TOLERANCE_SECONDS):
+    """One complete inspection phase; never labels a partial decode as coverage.
+
+    PCM keeps both passes in this phase: its relative peak and continuous runs
+    still refer to the complete stream. Per-command cumulative caps remain in
+    force; this checkpoint protocol alone does not make those scans resumable.
+    """
+    if phase == "metadata":
+        return _probe(path, context=context)
+    payload = checkpoints["metadata"]
     origin = _timeline_origin(payload)
-    findings: list[QualityFinding] = []
-    unavailable: list[QualityUnavailable] = []
+    findings, unavailable, summary = [], [], None
+    if phase == "black_frames":
+        findings = _shifted(detect_black_frames(path, min_duration_seconds=min_black_seconds,
+            pixel_threshold=black_pixel_threshold, context=context), origin)
+    elif phase == "truncation":
+        findings, unavailable = detect_truncation(path, payload=payload, origin=origin,
+            tolerance_seconds=truncation_tolerance_seconds, context=context)
+    elif phase == "clipping":
+        audio = _stream_of(payload, "audio")
+        if audio is None:
+            unavailable = [QualityUnavailable(QUALITY_KIND_CLIPPING, "成片没有音频流，无法按样本判断削平")]
+        else:
+            clipping = detect_clipping(path, sample_rate=_probe_sample_rate(path, context=context),
+                audio_start_seconds=_stream_start_seconds(audio) if _stream_start_known(audio) else 0.0,
+                timeline_origin_seconds=origin, full_scale_duty_threshold=clip_full_scale_duty_threshold,
+                context=context)
+            findings, unavailable, summary = clipping.findings, clipping.unavailable, clipping.summary
+    elif phase == "finalize":
+        return quality_report_evidence(_report_from_phases(path, checkpoints,
+            clip_full_scale_duty_threshold=clip_full_scale_duty_threshold,
+            start_offset_tolerance_seconds=start_offset_tolerance_seconds))
+    else:
+        raise ValueError("未知质检阶段")
+    return {"findings": [asdict(item) for item in findings],
+            "unavailable": [asdict(item) for item in unavailable], "clipping_summary": summary}
 
-    findings.extend(_shifted(
-        detect_black_frames(
-            target,
-            min_duration_seconds=min_black_seconds,
-            pixel_threshold=black_pixel_threshold,
-        context=context),
-        origin,
-    ))
 
-    truncation_findings, truncation_unavailable = detect_truncation(
-        target, payload=payload, origin=origin,
-        tolerance_seconds=truncation_tolerance_seconds,
-    context=context)
-    findings.extend(truncation_findings)
-    unavailable.extend(truncation_unavailable)
-
-    offset_findings, offset_unavailable = detect_timestamp_offset(
-        target, payload=payload, origin=origin,
-        tolerance_seconds=start_offset_tolerance_seconds,
-    context=context)
+def _report_from_phases(path, checkpoints, *,
+        clip_full_scale_duty_threshold=DEFAULT_CLIP_FULL_SCALE_DUTY,
+        start_offset_tolerance_seconds=DEFAULT_START_OFFSET_TOLERANCE_SECONDS, **_):
+    payload = checkpoints["metadata"]
+    origin = _timeline_origin(payload)
+    findings, unavailable = [], []
+    for phase in ("black_frames", "truncation", "clipping"):
+        findings.extend(QualityFinding(**item) for item in checkpoints[phase]["findings"])
+        unavailable.extend(QualityUnavailable(**item) for item in checkpoints[phase]["unavailable"])
+    offset_findings, offset_unavailable = detect_timestamp_offset(path, payload=payload, origin=origin,
+        tolerance_seconds=start_offset_tolerance_seconds)
     findings.extend(offset_findings)
     unavailable.extend(offset_unavailable)
-
-    audio = _stream_of(payload, "audio")
-    clipping_summary: dict | None = None
-    if audio is None:
-        unavailable.append(QualityUnavailable(
-            QUALITY_KIND_CLIPPING, "成片没有音频流，无法按样本判断削平"
-        ))
-    else:
-        clipping = detect_clipping(
-            target,
-            sample_rate=_probe_sample_rate(target, context=context),
-            audio_start_seconds=(
-                _stream_start_seconds(audio) if _stream_start_known(audio) else 0.0
-            ),
-            timeline_origin_seconds=origin,
-        context=context)
-        clipping_summary = clipping.summary
-        findings.extend(clipping.findings)
-        unavailable.extend(clipping.unavailable)
-
     findings.sort(key=lambda item: (item.start_seconds, item.kind))
-    return QualityReport(
-        path=str(target),
-        findings=tuple(findings),
-        unavailable=tuple(unavailable),
+    return QualityReport(path=str(path), findings=tuple(findings), unavailable=tuple(unavailable),
         duration_seconds=_finite((payload.get("format") or {}).get("duration")),
         engine="ffmpeg/ffprobe present" if shutil.which("ffmpeg") else "ffmpeg missing",
         clip_full_scale_duty_threshold=clip_full_scale_duty_threshold,
-        timeline_origin_seconds=round(origin, 3),
-        clipping_summary=clipping_summary,
+        timeline_origin_seconds=round(origin, 3), clipping_summary=checkpoints["clipping"]["clipping_summary"],
         video_duration_seconds=_stream_duration_seconds(_stream_of(payload, "video")),
-        video_frame_rate=(_stream_of(payload, "video") or {}).get("avg_frame_rate"),
-    )
+        video_frame_rate=(_stream_of(payload, "video") or {}).get("avg_frame_rate"))
 
 
 def _clipping_summary(

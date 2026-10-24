@@ -976,8 +976,8 @@ class DeviceScheduler:
         permit = connection.execute("SELECT state,generation FROM device_permit WHERE id=1").fetchone()
         if permit is None or (permit["state"], permit["generation"]) != ("free", generation):
             raise RecoveryBlocked("设备许可在质检恢复提交前已变化")
-        rows = connection.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type='quality_check' AND owner_id=?",
-                                  (expected.workspace_id, expected.owner_id)).fetchall()
+        rows = connection.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type='quality_check' AND owner_id=? AND unit_key=?",
+                                  (expected.workspace_id, expected.owner_id, expected.unit_key)).fetchall()
         if not rows:
             if status == "succeeded":
                 raise RecoveryBlocked("已完成质检缺少原设备请求，不能伪造检查点")

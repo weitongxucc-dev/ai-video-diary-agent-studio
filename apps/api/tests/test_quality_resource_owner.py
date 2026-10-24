@@ -18,7 +18,8 @@ from app.montage import CreationTaskMontagePlan, MontageClip, creation_task_mont
 from app.production import ArtifactRecord, CreationPlan, CreationTask, JobRun, ProductionRepository, TimelineVersion
 from app.quality_checks import QualityReport, QualityUnavailable, quality_report_evidence
 from app.quality_inspection import QualityCheckRepository
-from app.quality_worker_runtime import QualityBudget, source_receipt
+from app.quality_worker_runtime import (QualityBudget, source_receipt, QUALITY_PHASES,
+    quality_phase_request, quality_unit_key)
 from app.task_audio import TaskAudio
 
 
@@ -154,8 +155,37 @@ def seed_source(repository, store, version="v1"):
 
 def metadata_result(request):
     report = QualityReport("fixture.mp4", (), (QualityUnavailable("clipping", "声明端口无 native 音频"),), 2, "declared-metadata-port")
-    return {"evidence": quality_report_evidence(report), "receipt": source_receipt(request["source"], request["check_id"]),
+    result = {"evidence": quality_report_evidence(report), "receipt": source_receipt(request["source"], request["check_id"]),
         "worker_sha256": request["budget"]["worker_sha256"]}
+    if "phase" in request:
+        phase = request["phase"]
+        result.update(phase=phase, checkpoint_digest=request["checkpoint_digest"])
+        if phase in {"metadata", "finalize"}:
+            result["file_sha256"] = request["source"]["render_ref"]
+        if phase != "finalize":
+            result.pop("evidence")
+            result["data"] = ({"streams": [], "format": {"duration": "2"}} if phase == "metadata" else
+                {"findings": [], "unavailable": [], "clipping_summary": None})
+    return result
+
+
+def stage_metadata_prefix(runtime, service, actor, check_id):
+    """Declare completed non-native phases through the real owner transaction."""
+    for phase in QUALITY_PHASES[:-1]:
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None and grant.unit_key == f"quality:{check_id}:{phase}"
+        job, _, record, sealed = service.read(actor.workspace_id, grant.owner_id)
+        if job.status in {"queued", "interrupted"}:
+            job = service.production.claim_job_run(actor.workspace_id, job.id)
+        request = quality_phase_request(sealed, record["evidence"])
+        result = metadata_result(request)
+        service.validate_result(request, result)
+        service.checks.store_worker_result(job.workspace_id, job.task_id, check_id, result)
+        runtime.scheduler.complete_unit(grant, checkpoint_database_path=service.production.database_path,
+            checkpoint_write=lambda conn, current: service.complete_result(conn, job, check_id, result))
+        service.submit_next(runtime.scheduler, job.workspace_id, job.id, actor)
+    _, _, record, sealed = service.read(actor.workspace_id, f"job_quality_{check_id}")
+    return quality_phase_request(sealed, record["evidence"])
 
 
 def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
@@ -196,10 +226,22 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         with repository._connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM device_work_requests WHERE owner_type=?", (QUALITY_KIND,)).fetchone()[0] == 1
         assert runtime.run_once() is True
-        assert checks.get_check("local", "task", old_id)["result_status"] == "unavailable"
+        assert runtime.stop(1)
+        runtime = build_metadata_runtime(tmp_path, service, worker, resources=resources, processes=processes)
+        assert checks.get_check("local", "task", old_id)["result_status"] is None
+        assert list(checks.get_check("local", "task", old_id)["evidence"]["_phases"]) == ["metadata"]
         assert checks.get("local", "task")["check_id"] == newer[0]
         assert checks.get("local", "task")["check_state"] == "checking"
-        assert runtime.run_once() is True
+        service.recover(runtime.scheduler)
+        assert calls == [old_id]  # A new runtime reuses the committed metadata phase.
+        with repository._connect() as conn:
+            units = [tuple(row) for row in conn.execute("SELECT unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY unit_key", (f"job_quality_{old_id}",))]
+        assert units == [(f"quality:{old_id}:black_frames", "waiting"), (f"quality:{old_id}:metadata", "done")]
+        for _ in range(2 * len(QUALITY_PHASES) - 1):
+            ran = runtime.run_once()
+            with repository._connect() as conn:
+                queue = [dict(row) for row in conn.execute("SELECT unit_key,state,wait_reason,last_failure_reason FROM device_work_requests")]
+            assert ran is True, queue
         current = service.projection("local", "task")
         assert current["check_id"] == newer[0] and current["result_status"] == "unavailable"
         assert current["stale"] is False and current["findings"] == []
@@ -211,13 +253,15 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
             terminal = repository.get_task_event("local", f"event_{job.id}_quality_terminal")
             assert terminal.payload == {"check_id": check_id, "status": "succeeded"}
             assert reopened.get_check("local", "task", check_id)["check_state"] == "done"
-        assert calls == [old_id, newer[0]]
-        assert len(resources.admissions) == 4 and len(resources.releases) >= 2
+        assert calls.count(old_id) == calls.count(newer[0]) == len(QUALITY_PHASES)
+        assert len(set(resources.admissions)) == 2 * len(QUALITY_PHASES)
+        assert set(resources.admissions) <= set(resources.releases)
         released_result = service.start(runtime, actor, "local", "task", force=True)
+        request = stage_metadata_prefix(runtime, service, actor, released_result)
         grant = runtime.scheduler.pick_and_grant()
         assert grant is not None and grant.owner_id == f"job_quality_{released_result}"
-        job = repository.claim_job_run("local", grant.owner_id)
-        _, _, record, request = service.read("local", job.id)
+        job = repository.get_job_run("local", grant.owner_id)
+        _, _, record, _ = service.read("local", job.id)
         # A declared already-returned worker receipt, not the separate late-SQL gate.
         checks.store_worker_result("local", "task", record["check_id"], metadata_result(request))
         seed_source(repository, store, "v3")
@@ -239,7 +283,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
             with pytest.raises(RecoveryBlocked):
                 service.recover(runtime.scheduler)
             assert persisted_facts() == before
-            assert len(calls) == 2 and len(resources.admissions) == admissions_before
+            assert len(calls) == 2 * len(QUALITY_PHASES) and len(resources.admissions) == admissions_before
         # Metadata settlement of the sealed old receipt does not borrow a new profile.
         service.budget = None
         processes.recovery = "released"
@@ -249,15 +293,15 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         assert repository.get_task_event("local", f"event_job_quality_{released_result}_quality_terminal").payload == {
             "check_id": released_result, "status": "succeeded"}
         assert reopened.get("local", "task")["check_id"] == interrupted
-        assert reopened.get("local", "task")["check_state"] == "failed"
-        assert "服务中断" in service.projection("local", "task")["error"]
-        assert repository.get_job_run("local", f"job_quality_{interrupted}").status == "cancelled"
-        assert len(calls) == 2
+        assert reopened.get("local", "task")["check_state"] == "checking"
+        assert service.projection("local", "task")["result_status"] is None
+        assert repository.get_job_run("local", f"job_quality_{interrupted}").status == "interrupted"
+        assert len(calls) == 2 * len(QUALITY_PHASES)
         evidence_root = os.environ.get("QUALITY_RESOURCE_EVIDENCE_DIR")
         if evidence_root:
             Path(evidence_root, "NORMAL_FACTS.json").write_text(json.dumps({"port": "non-native metadata only",
                 "checks": [old_id, newer[0], released_result, interrupted], "worker_calls": calls, "shared_reader": actor.member_id,
-                "terminal_status": "unavailable", "recovery_status": "failed", "runtime_run_once_calls": 2,
+                "terminal_status": "unavailable", "recovery_status": "interrupted", "runtime_run_once_calls": 2 * len(QUALITY_PHASES),
                 "unknown_active_full_DB_unchanged": True, "released_receipt_resumed_without_worker": True,
                 "recovery_current_profile": None, "reconciliation_extra_admissions": len(resources.admissions) - admissions_before}, indent=2))
     finally:
@@ -445,8 +489,11 @@ def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, g
     program = '''
 import json, sys, time
 from pathlib import Path
-from app.quality_worker_runtime import QualityBudget, QualityWorkerContext
+from dataclasses import asdict, replace
+from app.quality_worker_runtime import QualityBudget, QualityWorkerContext, QUALITY_PHASES, QUALITY_PHASE_PROTOCOL, quality_phase_request, file_identity
+from app.quality_worker import inspect_request, worker_identity
 from app.quality_checks import inspect_media_quality, quality_report_evidence
+import hashlib
 request=json.loads(Path(sys.argv[1]).read_text())
 context=QualityWorkerContext(QualityBudget(**request['budget']), time.monotonic()+15)
 reports=[]
@@ -458,6 +505,23 @@ for name, amplitude in [('normal', .5), ('clipped', 3)]:
         '-c:v','ffv1','-threads:v','1','-pix_fmt','yuv420p','-c:a','pcm_s16le',str(target)],3)
     if result.returncode: raise RuntimeError(result.stderr.decode())
     report=quality_report_evidence(inspect_media_quality(target,context=context))
+    if name == 'normal':
+        with target.open('rb') as source_file:
+            sha = hashlib.file_digest(source_file, 'sha256').hexdigest()
+        source=dict(workspace_id='fixture', task_id='fixture', timeline_version_id='v1', source_ref='fixture.mkv',
+            artifact_id='fixture', render_ref=sha, size_bytes=target.stat().st_size, file_identity=file_identity(target), path=str(target))
+        sealed=dict(protocol=QUALITY_PHASE_PROTOCOL, source=source, check_id='synthetic-phase-check', thresholds={},
+            budget=asdict(replace(context.budget, worker_sha256=worker_identity())))
+        checkpoints={}
+        for phase in QUALITY_PHASES:
+            phase_request=quality_phase_request(sealed, {'_phases':checkpoints})
+            response=inspect_request({**phase_request, 'deadline_monotonic':time.monotonic()+15})
+            assert response['phase']==phase
+            if phase=='finalize':
+                assert response['file_sha256']==sha
+                assert response['evidence']==report
+            else:
+                checkpoints[phase]=response['data']
     reports.append({key:report[key] for key in ('status','unavailable','clipping_summary')})
 print(json.dumps(reports))
 '''
@@ -474,3 +538,45 @@ print(json.dumps(reports))
     assert clipped['clipping_summary']['full_scale_duty'] > .7
     assert clipped['clipping_summary']['first_start_seconds'] >= 0
     assert clipped['clipping_summary']['last_end_seconds'] <= .301
+
+
+def test_quality_phase_cancellation_preserves_prefix_without_completing_current_phase(tmp_path):
+    repository = ProductionRepository(tmp_path / "studio.sqlite", tmp_path / "library")
+    plan = CreationPlan(id="plan", workspace_id="local", goal="测试", name="质检", target_count=1, language="zh-CN",
+        aspect_ratio="16:9", duration_target_seconds=2, knowledge_references=[], source_references=[], selected_voice=None,
+        pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
+        confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
+    task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
+    repository.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    actor = CreationExecutionActor("local", "member")
+    store = ArtifactStore(tmp_path / "artifacts")
+    checks = QualityCheckRepository(repository.database_path)
+    outputs = OutputObservationUseCase(repository, store, TaskAudio(repository, store, tmp_path), tmp_path, None)
+    service = QualityInspectionUseCase(repository, checks, outputs, budget=fixture_budget(),
+        verify_identity=lambda current: "ready" if current == actor else "unauthorized", temporary_root=tmp_path / "worker")
+    seed_source(repository, store)
+    calls = []
+
+    def worker(context, request, temporary_root):
+        calls.append(request["phase"])
+        if request["phase"] == "black_frames":
+            context.cancel_event.set()
+        return metadata_result(request)
+
+    runtime = build_metadata_runtime(tmp_path, service, worker)
+    try:
+        check_id = service.start(runtime, actor, "local", "task", force=True)
+        assert runtime.run_once()
+        assert runtime.run_once()
+        record = checks.get_check("local", "task", check_id)
+        assert list(record["evidence"]["_phases"]) == ["metadata"]
+        assert record["evidence"]["_worker_result"]["phase"] == "black_frames"
+        assert record["check_state"] == "failed" and record["result_status"] is None
+        assert repository.get_job_run("local", f"job_quality_{check_id}").status == "cancelled"
+        with repository._connect() as conn:
+            units = [tuple(row) for row in conn.execute("SELECT unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY unit_key", (f"job_quality_{check_id}",))]
+            assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
+        assert units == [(f"quality:{check_id}:black_frames", "cancelled"), (f"quality:{check_id}:metadata", "done")]
+        assert calls == ["metadata", "black_frames"]
+    finally:
+        assert runtime.stop(1)

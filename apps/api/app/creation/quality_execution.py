@@ -16,7 +16,7 @@ from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SourceRef, VerifiedWork
 from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout, run_granted_command
 from app.host_resource_probes import HostResourceRefusal
-from app.quality_worker_runtime import QualityBudget, QualityWorkerError
+from app.quality_worker_runtime import QualityBudget, QualityWorkerError, quality_phase_request, quality_unit_key
 from app.creation.quality_inspection_use_case import QUALITY_KIND
 
 
@@ -84,12 +84,12 @@ class QualityCheckOwnerVerifier:
         self.service.verify_source(request, actor)
         source = request["source"]
         refs = (SourceRef(workspace_id, "artifact", source["artifact_id"], source["render_ref"]),)
-        return job, event, record, request, actor, refs
+        return job, event, record, quality_phase_request(request, record["evidence"]), actor, refs
 
     def verify_submission(self, intent, actor):
         job, event, record, request, original, refs = self._verified(intent.workspace_id, intent.owner_id)
         if (intent.owner_type, intent.input_digest, intent.unit_key, actor) != (
-                QUALITY_KIND, job.input_digest, f"quality:{record['check_id']}", original):
+                QUALITY_KIND, job.input_digest, quality_unit_key(request), original):
             raise PermissionError("质检请求未绑定原检查和执行身份")
         return VerifiedWork(job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
             intent.unit_key, original.member_id, "normal_make", request["resources"], refs)
@@ -99,7 +99,7 @@ class QualityCheckOwnerVerifier:
             job, event, record, original, actor, refs = self._verified(request.workspace_id, request.owner_id, connection=conn)
             if (request.owner_type, request.input_digest, request.unit_key, request.member_id,
                     request.work_class, request.resources, request.source_refs) != (
-                    QUALITY_KIND, job.input_digest, f"quality:{record['check_id']}", actor.member_id,
+                    QUALITY_KIND, job.input_digest, quality_unit_key(original), actor.member_id,
                     "normal_make", original["resources"], refs):
                 return "stale"
             return "ready"
@@ -225,7 +225,8 @@ class QualityCheckUnitExecutor:
         if grant.owner_type != QUALITY_KIND:
             raise PermissionError("质检不能借用其他阶段的许可")
         job, event, record, request = self.service.read(grant.workspace_id, grant.owner_id)
-        if (grant.input_digest, grant.unit_key) != (job.input_digest, f"quality:{record['check_id']}"):
+        request = quality_phase_request(request, record["evidence"])
+        if (grant.input_digest, grant.unit_key) != (job.input_digest, quality_unit_key(request)):
             raise PermissionError("质检许可未绑定原检查输入")
         actor = CreationExecutionActor.from_event(grant.workspace_id, event)
         budget = QualityBudget(**request["budget"])
@@ -302,10 +303,11 @@ class QualityCheckUnitExecutor:
             def checkpoint(connection,current):
                 if self._stopping or cancellation.is_set():
                     raise GrantedCommandCancelled("质检已停止，未提交成功")
-                return self.service.settle(connection,job,record["check_id"],status="succeeded",result=result)
+                return self.service.complete_result(connection,job,record["check_id"],result)
             try:
                 scheduler.complete_unit(grant,checkpoint_database_path=self.service.production.database_path,
-                    checkpoint_write=checkpoint)
+                    checkpoint_write=checkpoint,
+                    next_unit_write=lambda conn, current: self.service.next_unit(conn, job, record["check_id"], actor))
             except GrantedCommandCancelled as exc:
                 if not (self._stopping and self._pause(grant,scheduler,job,record["check_id"],reason="application_quit")):
                     self._cancel(grant,scheduler,job,record["check_id"],str(exc))

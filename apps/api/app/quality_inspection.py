@@ -114,6 +114,23 @@ class QualityCheckRepository:
             if changed != 1:
                 raise ValueError("该检查已经结束，不能替换其 worker 回执")
 
+    def save_phase(self, workspace_id, task_id, check_id, phase, data, *, connection):
+        """Advance only inside the owner's permit-release transaction."""
+        if not connection.in_transaction:
+            raise ValueError("质检阶段必须与设备释放同事务保存")
+        record = self.get_check(workspace_id, task_id, check_id, connection=connection)
+        if record["check_state"] != "checking":
+            raise ValueError("该检查已经结束")
+        value = dict(record["evidence"])
+        value["_phases"] = {**value.get("_phases", {}), phase: data}
+        value.pop("_worker_result", None)
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        now = datetime.now(timezone.utc).isoformat()
+        for table in ("creation_task_quality_history", "creation_task_quality_checks"):
+            connection.execute(f"UPDATE {table} SET evidence=?,updated_at=? "
+                "WHERE workspace_id=? AND task_id=? AND check_id=? AND check_state='checking'",
+                (encoded, now, workspace_id, task_id, check_id))
+
     def seal_request(self, workspace_id: str, task_id: str, check_id: str, request: dict,
                      *, connection: sqlite3.Connection) -> None:
         record = self.get_check(workspace_id, task_id, check_id, connection=connection)

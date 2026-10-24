@@ -18,7 +18,8 @@ from app.device_runtime import RuntimeUnavailable
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import content_readable
 from app.quality_inspection import final_quality_check_payload
-from app.quality_worker_runtime import QualityBudget, budget_identity, file_identity, source_receipt
+from app.quality_worker_runtime import (QualityBudget, budget_identity, file_identity, source_receipt,
+    QUALITY_PHASE_PROTOCOL, quality_phase_request, quality_unit_key)
 
 
 QUALITY_KIND = "quality_check"
@@ -192,8 +193,9 @@ class QualityInspectionUseCase:
         try:
             if runtime is None:
                 raise ValueError("整机质检许可运行时尚未就绪，请恢复后重新检查。")
+            _, _, record, sealed = self.read(workspace_id, job.id)
             runtime.scheduler.submit(SubmissionIntent(workspace_id, QUALITY_KIND, job.id, job.input_digest,
-                f"quality:{check_id}", SchedulePolicy()), actor)
+                quality_unit_key(quality_phase_request(sealed, record["evidence"])), SchedulePolicy()), actor)
             runtime.wake()
         except (ValueError, PermissionError, RuntimeUnavailable) as exc:
             with closing(self._connect()) as conn, conn:
@@ -240,7 +242,8 @@ class QualityInspectionUseCase:
                     evidence={"_source_input": source_receipt(source, check_id)}, error=error, connection=conn)
                 return check_id, None
             request = {"source": source, "check_id": check_id, "actor": actor.identity_payload(),
-                "budget": asdict(self.budget), "resources": self.resources(source, self.budget), "thresholds": {}}
+                "budget": asdict(self.budget), "resources": self.resources(source, self.budget), "thresholds": {},
+                "protocol": QUALITY_PHASE_PROTOCOL}
             digest = quality_input_digest(request)
             job = self.production.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
                 task_id=task_id, kind=QUALITY_KIND, idempotency_key=f"quality:{check_id}", input_digest=digest), connection=conn)
@@ -254,10 +257,25 @@ class QualityInspectionUseCase:
         budget = QualityBudget(**request["budget"])
         if (not isinstance(result, dict) or result.get("worker_sha256") != budget.worker_sha256
                 or result.get("receipt") != source_receipt(request["source"], request["check_id"])
-                or not isinstance(result.get("evidence"), dict)
-                or result["evidence"].get("status") not in {"clean", "issues_found", "unavailable"}
-                or len(json.dumps(result, ensure_ascii=False).encode()) > budget.max_report_bytes):
+                or len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > budget.max_report_bytes):
             raise ValueError("质检 worker 回执未绑定原请求或超过有限大小")
+        if request.get("protocol") == QUALITY_PHASE_PROTOCOL:
+            if (result.get("phase"), result.get("checkpoint_digest")) != (request.get("phase"), request.get("checkpoint_digest")):
+                raise ValueError("质检 worker 回执未绑定当前阶段和前序检查点")
+            if request["phase"] in {"metadata", "finalize"} and result.get("file_sha256") != request["source"]["render_ref"]:
+                raise ValueError("质检阶段缺少完整文件 SHA 回执")
+            if request["phase"] != "finalize":
+                if not isinstance(result.get("data"), dict):
+                    raise ValueError("质检阶段缺少有限检查结果")
+                # All persisted phase summaries must fit the same sealed report
+                # envelope. No PCM, frame list, or exported hash state is stored.
+                candidate = {**request["checkpoints"], request["phase"]: result["data"]}
+                if len(json.dumps(candidate, ensure_ascii=False, allow_nan=False).encode()) > budget.max_report_bytes:
+                    raise ValueError("质检阶段累计摘要超过本次报告上限")
+                return
+        if (not isinstance(result.get("evidence"), dict)
+                or result["evidence"].get("status") not in {"clean", "issues_found", "unavailable"}):
+            raise ValueError("质检 worker 缺少完整报告")
 
         from app.creation.duration_requirement import DurationRequirement
         evidence = result['evidence']
@@ -284,9 +302,51 @@ class QualityInspectionUseCase:
         if len(json.dumps(result, ensure_ascii=False).encode()) > budget.max_report_bytes:
             raise ValueError("包含交付时长判断的报告超过本次许可上限")
 
+    def complete_result(self, connection, job, check_id, result):
+        record = self.checks.get_check(job.workspace_id, job.task_id, check_id, connection=connection)
+        request = quality_phase_request(record["evidence"]["_request"], record["evidence"])
+        self.validate_result(request, result)
+        if "phase" not in request or request["phase"] == "finalize":
+            return self.settle(connection, job, check_id, status="succeeded", result=result)
+        self.checks.save_phase(job.workspace_id, job.task_id, check_id, request["phase"], result["data"], connection=connection)
+        event = TaskEvent(id=f"event_{job.id}_quality_{request['phase']}", workspace_id=job.workspace_id,
+            task_id=job.task_id, job_id=job.id, event_type="quality_check_phase_completed",
+            payload={"check_id": check_id, "phase": request["phase"], "checkpoint_digest": request["checkpoint_digest"],
+                "worker_sha256": result["worker_sha256"],
+                **({"file_sha256": result["file_sha256"]} if "file_sha256" in result else {})})
+        self.production.append_task_event(event, connection=connection)
+        return event.id
+
+    def next_unit(self, connection, job, check_id, actor):
+        """Trusted continuation from the prefix just saved by complete_result.
+
+        complete_unit fences the original owner/source/authority observation and
+        enforces the same job, actor and source references on this continuation.
+        """
+        record = self.checks.get_check(job.workspace_id, job.task_id,
+            check_id, connection=connection)
+        if record["check_state"] != "checking":
+            return None
+        request = quality_phase_request(record["evidence"]["_request"], record["evidence"])
+        source = request["source"]
+        unit = quality_unit_key(request)
+        intent = SubmissionIntent(job.workspace_id, QUALITY_KIND, job.id, job.input_digest, unit, SchedulePolicy())
+        verified = VerifiedWork(job.workspace_id, QUALITY_KIND, job.id, job.input_digest, unit, actor.member_id,
+            "normal_make", request["resources"],
+            (SourceRef(job.workspace_id, "artifact", source["artifact_id"], source["render_ref"]),))
+        return intent, verified
+
+    def submit_next(self, scheduler, workspace_id, job_id, actor):
+        job, _, record, sealed = self.read(workspace_id, job_id)
+        if record["check_state"] != "checking":
+            return
+        request = quality_phase_request(sealed, record["evidence"])
+        scheduler.submit(SubmissionIntent(workspace_id, QUALITY_KIND, job.id, job.input_digest,
+            quality_unit_key(request), SchedulePolicy()), actor)
+
     def settle(self, connection, job, check_id, *, status, result=None, error=None):
         record = self.checks.get_check(job.workspace_id, job.task_id, check_id, connection=connection)
-        private = {key: value for key, value in record["evidence"].items() if key in {"_request", "_source_input", "_worker_result"}}
+        private = {key: value for key, value in record["evidence"].items() if key in {"_request", "_source_input", "_worker_result", "_phases"}}
         evidence = ({**private, **result["evidence"], "_source_receipt": result["receipt"]} if result is not None else private)
         self.checks.finish(job.workspace_id, job.task_id, check_id, evidence=evidence, error=error, connection=connection)
         self.production.finish_job_run(job.workspace_id, job.id, status=status, output_refs=[],
@@ -314,6 +374,8 @@ class QualityInspectionUseCase:
         # The sealed request and staged worker result stay in their original row.
         if job.status == "interrupted" and job.failure_reason == reason:
             return
+        if job.status in {"queued", "interrupted"}:
+            job = self.production.claim_job_run(job.workspace_id, job.id, connection=connection)
         self.production.finish_job_run(job.workspace_id, job.id, status="interrupted",
             failure_reason=reason, impact="检查暂停，原成片和已有检查回执保留。",
             repair_action="原任务授权及执行条件恢复后继续同一次检查。", connection=connection)
@@ -331,6 +393,7 @@ class QualityInspectionUseCase:
                 "AND status IN ('queued','interrupted','running') ORDER BY updated_at LIMIT 16", (QUALITY_KIND,)).fetchall()
         for row in rows:
             job, original, record, request = self.read(row["workspace_id"], row["id"])
+            request = quality_phase_request(request, record["evidence"])
             actor = CreationExecutionActor.from_event(job.workspace_id, original)
             authorization_denied = False
             if self.task_authorizations is not None:
@@ -378,18 +441,17 @@ class QualityInspectionUseCase:
                     status = "failed" if error is not None else "succeeded"
                     if job.status in {"queued", "interrupted"}:
                         job = self.production.claim_job_run(job.workspace_id, job.id, connection=conn)
-                    checkpoint = self.settle(conn, job, record["check_id"], status=status,
-                        result=result if status == "succeeded" else None, error=error)
+                    checkpoint = (self.complete_result(conn, job, record["check_id"], result) if status == "succeeded"
+                        else self.settle(conn, job, record["check_id"], status=status, error=error))
                     source = request["source"]
                     expected = VerifiedWork(job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
-                        f"quality:{record['check_id']}", actor.member_id, "normal_make", request["resources"],
+                        quality_unit_key(request), actor.member_id, "normal_make", request["resources"],
                         (SourceRef(job.workspace_id, "artifact", source["artifact_id"], source["render_ref"]),))
                     scheduler.complete_recovered_quality(conn, expected, generation=generation,
                         checkpoint_ref=checkpoint, status=status)
-                    terminal = True
+                    terminal = status != "succeeded" or "phase" not in request or request["phase"] == "finalize"
             if not terminal and ready:
                 try:
-                    scheduler.submit(SubmissionIntent(job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
-                        f"quality:{record['check_id']}", SchedulePolicy()), actor)
+                    self.submit_next(scheduler, job.workspace_id, job.id, actor)
                 except (PermissionError, ValueError):
                     logger.info("Original quality request remains paused; its current authority/input is not ready")

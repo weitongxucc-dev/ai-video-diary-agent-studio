@@ -11,6 +11,7 @@ from app import quality_checks
 from app import quality_worker_runtime
 from app.quality_worker_runtime import (
     QualityBudget, QualityWorkerContext, QualityWorkerError, file_identity, hash_file, source_receipt,
+    QUALITY_PHASE_PROTOCOL, quality_phase_request,
 )
 
 
@@ -43,6 +44,30 @@ def inspect_request(request: dict) -> dict:
     path = Path(source["path"])
     if not path.is_absolute() or file_identity(path) != source["file_identity"]:
         raise QualityWorkerError("检查期间成片内容已变化，请重新检查当前成片。")
+    if request.get("protocol") == QUALITY_PHASE_PROTOCOL:
+        # Verify the sealed prefix before consuming it; no offset or serialized
+        # hashlib internals are trusted as a substitute for the final full hash.
+        expected = quality_phase_request(request, {"_phases": request["checkpoints"]})
+        if (request["phase"], request["checkpoint_digest"]) != (expected["phase"], expected["checkpoint_digest"]):
+            raise QualityWorkerError("质检阶段与原检查点不一致")
+        phase = request["phase"]
+        digest = None
+        if phase in {"metadata", "finalize"}:
+            digest = hash_file(path, check=context.check, max_bytes=budget.max_input_bytes)
+            if digest != source["render_ref"]:
+                raise QualityWorkerError("成片与登记产物不匹配，请重新生成。")
+        data = quality_checks.inspect_quality_phase(path, phase, request["checkpoints"],
+            context=context, **request["thresholds"])
+        context.check()
+        if file_identity(path) != source["file_identity"]:
+            raise QualityWorkerError("检查期间成片内容已变化，请重新检查当前成片。")
+        result = {"phase": phase, "checkpoint_digest": request["checkpoint_digest"],
+            "data": data, "receipt": source_receipt(source, check_id), "worker_sha256": identity}
+        if digest is not None:
+            result["file_sha256"] = digest
+        if phase == "finalize":
+            result["evidence"] = result.pop("data")
+        return result
     before = hash_file(path, check=context.check, max_bytes=budget.max_input_bytes)
     if before != source["render_ref"]:
         raise QualityWorkerError("成片与登记产物不匹配，请重新生成。")

@@ -18,6 +18,31 @@ class QualityWorkerError(RuntimeError):
     pass
 
 
+# This is the ordered inspection algorithm, not a limit on media length.
+QUALITY_PHASES = ("metadata", "black_frames", "truncation", "clipping", "finalize")
+QUALITY_PHASE_PROTOCOL = "quality_phases_v1"
+
+
+def quality_phase_request(request: dict, evidence: dict) -> dict:
+    """Bind a released unit to the exact, bounded prefix already committed."""
+    if request.get("protocol") != QUALITY_PHASE_PROTOCOL:
+        return request  # Original sealed requests retain their original protocol.
+    checkpoints = evidence.get("_phases", {})
+    if not isinstance(checkpoints, dict) or set(checkpoints) != set(QUALITY_PHASES[:len(checkpoints)]):
+        raise ValueError("质检阶段回执不是完整有序前缀")
+    if len(checkpoints) >= len(QUALITY_PHASES):
+        raise ValueError("质检已经完成全部阶段")
+    digest = hashlib.sha256(json.dumps(checkpoints, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return {**request, "phase": QUALITY_PHASES[len(checkpoints)],
+            "checkpoints": checkpoints, "checkpoint_digest": digest}
+
+
+def quality_unit_key(request: dict) -> str:
+    base = f"quality:{request['check_id']}"
+    return f"{base}:{request['phase']}" if "phase" in request else base
+
+
 @dataclass(frozen=True)
 class QualityBudget:
     max_input_bytes: int
