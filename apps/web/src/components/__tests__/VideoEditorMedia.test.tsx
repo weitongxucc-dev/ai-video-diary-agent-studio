@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
+import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTaskMontageClip, CreationTaskWorkspace } from "@/lib/types";
 import { ClipThumbnail, VideoClipInspector, VideoClipQuickEditor, VideoEditingStage } from "../VideoEditor";
@@ -277,6 +278,65 @@ describe("complete source in clip details and replacement", () => {
     Object.defineProperty(video, "videoHeight", { configurable: true, value: height });
     fireEvent.loadedMetadata(video);
   }
+
+  it("isolates same-source clip positions and resumes each preview role on its decoded seek target", () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype,"play").mockResolvedValue();
+    const first = { ...clip, id:"clip-first", source_start_seconds:22.422, source_end_seconds:28.422 };
+    const second = { ...clip, id:"clip-second", source_start_seconds:12, source_end_seconds:18 };
+    const slot: WorkspacePageSlot = { id:"/tasks/task-1", href:"/tasks/task-1", active:true, updateShell:vi.fn(), viewState:new Map() };
+    const videoRef = createRef<HTMLVideoElement>();
+    const content = (selected: CreationTaskMontageClip, active=true) => {
+      const data = workspace(selected, null);
+      data.montage!.clips = [first, second];
+      return <WorkspacePageContext.Provider value={{...slot,active}}>
+        <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key}
+          montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={selected.id}
+          onSelect={vi.fn()} onPosition={vi.fn()} videoRef={videoRef} initialTime={0} busy={false} renderAction={null}/>
+        {inspector(selected)}
+      </WorkspacePageContext.Provider>;
+    };
+    const preview = (label:string) => screen.getByLabelText(label) as HTMLVideoElement;
+    const decodedSeek = (video:HTMLVideoElement) => {
+      mediaState(video,2,true); fireEvent.seeking(video);
+      mediaState(video,2,false); fireEvent.seeked(video);
+    };
+    const view = render(content(first));
+    const firstMain = preview("源素材预览"), firstDetails = preview("镜头源素材预览");
+    for (const video of [firstMain,firstDetails]) { dimensions(video,1920,1080); decodedSeek(video); }
+    firstMain.currentTime=23.422; fireEvent.timeUpdate(firstMain);
+    firstDetails.currentTime=24.422; fireEvent.timeUpdate(firstDetails);
+    const src = firstMain.getAttribute("src");
+
+    view.rerender(content(second));
+    const secondMain = preview("源素材预览"), secondDetails = preview("镜头源素材预览");
+    expect(secondMain).not.toBe(firstMain); expect(secondDetails).not.toBe(firstDetails);
+    for (const video of [secondMain,secondDetails]) {
+      expect(video).toHaveAttribute("src",src); dimensions(video,1920,1080);
+      expect(video.currentTime).toBe(12); decodedSeek(video);
+    }
+    expect(screen.queryAllByText("正在读取原片…")).toHaveLength(0);
+    expect(secondMain).not.toHaveAttribute("positionkey");
+    secondMain.currentTime=13; fireEvent.timeUpdate(secondMain);
+    secondDetails.currentTime=14; fireEvent.timeUpdate(secondDetails);
+
+    view.rerender(content(first));
+    const resumedMain = preview("源素材预览"), resumedDetails = preview("镜头源素材预览");
+    dimensions(resumedMain,1920,1080); dimensions(resumedDetails,1920,1080);
+    expect(resumedMain.currentTime).toBe(23.422); expect(resumedDetails.currentTime).toBe(24.422);
+    decodedSeek(resumedMain); decodedSeek(resumedDetails);
+    expect(screen.queryAllByText("正在读取原片…")).toHaveLength(0);
+
+    view.rerender(content(first,false));
+    expect(resumedDetails).not.toHaveAttribute("src");
+    view.rerender(content(first));
+    const visibleMain = preview("源素材预览"), visibleDetails = preview("镜头源素材预览");
+    dimensions(visibleMain,1920,1080); dimensions(visibleDetails,1920,1080);
+    expect(visibleMain.currentTime).toBe(23.422); expect(visibleDetails.currentTime).toBe(24.422);
+    decodedSeek(visibleMain); decodedSeek(visibleDetails);
+    expect(screen.queryAllByText("正在读取原片…")).toHaveLength(0);
+    expect(play).not.toHaveBeenCalled();
+    play.mockRestore();
+  });
 
   it("shows the real source span after linked speed and retains it for a trim draft", () => {
     const sped = { ...clip, source_start_seconds: 0, source_end_seconds: 6, timeline_start_seconds: 1, timeline_end_seconds: 4 };

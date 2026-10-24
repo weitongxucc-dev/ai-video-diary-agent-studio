@@ -15,10 +15,10 @@ function useViewMedia<T extends HTMLMediaElement>(src: VideoHTMLAttributes<HTMLV
   const key = typeof src === "string" && positionKey ? `media:${positionKey}:${src}` : null;
   const saved = key ? page?.viewState.get(key) as number | undefined : undefined;
   const node = useRef<T | null>(null);
-  const position = useRef({ src, time: saved ?? 0 });
+  const position = useRef({ key, src, time: saved ?? 0 });
   const binding = useRef({ src, active });
   binding.current = { src, active };
-  if (position.current.src !== src) position.current = { src, time: saved ?? 0 };
+  if (position.current.key !== key || position.current.src !== src) position.current = { key, src, time: saved ?? 0 };
   const remember = (media: T) => {
     position.current.time = media.currentTime;
     if (key) page?.viewState.set(key, media.currentTime);
@@ -40,8 +40,8 @@ function useViewMedia<T extends HTMLMediaElement>(src: VideoHTMLAttributes<HTMLV
 }
 
 /** Hidden pages retain a position, never a playing/decoding native media source. */
-export const WorkspaceVideo = forwardRef<HTMLVideoElement, VideoHTMLAttributes<HTMLVideoElement>>(function WorkspaceVideo(props, ref) {
-  const { active, attach, position, remember } = useViewMedia(props.src, ref, props["aria-hidden"] === true || props["aria-hidden"] === "true" ? null : props["aria-label"] ?? "video");
+export const WorkspaceVideo = forwardRef<HTMLVideoElement, VideoHTMLAttributes<HTMLVideoElement> & { positionKey?: string }>(function WorkspaceVideo({ positionKey, ...props }, ref) {
+  const { active, attach, position, remember } = useViewMedia(props.src, ref, props["aria-hidden"] === true || props["aria-hidden"] === "true" ? null : positionKey ?? props["aria-label"] ?? "video");
   return <video {...props} ref={attach} src={active ? props.src : undefined} preload={active ? props.preload : "none"}
     onLoadedMetadata={event => { if (active) { props.onLoadedMetadata?.(event); if (position.current.time) event.currentTarget.currentTime = position.current.time; } }}
     onLoadedData={event => { if (active) props.onLoadedData?.(event); }} onCanPlay={event => { if (active) props.onCanPlay?.(event); }}

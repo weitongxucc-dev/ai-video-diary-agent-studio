@@ -123,22 +123,25 @@ function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded
   const [retry, setRetry] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const positioned = useRef(false);
+  const seekTarget = useRef(clip.source_start_seconds);
   const missing = !clip.person_render_id && !clip.asset_id;
   const identity = clip.person_render_id ? (bounded ? "镜头人物口型预览" : "人物口型预览") : (bounded ? "镜头源素材预览" : "源素材预览");
   function frameReady(video: HTMLVideoElement) {
     if (video !== videoRef.current || video.readyState < 2 || video.seeking) return;
-    if (!positioned.current && Math.abs(video.currentTime - clip.source_start_seconds) > .05) return;
+    if (!positioned.current && Math.abs(video.currentTime - seekTarget.current) > .05) return;
     positioned.current = true;
     setState("ready");
   }
-  const video = missing ? null : <WorkspaceVideo key={retry} ref={videoRef} className={bounded ? mediaUi.sourceVideo : undefined} style={bounded && dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined} aria-hidden={preview ? undefined : true} aria-label={preview ? identity : undefined}
+  const video = missing ? null : <WorkspaceVideo key={retry} ref={videoRef} className={bounded ? mediaUi.sourceVideo : undefined} style={bounded && dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined} aria-hidden={preview ? undefined : true} aria-label={preview ? identity : undefined} positionKey={`${identity}:${clipMediaKey(clip, taskId)}`}
     controls={preview} muted={!preview} playsInline preload="metadata" src={sourceUrl(clip, taskId)}
     onLoadedMetadata={event => {
       const current = event.currentTarget;
       if (current !== videoRef.current) return;
       if (bounded && current.videoWidth > 0 && current.videoHeight > 0) setDimensions({ width: current.videoWidth, height: current.videoHeight });
-      current.currentTime = clip.source_start_seconds;
+      seekTarget.current = clip.source_start_seconds;
+      current.currentTime = seekTarget.current;
     }}
+    onSeeking={event => { if (event.currentTarget === videoRef.current) seekTarget.current = event.currentTarget.currentTime; }}
     onLoadedData={event => frameReady(event.currentTarget)} onSeeked={event => frameReady(event.currentTarget)} onCanPlay={event => frameReady(event.currentTarget)}
     onError={event => { if (event.currentTarget === videoRef.current) setState("error"); }} />;
   const message = missing ? "未关联媒体" : state === "loading" ? (preview ? "正在读取原片…" : "读取缩略图…") : state === "error" ? (preview ? "原片暂时无法读取" : "缩略图读取失败") : "缩略图已定位";
