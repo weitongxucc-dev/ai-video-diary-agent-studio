@@ -37,6 +37,8 @@ corepack pnpm --dir apps/desktop build:mac
 
 该命令会构建 Next.js standalone、PyInstaller API 和 Electron 包。产物位于 `apps/desktop/dist/`，该目录不进入 Git。当前打包客户端只启动 API 和 Web；遗留 Worker 不进入默认构建或包资源。
 
+桌面UI改动必须先集成到本次固定源码，再重新执行 `build:web`，把新的 `standalone-bundled/apps/web` 随包交付；不能复用旧候选的Web产物或把独立设计预览当成产品UI。打包后核对包内Web输入摘要与本次生成的构建身份，并在该包中验证实际界面。保留当前认证模式及其构建配置，不能因重建前端而从Supabase静默改为local。
+
 本机 Python/OpenSSL 和 CPU 架构差异容易产生只能在构建机运行的二进制。发给测试者时，应优先使用 GitHub Actions 的原生 arm64/x64 内测构建，而不是随手转发本机构建。
 
 ## 运行结构
