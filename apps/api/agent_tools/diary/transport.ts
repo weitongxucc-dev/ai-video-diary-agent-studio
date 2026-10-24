@@ -190,6 +190,19 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (!suffix && !search) return result('read_task_workspace', args);
     if (suffix === '/execution' && only('job_id')) return result('read_creation_execution',
       {...args, ...(query.has('job_id') ? {job_id: query.get('job_id')} : {})});
+    const scriptSections = suffix.match(/^\/scripts\/([^/]+)\/sections$/);
+    if (scriptSections && only('after_ordinal','limit','expected_updated_at')) {
+      const ordinal = (name: string) => {
+        const raw = query.get(name)!;
+        return /^-?\d+$/.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : raw;
+      };
+      return result('read_script_sections', {
+        ...args, script_id:decodeURIComponent(scriptSections[1]),
+        ...(query.has('after_ordinal') ? {after_ordinal:ordinal('after_ordinal')} : {}),
+        ...(query.has('limit') ? {limit:ordinal('limit')} : {}),
+        ...(query.has('expected_updated_at') ? {expected_updated_at:query.get('expected_updated_at')} : {}),
+      });
+    }
     const reads: Record<string, string> = {
       '/execution/preview': 'read_creation_execution_preview',
       '/assistant/script-context': 'read_assistant_script_context',

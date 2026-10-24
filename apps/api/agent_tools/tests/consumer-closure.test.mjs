@@ -202,6 +202,44 @@ console.log('common host calls: PASS');`, pathToFileURL(join(tree.root,'Resource
   assert.match(stdout,/common host calls: PASS/);
 });
 
+test('script window tool binds continuation versions without reading the workspace or retrying conflicts', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath, ['--experimental-strip-types','--input-type=module','-e', `
+import assert from 'node:assert/strict';
+const {createBusinessRequest,RequestNotSubmitted}=await import(process.argv[1]);
+const {registerScriptTools}=await import(process.argv[2]);
+const calls=[],tools=new Map();let version='v1';
+const request=createBusinessRequest({taskId:'task:original',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw new Error('credentials forbidden')},getSignal:()=>undefined,
+ fetchRequest(){throw new Error('HTTP forbidden')},businessCall:async(operation,args)=>{
+  calls.push({operation,args});assert.equal(operation,'read_script_sections');
+  if(args.expected_updated_at && args.expected_updated_at!==version)return {ok:false,failure:{status_code:409,reason:'stale',submission_effect:'not_submitted'}};
+  const after=args.after_ordinal||0, end=Math.min(45,after+(args.limit||20));
+  return {ok:true,value:{task_id:args.task_id,script_id:args.script_id,updated_at:version,total_count:45,
+   items:Array.from({length:end-after},(_,i)=>({ordinal:after+i+1,section:{id:'s'+(after+i+1)},digest:'digest'})),
+   next_after_ordinal:end<45?end:null,truncated:end<45}};
+ }});
+registerScriptTools({registerTool:tool=>tools.set(tool.name,tool)},{request,taskId:'task:original'});
+const tool=tools.get('read_script_sections');
+const first=(await tool.execute('first',{script_id:'script:original'})).details.page;
+const second=(await tool.execute('second',{script_id:'script:original',after_ordinal:first.next_after_ordinal,expected_updated_at:first.updated_at})).details.page;
+const third=(await tool.execute('third',{script_id:'script:original',after_ordinal:second.next_after_ordinal,expected_updated_at:first.updated_at,limit:5})).details.page;
+assert.deepEqual([first.items.length,second.items.length,third.items.length],[20,20,5]);
+assert.equal(third.items.at(-1).ordinal,45);assert.equal(third.next_after_ordinal,null);
+assert.deepEqual(calls[0].args,{task_id:'task:original',script_id:'script:original',after_ordinal:0});
+await assert.rejects(()=>tool.execute('missing-version',{script_id:'script:original',after_ordinal:20}));
+await assert.rejects(()=>tool.execute('too-large',{script_id:'script:original',limit:21}));
+assert.equal(calls.length,3);
+version='v2';
+await assert.rejects(()=>tool.execute('stale',{script_id:'script:original',after_ordinal:20,expected_updated_at:'v1'}),error=>error instanceof RequestNotSubmitted&&error.httpStatus===409);
+assert.equal(calls.length,4);assert.equal(calls.at(-1).args.expected_updated_at,'v1');
+console.log('versioned script window host: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','script-tools.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/versioned script window host: PASS/);
+});
+
 test('execution capability tool reads the bound task through the host without execution or admission', async t => {
   const tree = await resourceTree(t);
   const {stdout} = await execute(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `

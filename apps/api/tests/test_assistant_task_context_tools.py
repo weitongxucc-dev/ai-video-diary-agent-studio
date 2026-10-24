@@ -106,7 +106,7 @@ def confirmed_workspace():
                  "source_path":"/private/raw.mp4"} for index in (1,2,3)]
     script = {"id":"confirmed-script", "task_id":"task-real", "selection_status":"confirmed",
               "title":"实际已确认三段文案", "language":"zh-CN", "updated_at":"2026-10-10T04:26:40Z",
-              "sections":sections, "private_key":"secret-token"}
+              "sections":sections, "sections_loaded":True, "sections_total_count":3, "private_key":"secret-token"}
     workspace["scripts"] = [{**script, "id":"newer-draft", "selection_status":"draft", "title":"不可冒充确认稿"}, script]
     return workspace
 
@@ -131,29 +131,31 @@ def test_real_node_reads_confirmed_script_and_independent_execution_without_gues
     assert details["execution"]["updated_at"] == execution["status_updated_at"]
     script = details["confirmed_script"]
     assert script["id"] == details["confirmed_script_id"] == "confirmed-script"
-    assert script["selection_status"] == "confirmed" and script["section_count"] == 3
-    assert [section["content"] for section in script["sections"]] == [f"第{index}段实际配音正文。" for index in (1,2,3)]
-    assert script["sections"][0]["visual_prompt"] == "第1段实际画面。"
-    assert script["sections"][0]["evidence_reference_ids"] == ["knowledge:knowledge-real:1"]
+    assert script["selection_status"] == "confirmed" and script["sections_loaded"] is False
+    assert script["sections"] is None and script["read_tool"] == "read_script_sections"
+    assert script["sections_total_count"] == 3
     assert len(output["calls"]) == 2 and all(call["method"] == "GET" for call in output["calls"])
     text = output["result"]["content"][0]["text"]
     assert "/private/" not in text and "secret-token" not in text and "不可冒充确认稿" not in text
 
 
-def test_real_node_confirmed_script_projection_is_bounded_without_hiding_total_counts(tmp_path):
+@pytest.mark.parametrize("metadata_count", [None, 30])
+def test_real_node_context_does_not_embed_preloaded_script_body(tmp_path, metadata_count):
     workspace = confirmed_workspace()
     sections = workspace["scripts"][1]["sections"]
     sections[0].update(content="正文"*2000, visual_prompt="画面"*400,
                        evidence_reference_ids=[f"knowledge:item-{index}:1" for index in range(20)])
     workspace["scripts"][1]["sections"] = sections * 10
+    if metadata_count is None:
+        workspace["scripts"][1].pop("sections_total_count")
+    else:
+        workspace["scripts"][1]["sections_total_count"] = metadata_count
     output = run_tool(tmp_path, workspace, stage="narration")
     script = output["result"]["details"]["confirmed_script"]
-    assert script["section_count"] == 30 and script["sections_truncated"]
-    assert len(script["sections"]) == 24
-    section = script["sections"][0]
-    assert len(section["content"]) == 2000 and len(section["visual_prompt"]) == 500
-    assert section["text_truncated"] and section["evidence_truncated"]
-    assert section["evidence_reference_count"] == 20 and len(section["evidence_reference_ids"]) == 16
+    assert script["sections_loaded"] is False and script["sections"] is None
+    assert script["sections_total_count"] == metadata_count and script["read_tool"] == "read_script_sections"
+    assert "正文" not in json.dumps(output["result"], ensure_ascii=False)
+    assert "画面" not in json.dumps(script, ensure_ascii=False)
 
 
 @pytest.mark.parametrize(("execution", "status"), [

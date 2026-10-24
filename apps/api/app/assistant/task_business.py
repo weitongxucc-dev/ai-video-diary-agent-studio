@@ -63,7 +63,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -80,6 +80,7 @@ class TaskBusiness:
         self.exact_case_for=exact_case_for
         self.media_jobs_list=media_jobs_list
         self.execution_capabilities=execution_capabilities
+        self.read_script_sections=read_script_sections
 
     def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -488,6 +489,20 @@ class TaskBusiness:
         if operation=='read_task_workspace': return self.workspace_facts(ws,task)
         if operation=='read_creator_memory': return sealed['memory']
         if operation=='read_assistant_script_context': return self.script_context(ws,task_id,actor.user_id or actor.member_id)
+        if operation=='read_script_sections':
+            from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT, ScriptWindowConflict
+            if self.read_script_sections is None:
+                raise TaskBusinessRejected('文案窗口读面尚未装配',status_code=503)
+            try:
+                return self.read_script_sections(task,args['script_id'],
+                    after_ordinal=args.get('after_ordinal',0),limit=args.get('limit',SCRIPT_SECTION_WINDOW_LIMIT),
+                    expected_updated_at=args.get('expected_updated_at'))
+            except ScriptWindowConflict as exc:
+                raise HTTPException(status_code=409,detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404,detail='文案不存在') from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=422,detail=str(exc)) from exc
         if operation=='read_task_edit_capabilities': return self.edit_capabilities(task)
         if operation=='read_execution_capabilities':
             if self.execution_capabilities is None:

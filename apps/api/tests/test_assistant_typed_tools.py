@@ -451,7 +451,7 @@ def test_fine_object_reads_include_mix_controls_and_the_existing_picture_effect_
     assert picture["units"]["fade_envelope_frames"] == "30 fps effect clock"
 
 
-def test_complete_subtitle_and_script_reads_discover_parents_and_actual_revisions(tmp_path):
+def test_object_reads_preserve_subtitles_and_route_script_body_to_versioned_windows(tmp_path):
     seen = invoke(tmp_path, workspace=complete_workspace(), steps=[
         {"tool": "read_task_object", "args": {"kind": "subtitle_tracks", "object_id": "subtitle-9"}},
         {"tool": "read_task_object", "args": {"kind": "subtitle_cues", "parent_id": "subtitle-9", "offset": 24, "limit": 6}},
@@ -465,9 +465,9 @@ def test_complete_subtitle_and_script_reads_discover_parents_and_actual_revision
     assert cues["total_count"] == 30 and cues["items"][-1]["id"] == "cue-9-29"
     assert cue["collection_total_count"] == 300 and cue["items"][0]["object_ref"] == "cue:cue-9-29"
     assert cue["items"][0]["revision_source"] == "parent_subtitle_track_updated_at"
-    assert script["items"][0]["script_id"] == "script-current"
-    assert script["items"][0]["revision"] == "2026-10-13T10:00:00Z"
-    assert script["items"][0]["evidence_reference_ids"] == ["knowledge:source:3"]
+    assert seen["results"][3]["result"]["isError"] is True
+    assert "items" not in script
+    assert sum(call["path"] == "/api/creation-tasks/task-current" for call in seen["calls"]) == 4
     assert narration["items"][0]["source_section_id"] == "section-29" and narration["items"][0]["revision"] == "a" * 64
 
 

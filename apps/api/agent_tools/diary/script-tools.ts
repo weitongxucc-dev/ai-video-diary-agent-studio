@@ -7,6 +7,31 @@ import {rankByQuery, tokenizeQuery} from '../retrieval.ts';
 export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, readCurrentTaskFacts, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
   request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; readCurrentTaskFacts: () => Promise<any>; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
 }) {
+  if (taskId) pi.registerTool({
+    name: "read_script_sections", label: "按版本读取文案段落",
+    description: "只读当前任务指定稿的有界窗口，不加载全稿。首窗可省版本；续页传原页updated_at和next_after_ordinal，409时不得拼接不同版本。窗口大小不是作品段数上限；只读不保存、不确认，局部页不能当全稿提交。",
+    parameters: {type: "object", properties: {
+      script_id: {type: "string", minLength: 1},
+      after_ordinal: {type: "integer", minimum: 0},
+      limit: {type: "integer", minimum: 1, maximum: 20},
+      expected_updated_at: {type: "string", minLength: 1},
+    }, required: ["script_id"], additionalProperties: false},
+    execute: async (_id: string, params: {script_id: string; after_ordinal?: number; limit?: number; expected_updated_at?: string}) => {
+      const after = params.after_ordinal ?? 0, limit = params.limit;
+      if (!Number.isSafeInteger(after) || after < 0 || (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)))
+        throw new Error("文案读取窗口参数无效");
+      if (after > 0 && !params.expected_updated_at) throw new Error("文案续页必须提供原窗口版本");
+      const query = new URLSearchParams({after_ordinal: String(after)});
+      if (limit !== undefined) query.set("limit", String(limit));
+      if (params.expected_updated_at) query.set("expected_updated_at", params.expected_updated_at);
+      const page = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(params.script_id)}/sections?${query}`);
+      if (page.task_id !== taskId || page.script_id !== params.script_id
+          || (params.expected_updated_at && page.updated_at !== params.expected_updated_at))
+        throw new Error("文案窗口响应身份或版本不一致");
+      const details = {kind: "script_sections", page};
+      return {content: [{type: "text", text: JSON.stringify(details)}], details};
+    },
+  });
   let blockedReview: {inputKey: string | undefined; failure: ScriptDraftFailure; receipt?: Partial<BusinessFailure>} | null = null;
   function rejectedDraft(failure: ScriptDraftFailure, submitted?: {
     title: string; sections: {title: string; content: string; visual_prompt: string}[];

@@ -17,10 +17,16 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
         || (execution.job && execution.job.task_id !== taskId)) {
       throw new Error("后台安排响应不可读或任务身份不一致，不能推断为空或未排队");
     }
-    const scriptContext = (task.task?.stage === "script" || task.task?.can_revise_script
+    const rawScriptContext = (task.task?.stage === "script" || task.task?.can_revise_script
         && !(task.scripts || []).find((item: any) => item.id === task.task.confirmed_script_id)?.locked_body_digest)
       ? await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/script-context`)
       : null;
+    const draft = rawScriptContext?.draft;
+    const scriptContext = rawScriptContext ? {...rawScriptContext, draft: draft ? {
+      id: draft.id, title: draft.title, updated_at: draft.updated_at,
+      sections_total_count: typeof draft.sections_total_count === "number" ? draft.sections_total_count : null,
+      sections: null, sections_loaded: false, read_tool: "read_script_sections",
+    } : null} : null;
     currentScriptDraftUpdatedAt = typeof scriptContext?.draft?.updated_at === "string"
       ? scriptContext.draft.updated_at : null;
     const allClips = task.montage?.clips || [];
@@ -42,7 +48,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
     const confirmedScript = confirmedScriptId ? task.scripts?.find((item: Record<string, unknown>) =>
       item.id === confirmedScriptId && item.task_id === taskId && item.selection_status === "confirmed") : null;
     if (confirmedScriptId && !confirmedScript) throw new Error("当前任务的已确认文案不可读或身份不一致，不能当作没有文案");
-    const sections = confirmedScript?.sections || [];
+    const sectionCount = typeof confirmedScript?.sections_total_count === "number" ? confirmedScript.sections_total_count : null;
     const audioTracks = task.montage?.audio_timeline?.tracks || [];
     const overlays = task.montage?.graphic_overlays || [];
     const binding = taskObjectBinding(task);
@@ -63,17 +69,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       confirmed_script: confirmedScript ? {
         id: confirmedScript.id, title: metadata(confirmedScript.title), language: confirmedScript.language,
         selection_status: confirmedScript.selection_status, updated_at: confirmedScript.updated_at,
-        section_count: sections.length, sections_truncated: sections.length > 24,
-        sections: sections.slice(0, 24).map((section: Record<string, unknown>) => {
-          const evidenceIds = section.evidence_reference_ids as string[];
-          return {
-            id: section.id, title: metadata(section.title), content: metadata(section.content, 2000),
-            visual_prompt: metadata(section.visual_prompt, 500),
-            evidence_reference_ids: evidenceIds.slice(0, 16), evidence_reference_count: evidenceIds.length,
-            text_truncated: String(section.content).length > 2000 || String(section.visual_prompt).length > 500,
-            evidence_truncated: evidenceIds.length > 16,
-          };
-        }),
+        sections_total_count: sectionCount, sections: null, sections_loaded: false, read_tool: "read_script_sections",
       } : null,
       execution: executionFacts(execution),
       available_voices: (task.available_voices || []).slice(0, 24).map((voice: Record<string, unknown>) => ({
@@ -121,7 +117,8 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
           {kind: "subtitle_tracks", total_count: allTracks.length},
           {kind: "subtitle_cues", total_count: allTracks.reduce((n: number, track: any) => n + (track.cues || []).length, 0), parent_field: "subtitle_track_id"},
           {kind: "narration_segments", total_count: allNarration.length},
-          {kind: "script_sections", total_count: sections.length, parent_field: "script_id"},
+          {kind: "script_sections", total_count: sectionCount, parent_field: "script_id",
+            script_id: confirmedScriptId, read_tool: "read_script_sections", updated_at: confirmedScript?.updated_at ?? null},
           {kind: "audio_tracks", total_count: audioTracks.length},
           {kind: "audio_clips", total_count: audioTracks.reduce((n: number, track: any) => n + (track.clips || []).length, 0), parent_field: "audio_track_id"},
           {kind: "graphic_overlays", total_count: overlays.length},
