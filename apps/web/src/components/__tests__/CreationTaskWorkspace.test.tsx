@@ -4939,35 +4939,45 @@ it('keeps a 45-section unloaded header readable without enabling partial replace
   expect(confirm).not.toHaveBeenCalled();
 });
 
-it('requires an explicit complete read of a small header before editing and confirming its original version',async()=>{
+it('automatically reads a complete small header on edit intent before allowing versioned confirmation',async()=>{
   const script:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),selection_status:'draft',sections_loaded:false,sections:null,sections_total_count:1};
   const section={id:'only-section',title:'正文',content:'完整正文',visual_prompt:'完整画面',evidence_reference_ids:[]};
-  const fetch=vi.fn(async(_url:string)=>new Response(JSON.stringify({...sectionReaderPage(script),total_count:1,
-    items:[{ordinal:1,digest:'digest-only',section}],next_after_ordinal:null,truncated:false})));
+  let finishRead!:(response:Response)=>void;
+  const fetch=vi.fn((_url:string)=>new Promise<Response>(resolve=>{finishRead=resolve;}));
   vi.stubGlobal('fetch',fetch);
   const confirm=vi.fn();
   render(<ScriptEditor taskId={script.task_id} script={script} busy={false} repairing={false} onConfirm={confirm}/>);
-  await screen.findByText('完整正文');
+  expect(screen.getByRole('status')).toHaveTextContent('正在读取完整文案');
+  expect(screen.queryByRole('button',{name:'读取完整文案以编辑'})).not.toBeInTheDocument();
   expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button',{name:'读取完整文案以编辑'}));
-  await screen.findByLabelText('第 1 段正文');
-  const params=new URL(fetch.mock.calls[1][0],'http://local').searchParams;
+  await waitFor(()=>expect(fetch).toHaveBeenCalled());
+  const params=new URL(fetch.mock.calls[0][0],'http://local').searchParams;
   expect(params.get('expected_updated_at')).toBe(script.updated_at);
+  await act(async()=>{finishRead(new Response(JSON.stringify({...sectionReaderPage(script),total_count:1,
+    items:[{ordinal:1,digest:'digest-only',section}],next_after_ordinal:null,truncated:false})));});
+  await screen.findByLabelText('第 1 段正文');
   fireEvent.click(screen.getByRole('button',{name:'确认文案'}));
   expect(confirm).toHaveBeenCalledWith(expect.objectContaining({sections_loaded:true,sections_total_count:1,sections:[section],updated_at:script.updated_at}));
 });
 
 it('rejects a partial window as a complete edit even when the header count was small',async()=>{
   const script:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),sections_loaded:false,sections:null,sections_total_count:1};
-  vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify(sectionReaderPage(script)))));
+  const complete=sectionReaderPage(script);
+  complete.items=complete.items.slice(0,1);
+  complete.total_count=1;
+  complete.next_after_ordinal=null;
+  complete.truncated=false;
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(sectionReaderPage(script))))
+    .mockResolvedValueOnce(new Response(JSON.stringify(complete))));
   const confirm=vi.fn();
   render(<ScriptEditor taskId={script.task_id} script={script} busy={false} repairing={false} onConfirm={confirm}/>);
-  await screen.findByText('窗口正文 reader-script 1');
-  fireEvent.click(screen.getByRole('button',{name:'读取完整文案以编辑'}));
   expect(await screen.findByRole('alert')).toHaveTextContent('不能将当前窗口保存或确认为全文');
   expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
   expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
   expect(confirm).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'重试读取文案'}));
+  await screen.findByLabelText('第 1 段正文');
+  expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled();
 });
 
 it.each(['authorization_scope_mixed','unit_budget_blocked'])('keeps mixed scope details separate from the authoritative budget summary %s',async(status)=>{
@@ -4994,4 +5004,24 @@ it.each(['authorization_scope_mixed','unit_budget_blocked'])('keeps mixed scope 
     expect(within(details).queryByText(/各累计授权范围的状态不一致/)).not.toBeInTheDocument();
   }
   expect(within(details).queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('ignores an old automatic edit read after the script version changes',async()=>{
+  const oldScript:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),sections_loaded:false,sections:null,sections_total_count:1};
+  const newScript={...oldScript,updated_at:'2026-10-24T00:02:00Z'};
+  function completePage(script:import('@/lib/types').CreationTaskScript,content:string) {
+    const page=sectionReaderPage(script);
+    return {...page,items:[{...page.items[0],section:{...page.items[0].section,content}}],total_count:1,next_after_ordinal:null,truncated:false};
+  }
+  let finishOld!:(response:Response)=>void;
+  vi.stubGlobal('fetch',vi.fn().mockReturnValueOnce(new Promise<Response>(resolve=>{finishOld=resolve;}))
+    .mockResolvedValueOnce(new Response(JSON.stringify(completePage(newScript,'新版本正文')))));
+  const confirm=vi.fn();
+  const view=render(<ScriptEditor taskId={oldScript.task_id} script={oldScript} busy={false} repairing={false} onConfirm={confirm}/>);
+  view.rerender(<ScriptEditor taskId={newScript.task_id} script={newScript} busy={false} repairing={false} onConfirm={confirm}/>);
+  expect(await screen.findByLabelText('第 1 段正文')).toHaveValue('新版本正文');
+  await act(async()=>{finishOld(new Response(JSON.stringify(completePage(oldScript,'过期旧正文'))));});
+  expect(screen.getByLabelText('第 1 段正文')).toHaveValue('新版本正文');
+  fireEvent.click(screen.getByRole('button',{name:'确认文案'}));
+  expect(confirm).toHaveBeenCalledWith(expect.objectContaining({updated_at:newScript.updated_at,sections:[expect.objectContaining({content:'新版本正文'})]}));
 });

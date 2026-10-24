@@ -184,32 +184,34 @@ export function ScriptEditor(props: ScriptEditorProps) {
 }
 function ScriptEditorLoader(props: ScriptEditorProps) {
     const [loaded, setLoaded] = useState<LoadedScript | null>(null);
-    const [reading, setReading] = useState(false);
+    const [reading, setReading] = useState(props.script.sections_total_count <= 20);
     const [error, setError] = useState<string | null>(null);
-    const active = useRef(true);
-    useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
-    async function loadCompleteDraft() {
+    const [retry, setRetry] = useState(0);
+    const { taskId, script } = props;
+    useEffect(() => {
+        if (script.sections_total_count > 20) return;
+        let active = true;
         setReading(true);
         setError(null);
-        try {
-            const page = await getCreationTaskScriptSections(props.taskId, props.script.id, { expected_updated_at: props.script.updated_at });
-            if (!active.current) return;
+        void getCreationTaskScriptSections(taskId, script.id, { expected_updated_at: script.updated_at }).then(page => {
+            if (!active) return;
             if (page.total_count === 0 || page.next_after_ordinal !== null || page.items.length !== page.total_count) {
                 throw new Error("本稿尚未完整载入，不能将当前窗口保存或确认为全文。请逐页查看文案。");
             }
-            setLoaded({ ...props.script, title: page.title, language: page.language, selection_status: page.selection_status,
+            setLoaded({ ...script, title: page.title, language: page.language, selection_status: page.selection_status,
                 updated_at: page.updated_at, sections_loaded: true, sections_total_count: page.total_count,
                 sections: page.items.map(item => item.section) });
-        } catch (cause) {
-            if (active.current) setError(cause instanceof Error ? cause.message : "文案没有完整读回，当前不可保存或确认。");
-        } finally { if (active.current) setReading(false); }
-    }
+        }).catch(cause => {
+            if (active) setError(cause instanceof Error ? cause.message : "文案没有完整读回，当前不可保存或确认。");
+        }).finally(() => { if (active) setReading(false); });
+        return () => { active = false; };
+    }, [taskId, script, retry]);
     if (loaded) return <CompleteScriptEditor {...props} script={loaded}/>;
     return <>
         <p>文案共 {props.script.sections_total_count} 段，正文尚未完整载入；当前不可保存或确认。</p>
-        {props.script.sections_total_count <= 20 ? <Button variant="outline" disabled={props.busy || reading} onClick={() => void loadCompleteDraft()}>{reading ? '正在读取完整文案…' : '读取完整文案以编辑'}</Button> : <p>当前可逐页查看，分段修改尚未开放。</p>}
-        {error ? <p role="alert">{error}</p> : null}
-        <ConfirmedScriptView script={props.script}/>
+        {reading ? <p role="status">正在读取完整文案…</p> : null}
+        {error ? <><p role="alert">{error}</p><Button variant="outline" disabled={props.busy || reading} onClick={() => setRetry(value => value + 1)}>重试读取文案</Button></> : null}
+        {props.script.sections_total_count > 20 ? <><p>当前可逐页查看，分段修改尚未开放。</p><ConfirmedScriptView script={props.script}/></> : null}
     </>;
 }
 function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Omit<ScriptEditorProps, 'script'> & { script: LoadedScript }) {
