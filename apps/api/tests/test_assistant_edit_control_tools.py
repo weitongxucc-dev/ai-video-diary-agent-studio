@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from test_timeline_history import history_task  # noqa: F401
+
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 RUNNER = r"""
@@ -259,3 +261,83 @@ def test_parallel_create_is_claimed_before_await_and_never_submits_twice(tmp_pat
     out = call(tmp_path, context, [create, create], task=False, parallel=True, failure=failure)
     assert len(posts(out)) == 1
     assert not out["steps"][1]["ok"]
+
+
+def _history_owner(repo, tmp_path):
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase
+    from app.creation_execution import CreationExecutionActor
+    edits = MetadataEditUseCase(repo, None, output_root=tmp_path, audio_service=None)
+    return TimelineRestoreUseCase(repo, edits), CreationExecutionActor('local', 'history-reader')
+
+
+def test_history_http_and_background_share_bounded_read_projection(history_task, tmp_path):
+    from app.creation.editing.timeline_history_repository import TimelineHistoryReadRepository
+    from app.schemas import TimelineVersionListResponse
+    repo, task_id, client = history_task
+    owner, actor = _history_owner(repo, tmp_path)
+    path = f'/api/creation-tasks/{task_id}/timeline/versions'
+    pages = []
+    for before in (None, 2, 1):
+        query = {'limit': 1, **({'before_sequence': before} if before is not None else {})}
+        response = client.get(path, params=query)
+        assert response.status_code == 200, response.text
+        background = owner.history('local', task_id, actor, limit=1, before_sequence=before)
+        assert response.json() == TimelineVersionListResponse.model_validate(background).model_dump(mode='json')
+        pages.append(response.json())
+    assert [[item['sequence'] for item in page['items']] for page in pages] == [[2], [1], []]
+    assert [page['next_before_sequence'] for page in pages] == [2, None, None]
+    assert all(page['total_count'] == 2 for page in pages)
+    assert all(item['operation_id'] is None and item['operation_type'] is None
+               for page in pages for item in page['items'])
+
+    def readonly_connection():
+        conn = repo._connect()
+        conn.execute('PRAGMA query_only=ON')
+        return conn
+
+    reader = TimelineHistoryReadRepository(readonly_connection)
+    assert reader.page('local', task_id, limit=1)['items'][0]['id'] == 'timeline_history_v2'
+    assert reader.summary('local', task_id, 'timeline_history_v1')['subtitle_track_count'] == 1
+
+
+@pytest.mark.parametrize('association', ['valid', 'missing', 'task', 'result', 'workspace'])
+def test_history_list_detail_and_background_use_original_operation_identity(history_task, tmp_path, association):
+    from app.creation.contracts import TimelineVersion
+    from app.creation.editing.timeline_history import TimelineHistoryConflict
+    from app.schemas import TimelineVersionListResponse
+    repo, task_id, client = history_task
+    operation_id, version_id = 'synthetic-history-operation', 'timeline_history_v3'
+    if association != 'missing':
+        with repo._connect() as conn:
+            conn.execute('INSERT INTO edit_operations '
+                '(id,workspace_id,task_id,proposal_id,operation_type,payload_json,base_version_id,'
+                'result_version_id,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (operation_id, 'foreign' if association == 'workspace' else 'local',
+                 'task_other' if association == 'task' else task_id, 'synthetic-history-proposal',
+                 'AdjustVisualEffects', json.dumps({'request_id': 'synthetic-history-request'}),
+                 'timeline_history_v2', 'timeline_history_v1' if association == 'result' else version_id,
+                 'applied', '2026-01-01T00:00:00+00:00'))
+    repo.create_timeline_version(TimelineVersion(
+        id=version_id, workspace_id='local', task_id=task_id, parent_version_id='timeline_history_v2',
+        sequence=3, snapshot={}, created_by_operation_id=operation_id))
+    before = repo.get_creation_task('local', task_id)
+    owner, actor = _history_owner(repo, tmp_path)
+    path = f'/api/creation-tasks/{task_id}/timeline/versions'
+    listing, detail = client.get(path), client.get(f'{path}/{version_id}')
+    if association == 'valid':
+        assert listing.status_code == detail.status_code == 200
+        item = listing.json()['items'][0]
+        assert detail.json()['version'] == item
+        assert item['operation_id'] == operation_id
+        assert item['operation_type'] == 'AdjustVisualEffects'
+        assert item['source_request_id'] == 'synthetic-history-request'
+        background = owner.history('local', task_id, actor)
+        assert listing.json() == TimelineVersionListResponse.model_validate(background).model_dump(mode='json')
+    else:
+        assert listing.status_code == detail.status_code == 409
+        assert listing.json()['detail'] == detail.json()['detail']
+        with pytest.raises(TimelineHistoryConflict) as caught:
+            owner.history('local', task_id, actor)
+        assert str(caught.value) == detail.json()['detail']
+    assert repo.get_creation_task('local', task_id) == before

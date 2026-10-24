@@ -32,6 +32,7 @@ from app.creation.task_input_reads import (
 )
 from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, profile_use_failure, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
+from app.creation.editing.timeline_history_repository import TimelineHistoryReadRepository
 from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
 from app.profiles.legacy_voice import LegacyVoiceProfileStore, VoiceProfile
 from app.profiles.workspace_profile import WorkspaceProductionProfileStore, ProductionProfile
@@ -4956,28 +4957,11 @@ class ProductionRepository:
         return [self._timeline_version_from_row(row) for row in rows]
 
     def timeline_history_page(self, workspace_id, task_id, *, limit=20, before_sequence=None):
-        if not 1 <= limit <= 50 or before_sequence is not None and before_sequence < 1:
-            raise ValueError('历史读取范围无效')
-        with self._connect() as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
-            total = conn.execute('SELECT COUNT(*) FROM timeline_versions WHERE workspace_id=? AND task_id=?',
-                (workspace_id, task_id)).fetchone()[0]
-            rows = conn.execute("SELECT v.id,v.sequence,v.parent_version_id,v.created_at,v.created_by_operation_id AS operation_id,"
-                "o.operation_type,p.target_refs_json,json_extract(o.payload_json,'$.request_id') AS source_request_id,"
-                "coalesce(json_array_length(v.snapshot_json,'$.montage.clips'),0) AS shot_count,"
-                "coalesce(json_array_length(v.snapshot_json,'$.subtitle_track_ids'),0) AS subtitle_track_count,"
-                "coalesce(json_array_length(v.snapshot_json,'$.narration_segments'),0) AS narration_segment_count "
-                "FROM timeline_versions v LEFT JOIN edit_operations o ON o.workspace_id=v.workspace_id AND o.id=v.created_by_operation_id "
-                "LEFT JOIN edit_proposals p ON p.workspace_id=o.workspace_id AND p.id=o.proposal_id "
-                "WHERE v.workspace_id=? AND v.task_id=? AND (? IS NULL OR v.sequence<?) ORDER BY v.sequence DESC LIMIT ?",
-                (workspace_id, task_id, before_sequence, before_sequence, limit+1)).fetchall()
-        items = [{**{key: row[key] for key in row.keys() if key != 'target_refs_json'},
-            'is_current': row['id'] == task.current_timeline_version_id,
-            'target_refs': json.loads(row['target_refs_json'])[:20] if row['target_refs_json'] else []} for row in rows[:limit]]
-        truncated = len(rows) > limit
-        return {'task_id': task_id, 'current_version_id': task.current_timeline_version_id, 'items': items,
-            'total_count': total, 'truncated': truncated,
-            'next_before_sequence': items[-1]['sequence'] if truncated else None}
+        return TimelineHistoryReadRepository(self._connect).page(
+            workspace_id, task_id, limit=limit, before_sequence=before_sequence)
+
+    def timeline_history_summary(self, workspace_id, task_id, version_id):
+        return TimelineHistoryReadRepository(self._connect).summary(workspace_id, task_id, version_id)
 
     def timeline_contains_version(self, workspace_id, task_id, current_id, ancestor_id):
         with self._connect() as conn:

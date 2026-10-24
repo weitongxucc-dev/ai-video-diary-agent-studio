@@ -107,6 +107,7 @@ from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OP
 from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
 from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
 from app.creation.output_observation_use_case import OutputObservationUseCase, OutputObservationRejected
+from app.creation.editing.timeline_history import TimelineHistoryConflict
 from app.creation.editing.timeline_restore_use_case import (TimelineRestoreUseCase, TimelineRestoreCommand,
     TimelineOutputQualification, TimelineRestoreUnavailable)
 from app.creation.editing.sources import EditSourceVerifier
@@ -10311,29 +10312,11 @@ def _history_summary(
     version: TimelineVersion,
     workspace_id: str,
 ) -> TimelineVersionSummaryResponse:
-    montage = _history_montage(version)
-    clips = montage.get("clips")
-    segments = version.snapshot.get("narration_segments")
-    operation = None
-    if version.created_by_operation_id is not None:
-        try:
-            operation = production_repo.get_edit_operation(workspace_id, version.created_by_operation_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=409, detail="历史版本的原修改记录不存在") from exc
-        if operation.task_id != task.id or operation.result_version_id != version.id:
-            raise HTTPException(status_code=409, detail="历史版本与原修改记录关联不一致")
-    return TimelineVersionSummaryResponse(
-        id=version.id,
-        sequence=version.sequence,
-        parent_version_id=version.parent_version_id,
-        created_at=version.created_at,
-        is_current=task.current_timeline_version_id == version.id,
-        shot_count=len(clips) if isinstance(clips, list) else 0,
-        subtitle_track_count=len(_history_subtitle_tracks(workspace_id, task.id, version)),
-        narration_segment_count=len(segments) if isinstance(segments, list) else 0,
-        operation_id=operation.id if operation is not None else None,
-        operation_type=operation.operation_type if operation is not None else None,
-    )
+    try:
+        return TimelineVersionSummaryResponse.model_validate(
+            production_repo.timeline_history_summary(workspace_id, task.id, version.id))
+    except TimelineHistoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _history_artifact_refs(
@@ -10434,8 +10417,11 @@ def list_creation_task_timeline_versions(
 ) -> TimelineVersionListResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    return TimelineVersionListResponse.model_validate(production_repo.timeline_history_page(
-        workspace_id, task.id, limit=limit, before_sequence=before_sequence))
+    try:
+        return TimelineVersionListResponse.model_validate(production_repo.timeline_history_page(
+            workspace_id, task.id, limit=limit, before_sequence=before_sequence))
+    except TimelineHistoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get(

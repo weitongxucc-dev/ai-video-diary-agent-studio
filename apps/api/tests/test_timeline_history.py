@@ -108,6 +108,7 @@ def history_task(tmp_path, monkeypatch):
         id="timeline_history_v1", workspace_id=WORKSPACE_ID, task_id=task.id,
         parent_version_id=None, sequence=1,
         snapshot={"montage": old_payload,
+                  "subtitle_track_ids": ["subtitle_history_v1"],
                   "narration_segments": [{"id": "segment_1", "text": "旧版本文案",
                                           "duration_seconds": 1.0, "status": "ready"}]},
         created_by_operation_id=None))
@@ -162,12 +163,12 @@ def test_version_list_shows_sequence_time_and_current_marker(history_task):
     body = listed.json()
     assert body["task_id"] == task_id
     assert body["current_version_id"] == "timeline_history_v2"
-    assert [item["sequence"] for item in body["items"]] == [1, 2]
-    assert [item["is_current"] for item in body["items"]] == [False, True]
-    assert body["items"][0]["parent_version_id"] is None
-    assert body["items"][1]["parent_version_id"] == "timeline_history_v1"
-    assert datetime.fromisoformat(body["items"][0]["created_at"]).tzinfo is not None
-    old = body["items"][0]
+    assert [item["sequence"] for item in body["items"]] == [2, 1]
+    assert [item["is_current"] for item in body["items"]] == [True, False]
+    assert body["items"][0]["parent_version_id"] == "timeline_history_v1"
+    assert body["items"][1]["parent_version_id"] is None
+    old = body["items"][1]
+    assert datetime.fromisoformat(old["created_at"]).tzinfo is not None
     assert old["shot_count"] == 2 and old["subtitle_track_count"] == 1
     assert old["narration_segment_count"] == 1
 
