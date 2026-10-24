@@ -682,12 +682,12 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="重新预检并选择中文、英文或中英混合。",
                 retryable=False,
             )
-        if not 15 <= input.duration_target_seconds <= 600:
+        if type(input.duration_target_seconds) is not int or input.duration_target_seconds <= 0:
             raise self._failure(
                 code="input_invalid",
                 reason="文案目标时长无效。",
                 impact="未调用文字模型，未生成文案。",
-                repair_action="将目标时长设置在 15 到 600 秒之间。",
+                repair_action="将作品目标时长设置为正整数秒；实际执行能力由制作前检查单独确认。",
                 retryable=False,
             )
         required_texts = (input.goal, input.topic_title)
@@ -765,11 +765,11 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 160},
                                 "content": {"type": "string", "minLength": 1, "maxLength": 4000},
                                 "visual_prompt": {"type": "string", "minLength": 1, "maxLength": 1000},
-                                "evidence_reference_ids": {"type": "array", "minItems": 1, "maxItems": 12,
+                                "evidence_reference_ids": {"type": "array", "minItems": 0, "maxItems": 12,
                                     "items": {"type": "string", "minLength": 1, "maxLength": 200}}}}}}}}}
         generation_requirements = {"spoken_language": input.language,
             "presenter_share_target": input.presenter_share_target,
-            "every_section_requires_evidence": True}
+            "factual_assertions_require_evidence": True}
         sections_schema = report_schema["properties"]["script"]["properties"]["sections"]
         if input.script_section_count is not None:
             sections_schema["minItems"] = input.script_section_count
@@ -785,7 +785,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "你是短视频口播文案生成器。按指定语言写正文，只调用一次submit_script_draft提交候选，不在content写报告，不执行动作。"
                         "confirmed_topic.origin为provided表示用户给定主题；空角度、受众、大纲表示未指定，不补造这些元数据，按实际标题与goal起草。"
                         "事实只能来自 sources 的 text；资料标题、目标、已确认选题及大纲、风格和画面设想不是已实现事实。"
-                        "可原创修辞、比喻、组织和转场，但每段至少保留一条有资料支持的内容。"
+                        "事实断言须有资料支持；可有纯提问、修辞、比喻或转场段，不为凑证据添加无需求的事实。无事实断言的段落evidence_reference_ids可为空，仍须完整核查事实与制作要求。"
                         "不得凭空承诺性能、安全、备份、恢复或口型能力；来源中的计划、可能和限制必须保留。"
                         "遵守原始目标与制作约束：0%露脸不得安排人物口播或口型段；"
                         "中文旁白和中英字幕是不同要求，字幕双语不等于旁白中英混读；"
@@ -950,7 +950,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 mismatch = "type"
             elif entry is None:
                 mismatch = "unknown"
-            elif entry["index"] not in {0, section_index}:
+            elif entry["index"] != section_index and not (entry["index"] == 0 and section_index == 1):
                 mismatch = "cross_section"
             else:
                 current = script.title if entry["index"] == 0 else getattr(script.sections[entry["index"] - 1], entry["field"])
@@ -977,9 +977,11 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         review_section_count = len(sections)
 
         def review_section_schema(section):
-            candidate_ids = [piece["quote_id"] for piece in title_pieces]
+            candidate_ids = [piece["quote_id"] for piece in title_pieces] if section["index"] == 1 else []
             candidate_ids += [piece["quote_id"] for field in ("title", "content", "visual_prompt") for piece in section[field]]
-            source_ids = [quote_id for values in section["allowed_source_quote_ids"].values() for quote_id in values]
+            allowed_review_sources = quote_ids_by_source if section["index"] == 1 else section["allowed_source_quote_ids"]
+            source_ids = [quote_id for values in allowed_review_sources.values() for quote_id in values]
+            reference_aliases = list(allowed_review_sources)
             issue_schemas = []
             for kind in ("unsupported_fact", "goal_conflict"):
                 issue_schemas.append({
@@ -989,11 +991,14 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "properties": {
                         "kind": {"type": "string", "enum": [kind]},
                         "candidate_quote_id": {"type": "string", "minLength": 1, "maxLength": 128, "enum": candidate_ids},
-                        "reference_ids": {"type": "array", "minItems": 1,
-                            "maxItems": 12, "uniqueItems": True,
+                        "reference_ids": {"type": "array", "minItems": 1 if section["evidence_reference_ids"] else 0,
+                            "maxItems": 12 if reference_aliases else 0, "uniqueItems": True,
                             "description": "仅从当前段evidence_reference_ids原样选择资料别名，不重复；不得填片段ID、资料原ID或标题。",
-                            "items": {"type": "string", "minLength": 1, "maxLength": 128, "enum": section["evidence_reference_ids"]}},
+                            "items": {"type": "string", "minLength": 1, "maxLength": 128,
+                                      **({"enum": reference_aliases} if reference_aliases else {})}},
                         "missing_or_conflicting": {"type": "string", "minLength": 1, "maxLength": 300}}})
+            if not reference_aliases:
+                del issue_schemas[1]["properties"]["reference_ids"]
             index_schema = {"type": "integer", "enum": [section["index"]]}
             supports_schema = {"type": "array", "minItems": 1, "maxItems": 3, "items": {
                             "type": "object", "additionalProperties": False,
@@ -1002,7 +1007,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                                     "enum": candidate_ids},
                                 "source_quote_id": {"type": "string", "minLength": 1, "maxLength": 128,
                                     "enum": source_ids}}}}
-            return [
+            branches = [
                 {"type": "object", "additionalProperties": False, "required": ["index", "supports"],
                     "properties": {"index": index_schema, "supports": supports_schema}},
                 {"type": "object", "additionalProperties": False, "required": ["index", "issues"],
@@ -1012,6 +1017,24 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                         "type": "object", "required": ["kind"],
                         "properties": {"kind": {"enum": ["unsupported_fact"]}}}}}}]},
             ]
+            if not source_ids:
+                # There is no valid support quote when no source was declared.
+                branches = [branches[1]]
+                del branches[0]["properties"]["supports"]
+                branches[0]["anyOf"] = branches[0]["anyOf"][1:]
+            no_facts_schema = {"type": "object", "additionalProperties": False,
+                "required": ["reason", "candidate_quote_ids"], "properties": {
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 300},
+                    "candidate_quote_ids": {"type": "array", "minItems": len(candidate_ids), "maxItems": len(candidate_ids),
+                        "uniqueItems": True, "items": {"type": "string", "enum": candidate_ids}}}}
+            goal_issues = {"type": "array", "minItems": 1, "maxItems": 3, "items": issue_schemas[1]}
+            branches += [
+                {"type": "object", "additionalProperties": False, "required": ["index", "no_factual_assertions"],
+                    "properties": {"index": index_schema, "no_factual_assertions": no_facts_schema}},
+                {"type": "object", "additionalProperties": False, "required": ["index", "no_factual_assertions", "issues"],
+                    "properties": {"index": index_schema, "no_factual_assertions": no_facts_schema, "issues": goal_issues}},
+            ]
+            return branches
 
         report_schema = {
             "type": "object", "additionalProperties": False, "required": ["sections"],
@@ -1037,6 +1060,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "把制作说明写成旁白，或用‘画面文字、不读旁白’占位，均应报告goal_conflict，不能因该说明有资料依据就判通过。"
             "候选每个字段和资料text均为按顺序的{quote_id,text}片段，拼接text就是该字段完整原文，没有省略。"
             "必须阅读全部片段来核全部事实，只选现有quote_id定位，不自行复述引句或构造新ID。"
+            "总标题仅归title_review_section_index指定的第1项报告负责，其他段不重复承担总标题断言。"
+            "总标题的事实可使用全部已授权sources，正文及本段标题/画面仍仅使用该段声明资料，不得借总标题权限给正文凑支持。"
         )
         payload = {
             "model": self._model,
@@ -1047,32 +1072,37 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "这是无副作用的检查报告，不执行任何动作，不在content写报告，不额外调用工具。"
                     f"本次送审稿有{review_section_count}段，报告sections必须恰好返回{review_section_count}项，index为1至{review_section_count}且唯一。"
                     "完整覆盖输入全部段落，index从1开始且唯一。无问题段严格返回{index,supports:非空数组}并省略issues；"
-                    "有问题段返回{index,issues:非空数组}，可补非空supports；仅有goal_conflict时仍必须给supports。"
+                    "有事实的段落返回具体事实supports或unsupported_fact，不得借总标题的一条支持替代正文事实核查。"
+                    "有问题段返回{index,issues:非空数组}，可补非空supports；只有goal_conflict且含事实时仍必须给supports。"
+                    "完整检查本项归属字段（第1项含总标题，其余仅本段标题、正文、画面描述）后，若没有任何对外事实断言，返回{index,no_factual_assertions:{reason,candidate_quote_ids}}。"
+                    "reason简述为何属于纯提问、修辞、转场或未声称已完成的创作计划；candidate_quote_ids必须完整列出该index分支的全部候选片段ID，只在第1项包含总标题，不得漏片段。"
+                    "无事实结论与supports、unsupported_fact互斥，不能将陈述、承诺、暗示性反问或既有事实改称修辞绕过。"
+                    "无事实段仍完整核对goal/current_instruction/requirements；违反要求时同时报告goal_conflict，不得用无事实代替符合要求。"
                     "不适用字段按对应schema分支省略，不填写空数组、空字符串或null，不增加其他字段。"
                     "结论只由具体问题表达，不另返回grounded、constraints_met等重复判断。"
                     "通过的每段supports给1项最有代表性的支持，必要时补第2项，每项严格只有{candidate_quote_id,source_quote_id}。"
-                    "candidate_quote_id须来自当前段的title/content/visual_prompt或全局总标题；"
+                    "candidate_quote_id须来自当前段的title/content/visual_prompt；仅第1项可引用全局总标题；"
                     "报告schema按index区分段落分支，所有候选和资料片段只能从该index分支的枚举选择，不跨段借用。"
                     "每段allowed_source_quote_ids按该段已声明资料列出本段可选的source_quote_id；"
-                    "source_quote_id只能从本段此映射选择，不借用其他段或未声明资料的片段。"
+                    "正文支持的source_quote_id只能从本段此映射选择；仅第1项总标题支持可从全部已授权sources选择，不给其他字段借用。"
                     "资料片段须真正支持候选片段的事实，不能用无关文字。"
                     "核查全部事实，supports引用真实支持片段，不能只声称有据。"
                     "核查范围不因精简报告而缩小；不要复述整段正文、穷举每个错误或输出长分析。"
-                    "无据事实必须在issues报告unsupported_fact；没有这类问题时supports至少给1项真实支持。"
+                    "无据事实必须在issues报告unsupported_fact；含事实且没有这类问题时supports至少给1项真实支持。"
                     "若同段事实支持和制作要求均失败，分别保留每类最重要一项，共2项。"
                     "issues总计至多12项，每项为"
                     "{kind,candidate_quote_id,reference_ids,missing_or_conflicting}。kind仅unsupported_fact或goal_conflict；"
                     "candidate_quote_id须为当前段或总标题的现有片段；unsupported_fact列该段资料编号，goal_conflict可省略不适用的reference_ids。"
                     "reference_ids只能从当前段evidence_reference_ids原样选择evidence_N资料别名，不得重复；"
-                    "提供reference_ids时必须至少列1个；unsupported_fact必须提供。不得填quote_id、资料原ID或来源标题。"
+                    "有声明资料时reference_ids必须至少列1个；没有声明资料而存在无据事实时unsupported_fact仍必须提供reference_ids:[]，不能伪造资料或改报无事实。不得填quote_id、资料原ID或来源标题。"
                     "不返回field、quote、source_quote或全文，程序会从片段ID还原准确原文。"
                     "missing_or_conflicting用80字以内的普通短说明指出哪份资料缺少什么或哪条要求冲突，不写原ID、证据编号或协议术语。"
-                    "要求冲突必须报告goal_conflict；只有核查全部事实与要求后没有发现问题，才走无issues字段的支持分支。"
+                    "要求冲突必须报告goal_conflict；只有核查全部事实与要求后没有发现问题，才走无issues字段的支持或无事实分支。"
                     "不写Markdown；在有限输出内完整核查，不能用少核几段来假装通过。"
                 )},
                 {"role": "user", "content": json.dumps({
                     "goal": input.goal, "current_instruction": input.current_instruction,
-                    "review_section_count": review_section_count,
+                    "review_section_count": review_section_count, "title_review_section_index": 1,
                     "review_scope": {"stage": "script_draft", "delivery_count": 1, "language": input.language,
                         "duration_target_seconds": input.duration_target_seconds, "presenter_share_target": input.presenter_share_target},
                     "confirmed_topic": {"title": input.topic_title, "origin": input.topic_origin,
@@ -1257,7 +1287,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         all_issues = []
         for review in reviews:
             if not isinstance(review, dict) or set(review) not in (
-                    {"index", "supports"}, {"index", "issues"}, {"index", "supports", "issues"}):
+                    {"index", "supports"}, {"index", "issues"}, {"index", "supports", "issues"},
+                    {"index", "no_factual_assertions"}, {"index", "no_factual_assertions", "issues"}):
                 raise self._review_failure("section_shape", diagnostics)
             index = review.get("index")
             diagnostics["section_index"] = safe_count(index)
@@ -1265,6 +1296,21 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 raise self._review_failure("index", diagnostics)
             seen.add(index)
             section = sections[index - 1]
+            no_facts = review.get("no_factual_assertions")
+            if "no_factual_assertions" in review:
+                if (not isinstance(no_facts, dict) or set(no_facts) != {"reason", "candidate_quote_ids"}
+                        or not isinstance(no_facts["reason"], str) or not no_facts["reason"].strip() or len(no_facts["reason"]) > 300):
+                    raise self._review_failure("no_facts_shape", diagnostics)
+                expected_ids = [piece["quote_id"] for piece in title_pieces] if index == 1 else []
+                expected_ids += [piece["quote_id"] for field in ("title", "content", "visual_prompt") for piece in section[field]]
+                actual_ids = no_facts["candidate_quote_ids"]
+                if (not isinstance(actual_ids, list) or len(actual_ids) != len(expected_ids)
+                        or any(not isinstance(value, str) for value in actual_ids)
+                        or len(set(actual_ids)) != len(actual_ids) or set(actual_ids) != set(expected_ids)):
+                    raise self._review_failure("no_facts_coverage", diagnostics)
+                for item_index, quote_id in enumerate(actual_ids, start=1):
+                    if candidate_quote(quote_id, index, item_index) is None:
+                        raise self._review_failure("no_facts_coverage", diagnostics)
             # Omission belongs only to an explicit report branch. Supplied
             # values, including empty arrays, still have to meet its schema.
             supports = review["supports"] if "supports" in review else []
@@ -1281,12 +1327,13 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             for support_index, support in enumerate(supports, start=1):
                 if not isinstance(support, dict) or set(support) != {"candidate_quote_id", "source_quote_id"}:
                     raise self._review_failure("support_shape", diagnostics)
-                if candidate_quote(support["candidate_quote_id"], index, support_index) is None:
+                supported_fragment = candidate_quote(support["candidate_quote_id"], index, support_index)
+                if supported_fragment is None:
                     raise self._review_failure("support_quote", diagnostics)
                 source = source_quote(support["source_quote_id"])
                 if source is None:
                     raise self._review_failure("source_quote", diagnostics)
-                if source["source_alias"] not in section["evidence_reference_ids"]:
+                if supported_fragment["index"] != 0 and source["source_alias"] not in section["evidence_reference_ids"]:
                     diagnostics["support_reference_mismatch"] = {
                         "support_index": support_index, "selected_source_ordinal": source["index"],
                         "allowed_source_ordinals": [source_ordinals[reference] for reference in section["evidence_reference_ids"]]}
@@ -1334,11 +1381,12 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     reference_error = "non_string"
                 elif any(ref not in source_ordinals for ref in refs):
                     reference_error = "unknown_alias"
-                elif any(ref not in section["evidence_reference_ids"] for ref in refs):
+                elif fragment["index"] != 0 and any(ref not in section["evidence_reference_ids"] for ref in refs):
                     reference_error = "not_in_section"
                 elif len(set(refs)) != len(refs):
                     reference_error = "duplicate"
-                elif "reference_ids" in issue and not refs:
+                elif "reference_ids" in issue and not refs and not (
+                        kind == "unsupported_fact" and not section["evidence_reference_ids"]):
                     reference_error = "empty_unsupported" if kind == "unsupported_fact" else "empty_goal"
                 if reference_error:
                     diagnostics["issue_reference_mismatch"] = reference_diagnostic(
@@ -1348,7 +1396,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 all_issues.append((index, {**issue, "reference_ids": refs, "field": fragment["field"], "quote": fragment["text"],
                     "candidate_section_index": fragment["index"], "candidate_fragment_index": fragment["ordinal"],
                     "candidate_field_digest": fragment["full_digest"]}))
-            if "unsupported_fact" not in kinds and not supports:
+            if no_facts is not None and "unsupported_fact" in kinds:
+                raise self._review_failure("no_facts_conflict", diagnostics)
+            if "unsupported_fact" not in kinds and not supports and no_facts is None:
                 raise self._review_failure("support_shape", diagnostics)
         if len(all_issues) > 12:
             raise self._review_failure("issue_count", diagnostics)
@@ -1408,6 +1458,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             "issue_shape": "问题报告结构无效", "issue_quote": "问题引用与送审片段不一致",
             "issue_reference": "问题报告的来源关联无效", "issue_flags": "问题标记与报告结论不一致",
             "issue_count": "问题报告数量不符合协议",
+            "no_facts_shape": "无事实断言结论缺少有效理由或结构不完整",
+            "no_facts_coverage": "无事实断言结论未覆盖本段全部原文或引用了其他版本",
+            "no_facts_conflict": "无事实断言结论与实际事实问题报告相互矛盾",
         }[reason_code]
         reason = f"{section}核查报告无效：{issue}；尚不能判定文案是否通过。"
         return self._failure(code="script_review_invalid", reason=reason,
@@ -1434,7 +1487,6 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             reference_ids = section.get("evidence_reference_ids")
             if (
                 not isinstance(reference_ids, list)
-                or not reference_ids
                 or len(reference_ids) > 12
                 or any(
                     not isinstance(item, str) or item not in allowed_reference_aliases

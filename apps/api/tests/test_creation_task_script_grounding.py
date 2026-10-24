@@ -137,7 +137,8 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     assert tool['type'] == 'function' and tool['function']['name'] == 'submit_script_review'
     schema = tool['function']['parameters']
     assert schema['required'] == ['sections'] and schema['additionalProperties'] is False
-    supported, branch = schema['properties']['sections']['items']['anyOf']
+    supported, branch = [branch for branch in schema['properties']['sections']['items']['anyOf']
+                         if 'no_factual_assertions' not in branch['properties']]
     assert supported['required'] == ['index', 'supports']
     assert set(supported['properties']) == {'index', 'supports'} and supported['additionalProperties'] is False
     properties = branch['properties']
@@ -180,8 +181,7 @@ def test_two_section_review_schema_pins_actual_count_and_keeps_template_count_se
     sections_schema = payload['tools'][0]['function']['parameters']['properties']['sections']
     assert sections_schema['minItems'] == sections_schema['maxItems'] == 2
     assert [branch['properties']['index'] for branch in sections_schema['items']['anyOf']] == [
-        {'type': 'integer', 'enum': [1]}, {'type': 'integer', 'enum': [1]},
-        {'type': 'integer', 'enum': [2]}, {'type': 'integer', 'enum': [2]}]
+        {'type': 'integer', 'enum': [index]} for index in (1, 1, 1, 1, 2, 2, 2, 2)]
     assert actual_input['review_section_count'] == len(actual_input['script']['sections']) == 2
     assert actual_input['requirements']['section_count'] == template_count
     assert '必须恰好返回2项' in payload['messages'][0]['content']
@@ -221,13 +221,15 @@ def test_each_schema_branch_pairs_only_current_section_candidates_and_declared_e
     data = json.loads(payload['messages'][1]['content'])
     schema = payload['tools'][0]['function']['parameters']['properties']['sections']
     assert schema['minItems'] == schema['maxItems'] == 2
-    assert len(schema['items']['anyOf']) == 4
+    assert {branch['properties']['index']['enum'][0] for branch in schema['items']['anyOf']} == {1, 2}
     global_title_ids = [piece['quote_id'] for piece in data['script']['title']]
-    for section, branch in zip(data['script']['sections'], schema['items']['anyOf'][1::2]):
+    for section, branch in zip(data['script']['sections'],
+            [branch for branch in schema['items']['anyOf'] if {'supports', 'issues'} <= set(branch['properties'])]):
         props = branch['properties']
         assert props['index'] == {'type': 'integer', 'enum': [section['index']]}
-        local_ids = global_title_ids + [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
-        source_ids = [value for ids in section['allowed_source_quote_ids'].values() for value in ids]
+        local_ids = (global_title_ids if section['index'] == 1 else []) + [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+        source_ids = ([piece['quote_id'] for source in data['sources'] for piece in source['text']] if section['index'] == 1
+                      else [value for ids in section['allowed_source_quote_ids'].values() for value in ids])
         support = props['supports']['items']['properties']
         assert support['candidate_quote_id']['enum'] == local_ids
         assert support['source_quote_id']['enum'] == source_ids
@@ -235,7 +237,8 @@ def test_each_schema_branch_pairs_only_current_section_candidates_and_declared_e
             issue = issue_branch['properties']
             assert issue['kind']['enum'] == [kind]
             assert issue['candidate_quote_id']['enum'] == local_ids
-            assert issue['reference_ids']['items']['enum'] == section['evidence_reference_ids']
+            assert issue['reference_ids']['items']['enum'] == ([source['reference_id'] for source in data['sources']]
+                if section['index'] == 1 else section['evidence_reference_ids'])
             assert issue['reference_ids']['minItems'] == 1
             assert ('reference_ids' in issue_branch['required']) is (kind == 'unsupported_fact')
             assert issue['reference_ids']['uniqueItems'] is True
@@ -1836,3 +1839,364 @@ def test_confirm_does_not_treat_estimated_speech_as_real_delivery_duration(api_s
     assert persisted.selection_status == 'confirmed' and persisted.sections[0].content == content
     assert state.repository.get_creation_task('local', 'task').confirmed_script_id == script.id
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('duration', [1, 601, 1800])
+def test_content_goal_duration_is_not_a_single_call_execution_window(duration):
+    document = draft()
+    calls = []
+    result = provider(document, reviewed(document), calls).generate(replace(inputs(), duration_target_seconds=duration))
+    assert result.sections[0].content == FACT
+    assert json.loads(calls[0][1]['messages'][1]['content'])['duration_target_seconds'] == duration
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('duration', [0, -1, True])
+def test_invalid_content_duration_is_rejected_before_provider_execution(duration):
+    calls = []
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        provider(draft(), reviewed(draft()), calls).generate(replace(inputs(), duration_target_seconds=duration))
+    assert error.value.code == 'input_invalid' and calls == []
+
+
+def no_facts_provider(document, report_edit=None):
+    calls = []
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return _response(document)
+        data = json.loads(body['messages'][1]['content'])
+        reports = []
+        for section in data['script']['sections']:
+            ids = [piece['quote_id'] for piece in data['script']['title']] if section['index'] == 1 else []
+            ids += [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+            reports.append({'index': section['index'], 'no_factual_assertions': {
+                'reason': '仅提出开放问题并计划抽象画面，没有对外事实或已完成承诺。', 'candidate_quote_ids': ids}})
+        report = {'sections': reports}
+        if report_edit:
+            report_edit(report, data)
+        return _review_tool_response(report)
+    generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(respond))
+    return generator, calls
+
+
+def rhetorical_draft():
+    return {'script': {'title': '想一想', 'language': 'zh-CN', 'sections': [{
+        'title': '一个问题', 'content': '你会怎样讲述自己的今天？', 'visual_prompt': '计划展示抽象色块', 'evidence_reference_ids': []}]}}
+
+
+def test_no_factual_assertions_is_an_explicit_fully_covered_review_branch():
+    document = rhetorical_draft()
+    generator, calls = no_facts_provider(document)
+    result = generator.generate(inputs())
+    assert result.sections[0].content == document['script']['sections'][0]['content']
+    assert result.sections[0].evidence_reference_ids == () and len(calls) == 2
+    schema = calls[1]['tools'][0]['function']['parameters']
+    branches = schema['properties']['sections']['items']['anyOf']
+    no_facts = next(branch for branch in branches if branch['required'] == ['index', 'no_factual_assertions'])
+    assert no_facts['additionalProperties'] is False
+    data = json.loads(calls[1]['messages'][1]['content'])
+    required_ids = [piece['quote_id'] for piece in data['script']['title']]
+    required_ids += [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in data['script']['sections'][0][field]]
+    coverage = no_facts['properties']['no_factual_assertions']['properties']['candidate_quote_ids']
+    assert coverage['items']['enum'] == required_ids
+    assert coverage['minItems'] == coverage['maxItems'] == len(required_ids)
+    assert 'factual_assertions_require_evidence' in json.loads(calls[0]['messages'][1]['content'])['requirements']
+
+
+@pytest.mark.parametrize('malformation', ['empty_reason', 'missing_fragment', 'duplicate', 'foreign_fragment', 'extra_key', 'supports', 'unsupported_fact'])
+def test_no_facts_cannot_be_an_unbound_or_contradictory_pass_marker(malformation):
+    def edit(report, data):
+        section = report['sections'][0]
+        decision = section['no_factual_assertions']
+        if malformation == 'empty_reason': decision['reason'] = '   '
+        elif malformation == 'missing_fragment': decision['candidate_quote_ids'].pop()
+        elif malformation == 'duplicate': decision['candidate_quote_ids'][-1] = decision['candidate_quote_ids'][0]
+        elif malformation == 'foreign_fragment': decision['candidate_quote_ids'][-1] = 'previous-version-or-other-section'
+        elif malformation == 'extra_key': decision['grounded'] = True
+        elif malformation == 'supports': section['supports'] = [{'candidate_quote_id': decision['candidate_quote_ids'][0], 'source_quote_id': 'fake'}]
+        else: section['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': decision['candidate_quote_ids'][0],
+                                  'reference_ids': [], 'missing_or_conflicting': '陈述没有资料支持'}]
+    generator, calls = no_facts_provider(rhetorical_draft(), edit)
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        generator.generate(inputs())
+    assert error.value.code == 'script_review_invalid' and len(calls) == 2
+
+
+def test_no_facts_still_reports_a_real_requirement_conflict():
+    def edit(report, data):
+        report['sections'][0]['issues'] = [{'kind': 'goal_conflict',
+            'candidate_quote_id': data['script']['sections'][0]['visual_prompt'][0]['quote_id'],
+            'missing_or_conflicting': '方案明确要求不安排人物出镜。'}]
+    document = rhetorical_draft()
+    document['script']['sections'][0]['visual_prompt'] = '计划安排人物出镜提问'
+    generator, calls = no_facts_provider(document, edit)
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        generator.generate(inputs())
+    assert error.value.code == 'script_goal_conflict' and len(calls) == 2
+
+
+def test_factual_assertion_without_declared_sources_is_still_rejected():
+    document = draft('每天自动备份。')
+    document['script']['sections'][0]['evidence_reference_ids'] = []
+    def edit(report, data):
+        report['sections'][0] = {'index': 1, 'issues': [{'kind': 'unsupported_fact',
+            'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
+            'reference_ids': [], 'missing_or_conflicting': '没有声明支持自动备份承诺的资料。'}]}
+    generator, calls = no_facts_provider(document, edit)
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        generator.generate(inputs())
+    assert error.value.code == 'script_fact_unsupported' and len(calls) == 2
+
+
+@pytest.mark.parametrize('borrow_other_section', [False, True])
+def test_mixed_fact_and_rhetorical_sections_require_each_own_review(borrow_other_section):
+    document = draft()
+    document['script']['sections'].append(rhetorical_draft()['script']['sections'][0])
+    def edit(report, data):
+        first = data['script']['sections'][0]
+        report['sections'][0] = {'index': 1, 'supports': [{
+            'candidate_quote_id': first['content'][0]['quote_id'],
+            'source_quote_id': first['allowed_source_quote_ids']['evidence_1'][0]}]}
+        if borrow_other_section:
+            report['sections'][1]['no_factual_assertions']['candidate_quote_ids'][-1] = first['content'][0]['quote_id']
+    generator, calls = no_facts_provider(document, edit)
+    if borrow_other_section:
+        with pytest.raises(CreationTaskScriptGenerationError) as error:
+            generator.generate(inputs())
+        assert error.value.code == 'script_review_invalid'
+    else:
+        result = generator.generate(inputs())
+        assert len(result.sections) == 2 and result.sections[1].evidence_reference_ids == ()
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('endpoint', ['scripts/generate', 'assistant/script-draft'])
+def test_no_facts_draft_saves_updates_and_confirms_without_inventing_evidence(api_state, monkeypatch, endpoint):
+    state = api_state
+    document = rhetorical_draft()
+    generator, calls = no_facts_provider(document)
+    if endpoint == 'assistant/script-draft':
+        def review_without_generation(request):
+            # Use the existing report builder against the actual review request.
+            body = json.loads(request.content)
+            data = json.loads(body['messages'][1]['content'])
+            calls.append(body)
+            section = data['script']['sections'][0]
+            ids = [piece['quote_id'] for piece in data['script']['title']] if section['index'] == 1 else []
+            ids += [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+            return _review_tool_response({'sections': [{'index': 1, 'no_factual_assertions': {
+                'reason': '纯提问与计划画面，没有对外事实断言。', 'candidate_quote_ids': ids}}]})
+        generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+            transport=httpx.MockTransport(review_without_generation))
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
+    if endpoint == 'scripts/generate':
+        body = {}
+    else:
+        body = {'title': document['script']['title'], 'sections': [{**document['script']['sections'][0], 'id': 'rhetorical'}]}
+    response = state.client.post('/api/creation-tasks/task/' + endpoint, json=body)
+    assert response.status_code == 200, response.text
+    script = state.repository.list_creation_task_scripts('local', 'task')[0]
+    assert script.sections[0].evidence_reference_ids == []
+    if endpoint == 'assistant/script-draft':
+        body['expected_updated_at'] = script.updated_at.isoformat()
+        body['sections'][0]['content'] = '你想先从哪一个瞬间讲起？'
+        updated = state.client.post('/api/creation-tasks/task/assistant/script-draft', json=body)
+        assert updated.status_code == 200, updated.text
+        script = state.repository.get_creation_task_script('local', script.id)
+        assert script.sections[0].content == body['sections'][0]['content']
+        assert len(state.repository.list_creation_task_scripts('local', 'task')) == 1
+    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
+        main.confirm_creation_task_script, methods=['POST'])
+    confirm_body = {'title': script.title, 'sections': [vars(section) for section in script.sections],
+                    'expected_updated_at': script.updated_at.isoformat()}
+    confirmation_calls = []
+    def confirmation_review(request):
+        data = json.loads(json.loads(request.content)['messages'][1]['content'])
+        confirmation_calls.append(data)
+        section = data['script']['sections'][0]
+        content = ''.join(piece['text'] for piece in section['content'])
+        if '全国第一' in content:
+            return _review_tool_response({'sections': [{'index': 1, 'issues': [{'kind': 'unsupported_fact',
+                'candidate_quote_id': section['content'][0]['quote_id'], 'reference_ids': [],
+                'missing_or_conflicting': '提问暗含全国第一断言，没有资料支持。'}]}]})
+        ids = [piece['quote_id'] for piece in data['script']['title']]
+        ids += [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+        return _review_tool_response({'sections': [{'index': 1, 'no_factual_assertions': {
+            'reason': '完整核查纯提问与计划画面，无对外事实断言。', 'candidate_quote_ids': ids}}]})
+    confirmation_generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(confirmation_review))
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: confirmation_generator)
+    unreviewed = copy.deepcopy(confirm_body)
+    unreviewed['sections'][0]['content'] = '你知道我们是全国第一吗？'
+    rejected = state.client.post(f'/api/creation-tasks/task/scripts/{script.id}/confirm', json=unreviewed)
+    assert rejected.status_code == 422, rejected.text
+    assert state.repository.get_creation_task('local', 'task').confirmed_script_id is None
+    assert state.repository.get_creation_task_script('local', script.id).sections == script.sections
+    assert len(confirmation_calls) == 1
+    confirm_body['sections'][0]['content'] = '接下来你想怎样讲述今天？'
+    confirmed = state.client.post(f'/api/creation-tasks/task/scripts/{script.id}/confirm', json=confirm_body)
+    assert confirmed.status_code == 200, confirmed.text
+    assert state.repository.get_creation_task('local', 'task').confirmed_script_id == script.id
+    assert state.repository.get_creation_task_script('local', script.id).sections[0].evidence_reference_ids == []
+    assert state.repository.get_creation_task_script('local', script.id).sections[0].content == confirm_body['sections'][0]['content']
+    assert len(calls) == 2 and len(confirmation_calls) == 2
+
+
+@pytest.mark.parametrize('misuse', ['none', 'global_title_in_second', 'borrow_title_source_for_body'])
+def test_global_factual_title_has_one_owner_without_burdening_a_rhetorical_section(misuse):
+    document = draft()
+    document['script']['title'] = '用户可以为素材设置用途'
+    document['script']['sections'].append(rhetorical_draft()['script']['sections'][0])
+    def edit(report, data):
+        assert data['title_review_section_index'] == 1
+        first = data['script']['sections'][0]
+        report['sections'][0] = {'index': 1, 'supports': [{
+            'candidate_quote_id': data['script']['title'][0]['quote_id'],
+            'source_quote_id': data['sources'][0]['text'][0]['quote_id']}]}
+        if misuse == 'global_title_in_second':
+            report['sections'][1]['no_factual_assertions']['candidate_quote_ids'].append(data['script']['title'][0]['quote_id'])
+        elif misuse == 'borrow_title_source_for_body':
+            report['sections'][0]['supports'][0]['candidate_quote_id'] = first['content'][0]['quote_id']
+    if misuse == 'borrow_title_source_for_body':
+        document['script']['sections'][0]['evidence_reference_ids'] = []
+    generator, calls = no_facts_provider(document, edit)
+    if misuse == 'none':
+        result = generator.generate(inputs())
+        assert len(result.sections) == 2 and result.sections[1].evidence_reference_ids == ()
+    else:
+        with pytest.raises(CreationTaskScriptGenerationError) as error:
+            generator.generate(inputs())
+        assert error.value.code == 'script_review_invalid'
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('claim', ['你知道我们是全国第一吗？', '今天来聊聊，我们的销量全国第一。'])
+def test_rhetorical_form_does_not_erase_an_embedded_factual_claim(claim):
+    document = rhetorical_draft()
+    document['script']['sections'][0]['content'] = claim
+    def edit(report, data):
+        report['sections'][0] = {'index': 1, 'issues': [{'kind': 'unsupported_fact',
+            'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'],
+            'reference_ids': [], 'missing_or_conflicting': '提问或转场仍暗含全国第一的事实断言，没有支持来源。'}]}
+    generator, calls = no_facts_provider(document, edit)
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        generator.generate(inputs())
+    assert error.value.code == 'script_fact_unsupported' and len(calls) == 2
+
+
+@pytest.mark.parametrize('change', ['title', 'references', 'order', 'visual', 'borrow_reference_for_fact', 'source_revoked', 'outside_scope'])
+def test_confirmation_reviews_the_entire_changed_candidate_identity(api_state, monkeypatch, change):
+    state = api_state
+    document = rhetorical_draft()
+    document['script']['sections'].append({**document['script']['sections'][0], 'content': '接下来想聊什么？'})
+    document['script']['sections'][0]['evidence_reference_ids'] = ['evidence_1']
+    generator, _ = no_facts_provider(document)
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
+    saved = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
+    assert saved.status_code == 200, saved.text
+    script = state.repository.list_creation_task_scripts('local', 'task')[0]
+    body = {'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
+            'expected_updated_at': script.updated_at.isoformat()}
+    if change == 'title': body['title'] = '换一个问题'
+    elif change == 'references': body['sections'][1]['evidence_reference_ids'] = [state.refs[0]['reference_id']]
+    elif change == 'order': body['sections'].reverse()
+    elif change == 'visual': body['sections'][1]['visual_prompt'] = '计划展示另一种抽象色块'
+    elif change == 'borrow_reference_for_fact':
+        body['sections'][1]['content'] = '我们的销量全国第一。'
+        body['sections'][1]['evidence_reference_ids'] = [state.refs[0]['reference_id']]
+    elif change == 'outside_scope': body['sections'][1]['evidence_reference_ids'] = ['foreign-reference']
+    else: body['title'] = '检查来源有效的修订'
+    calls = []
+    def review(request):
+        data = json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
+        reports = []
+        for section in data['script']['sections']:
+            if change == 'borrow_reference_for_fact' and section['index'] == 2:
+                reports.append({'index': 2, 'issues': [{'kind': 'unsupported_fact',
+                    'candidate_quote_id': section['content'][0]['quote_id'], 'reference_ids': ['evidence_1'],
+                    'missing_or_conflicting': '复制的来源引用不支持全国第一承诺。'}]})
+                continue
+            ids = [piece['quote_id'] for piece in data['script']['title']] if section['index'] == 1 else []
+            ids += [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
+            reports.append({'index': section['index'], 'no_factual_assertions': {
+                'reason': '纯提问与计划画面，不含对外事实断言。', 'candidate_quote_ids': ids}})
+        if change == 'source_revoked':
+            state.sources.set_knowledge_item_use_state('local', 'fixture', 'excluded')
+        return _review_tool_response({'sections': reports})
+    reviewer = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model', transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: reviewer)
+    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm', main.confirm_creation_task_script, methods=['POST'])
+    result = state.client.post(f'/api/creation-tasks/task/scripts/{script.id}/confirm', json=body)
+    if change in {'borrow_reference_for_fact', 'source_revoked', 'outside_scope'}:
+        assert result.status_code == (409 if change == 'source_revoked' else 422), result.text
+        assert state.repository.get_creation_task_script('local', script.id) == script
+        assert state.repository.get_creation_task('local', 'task').confirmed_script_id is None
+    else:
+        assert result.status_code == 200, result.text
+        stored = state.repository.get_creation_task_script('local', script.id)
+        assert stored.title == body['title'] and [vars(part) for part in stored.sections] == body['sections']
+    assert len(calls) == (0 if change == 'outside_scope' else 1)
+
+
+@pytest.mark.parametrize('change', ['unchanged', 'supported', 'unsupported', 'source_revoked'])
+def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic(api_state, monkeypatch, change):
+    state = api_state
+    for path, endpoint in (
+            ('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm', main.confirm_creation_task_script),
+            ('/api/production/script-library', main.save_script_library),
+            ('/api/production/script-library/{entry_id}/reuse', main.reuse_script_library)):
+        state.client.app.add_api_route(path, endpoint, methods=['POST'])
+    original_calls = []
+    set_api_provider(monkeypatch, draft(), reviewed(draft()), original_calls)
+    generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
+    assert generated.status_code == 200, generated.text
+    original = state.repository.list_creation_task_scripts('local', 'task')[0]
+    confirmed = state.client.post(f'/api/creation-tasks/task/scripts/{original.id}/confirm', json={
+        'title': original.title, 'sections': [vars(section) for section in original.sections],
+        'expected_updated_at': original.updated_at.isoformat()})
+    assert confirmed.status_code == 200, confirmed.text
+    saved = state.client.post('/api/production/script-library', json={'source_script_id': original.id, 'name': '真实来源的库稿'})
+    assert saved.status_code == 200, saved.text
+    entry_id = saved.json()['id']
+    reused = state.client.post(f'/api/production/script-library/{entry_id}/reuse', json={
+        'name': '复用后直接微调', 'duration_target_seconds': 60, 'requirements_confirmed': True})
+    assert reused.status_code == 200, reused.text
+    new_task_id = reused.json()['task_id']
+    script = state.repository.get_creation_task_script('local', reused.json()['script']['id'])
+    task = state.repository.get_creation_task('local', new_task_id)
+    assert task.selected_topic_id is None and script.run_id == '' and script.topic_id == ''
+    body = {'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
+            'expected_updated_at': script.updated_at.isoformat()}
+    if change != 'unchanged':
+        body['sections'][0]['content'] += '从这里开始。' if change != 'unsupported' else '每天自动备份。'
+    calls = []
+    def review(request):
+        data = json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
+        assert data['confirmed_topic'] == {'origin': 'provided', 'title': original.title, 'angle': '', 'audience': '', 'outline': []}
+        assert ''.join(piece['text'] for piece in data['sources'][0]['text']) == SOURCE
+        if change == 'source_revoked':
+            state.sources.set_knowledge_item_use_state('local', 'fixture', 'excluded')
+        if change == 'unsupported':
+            return _review_tool_response({'sections': [{'index': 1, 'issues': [{'kind': 'unsupported_fact',
+                'candidate_quote_id': data['script']['sections'][0]['content'][0]['quote_id'], 'reference_ids': ['evidence_1'],
+                'missing_or_conflicting': '原来源没有自动备份承诺。'}]}]})
+        return _review_tool_response(bound_review(reviewed(draft()), data))
+    reviewer = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model', transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: reviewer)
+    result = state.client.post(f'/api/creation-tasks/{new_task_id}/scripts/{script.id}/confirm', json=body)
+    if change in {'unsupported', 'source_revoked'}:
+        assert result.status_code == (422 if change == 'unsupported' else 409), result.text
+        assert state.repository.get_creation_task('local', new_task_id).confirmed_script_id is None
+        assert state.repository.get_creation_task_script('local', script.id) == script
+    else:
+        assert result.status_code == 200, result.text
+        stored = state.repository.get_creation_task_script('local', script.id)
+        assert stored.selection_status == 'confirmed' and stored.sections[0].content == body['sections'][0]['content']
+        assert state.repository.get_creation_task('local', new_task_id).confirmed_script_id == script.id
+    assert len(calls) == (0 if change == 'unchanged' else 1)
+    assert state.repository.get_creation_task_script('local', original.id).sections == original.sections
