@@ -110,7 +110,7 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
 
 def test_terminal_conversation_uses_same_resource_history_without_changing_cancel_status(tmp_path, monkeypatch):
     import json
-    from dataclasses import asdict
+    from dataclasses import asdict, replace
     from types import SimpleNamespace
     from app.conversation_repository import ConversationRepository
     (repo, actor, _, _, _, media, runtime, _), client = _resource_api_case(tmp_path, monkeypatch)
@@ -156,7 +156,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     import io
     import wave
     import shutil
-    from dataclasses import asdict
+    from dataclasses import asdict, replace
     from types import SimpleNamespace
     from app.artifact_store import ArtifactStore
     from app.host_resource_probes import HostProcessProbe
@@ -166,14 +166,12 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     repo, actor, state, factory, build, media = case(tmp_path)
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path/'output'))
-    monkeypatch.setattr(main, 'settings', SimpleNamespace(effective_temporary_root_path=tmp_path/'temporary'))
+    monkeypatch.setattr(main, 'settings', replace(main.settings,temporary_root_path=str(tmp_path/'temporary'),video_output_path=str(tmp_path/'output')))
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args: actor)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
     for field, value in asdict(audio_budget()).items():
         monkeypatch.setenv('DEVICE_CPU_AUDIO_'+field.upper(), str(value))
     media.facts = main._task_media_facts
-    media.execute_operation = main._execute_task_media_operation
-    media.validate_result = main._validate_task_media_result
     media.audio_ingress = main._audio_ingress_use_case()
     media.audio_edit = main._audio_edit_use_case()
     runtime = build(media)

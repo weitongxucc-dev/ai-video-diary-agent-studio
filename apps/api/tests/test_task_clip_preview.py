@@ -1,5 +1,6 @@
 """A long movie's selected-clip preview remains a silent five-second unit."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from uuid import uuid4
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import json
@@ -42,7 +43,7 @@ def test_exposure_preview_uses_explicit_grant_then_atomic_adoption_and_undo(tmp_
         assert queued.status_code == 202, queued.text
         def forbidden(*args, **kwargs):
             raise AssertionError('short preview must not reenter HTTP execution')
-        media.execute_operation = forbidden
+        assert not hasattr(media, "execute_operation")
         monkeypatch.setattr(main, 'Request', forbidden)
         execute = media.clip_preview.execute
         def explicit(job, event, original_actor, context):
@@ -67,7 +68,7 @@ def test_exposure_preview_uses_explicit_grant_then_atomic_adoption_and_undo(tmp_
         kept = repo.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
         assert [(item.text, item.start_seconds, item.end_seconds) for item in kept[0].cues] == [
             (item.text, item.start_seconds, item.end_seconds) for item in track.cues]
-        undo = client.post('/api/creation-tasks/task/timeline/undo', json={})
+        undo = client.post('/api/creation-tasks/task/timeline/undo', json={'request_id':str(uuid4())})
         assert undo.status_code == 200, undo.text
         restored = repo.get_creation_task_montage_plan('local', 'task')
         assert restored['clips'] == original['clips'] and restored['audio_timeline'] == original['audio_timeline']
@@ -167,8 +168,14 @@ def test_assistant_short_preview_freezes_original_turn_and_survives_runtime_rest
         assert event['arguments']['_clip_preview']['source']['assistant_turn_id'] == turn['id']
         conversations.finish_turn(turn['id'], 'completed', result={})
         assert runtime.stop(0)
+        from app.task_audio import TaskMediaJobs
+        from app.device_runtime import OwnerRegistration
+        from app.creation_execution import CreationJobOwnerVerifier,CreationJobUnitExecutor
+        media = TaskMediaJobs(repo,facts=media.facts,verify_identity=media.verify_identity,clip_preview=media.clip_preview)
+        registration=OwnerRegistration(CreationJobOwnerVerifier(repo,verify_identity=media.verify_identity,task_media=media),
+            CreationJobUnitExecutor(repo,render_action=None,render_is_valid=None,task_media=media))
         runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path/'device.lock',
-            registrations=runtime.registrations, device_access=MemberDeviceAccess(LocalMemberService(repo.database_path)),
+            registrations={'creation_job':registration}, device_access=MemberDeviceAccess(LocalMemberService(repo.database_path)),
             resources=runtime.scheduler.resources, processes=HostProcessProbe(), admission_recorder=media.record_admission)
         monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
         assert runtime.run_once()
@@ -206,8 +213,6 @@ def test_retired_declarations_preserve_successful_history_but_never_execute(tmp_
             scoped.setattr(media, 'read', lambda *args:(old_job, legacy))
             with pytest.raises(PermissionError, match='仅供回读'):
                 media.verify_retry(SimpleNamespace(workspace_id='local', owner_id=job.id), actor, 'result_invalid', None)
-        with pytest.raises(ValueError, match='不能重入路由'):
-            main._execute_task_media_operation(old_job, legacy, actor)
         source = repo.resolve_clip_media_reference('local', 'asset', original['clips'][1]['source_path'])
         source.touch()
         assert media.check(old_job, legacy, actor) == 'stale'
@@ -227,12 +232,14 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
         intent_count = len(repo.list_edit_intents('local', 'task'))
         proposal_count = len(repo.list_edit_proposals('local', 'task'))
         if race_at == 'adapter':
-            submit = main._submit_clip_preview
-            def after_initial_validation(*args, **kwargs):
-                assert kwargs['base_version_id'] == 'timeline'
+            from app.creation.clip_preview import ClipPreviewUseCase
+            prepare = ClipPreviewUseCase.prepare
+            def after_initial_validation(self, original_actor, command):
+                prepared = prepare(self, original_actor, command)
+                assert command.base_version_id == 'timeline'
                 commit_other_edit()
-                return submit(*args, **kwargs)
-            monkeypatch.setattr(main, '_submit_clip_preview', after_initial_validation)
+                return prepared
+            monkeypatch.setattr(ClipPreviewUseCase, 'prepare', after_initial_validation)
         elif race_at == 'job_commit':
             facts = media.facts
             def after_sealing(*args):
@@ -309,12 +316,15 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     monkeypatch.setattr('app.member_permits.cpu_render_budget_from_env',lambda:budget)
     monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'output'))
-    monkeypatch.setattr(main,'settings',SimpleNamespace(effective_temporary_root_path=tmp_path/'temp'))
+    monkeypatch.setattr(main,'settings',replace(main.settings,temporary_root_path=str(tmp_path/'temp'),video_output_path=str(tmp_path/'output')))
     monkeypatch.setattr(main,'_require_permit_actor',lambda *args:actor)
+    monkeypatch.setattr(main,'_assistant_member_id',lambda *args:actor.member_id)
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
     media.facts=main._task_media_facts
-    media.execute_operation=main._execute_task_media_operation
-    media.validate_result=main._validate_task_media_result
+    from app.media.clip_preview import ClipPreviewExecutor
+    from app.task_audio import TaskAudio
+    media.clip_preview=ClipPreviewExecutor(main._clip_preview_use_case(),
+        TaskAudio(repo,main.artifact_store,main.settings.effective_temporary_root_path))
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)

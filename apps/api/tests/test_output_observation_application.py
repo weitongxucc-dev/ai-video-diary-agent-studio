@@ -51,8 +51,6 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         monkeypatch.setenv('DEVICE_CPU_RENDER_'+name.upper(), str(value))
     monkeypatch.delenv('TASK_OUTPUT_OBSERVATION_BUDGET_JSON', raising=False)
     media.facts = main._task_media_facts
-    media.execute_operation = main._execute_task_media_operation
-    media.validate_result = main._validate_task_media_result
     media.output_observation = main._output_observation_use_case()
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()
@@ -134,7 +132,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     assert repo.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
     assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
     assert main._creation_task_output_path('local','task',subtitle=False)==store.resolve_file(publication.logical_ref)
-    assert main._quality_check_source('local','task')[3]==publication.sha256
+    assert main._quality_check_source('local','task')[3].sha256==publication.sha256
     assert not list((tmp_path/'temporary').glob('task-observation-*'))
     assert TASK_MEDIA_CONTEXT.get() is None and runtime.stop(1)
     client.close()

@@ -47,8 +47,6 @@ def audio_state(tmp_path, monkeypatch):
     for name, value in asdict(audio_budget()).items():
         monkeypatch.setenv('DEVICE_CPU_AUDIO_'+name.upper(),str(value))
     media.facts = main._task_media_facts
-    media.execute_operation = main._execute_task_media_operation
-    media.validate_result = main._validate_task_media_result
     media.audio_ingress = main._audio_ingress_use_case()
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()

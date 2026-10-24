@@ -1,6 +1,9 @@
 """Persistent task-media work uses the sole device grant and isolated stores."""
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from tests.host_memory_boundary import IsolatedMemoryMonitor
+from test_host_resource_probes import _render_budget
 
 import pytest
 
@@ -16,6 +19,7 @@ from test_device_runtime import Resources, Processes
 
 
 def case(tmp_path, action=None, validate=None, resources=None):
+    """Synthetic audio owner for grant mechanics; application tests inject their actual use case."""
     repo = ProductionRepository(tmp_path / 'media.sqlite', tmp_path / 'library')
     plan = CreationPlan(id='plan', workspace_id='local', goal='test', name='test', target_count=1,
         language='zh-CN', aspect_ratio='9:16', duration_target_seconds=120,
@@ -27,13 +31,13 @@ def case(tmp_path, action=None, validate=None, resources=None):
     actor = CreationExecutionActor('local', members.whoami(None)[0].member_id)
     access = MemberDeviceAccess(members)
     state = {'revision': 1, 'calls': 0, 'checks': 0}
-    def execute(job, event, actor):
-        assert TASK_MEDIA_CONTEXT.get()[0].grant.owner_id == job.id
+    def execute(job, event, actor, context):
+        assert TASK_MEDIA_CONTEXT.get() is None and context.grant.owner_id == job.id
         state['calls'] += 1
         if action:
             return action(state)
         return {'audio_url': '/saved-output'}
-    def check_output(*args):
+    def check_output(job, event, result, context):
         state['checks'] += 1
         if validate:
             validate(state)
@@ -42,13 +46,15 @@ def case(tmp_path, action=None, validate=None, resources=None):
             {'kind': 'task_audio', 'execution_mode': 'cpu_ffmpeg', 'timeout_seconds': 30, 'max_output_bytes': 65536, 'threads': 1, 'input_policy': 'probe_then_bounded_decode',
              'source_duration_limit_seconds':120, 'source_sample_rate_limit':48000, 'source_channels_limit':8,
              'output_duration_limit_seconds':120, 'output_sample_rate_limit':48000, 'output_channels_limit':8, 'inputs': []}),
-            execute_operation=execute, validate_result=check_output, verify_identity=access.verify_identity)
+            audio_ingress=SimpleNamespace(execute=execute,validate_result=check_output), verify_identity=access.verify_identity)
     def runtime(media):
+        fixture_resources = resources or Resources()
+        fixture_resources.memory_monitor = IsolatedMemoryMonitor()
         return build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path/'device.lock',
             device_access=access, registrations={'creation_job': OwnerRegistration(
                 CreationJobOwnerVerifier(repo, verify_identity=access.verify_identity, task_media=media),
                 CreationJobUnitExecutor(repo, render_action=None, render_is_valid=None, task_media=media))},
-            resources=resources or Resources(), processes=Processes(), admission_recorder=media.record_admission)
+            resources=fixture_resources, processes=Processes(), admission_recorder=media.record_admission)
     media = factory()
     return repo, actor, state, factory, runtime, media
 
@@ -160,9 +166,16 @@ def _resource_admission_case(tmp_path, monkeypatch):
     monkeypatch.setattr(probes.psutil, 'disk_usage', lambda path:SimpleNamespace(free=2**50))
     runtime = build(media)
     # Real admission implementation, synthetic envelope and platform observations in TMP only.
+    monitor = IsolatedMemoryMonitor()
+    sample_memory = monitor.check
+    def measured_memory(**kwargs):
+        decision = sample_memory(**kwargs)
+        decision.sample.facts['swap_used_bytes'] = {'value':values['swap'],'unit':'bytes','source':'synthetic'}
+        return decision
+    monkeypatch.setattr(monitor,'check',measured_memory)
     runtime.scheduler.resources = probes.HostResourceProbe(repo.database_path, disk_paths=(tmp_path,),
         budget=probes.HostBudget(91, 1024**3, 16342122496, 1, 10**12, 10**12,
-            cpu_render=replace(_render_budget(), additional_memory_bytes=2*1024**3)))
+            cpu_render=replace(_render_budget(), additional_memory_bytes=2*1024**3)),memory_monitor=monitor)
     return repo, actor, state, factory, build, media, runtime, values
 
 
@@ -191,9 +204,8 @@ def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_re
         assert refused['input_digest'] == job.input_digest and refused['base_version_id'] is None
         checks = {item['metric']:item for item in refused['checks']}
         assert checks['available_memory_bytes']['actual'] == 2801418240
-        assert checks['swap_used_bytes']['actual'] == 17957978112
-        assert checks['swap_used_bytes']['maximum'] == 16342122496
-        assert len(checks) == 5 and state['calls'] == 0
+        assert {'cpu_percent','available_memory_bytes','disk_io_bytes_per_second','disk_free_bytes'} <= checks.keys()
+        assert state['calls'] == 0
         values['available'] = 1
         for _ in range(3):
             assert not runtime.run_once()
@@ -204,7 +216,8 @@ def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_re
         for receipt in (unknown, refused):
             assert 'PRIVATE' not in json.dumps(receipt) and str(tmp_path) not in json.dumps(receipt)
         assert media.resource_admission_receipt(job, start, replace(actor, member_id='other'), request, 'queued') is None
-        values['available'], values['swap'] = 4*1024**3, 0
+        values['available'] = 4*1024**3
+        assert values['swap'] > runtime.scheduler.resources.budget.max_swap_used_bytes
         grant = runtime.scheduler.pick_and_grant()
         assert grant is not None
         history = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request.id), 'queued')
@@ -306,11 +319,11 @@ def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_
     repo, actor, state, factory, build, media = case(tmp_path)
     store = ArtifactStore(tmp_path/'output')
     audio = TaskAudio(repo, store, source.parent)
-    def produce(job, event, actor):
+    def produce(job, event, actor, context):
         record = audio.publish('local', 'task', kind='audio_source', parameters={'name': 'synthetic'}, input_refs=[],
-            operation='upload', media_input={'staged_input':'uploaded.wav'})
+            operation='upload', media_input={'staged_input':'uploaded.wav'},execution=(context,job,event,actor))
         return {'source_ref':record.logical_ref, 'artifact_id':record.id}
-    media.execute_operation = produce
+    media.audio_ingress.execute = produce
     original_facts = media.facts
     def upload_facts(*args):
         facts, resources = original_facts(*args)
@@ -391,14 +404,13 @@ def test_unknown_and_known_source_probe_rejects_before_dsp(tmp_path, monkeypatch
         dsp.append(args[2][0])
         return original_command(*args,**kwargs)
     monkeypatch.setattr(timeline,'_run_granted_audio_command',command)
-    def operation(job,event,actor):
-        context=TASK_MEDIA_CONTEXT.get()[0]
+    def operation(job,event,actor,context):
         graph=timeline.narration_audio_timeline('workspace://source.wav',.1)
         timeline.render_audio_mix(graph,.1,lambda ref:source,tmp_path/'mixed.wav',
             scheduler=context.scheduler,grant=context.grant,cancel_event=context.cancel_event,
             deadline_monotonic=context.deadline_monotonic,max_output_bytes=context.max_output_bytes,threads=context.threads)
         return {}
-    media.execute_operation=operation
+    media.audio_ingress.execute=operation
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
@@ -454,17 +466,18 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
             'width_px':1080,'height_px':1080,'input_bytes':source.stat().st_size+voice.stat().st_size,
             'clip_count':1,'overlay_count':0,'max_output_bytes':2000000,'threads':1,'timeout_seconds':30}
     media.facts=facts
-    def operation(job,event,actor):
+    def operation(job,event,actor,context):
         record=audio.publish('local','task',kind='color_preview',parameters={'side':'after'},input_refs=[],suffix='.mp4',
-            operation='picture_preview',media_input={'plan':creation_task_montage_plan_to_payload(plan),'subtitle_tracks':[]})
+            operation='picture_preview',media_input={'plan':creation_task_montage_plan_to_payload(plan),'subtitle_tracks':[]},execution=(context,job,event,actor))
         return {'video_url':'/synthetic-preview','artifact_id':record.id}
-    media.execute_operation=operation
+    media.visual_preview=SimpleNamespace(execute=operation,validate_result=media.audio_ingress.validate_result)
     configure_synthetic_media_budgets(monkeypatch, main)
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
     runtime.scheduler.resources=HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
-        100, 0, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=main.cpu_render_budget_from_env()))
+        100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
+        cpu_render=replace(main.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy)),
+        memory_monitor=IsolatedMemoryMonitor())
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
     saved=repo.get_job_run('local',job.id)
@@ -541,8 +554,8 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     store = ArtifactStore(tmp_path/'output')
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'artifact_store', store)
-    monkeypatch.setattr(main, 'settings', SimpleNamespace(
-        video_output_path=str(tmp_path/'output'), effective_temporary_root_path=tmp_path/'temp'))
+    monkeypatch.setattr(main, 'settings', replace(main.settings,
+        video_output_path=str(tmp_path/'output'), temporary_root_path=str(tmp_path/'temp')))
     subtitle_ref, transform_id = main._publish_subtitle_text(
         workspace_id='local', task_id='task', proposal_id='scope-fixture', kind='subtitle_text_edit',
         input_refs=['timeline:timeline'],
@@ -553,20 +566,24 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
         [SubtitleCue('inside', None, 'inside', 2, 3), SubtitleCue('outside', None, 'outside', 9, 10)],
         'timeline', None, subtitle_ref, transform_id, 'valid')
     repo.create_subtitle_track(track)
-    service = TaskAudio(repo, store, tmp_path/'temp', picture_renderer=main._render_task_picture_input)
+    service = TaskAudio(repo, store, tmp_path/'temp', picture_renderer=main._picture_preview_renderer().render_picture_input)
     monkeypatch.setattr(main, 'montage_renderer', MontageRenderer(tmp_path/'render'))
     monkeypatch.setattr(main, '_task_audio', lambda:service)
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args:actor)
     monkeypatch.setattr(main, '_assistant_member_id', lambda *args:actor.member_id)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request:'local')
     media.facts = main._task_media_facts
-    media.execute_operation = main._execute_task_media_operation
-    media.validate_result = main._validate_task_media_result
+    from app.media.clip_preview import ClipPreviewExecutor
+    media.visual_preview = main._visual_preview_use_case()
+    media.exact_preview = main._exact_preview_use_case()
+    media.command_preview = main._command_preview_use_case()
+    media.compound_selection = main._compound_edit_use_case()
+    media.clip_preview = ClipPreviewExecutor(main._clip_preview_use_case(),service)
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()
     runtime.scheduler.resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
-        100, 0, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=main.cpu_render_budget_from_env(), clip_preview=main.clip_preview_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()))
+        100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
+        cpu_render=replace(main.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy), clip_preview=main.clip_preview_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()),memory_monitor=IsolatedMemoryMonitor())
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
 
@@ -734,13 +751,13 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
     original_facts=media.facts
     media.facts=lambda *args:(original_facts(*args)[0], {'kind':'creation_render','execution_mode':'cpu_ffmpeg',
         'threads':1,'max_output_bytes':65536,'timeout_seconds':30})
-    def operation(job,event,actor):
+    def operation(job,event,actor,context):
         serial=str(state['render_calls'] if 'render_calls' in state else 0)
         # Fresh compiler IDs differ on the resumed invocation, but the render inputs are identical.
         inputs={'plan':{'id':'plan-'+serial,'duration_seconds':.1,'aspect_ratio':'1:1','cues':[{'id':'cue-'+serial}],
                        'clips':[{'id':'clip-'+serial,'cue_id':'cue-'+serial}]},'subtitle_tracks':[]}
         record=audio.publish('local','task',kind='audio_preview',parameters={'side':'after'},input_refs=[],
-            operation='picture_preview',media_input=inputs)
+            operation='picture_preview',media_input=inputs,execution=(context,job,event,actor))
         return {'artifact_id':record.id}
     original_transform=repo.create_transform_run
     attempts={'count':0}
@@ -750,7 +767,7 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
             raise ValueError('synthetic crash after immutable artifact receipt')
         return original_transform(value, **kwargs)
     monkeypatch.setattr(repo,'create_transform_run',transform)
-    media.execute_operation=operation
+    media.visual_preview=SimpleNamespace(execute=operation,validate_result=media.audio_ingress.validate_result)
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
