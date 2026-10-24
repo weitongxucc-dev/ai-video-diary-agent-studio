@@ -93,7 +93,8 @@ def test_quality_paths_and_worker_hash_are_not_returned():
     facts = execution_capability_facts(budget=budget, registrations=registrations)
     quality = by_purpose(facts, "quality_check")
     assert quality["implementation_status"] == "installed" and quality["configured"]
-    assert {limit["name"] for limit in quality["limits"]} == {"max_input_bytes", "max_report_bytes"}
+    assert {limit["name"] for limit in quality["limits"]} == {"max_report_bytes"}
+    assert {limit["name"] for limit in quality["legacy_configuration_limits"]} == {"max_input_bytes"}
     assert "/private/ffmpeg" not in json.dumps(facts)
     assert "secret-worker" not in json.dumps(facts)
 
@@ -134,3 +135,36 @@ def test_pcm_append_limits_name_the_accumulated_file_and_prefix_cost():
     assert pcm['max_input_bytes']['accounting'] == 'new_source_files_plus_existing_pcm_and_prefix_wav_header'
     assert mix['max_output_bytes']['scope'] == 'unit'
     assert 'existing_prefix_slots' not in mix['max_input_count']
+
+
+def test_quality_stream_projection_matches_real_preparation_without_inventing_media_caps():
+    from app.quality_worker_runtime import QualityBudget, QUALITY_STREAM_PROTOCOL, quality_stream_resources
+    quality = QualityBudget(max_input_bytes=10, max_pcm_bytes=20, max_frame_json_bytes=30,
+        max_report_bytes=1024, max_stderr_bytes=1024, max_timeout_seconds=60, decoder_threads=1,
+        max_process_rss_bytes=1048576, max_process_threads=4, runtime_sample_seconds=.1,
+        additional_memory_bytes=1048576, additional_disk_bytes=1048576, max_tool_bytes=1024,
+        ffmpeg_path='/private/ffmpeg', ffprobe_path='/private/ffprobe',
+        ffmpeg_sha256='a'*64, ffprobe_sha256='b'*64, worker_sha256='c'*64)
+    budget, registrations = configured_runtime()
+    registrations['quality_check'] = OwnerRegistration(
+        SimpleNamespace(verify_submission=forbidden), SimpleNamespace(execute=forbidden))
+    facts = execution_capability_facts(budget=replace(budget, quality=quality), registrations=registrations)
+    projected = by_purpose(facts, 'quality_check')
+    # Pure demand calculation only; this source is never opened or executed.
+    resources = quality_stream_resources({'budget':quality.__dict__,
+        'source':{'render_ref':'source-digest','size_bytes':1000000}}, 'metadata', {})
+    assert projected['protocol'] == QUALITY_STREAM_PROTOCOL
+    assert projected['read_mode'] == resources['read_mode'] == 'stream'
+    assert projected['workload_provenance'] == resources['workload_provenance']
+    legacy = {'max_input_bytes','max_pcm_bytes','max_frame_json_bytes'}
+    assert not legacy.intersection(item['name'] for item in projected['limits'])
+    assert {item['name'] for item in projected['legacy_configuration_limits']} == legacy
+    assert all(item['scope'] == 'legacy_buffered_request' for item in projected['legacy_configuration_limits'])
+    timeout = next(item for item in projected['limits'] if item['name'] == 'max_timeout_seconds')
+    assert timeout['scope'] == 'preparation_attempt' and timeout['subject'] == 'stream_phase_deadline'
+    assert projected['verification_status'] == 'unknown' and projected['verified_input_range'] is None
+    assert projected['applies_to'] == 'new_requests' and projected['gaps']
+    assert facts['whole_task_support'] == 'not_inferred'
+    public = json.dumps(projected)
+    assert '/private/' not in public and quality.worker_sha256 not in public
+    assert 'source-digest' not in public

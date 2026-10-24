@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from app.quality_worker_runtime import QUALITY_STREAM_PROTOCOL
+
 
 # Only numeric limits are public; budgets also contain private tool paths and hashes.
 _LIMIT_UNITS = {
@@ -78,6 +80,29 @@ def _capability(purpose, mode, budget, installed, *, continuation, gaps, narrati
     }
 
 
+def _quality_capability(budget, installed):
+    facts = _capability("quality_check", "isolated_quality_python", budget, installed,
+        continuation=["recover_persisted_phase_prefix"],
+        gaps=["Bounded preparation is not measured throughput or a promise to finish long media.",
+              "Every stream phase still has a finite preparation deadline; it does not renew itself.",
+              "Original sealed requests retain their own protocol and resource facts."])
+    legacy_fields = {"max_input_bytes", "max_pcm_bytes", "max_frame_json_bytes"}
+    facts["legacy_configuration_limits"] = [
+        {**item, "scope": "legacy_buffered_request"} for item in facts["limits"]
+        if item["name"] in legacy_fields]
+    facts["limits"] = [item for item in facts["limits"] if item["name"] not in legacy_fields]
+    for item in facts["limits"]:
+        if item["name"] == "max_timeout_seconds":
+            item.update(scope="preparation_attempt", subject="stream_phase_deadline")
+    facts.update(protocol=QUALITY_STREAM_PROTOCOL, read_mode="stream", applies_to="new_requests",
+        workload_provenance={"mode": "bounded_preparation",
+            "deadline_source": "sealed_quality_preparation_budget",
+            "deadline_seconds": next((item["value"] for item in facts["limits"]
+                                      if item["name"] == "max_timeout_seconds"), None),
+            "coverage": "complete_stream_required"})
+    return facts
+
+
 def execution_capability_facts(*, budget, registrations: Mapping) -> dict:
     """Project the current runtime's budgets and existing owner registrations.
 
@@ -132,8 +157,6 @@ def execution_capability_facts(*, budget, registrations: Mapping) -> dict:
             _capability("picture_render", "cpu_ffmpeg", render, picture_installed,
                         continuation=["serial_work_inside_one_grant"],
                         gaps=["Serial clip processing is not persistent cross-unit final composition."]),
-            _capability("quality_check", "isolated_quality_python", inspection, quality_installed,
-                        continuation=[],
-                        gaps=["Whole-file quality inspection is bounded; range-based aggregation is not established."]),
+            _quality_capability(inspection, quality_installed),
         ],
     }
