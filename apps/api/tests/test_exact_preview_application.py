@@ -111,7 +111,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
         source['expected_timeline_version_id'], source['expected_timeline_sequence']) == (
         state.workspace_id, state.task.id, task_before.owner_user_id, request_id, state.visual_base.id, state.visual_base.sequence)
     assert source['source_facts'] == []
-    assert source['action'] == {k:v for k,v in payload.items() if k not in {'request_id','expected_timeline_version_id','expected_timeline_sequence'}}
+    assert source['action'] == CreationTaskExactEditRequest.model_validate(payload).action_values()
     result = completed.json()['result']
     saved_source = result['intent']['constraints']['request_source']
     expected_actor = CreationExecutionActor.from_event(state.workspace_id,start).identity_payload()
@@ -147,7 +147,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     assert state.client.get(queued.json()['result_url']).json() == completed.json()
     assert state.production.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id) == montage_before
-    assert 'exact_edit_preview' not in main._TASK_MEDIA_HANDLERS
+    assert not hasattr(main,'_TASK_MEDIA_HANDLERS')
     assert not hasattr(main.preview_creation_task_exact_edit,'__wrapped__')
     assert TASK_MEDIA_CONTEXT.get() is None and EXACT_EDIT_SOURCE.get() is None
     with state.production._connect() as conn:

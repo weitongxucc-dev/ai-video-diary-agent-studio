@@ -778,7 +778,8 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     monkeypatch.setattr(
         main_module,
         "settings",
-        SimpleNamespace(video_output_path=str(output_root), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"),
+        replace(main_module.settings, video_output_path=str(output_root), video_inbox_path=str(production.video_library_path),
+            native_portrait_worker_path=None, temporary_root_path=str(tmp_path / "temp")),
     )
     monkeypatch.setattr(main_module, "avatar_lipsync_provider", provider)
     monkeypatch.setattr(
@@ -813,7 +814,7 @@ def synthetic_clip_preview_budget():
         additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2, max_process_threads=16)
 
 
-def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_override=None, validate_override=None):
+def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_override=None):
     """Use real membership/version/JobRun/permit/checkpoint for domain assertions.
 
     This fixture's old-person file is an intentionally non-decodable lineage
@@ -833,7 +834,7 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     def live_identity(candidate):
         return 'ready' if candidate==actor and any(member.member_id==actor.member_id for member in state.members.list_members()) else 'unauthorized'
     access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
-    monkeypatch.setattr(main_module.settings, 'native_ocr_worker_path', None, raising=False)
+    monkeypatch.setattr(main_module,'settings',replace(main_module.settings,native_ocr_worker_path=None))
     clip_profile = synthetic_clip_preview_budget()
     monkeypatch.setattr(main_module, 'clip_preview_budget_from_env', lambda:clip_profile)
     def facts(workspace,task_id,operation,arguments,original):
@@ -882,9 +883,6 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
                   if 'clip' in inputs else inputs['plan']['duration_seconds'])
         return {'duration_seconds':duration,'sample_rate':None,'channels':None}
     state.preview_inputs=[]
-    if validate_override is not None:
-        monkeypatch.setattr(TaskAudio,'validate_publications',
-            lambda self,job,event,result,context:validate_override(job,event,result,context))
     media=TaskMediaJobs(state.production,facts=facts_override or facts,verify_identity=access.verify_identity,
         audio_ingress=main_module._audio_ingress_use_case(state.production),
         audio_edit=main_module._audio_edit_use_case(state.production),
@@ -899,11 +897,14 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     resources = ControlledResources()
     if facts_override is not None:
         from app.host_resource_probes import HostBudget, HostResourceProbe
+        from tests.host_memory_boundary import IsolatedMemoryMonitor
+        from test_host_resource_probes import _render_budget
         _presenter, presenter_cpu = main_module.presenter_budgets_from_env()
         resources = HostResourceProbe(state.production.database_path, disk_paths=(state.production.database_path.parent,),
             budget=HostBudget(75, 1, 1, 1, 32*1024**2, 32*1024**2,
-                cpu_render=main_module.cpu_render_budget_from_env(), clip_preview=clip_profile,
-                presenter_cpu_render=presenter_cpu, cpu_audio=main_module.cpu_audio_budget_from_env()))
+                cpu_render=replace(main_module.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy),
+                clip_preview=clip_profile,presenter_cpu_render=presenter_cpu,cpu_audio=main_module.cpu_audio_budget_from_env()),
+            memory_monitor=IsolatedMemoryMonitor())
     runtime=build_device_runtime(database_path=state.production.database_path,
         device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,
         registrations={'creation_job':OwnerRegistration(CreationJobOwnerVerifier(state.production,
@@ -934,7 +935,10 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         assert receipt['result'] is None and receipt['device_request_id']
         assert runtime.run_once()
         completed=state.client.get(receipt['result_url'])
-        assert completed.status_code==200 and completed.json()['status']=='succeeded',(completed.text,getattr(state,'preview_error',None))
+        with state.production._connect() as connection:
+            pending=connection.execute('SELECT state,wait_reason FROM device_work_requests WHERE id=?',
+                (receipt['device_request_id'],)).fetchone()
+        assert completed.status_code==200 and completed.json()['status']=='succeeded',(completed.text,tuple(pending),getattr(state,'preview_error',None))
         response.status_code=200
         response._content=json.dumps(completed.json()['result']).encode()
         return response
@@ -1107,7 +1111,7 @@ def prepare_current_presenter_media(state, monkeypatch):
 def permitted_media_state(person_render_edit_state, monkeypatch):
     state = prepare_current_presenter_media(person_render_edit_state, monkeypatch)
     runtime = _granted_domain_preview_adapter(state, monkeypatch,
-        facts_override=main_module._task_media_facts, validate_override=main_module._validate_task_media_result)
+        facts_override=main_module._task_media_facts)
     yield state
     assert runtime.stop(1)
 

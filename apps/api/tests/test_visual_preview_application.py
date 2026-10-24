@@ -32,7 +32,7 @@ def visual_application(permitted_media_state, monkeypatch):
     monkeypatch.setattr(TaskAudio, '_measure_publication', REAL_MEASURE)
     monkeypatch.setattr(main, '_task_media_outputs_current', REAL_CURRENT)
     state.client.post = state.domain_original_post
-    monkeypatch.setattr(main.settings, 'native_ocr_worker_path', '', raising=False)
+    monkeypatch.setattr(main,'settings',replace(main.settings,native_ocr_worker_path=None))
     original_swap = psutil.swap_memory
     state.actual_swap_before_fixture = original_swap().used
     # Control global OS pressure in the explicitly synthetic resource domain;
@@ -45,7 +45,6 @@ def visual_application(permitted_media_state, monkeypatch):
     state.media = state.runtime.registrations['creation_job'].owner.task_media
     state.media.visual_preview = main._visual_preview_use_case(state.production)
     state.media.facts = main._task_media_facts
-    state.media.validate_result = main._validate_task_media_result
     clip = next(item for item in state.montage.clips if not item.person_render_id)
     asset = state.production.get_asset(state.workspace_id, clip.asset_id)
     write_synthetic_video(Path(asset.path), seconds=10)
@@ -168,7 +167,7 @@ def test_short_and_full_tail_visual_preview_use_real_native_media(visual_applica
         outcomes.append({'label':label,'payload':payload,'queued':queued.json(),'result':completed.json(),
             'start_event':event,'replay':replay.json(),'successful_retry_refusal':retry.json(),
             'records':[asdict(r) for r in records],'visuals':visuals})
-    assert 'visual_edit_preview' not in main._TASK_MEDIA_HANDLERS
+    assert not hasattr(main,'_TASK_MEDIA_HANDLERS')
     assert not hasattr(main.preview_creation_task_visual,'__wrapped__')
     with state.production._connect() as conn:
         permit=dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())
