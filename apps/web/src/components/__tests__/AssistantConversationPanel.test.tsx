@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationPanel } from "../AssistantConversationPanel";
+import { ReferenceChips } from "../ui/reference-chips";
 import { referenceAssistantKnowledge, referenceAssistantMaterial, referenceAssistantProfile, referenceAssistantSelection } from "@/lib/assistant-reference";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
@@ -216,7 +217,7 @@ describe("actual goal progress", () => {
       failure: {reason: "曝光数值超出允许范围（-2 到 2）。", repair_action: "请使用范围内的曝光值重新准备修改。"}}];
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    fireEvent.click(screen.getByText(/工具记录/));
+    expect(screen.getByText(/工具记录/).closest("details")).toHaveAttribute("open");
     expect(screen.getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
     expect(screen.getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
     expect(screen.getByText("调整画面 · 未完成")).toBeVisible();
@@ -1038,7 +1039,7 @@ describe("AssistantConversationPanel", () => {
       next.rerender(<AssistantConversationPanel state={{ ...hook.result.current,
         conversation: { ...saved, id: "another-conversation" } }} input="" onInput={vi.fn()}
         onSend={vi.fn()} busy={false} configured scopeLabel="另一段对话" />);
-      expect([...next.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]")].every(detail => !detail.open)).toBe(true);
+      expect([...next.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]")].every(detail => detail.open === detail.classList.contains("assistant-turn-tools"))).toBe(true);
       act(paint);
       expect(scroll).toBe(0);
       next.unmount();
@@ -1067,7 +1068,7 @@ describe("AssistantConversationPanel", () => {
     expect(screen.queryByText("先确认制作方案和选题；这条回复只作为文案来源，不代替资料事实。")).not.toBeInTheDocument();
   });
 
-  it("renders one final Markdown body and one collapsed, ordered tool summary", async () => {
+  it("renders one final Markdown body and one ordered tool summary with failures expanded", async () => {
     const { container } = render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
       busy={false} configured scopeLabel="首页创作" />);
 
@@ -1078,7 +1079,7 @@ describe("AssistantConversationPanel", () => {
     const assistantText = screen.getByText("真实方案");
     expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const toolDetails = tools.closest("details")!;
-    expect(toolDetails).not.toHaveAttribute("open");
+    expect(toolDetails).toHaveAttribute("open");
     expect(within(toolDetails).getAllByRole("listitem")).toHaveLength(2);
     expect(within(toolDetails).getByText("读取当前方案 · 已返回")).toBeInTheDocument();
     expect(within(toolDetails).getByText("检查新建方案 · 未完成")).toBeInTheDocument();
@@ -1815,12 +1816,14 @@ describe("persistent workbench conversation and command completion", () => {
     expect(screen.getByText(/第一版资料/)).toBeVisible();
     view.rerender(<AssistantConversationProvider><Consumer key="profiles"/></AssistantConversationProvider>);
     expect(screen.getByText(/第一版资料/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button",{name:/取消资料引用：/}));
+    fireEvent.click(screen.getByRole("button", {name:/查看本轮 .* 项引用/}));
+    fireEvent.click(await screen.findByRole("button",{name:/取消资料引用：/}));
     expect(screen.queryByText(/第一版资料/)).not.toBeInTheDocument();
     act(() => referenceAssistantKnowledge({knowledge_item_id:"knowledge-real",version:"1",label:"第一版资料"}));
     act(() => referenceAssistantMaterial({selection:{scope:"asset",asset_id:"asset-real",expected_updated_at:"2026-10-10T00:00:00Z"},label:"明确素材"}));
-    expect(screen.getByText(/第一版资料/)).toBeVisible();
-    expect(screen.getByText(/明确素材/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", {name:/查看本轮 .* 项引用/}));
+    expect(await screen.findByText(/第一版资料/)).toBeVisible();
+    expect(await screen.findByText(/明确素材/)).toBeVisible();
   });
 
   it("restores saved reference after full Provider remount and persists explicit cancel", async () => {
@@ -1837,7 +1840,8 @@ describe("persistent workbench conversation and command completion", () => {
     first.unmount();
     const second=render(<AssistantConversationProvider><Consumer/></AssistantConversationProvider>);
     expect(await screen.findByText(/固定旧版/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button",{name:/取消资料引用：/}));
+    fireEvent.click(screen.getByRole("button", {name:/查看本轮 .* 项引用/}));
+    fireEvent.click(await screen.findByRole("button",{name:/取消资料引用：/}));
     await waitFor(() => expect(api.referenceSaved.get("conversation-one")?.selected_reference).toBeNull());
     second.unmount();
     render(<AssistantConversationProvider><Consumer/></AssistantConversationProvider>);
@@ -1880,7 +1884,8 @@ describe("persistent workbench conversation and command completion", () => {
     const selected={kind:"knowledge" as const,knowledge_item_id:"knowledge-real",version:"1",label:"不能复活"};
     act(() => referenceAssistantKnowledge(selected));
     await waitFor(() => expect(api.saveAssistantConversationReference).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button",{name:/取消资料引用：/}));
+    fireEvent.click(screen.getByRole("button", {name:/查看本轮 .* 项引用/}));
+    fireEvent.click(await screen.findByRole("button",{name:/取消资料引用：/}));
     expect(screen.queryByText(/不能复活/)).not.toBeInTheDocument();
     await act(async () => resolveSave({selected_reference:selected,reference_version:1,status:"ready",reason:null}));
     await waitFor(() => expect(api.saveAssistantConversationReference).toHaveBeenLastCalledWith("conversation-one",null,1));
@@ -1968,7 +1973,8 @@ it("composes explicit references, preserves other kinds on ordinary selection, a
   await waitFor(()=>expect(api.referenceSaved.get(saved.id)?.selected_reference).toMatchObject({kind:"selection",items:expect.any(Array)}));
   const final=api.referenceSaved.get(saved.id)?.selected_reference;
   expect(final?.kind === "selection" && final.items).toHaveLength(4);
-  fireEvent.click(screen.getByRole("button",{name:"+1"}));
+  fireEvent.click(screen.getByRole("button",{name:"查看本轮 4 项引用"}));
+  await screen.findByRole("button",{name:"取消素材引用：素材甲"});
   expect(screen.getByText("人物甲")).toBeVisible();
   fireEvent.click(screen.getByRole("button",{name:"取消素材引用：素材甲"}));
   expect(screen.queryByText("素材甲")).not.toBeInTheDocument();
@@ -1987,4 +1993,50 @@ it("composes explicit references, preserves other kinds on ordinary selection, a
     const value=api.referenceSaved.get(saved.id)?.selected_reference;
     expect(value?.kind === "selection" && value.items).toHaveLength(4);
   });
+});
+
+it("keeps pending inputs bounded near the composer and settled receipts in their original turn", async () => {
+  const saved = conversation();
+  const receipt = { type: "assistant_input" as const, input_id: "input-one", target_turn_id: "turn-one", message: "保留第一条已完成要求的完整正文", mode: "steer" as const, status: "accepted" as const, reason: "waiting_agent", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z" };
+  saved.turns[0].events.push(receipt);
+  saved.turns.push({ ...saved.turns[0], id: "turn-two", sequence: 2, status: "running", user_message: "继续制作", events: [
+    { ...receipt, status: "completed", updated_at: "2026-10-24T00:00:01Z" },
+    { ...receipt, input_id: "input-two", target_turn_id: "turn-two", message: "仍在等待的追加要求" },
+  ] });
+  const withdrawInput = vi.fn().mockResolvedValue(undefined);
+  const rendered = render(<AssistantConversationPanel state={state({ conversation: saved, withdrawInput })} input="下一条未发送草稿" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+  const pending = screen.getByRole("region", { name: "待处理追加要求" });
+  expect(pending).toHaveTextContent("仍在等待的追加要求");
+  expect(pending).not.toHaveTextContent(receipt.message);
+  fireEvent.click(within(pending).getByRole("button", { name: "撤回" }));
+  expect(withdrawInput).toHaveBeenCalledWith("input-two");
+  const original = rendered.container.querySelector('[data-turn-id="turn-one"]')!;
+  expect(original).toHaveTextContent(receipt.message);
+  expect(original).toHaveTextContent("Agent 已处理此输入");
+  expect(screen.getAllByText(receipt.message)).toHaveLength(1);
+  expect(rendered.container.querySelector('[data-turn-id="turn-two"]')).not.toHaveTextContent(receipt.message);
+  expect(screen.getByRole("textbox")).toHaveValue("下一条未发送草稿");
+});
+
+
+it("keeps different source paragraphs and video ranges individually reachable from one reference summary", async () => {
+  const onRemove = vi.fn();
+  render(<ReferenceChips onRemove={onRemove} items={[
+    {kind:"knowledge",knowledge_item_id:"document",version:"2",locator:"第1段",label:"同一份资料"},
+    {kind:"knowledge",knowledge_item_id:"document",version:"2",locator:"第2段",label:"同一份资料"},
+    {kind:"material",selection:{scope:"segment",asset_id:"video",segment_id:"range-one"},label:"同一视频 · 00:00–00:03"},
+    {kind:"material",selection:{scope:"segment",asset_id:"video",segment_id:"range-two"},label:"同一视频 · 00:04–00:07"},
+  ]}/>);
+  const summary = screen.getByRole("button", { name:"查看本轮 4 项引用" });
+  expect(screen.queryByRole("button", { name:/取消资料引用/ })).not.toBeInTheDocument();
+  summary.focus(); fireEvent.click(summary);
+  const remove = await screen.findByRole("button", {name:"取消资料引用：同一份资料 · 第2段"});
+  expect(screen.getByRole("button", {name:"取消资料引用：同一份资料 · 第1段"})).toBeVisible();
+  expect(screen.getByRole("button", {name:"取消素材引用：同一视频 · 00:00–00:03"})).toBeVisible();
+  expect(screen.getByRole("button", {name:"取消素材引用：同一视频 · 00:04–00:07"})).toBeVisible();
+  fireEvent.click(remove);
+  expect(onRemove).toHaveBeenCalledWith(expect.objectContaining({knowledge_item_id:"document",locator:"第2段",version:"2"}));
+  fireEvent.keyDown(screen.getByRole("dialog"), { key:"Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await waitFor(() => expect(summary).toHaveFocus());
 });

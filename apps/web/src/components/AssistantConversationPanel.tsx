@@ -16,7 +16,7 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure, ResourceAdmissionReceipt } from "@/lib/types";
-import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+import type { AssistantInputReceipt, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal } from "./useAssistantConversation";
 
@@ -200,7 +200,7 @@ function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; readi
   const runningTools = tools.some((tool) => tool.state === "running");
   const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
   return <div className="assistant-markdown-wrap">
-    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running"}>
+    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running" || failedTools}>
       <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含失败记录" : "调用已结束"}</summary>
       <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
         <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
@@ -348,7 +348,24 @@ function ResourceWaitReceipt({ receipt, reading, readingKey }: {
   </ReadingDetails>;
 }
 
-function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false, productionRecovered = false }: { turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean; productionRecovered?: boolean }) {
+const inputStatusLabels = { accepted: "已接收，等待 Agent 处理", consumed: "Agent 正在处理", completed: "Agent 已处理此输入", withdrawn: "已撤回", rejected: "未执行", interrupted: "处理已中断" };
+
+function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputReceipt; reading?: ReadingState; onWithdraw?: (id: string) => void }) {
+  return <div className="assistant-input-receipt" data-input-status={item.status}>
+    <ReadingDetails reading={reading} readingKey={`input:${item.input_id}`} defaultOpen={item.status === "rejected" || item.status === "interrupted"}>
+      <summary><span className="assistant-input-message">{item.message}</span><span className="assistant-input-state">{inputStatusLabels[item.status]}</span></summary>
+      <div className="assistant-input-details">
+        {item.understanding ? <p>{{query:"查询",clarification:"澄清",candidate:"尝试候选",effective_modification:"修改要求",adoption:"采用要求",independent_goal:"独立目标"}[item.understanding.kind]}：{item.understanding.summary}</p> : null}
+        {item.understanding && !item.business_effect && item.understanding.kind === "effective_modification" ? <p>已理解要求，尚未收到业务生效回执。</p> : null}
+        {item.business_effect ? <p>修改回执：{item.business_effect.status}</p> : null}
+      </div>
+    </ReadingDetails>
+    {item.reason && item.reason !== "waiting_agent" ? <p>{item.reason}</p> : null}
+    {item.status === "accepted" && onWithdraw ? <Button variant="ghost" type="button" onClick={() => onWithdraw(item.input_id)}>撤回</Button> : null}
+  </div>;
+}
+
+function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean; productionRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
@@ -422,10 +439,11 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
         : result?.kind === "failure" && typeof result.message === "string"
           ? result.message
           : null);
-  return <article className="assistant-persisted-turn" data-turn-status={turn.status}>
+  return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <p className="assistant-user-message">{turn.user_message}</p> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     <TurnContent turn={turn} reading={reading} />
+    {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
@@ -534,6 +552,17 @@ export function AssistantConversationPanel({
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
+  // The receipt identifies its original turn. Collapse repeated projections by
+  // input ID without inferring a new turn or a business completion from the text.
+  const inputs = new Map<string, { item: AssistantInputReceipt; owner: string }>();
+  for (const turn of turns) for (const event of turn.events) {
+    if (event.type !== "assistant_input") continue;
+    const previous = inputs.get(event.input_id);
+    if (!previous || previous.item.updated_at <= event.updated_at) inputs.set(event.input_id, {
+      item: event, owner: turns.some(candidate => candidate.id === event.target_turn_id) ? event.target_turn_id : turn.id,
+    });
+  }
+  const pendingInputs = [...inputs.values()].filter(({ item }) => item.status === "accepted" || item.status === "consumed");
   const goalProgress = assistantConversationGoal(conversation);
   const acceptsQueuedInput = currentRunning || Boolean(conversation?.scope_kind === "task" && goalProgress
     && ["running","waiting_result","waiting_adoption","waiting_identity","waiting_unknown"].includes(goalProgress.goal.status));
@@ -732,7 +761,7 @@ export function AssistantConversationPanel({
         state.historyScrollPositions?.current.set(conversation.id, node.scrollTop);
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
-        {turns.map((turn) => <TurnView key={turn.id} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused}
+        {turns.map((turn) => <TurnView key={turn.id} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused}
           productionRecovered={Boolean(goalProgress?.goal.status === "production_completed" && goalProgress.goal.production_result?.status === "succeeded" && goalProgress.goal.production_result.video_ready && goalProgress.turns.some(item => item.id === turn.id))}
           outputRecovered={Boolean(goalProgress && completedGoalOutput(goalProgress) && goalProgress.turns.some(item => item.id === turn.id))}/>)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}
@@ -741,15 +770,9 @@ export function AssistantConversationPanel({
     {showJumpToLatest && turns.length ? <Button variant="ghost" className="assistant-jump-latest" type="button" aria-label="回到最新回复" title="回到最新回复" onClick={() => { const node = historyRef.current; if (!node || !conversation) return; node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight); followBottom.current = true; state.historyFollowBottom?.current.set(conversation.id, true); state.historyScrollPositions?.current.set(conversation.id, node.scrollTop); setShowJumpToLatest(false); }}><ArrowDown size={16} aria-hidden="true"/></Button> : null}
     </div>
     {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
-    {turns.flatMap(turn=>turn.events.filter(event=>event.type === "assistant_input")).map(item=> item.type === "assistant_input" ? <div className="assistant-input-receipt" key={item.input_id}>
-      <p>{item.message}</p><span>{{accepted:"已接收，等待 Agent 处理",consumed:"Agent 正在处理",completed:"Agent 已处理此输入",withdrawn:"已撤回",rejected:"未执行",interrupted:"处理已中断"}[item.status]}</span>
-      {item.understanding ? <p>{{query:"查询",clarification:"澄清",candidate:"尝试候选",effective_modification:"修改要求",adoption:"采用要求",independent_goal:"独立目标"}[item.understanding.kind]}：{item.understanding.summary}</p> : null}
-      {item.understanding && !item.business_effect && item.understanding.kind === "effective_modification" ? <p>已理解要求，尚未收到业务生效回执。</p> : null}
-      {item.business_effect ? <p>修改回执：{item.business_effect.status}</p> : null}
-      {item.reason && item.reason !== "waiting_agent" ? <p>{item.reason}</p> : null}{item.status === "accepted" ? <Button variant="ghost" type="button" onClick={()=>void state.withdrawInput(item.input_id).catch(cause=>setError(cause.message))}>撤回</Button> : null}
-    </div> : null)}
+    {pendingInputs.length ? <section className="assistant-pending-inputs" aria-label="待处理追加要求">{pendingInputs.map(({ item }) => <InputReceipt key={item.input_id} item={item} reading={reading} onWithdraw={id => void state.withdrawInput(id).catch(cause => setError(cause.message))}/>)}</section> : null}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">
-      {selection ? <ReferenceChips items={selection.items} onRemove={item => { selection.remove(item); focus?.focus(); }}/> : null}
+      {selection ? <ReferenceChips items={selection.items} onRemove={item => { selection.remove(item); if (selection.items.length === 1) focus?.focus(); }}/> : null}
       {menuOpen ? <div className="assistant-slash-menu" role="listbox" aria-label="对话命令" id={`${diagnosticsId}-commands`} style={{ maxHeight: menuMaxHeight }}>
         {filteredCommands.length ? filteredCommands.map((item, index) => { const Icon = item.icon; return <Button variant="ghost" role="option" aria-selected={activeCommand === index} key={item.name} type="button" onPointerDown={event => event.preventDefault()} onClick={() => chooseCommand(index)} disabled={commandDisabled} aria-disabled={commandDisabled}>
           <Icon size={16}/><span><strong>{item.title}</strong><small>{item.description}</small></span><code>{item.syntax}</code>
