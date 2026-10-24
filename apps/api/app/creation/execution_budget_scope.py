@@ -159,6 +159,21 @@ class ExecutionBudgetScopes:
     def binding(self, connection, workspace_id, job_id):
         return self.repository.get_task_event(workspace_id, self._id('binding', workspace_id, job_id), connection=connection)
 
+    def for_task(self, connection, workspace_id, task_id, actor):
+        self._owner(connection, workspace_id, task_id, actor)
+        rows = connection.execute("SELECT DISTINCT json_extract(e.payload_json,'$.scope_id') AS scope_id "
+            "FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id AND j.id=e.job_id "
+            "AND j.task_id=e.task_id WHERE e.workspace_id=? AND e.task_id=? "
+            "AND e.event_type='execution_budget_scope_bound' ORDER BY scope_id",
+            (workspace_id, task_id)).fetchall()
+        scopes = []
+        for row in rows:
+            current = self.current(connection, workspace_id, row['scope_id'])
+            if current.payload['actor'] != actor.identity_payload() or task_id not in current.payload['target_task_ids']:
+                raise PermissionError('任务累计授权的当前主体或目标范围已变化')
+            scopes.append({'authorization': current.payload, 'usage': self.usage(connection, workspace_id, row['scope_id'])})
+        return scopes
+
     def usage(self, connection, workspace_id, scope_id):
         row = connection.execute("""
             SELECT COALESCE(SUM(CASE WHEN s.id IS NOT NULL
@@ -169,6 +184,8 @@ class ExecutionBudgetScopes:
                 ELSE json_extract(r.payload_json,'$.maximum.execution_seconds') END),0) AS reserved_seconds,
                 COALESCE(SUM(CASE WHEN s.id IS NOT NULL AND json_extract(s.payload_json,'$.output_bytes') IS NOT NULL
                 THEN 0 ELSE json_extract(r.payload_json,'$.maximum.generated_bytes') END),0) AS reserved_bytes,
+                COALESCE(SUM(CASE WHEN s.id IS NULL OR json_extract(s.payload_json,'$.output_bytes') IS NULL
+                    THEN 1 ELSE 0 END),0) AS unknown_unit_count,
                 COUNT(*) AS unit_count
             FROM task_events r LEFT JOIN task_events s ON s.workspace_id=r.workspace_id
                 AND s.id=json_extract(r.payload_json,'$.receipt_id') AND s.job_id=r.job_id

@@ -26,7 +26,29 @@ class TaskBudgetUseCase:
 
     def read(self, workspace_id, task_id, actor):
         self.require_actor(workspace_id, task_id, actor)
-        return self.repository.task_budget_projection(workspace_id, task_id)
+        result = self.repository.task_budget_projection(workspace_id, task_id)
+        scopes = self.repository.execution_budget_scopes_for_task(workspace_id, task_id, actor)
+        for scope in scopes:
+            policy, usage = scope['authorization'], scope['usage']
+            limits = policy['limits']
+            scope['remaining'] = {
+                'execution_seconds': None if limits['execution_seconds'] is None else max(0,
+                    limits['execution_seconds'] - usage['execution_seconds'] - usage['reserved_seconds']),
+                'generated_bytes': None if limits['generated_bytes'] is None else max(0,
+                    limits['generated_bytes'] - usage['generated_bytes'] - usage['reserved_bytes'])}
+            scope['status'] = ('revoked' if policy['revoked'] else 'usage_unknown' if usage['unknown_unit_count']
+                else 'exhausted' if any(value == 0 for value in scope['remaining'].values()) else 'available')
+            scope['coverage'] = 'tts_pcm_only'
+        result['scopes'] = scopes
+        result['authorization_coverage'] = 'tts_pcm_only' if scopes else 'scope_unbound'
+        if result['status'] == 'local_work_authorized':
+            if not scopes:
+                result['status'] = 'authorization_scope_unbound'
+            else:
+                states = {scope['status'] for scope in scopes}
+                result['status'] = ('authorization_scope_mixed' if len(states) > 1
+                    else 'authorization_scope_' + next(iter(states)))
+        return result
 
     def resume(self, workspace_id, task_id, actor, command, *, execution_control, runtime, write_guard=None):
         self.require_actor(workspace_id, task_id, actor)

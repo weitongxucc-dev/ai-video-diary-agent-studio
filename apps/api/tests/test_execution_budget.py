@@ -149,3 +149,62 @@ def test_no_total_limit_still_requires_finite_units_and_records_actuals(scope_ca
     status = repo.execution_budget_scope_usage('local', 'shared-goal')
     assert status['authorization']['limits'] == {'execution_seconds': None, 'generated_bytes': None}
     assert status['usage']['reserved_seconds'] == 6 and status['usage']['execution_seconds'] == 8
+
+
+def test_task_budget_read_discovers_bound_scope_and_distinguishes_unset_total(scope_case):
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+    repo, actor, origin, jobs, command = scope_case
+    service = TaskBudgetUseCase(repo)
+    reserve(repo, actor, jobs[1], 'other-job-pending')
+    response = service.read('local', origin, actor)
+    assert response['resources']['receipt_count'] == 0
+    assert response['authorization_coverage'] == 'tts_pcm_only'
+    assert len(response['scopes']) == 1
+    scope = response['scopes'][0]
+    assert scope['remaining'] == {'execution_seconds': 4, 'generated_bytes': 40}
+    assert scope['usage']['unknown_unit_count'] == 1 and scope['status'] == 'usage_unknown'
+    assert response['status'] == 'authorization_scope_usage_unknown'
+    repo.authorize_execution_budget_scope('local', origin, actor, **{**command,
+        'expected_revision': 0, 'request_id': 'explicit-local-goal', 'policy_kind': 'local_goal',
+        'limits': {'execution_seconds': None, 'generated_bytes': None}})
+    scope = service.read('local', origin, actor)['scopes'][0]
+    assert scope['remaining'] == {'execution_seconds': None, 'generated_bytes': None}
+    assert scope['usage']['unknown_unit_count'] == 1
+    with pytest.raises(PermissionError):
+        service.read('local', origin, CreationExecutionActor('local', 'different-reader'))
+    repo.authorize_execution_budget_scope('local', origin, actor, **{**command,
+        'expected_revision': 1, 'request_id': 'remove-second-target', 'target_task_ids': [origin]})
+    with pytest.raises(PermissionError, match='目标范围'):
+        service.read('local', jobs[1].task_id, actor)
+
+
+def test_task_budget_without_scope_is_not_reported_as_goal_authorized(scope_case):
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+    repo, actor, origin, jobs, _ = scope_case
+    with repo._connect() as conn:
+        conn.execute("DELETE FROM task_events WHERE event_type='execution_budget_scope_bound'")
+    response = TaskBudgetUseCase(repo).read('local', origin, actor)
+    assert response['scopes'] == []
+    assert response['authorization_coverage'] == 'scope_unbound'
+    assert response['status'] == 'authorization_scope_unbound'
+    assert 'resources' in response and 'actual_cost' in response and 'in_flight' in response
+
+
+def test_task_budget_mixed_scopes_do_not_claim_whole_task_exhausted(scope_case):
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+    repo, actor, origin, jobs, command = scope_case
+    reserve(repo, actor, jobs[0], 'old-scope-work')
+    settle(repo, jobs[0], 'old-scope-work', 10, 100)
+    repo.authorize_execution_budget_scope('local', origin, actor, **{**command,
+        'scope_id': 'additional-goal', 'request_id': 'additional-authorization'})
+    job = repo.create_job_run(JobRun(id='job_new_scope', workspace_id='local', task_id=origin,
+        kind='creation_task_execution', idempotency_key='new-scope-job', input_digest='c' * 64))
+    repo.bind_execution_budget_scope('local', job.id, actor, scope_id='additional-goal', expected_revision=0)
+    response = TaskBudgetUseCase(repo).read('local', origin, actor)
+    assert response['status'] == 'authorization_scope_mixed'
+    scopes = {item['authorization']['scope_id']: item for item in response['scopes']}
+    assert scopes['shared-goal']['status'] == 'exhausted'
+    assert scopes['shared-goal']['remaining'] == {'execution_seconds': 0, 'generated_bytes': 0}
+    assert scopes['additional-goal']['status'] == 'available'
+    assert scopes['additional-goal']['remaining'] == {'execution_seconds': 10, 'generated_bytes': 100}
+    assert scopes['shared-goal']['usage']['generated_bytes'] == 100
