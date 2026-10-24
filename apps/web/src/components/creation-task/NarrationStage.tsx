@@ -100,9 +100,10 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
             {receipt.recovery?.action==='resume_original' && !receiptUnknown?<Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(receipt.request_id,true)}>恢复原段修改</Button>:null}
         </div>:null}
         <details className={styles.segmentUsage}><summary>费用与资源记录</summary>
+            <p>任务级预算范围与剩余额度：当前接口未提供。</p>
             <p>实际费用：{actualKnown?`${paid!.amount} ${paid!.currency??''}`:'待核对供应商用量或账单'}</p>
             <p>费用估算：{typeof usage?.estimates.cost==='number'?usage.estimates.cost:'暂无估算'} · 完成时间估算：{typeof usage?.estimates.eta_seconds==='number'?`${usage.estimates.eta_seconds} 秒`:'暂无估算'}</p>
-            {usage?<><p>已记录执行 {usage.resources.settled_execution_seconds.toFixed(1)} 秒 · 生成 {(usage.resources.settled_generated_bytes/1048576).toFixed(1)} MB</p><p>{usage.resources.coverage==='complete'?'原执行用量记录齐全':'用量记录尚待核对，当前数字为已记录部分'}</p>{usage.status==='unit_budget_blocked'?<p role="status">执行因系统资源保护暂停。请查看制作状态并按原回执恢复。</p>:null}</>:<p>资源消耗：待核对</p>}
+            {usage?<><p>已记录执行 {usage.resources.settled_execution_seconds.toFixed(1)} 秒 · 生成 {(usage.resources.settled_generated_bytes/1048576).toFixed(1)} MB</p><p>{usage.resources.coverage==='complete'?'已列出当前执行回执，不代表整个任务已计量':'用量记录尚待核对，当前数字为已记录部分'}</p>{usage.status==='unit_budget_blocked'?<p role="status">单次请求的资源声明超出预算。请核对该请求声明和适用额度。</p>:null}</>:<p>资源消耗：待核对</p>}
             {budgetError?<p role="status">{budgetError}</p>:null}
         </details>
     </section>;
