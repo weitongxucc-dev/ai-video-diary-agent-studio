@@ -418,3 +418,67 @@ def test_replanned_sparse_voice_preserves_ranges_envelopes_and_translated_captio
     assert [(t.cues[0].start_seconds, t.cues[0].end_seconds) for t in shifted] == [(2, 3), (2, 3)]
     assert [t.cues[0].text for t in shifted] == ['保留修改后的字稿', 'Preserved translation']
     assert zh.cues[0].start_seconds == en.cues[0].start_seconds == 1
+
+
+@pytest.mark.parametrize('stale_head', [False, True])
+def test_completed_storyboard_can_request_only_current_render_without_replaying_old_head(state, stale_head):
+    from pathlib import Path
+    from app.creation_execution import CpuRenderLimits
+    from app.task_audio import TaskAudio
+    from test_creation_audio_mix import audio_budget
+    plan = state.repo.get_creation_plan('ws', state.task.plan_id)
+    state.repo.save_narration_artifact(replace(state.narration, voice_profile_id=plan.selected_voice.profile_id))
+    receipt = enqueue(state)
+    run(state)
+    completed = state.client.get(receipt['result_url']).json()
+    assert completed['status'] == 'succeeded'
+    job = state.repo.get_job_run('ws', receipt['job_id'])
+    start = state.repo.get_task_event('ws', f'event_{job.id}_start')
+    task = state.repo.get_creation_task('ws', state.task.id)
+    base = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    confirmed = replace(base, id='confirmed-storyboard-head', parent_version_id=base.id, sequence=base.sequence+1,
+        created_by_operation_id=None)
+    state.repo.create_timeline_version(confirmed)
+    audio = state.repo.get_narration_artifact('ws', task.narration_cache_key)
+    import hashlib
+    audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
+    usage = state.repo.creation_narration_usage('ws', job.id)
+    service = TaskAudio(state.repo, state.case.artifact_store,
+        state.case.output_root)
+    state.owner.cpu_render_limits = CpuRenderLimits(8_000_000, 1, 30)
+    state.owner.audio_mix_facts = lambda workspace, target, plan, *, actor: service.mix_facts(workspace,
+        target, plan.audio_timeline, plan.duration_seconds, actor=actor, budget=audio_budget(),
+        normalize_voice_sources=plan.narration_linkage_created_audio_timeline)
+    state.control.render_stage.valid = lambda *args, **kwargs: False
+    state.control.resume('ws', task.id, state.actor, state.runtime, verify_media=False)
+    requests = state.repo.list_creation_job_request_states('ws', job.id)
+    pending = [row for row in requests if row['state'] == 'waiting']
+    assert len(pending) == 1 and pending[0]['unit_key'].startswith('render:')
+    assert state.repo.get_job_run('ws', job.id).status == 'queued'
+    state.control.resume('ws', task.id, state.actor, state.runtime, verify_media=False)
+    assert state.repo.list_creation_job_request_states('ws', job.id) == requests
+    from app.creation_execution import next_creation_intent
+    from app.device_scheduler import SubmissionIntent, SchedulePolicy
+    effective = state.repo.creation_execution_input('ws', job.id)
+    assert effective['operation'] == 'render_current' and effective['render_unit_key'] == pending[0]['unit_key']
+    assert effective['render_input_timeline_version_id'] == confirmed.id
+    assert next_creation_intent(state.repo, state.scheduler, job).unit_key == pending[0]['unit_key']
+    original_unit = next(row['unit_key'] for row in requests if row['unit_key'].startswith('montage_plan:'))
+    with pytest.raises(PermissionError, match='本次明确绑定'):
+        state.owner.verify_submission(SubmissionIntent('ws', 'creation_job', job.id, job.input_digest,
+            original_unit, SchedulePolicy()), state.actor)
+    if stale_head:
+        state.repo.create_timeline_version(replace(confirmed, id='changed-after-render-request',
+            parent_version_id=confirmed.id, sequence=confirmed.sequence+1))
+        with state.repo._connect() as conn:
+            assert state.owner.check_current(state.scheduler._get(pending[0]['id']), conn) == 'stale'
+        assert state.scheduler.pick_and_grant() is None
+        state.scheduler.cancel(pending[0]['id'], state.actor)
+    else:
+        grant = state.scheduler.pick_and_grant()
+        assert grant.request_id == pending[0]['id'] and grant.owner_id == job.id
+        state.scheduler.cancel(grant.request_id, state.actor)
+    assert state.repo.get_task_event('ws', start.id) == start
+    assert state.repo.read_storyboard_regeneration_receipt('ws', task.id, receipt['request_id'])[2] == completed['result']
+    assert state.repo.creation_narration_usage('ws', job.id) == usage
+    assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha

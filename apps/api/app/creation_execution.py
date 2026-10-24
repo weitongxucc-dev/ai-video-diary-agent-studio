@@ -1239,6 +1239,8 @@ class CreationJobOwnerVerifier:
         with nullcontext(connection) if connection is not None else self.repository._connect() as conn:
             job, task, event, script, plan = self._facts(conn, intent.workspace_id, intent.owner_id)
             stage = intent.unit_key.split(":", 1)[0]
+            if event.get('operation') == 'render_current' and intent.unit_key != event['render_unit_key']:
+                raise PermissionError('重新输出必须沿本次明确绑定的原成片单元')
             verdict = self._check_facts(job, task, event, script, plan, stage, actor.member_id)
             try:
                 original = CreationExecutionActor.from_event(job.workspace_id, event)
@@ -1330,6 +1332,8 @@ class CreationJobOwnerVerifier:
                 ))
                 or revision_digest(script, plan) != job.input_digest):
             return "stale"
+        if event.get("operation") == "render_current" and stage != "render":
+            return "dependency"
         if event.get("operation") == "regenerate_storyboard":
             from app.creation.storyboard_regeneration import request_current
             try:
@@ -1384,6 +1388,8 @@ class CreationJobOwnerVerifier:
         if request.input_digest != job.input_digest:
             return "stale"
         stage = request.unit_key.split(":", 1)[0]
+        if event.get('operation') == 'render_current' and request.unit_key != event['render_unit_key']:
+            return "stale"
         observed_job = (replace(job, status='interrupted')
             if self._resumable_montage_request(request, job, task, script, conn) else job)
         verdict = self._check_facts(observed_job, task, event, script, plan, stage, request.member_id)
@@ -1797,6 +1803,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         if not request_current(repository, task, event):
             raise ValueError("故事板原请求的时间线、文案或配音已变化")
         stage = "montage_plan"
+    elif event.get("operation") == "render_current":
+        stage = "render"
     elif not (task.narration_cache_key and repository.get_narration_artifact(
             task.workspace_id, task.narration_cache_key, connection=connection)):
         stage = "narration"
@@ -2468,7 +2476,7 @@ class CreationJobUnitExecutor:
             if hasattr(owner, 'registrations'):
                 owner = owner.registrations[DEVICE_OWNER_TYPE].owner
 
-            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start').payload
+            event = self.repository.creation_execution_input(job.workspace_id, job.id)
             if event.get('operation') == 'regenerate_storyboard':
                 from app.creation.storyboard_regeneration import StoryboardRegeneration
                 if stage != 'montage_plan':
@@ -3094,14 +3102,18 @@ class CreationExecution:
         if self.repository.creation_narration_usage(job.workspace_id, job.id)['unsettled']:
             raise RecoveryBlocked('原配音消耗尚未核实，不能重开输出')
         version_id = task.current_timeline_version_id
-        intent = next_creation_intent(self.repository, scheduler, job)
-        if not version_id or intent is None or not intent.unit_key.startswith('render:'):
+        if not version_id:
             raise ValueError('当前作品尚不能仅重新输出；配音或剪辑仍未就绪')
+        with self.repository._connect() as reader:
+            key, _resources = owner.render_facts(reader, task, _plan, actor=actor)
+        intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, key, SchedulePolicy())
         identity = hashlib.sha256(json.dumps([version_id, intent.unit_key]).encode()).hexdigest()
         event = TaskEvent(id=f'event_{job.id}_render_requested_{identity}', workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
             payload={'stage': 'render', 'status': 'pending', 'input_timeline_version_id': version_id,
-                'unit_key': intent.unit_key, 'input_digest': job.input_digest})
+                'unit_key': intent.unit_key, 'input_digest': job.input_digest,
+                'execution_purpose': 'render_current', 'script_id': task.confirmed_script_id,
+                'start_event_id': f'event_{job.id}_start', **actor.identity_payload()})
         with self.repository._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             if write_guard is not None:

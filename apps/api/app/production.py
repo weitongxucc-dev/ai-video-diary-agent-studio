@@ -6072,17 +6072,36 @@ class ProductionRepository:
             start = self.get_task_event(workspace_id, f'event_{job_id}_start', connection=conn)
             if (start.task_id, start.job_id) != (job.task_id, job.id):
                 raise ValueError('原制作开始记录不属于当前任务')
-            if start.payload['input_digest'] == job.input_digest:
-                return start.payload
-            row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND job_id=? "
-                "AND event_type='creation_execution_input_rebound' AND json_extract(payload_json,'$.input_digest')=? "
-                "ORDER BY rowid DESC LIMIT 1", (workspace_id, job.task_id, job.id, job.input_digest)).fetchone()
-            if row is None or json.loads(row['payload_json'])['start_event_id'] != start.id:
-                from app.device_scheduler import RecoveryBlocked
-                raise RecoveryBlocked('原作业有效输入缺少声音改选回执，不能继续')
-            rebound = json.loads(row['payload_json'])
-            return {**start.payload, 'input_digest': job.input_digest,
-                'source_binding_event_id': rebound.get('source_binding_event_id')}
+            payload = start.payload
+            if payload['input_digest'] != job.input_digest:
+                row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND job_id=? "
+                    "AND event_type='creation_execution_input_rebound' AND json_extract(payload_json,'$.input_digest')=? "
+                    "ORDER BY rowid DESC LIMIT 1", (workspace_id, job.task_id, job.id, job.input_digest)).fetchone()
+                if row is None or json.loads(row['payload_json'])['start_event_id'] != start.id:
+                    from app.device_scheduler import RecoveryBlocked
+                    raise RecoveryBlocked('原作业有效输入缺少声音改选回执，不能继续')
+                rebound = json.loads(row['payload_json'])
+                payload = {**payload, 'input_digest': job.input_digest,
+                    'source_binding_event_id': rebound.get('source_binding_event_id')}
+            render = conn.execute("SELECT id,task_id,job_id,payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                "AND event_type='creation_execution_stage' AND json_extract(payload_json,'$.execution_purpose')='render_current' "
+                "ORDER BY rowid DESC LIMIT 1", (workspace_id, job_id)).fetchone()
+            if render is not None:
+                current = json.loads(render['payload_json'])
+                head, unit = current.get('input_timeline_version_id'), current.get('unit_key')
+                identity = hashlib.sha256(json.dumps([head, unit]).encode()).hexdigest()
+                if (render['task_id'] != job.task_id or render['job_id'] != job.id
+                        or render['id'] != f'event_{job_id}_render_requested_{identity}'
+                        or current.get('stage') != 'render' or current.get('status') != 'pending'
+                        or current.get('start_event_id') != start.id
+                        or not isinstance(head, str) or not head or not isinstance(unit, str) or not unit.startswith('render:')
+                        or current.get('script_id') != payload.get('script_id')
+                        or current.get('input_digest') != job.input_digest
+                        or any(current.get(key) != payload.get(key) for key in ('member_id','identity_kind','device_id','user_id'))):
+                    raise ValueError('重新输出事实与原作业身份、输入或成片单元不一致')
+                payload = {**payload, 'operation': 'render_current', 'render_request_id': render['id'],
+                    'render_unit_key': unit, 'render_input_timeline_version_id': head}
+            return payload
 
     def creation_narration_source_binding(self, workspace_id, job_id, *, connection=None):
         from app.device_scheduler import RecoveryBlocked
@@ -6387,6 +6406,10 @@ class ProductionRepository:
                 or event.event_type != 'creation_execution_stage' or event.payload.get('stage') != 'render'
                 or event.payload.get('status') != 'pending'
                 or event.payload.get('input_timeline_version_id') != expected_timeline_version_id
+                or event.payload.get('execution_purpose') != 'render_current'
+                or event.payload.get('script_id') != task.confirmed_script_id
+                or event.payload.get('input_digest') != run.input_digest
+                or event.payload.get('start_event_id') != f'event_{run.id}_start'
                 or not event.payload.get('unit_key', '').startswith('render:')):
             raise PermissionError('原完成作业或重新输出的时间线已变化')
         connection.execute("UPDATE job_runs SET status='queued',progress=66,failure_reason=NULL,impact=NULL,repair_action=NULL,"
