@@ -369,6 +369,17 @@ describe("persisted final video quality checks", () => {
     const editor = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
     fireEvent.loadedMetadata(editor);
     expect(editor.currentTime).toBe(3.25);
+    expect(editor).toBe(player);
+    const reads = mocks.getQualityCheck.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name:"成片检查" }));
+    const details = await screen.findByRole("dialog", { name:"成片质量检查" });
+    expect(within(details).getByText("真实黑场")).toBeVisible();
+    expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
+    expect(mocks.getQualityCheck).toHaveBeenCalledTimes(reads);
+    fireEvent.click(within(details).getByRole("button", { name:"定位 3.25–4.10 秒" }));
+    await waitFor(()=>expect(screen.queryByRole("dialog",{name:"成片质量检查"})).not.toBeInTheDocument());
+    expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
+    expect(player.currentTime).toBe(3.25);
     pause.mockRestore();
   });
 
@@ -3716,7 +3727,10 @@ describe("CreationTaskWorkspace", () => {
       kind: "arrow", id: "overlay-arrow", x: 0.3, y: 0.4, name: "指向数据",
       purpose: "指出关键数字", start_seconds: 1, end_seconds: 3,
       position: "right-top", color: "#FFDD00",
-    }];
+    }, ...["片头标题", "片尾标题"].map((text,index)=>({
+      kind:"text" as const,id:`title-${index}`,text,start_seconds:index,end_seconds:index+2,
+      x:.2,y:.3,width:.6,font_size:32,font_family:"PingFang SC",color:"#FFFFFF",
+    }))];
     mocks.previewEdit.mockResolvedValue(exactPreview(initial.task, "EditGraphicOverlay"));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
@@ -3726,6 +3740,13 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("complementary", { name: "标题1" })).not.toBeInTheDocument();
     // 会话标题应显示选中的实际对象与播放区间。
     expect(screen.getByRole("region", { name: /^助手对话：/ })).toBeInTheDocument();
+    const player = screen.getByLabelText("剪辑成片预览");
+    const tracks = screen.getByLabelText("配音与字幕时间范围");
+    for (const [name,selection] of [["标题2 · 片头标题","标题2"],["标题3 · 片尾标题","标题3"]]) {
+      fireEvent.click(within(tracks).getByRole("button",{name}));
+      expect(screen.getByRole("complementary",{name:selection})).toBeInTheDocument();
+      expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
+    }
   });
 
   // WIL-160：连续制作已成功，但剪辑改动让成片不再对应当前时间线（video_ready=false），
@@ -4607,9 +4628,9 @@ it('native registration waits for real artifacts and previews candidates before 
   segmentApi.native.mockResolvedValue(page as never);segmentApi.content.mockResolvedValue(new Blob(['fixture']));
   const preview=vi.fn();
   const view=render(<NativeOperationsPanel taskId="task" adoptedRefs={[]} onPreviewImage={preview} canPrepare/>);
-  await screen.findByText(/^工作产物与执行记录/);
-  expect(screen.getByText(/^工作产物与执行记录/).closest("details")).not.toHaveAttribute("open");
-  fireEvent.click(screen.getByText(/^工作产物与执行记录/));
+  await screen.findByRole("button",{name:/^工作产物与执行记录/});
+  expect(screen.getByRole("button",{name:/^工作产物与执行记录/})).toHaveAttribute("aria-expanded","false");
+  fireEvent.click(screen.getByRole("button",{name:/^工作产物与执行记录/}));
   await screen.findByText('产物登记 · 等待执行');
   expect(screen.getByText('等待原因：当前设备正在完成其他制作任务')).toBeTruthy();
   expect(screen.getByText('恢复方式：等待当前执行释放资源后继续')).toBeTruthy();
@@ -4637,6 +4658,14 @@ it('native registration waits for real artifacts and previews candidates before 
     fireEvent.click(screen.getByRole('button',{name:'预览候选'}));
     await screen.findByLabelText(label);
   }
+  const audio = screen.getByLabelText('实际登记的音频候选');
+  const reads = segmentApi.content.mock.calls.length;
+  fireEvent.click(within(screen.getByRole('dialog',{name:'工作产物与执行记录'})).getByRole('button',{name:'关闭卡片'}));
+  await waitFor(()=>expect(screen.queryByRole('dialog',{name:'工作产物与执行记录'})).not.toBeInTheDocument());
+  expect(audio).not.toHaveAttribute('src');
+  fireEvent.click(screen.getByRole('button',{name:/^工作产物与执行记录/}));
+  expect(await screen.findByLabelText('实际登记的音频候选')).toBe(audio);
+  expect(segmentApi.content).toHaveBeenCalledTimes(reads);
   view.unmount();vi.unstubAllGlobals();
 });
 

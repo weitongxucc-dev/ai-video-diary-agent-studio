@@ -153,10 +153,11 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
       {resumeWaiting && !detailsOpen ? <Button className={editorUi.button} disabled={busy || visualBusy} onClick={onResume} type="button">继续制作</Button> : null}
       {hasInitialExecutionControls && active && job?.status !== "interrupted" && !detailsOpen ? <button className={editorUi.button} type="button" disabled={busy || visualBusy} onClick={onCancel}>停止制作</button> : null}
     </section>
-    {storyboardControls}
+    {storyboard?.requestId && !storyboard.receipt ? <span role="status">原画面安排结果待核对</span> : null}
+    {storyboard?.error ? <p role="alert">{storyboard.error}</p> : null}
     {visualControls}
     <HomeCardDialog kind="detail" title="制作文案与要求" open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
-      <div className={styles.productionDetails}>{content}</div>
+      <div className={styles.productionDetails}>{content}{storyboardControls}</div>
     </HomeCardDialog>
   </>;
 }

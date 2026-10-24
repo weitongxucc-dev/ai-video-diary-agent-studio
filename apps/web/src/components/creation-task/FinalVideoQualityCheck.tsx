@@ -4,12 +4,16 @@ import { checkCreationTaskQuality, getCreationTaskQualityCheck } from "@/lib/api
 import type { CreationTaskQualityCheck } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { errorDetails } from './request-errors';
-export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate }: {
+import { HomeCardDialog } from "../HomeCardDialog";
+import { Button } from "../ui/button";
+export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate, compact = false }: {
+    compact?: boolean;
     taskId: string;
     versionId: string | null;
     outputUrl: string | null;
     onLocate: (finding: CreationTaskQualityCheck["findings"][number]) => void;
 }) {
+    const [detailsOpen, setDetailsOpen] = useState(false);
     const [result, setResult] = useState<CreationTaskQualityCheck | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
@@ -66,7 +70,7 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate 
                 : current.result_status === "issues_found" ? "成片发现问题"
                     : current.result_status === "unavailable" ? "部分检测不可用"
                         : current.result_status === "clean" ? "未发现确定性媒体问题" : "当前成片尚未检查";
-    return <section className={styles.qualityCheck} aria-label="成片质量检查">
+    const content = <section className={styles.qualityCheck} aria-label="成片质量检查">
     <div className={styles.qualityHeading}><strong role="status" aria-label="成片质量检查状态">{label}</strong>
       <button className={styles.secondaryButton} type="button" disabled={!outputUrl || submitting || current?.check_state === "checking"} onClick={() => void check()}>重新检查成片</button></div>
     <p>检查黑帧、尾部截断、音频削波和起点时间戳错位；内容质量仍需人工确认。</p>
@@ -82,11 +86,16 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate 
       </p> : null}
     </div> : null}
     {current?.findings.map((finding, index) => <article key={`${finding.kind}:${index}`}>
-      <button type="button" onClick={() => onLocate(finding)}>
+      <button type="button" onClick={() => { setDetailsOpen(false); onLocate(finding); }}>
         定位 {finding.start_seconds.toFixed(2)}–{finding.end_seconds.toFixed(2)} 秒
       </button><span>{finding.detail}</span>
     </article>)}
     {current?.unavailable.map((item, index) => <p key={`${item.kind}:${index}`}>
       检测不可用：{item.reason}</p>)}
   </section>;
+  return compact ? <section className={styles.compactQuality} aria-label="成片检查摘要">
+    <Button variant="ghost" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={()=>setDetailsOpen(true)}>成片检查</Button>
+    <span role={error || current?.check_state === "failed" ? "alert" : "status"}>{label}</span>
+    <HomeCardDialog kind="detail" title="成片质量检查" open={detailsOpen} onClose={()=>setDetailsOpen(false)}>{content}</HomeCardDialog>
+  </section> : content;
 }

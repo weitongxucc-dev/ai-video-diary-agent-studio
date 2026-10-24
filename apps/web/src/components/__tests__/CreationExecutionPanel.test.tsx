@@ -199,6 +199,10 @@ it.each([false, true])("exposes explicit keep-voice storyboard action and unknow
     onRegenerateStoryboard: regenerate, onReadStoryboard: read };
   const storyboard = { busy: false, canSubmit: true, refreshPending: false, requestId: null as string | null, receipt: null, error: null };
   const { rerender } = render(<CreationExecutionPanel {...props} storyboard={storyboard} />);
+  if (compact) {
+    expect(screen.queryByRole("button", { name: "重新安排画面，保留配音" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "核对制作要求" }));
+  }
   await userEvent.click(screen.getByRole("button", { name: "重新安排画面，保留配音" }));
   expect(regenerate).toHaveBeenCalledTimes(1);
   expect(props.onStart).not.toHaveBeenCalled();

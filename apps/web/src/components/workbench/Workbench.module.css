@@ -3,7 +3,7 @@
 .page { height:100%; min-width:0; min-height:0; overflow:auto; }
 .page[hidden] { display:none; }
 .pages { height:100%; min-width:0; min-height:0; }
-.withResource { display:grid; grid-template-rows:minmax(320px, 1.2fr) auto minmax(160px, 1fr); overflow:hidden; }
+.withResource { display:grid; grid-template-rows:minmax(360px, 1.6fr) auto minmax(160px, 1fr); overflow:hidden; }
 .withResource > .page:not(.resourcePage):not([hidden]) { grid-row:1; }
 .withResource > .resourcePage:not([hidden]) { grid-row:3; overscroll-behavior:contain; }
 .resourceHeader { grid-row:2; display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:32px; padding:2px 16px; border-block:1px solid var(--border-1); background:var(--surface-1); font-size:var(--font-size-meta); line-height:18px; color:var(--text-2); }

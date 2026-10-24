@@ -1,7 +1,6 @@
 "use client";
 import { WorkspaceAudio, WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { useWorkspacePage } from "../workbench/context";
-import { MediaVisibilityContext } from "../ui/media-visibility";
 import type { TaskMediaJob, TaskMediaJobPage, TaskMediaResultMap } from "@/lib/types";
 import NextImage from "next/image";
 import { creationTaskFailureReason, creationTaskRepairAction } from "@/lib/creation-task-status";
@@ -58,9 +57,8 @@ export function NativeOperationsPanel({taskId,adoptedRefs,onPreviewImage,canPrep
     const releaseStates:Record<string,string>={not_acquired:'未占用',released:'已释放',unknown:'待核对'};
     return <section aria-label="任务执行与工作产物">
         {error?<p role="alert">{error}<Button variant="outline" onClick={()=>setRetry(value=>value+1)}>重新读取产物</Button></p>:null}
-        <details className={styles.runDetails} open={historyOpen} onToggle={event=>setHistoryOpen(event.currentTarget.open)}>
-        <summary>工作产物与执行记录{current ? ` · ${current.total_count} 条` : ""}{current?.items.some(item=>['failed','interrupted'].includes(item.status)) ? " · 有失败或中断" : ""}</summary>
-        <MediaVisibilityContext.Provider value={historyOpen}>
+        <Button variant="ghost" aria-haspopup="dialog" aria-expanded={historyOpen} onClick={()=>setHistoryOpen(true)}>工作产物与执行记录{current ? ` · ${current.total_count} 条` : ""}{current?.items.some(item=>['failed','interrupted'].includes(item.status)) ? " · 记录含失败或中断" : ""}</Button>
+        <HomeCardDialog kind="detail" title="工作产物与执行记录" open={historyOpen} onClose={()=>setHistoryOpen(false)}>
         <div className={styles.sectionHeading}><span>工作产物候选</span><Button variant="outline" onClick={()=>setRetry(value=>value+1)}>刷新产物</Button></div>
         {selected?<div className={styles.segmentVideoPreview}>
             {url && selected.media_type.startsWith('image/')?<NextImage unoptimized width={640} height={360} style={{width:'100%',height:'auto',objectFit:'contain'}} src={url} alt="实际登记的工作产物候选"/>:null}
@@ -83,7 +81,7 @@ export function NativeOperationsPanel({taskId,adoptedRefs,onPreviewImage,canPrep
             </div>)}
         </article>)}</div>
         {current && (current.offset>0 || current.truncated)?<div><p>当前显示 {current.offset+1}–{current.offset+current.items.length} / {current.total_count} 条</p><Button variant="outline" disabled={offset===0} onClick={()=>setOffset(Math.max(0,offset-30))}>上一页</Button><Button variant="outline" disabled={!current.truncated} onClick={()=>setOffset(offset+30)}>下一页</Button></div>:null}
-        </MediaVisibilityContext.Provider></details>
+        </HomeCardDialog>
     </section>;
 }
 /**
