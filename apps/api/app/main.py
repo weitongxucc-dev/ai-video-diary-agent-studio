@@ -10314,6 +10314,14 @@ def _history_summary(
     montage = _history_montage(version)
     clips = montage.get("clips")
     segments = version.snapshot.get("narration_segments")
+    operation = None
+    if version.created_by_operation_id is not None:
+        try:
+            operation = production_repo.get_edit_operation(workspace_id, version.created_by_operation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="历史版本的原修改记录不存在") from exc
+        if operation.task_id != task.id or operation.result_version_id != version.id:
+            raise HTTPException(status_code=409, detail="历史版本与原修改记录关联不一致")
     return TimelineVersionSummaryResponse(
         id=version.id,
         sequence=version.sequence,
@@ -10323,6 +10331,8 @@ def _history_summary(
         shot_count=len(clips) if isinstance(clips, list) else 0,
         subtitle_track_count=len(_history_subtitle_tracks(workspace_id, task.id, version)),
         narration_segment_count=len(segments) if isinstance(segments, list) else 0,
+        operation_id=operation.id if operation is not None else None,
+        operation_type=operation.operation_type if operation is not None else None,
     )
 
 

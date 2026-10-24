@@ -235,3 +235,41 @@ def test_history_rejects_another_task_version_and_unknown_version(history_task):
     unknown = client.get(f"/api/creation-tasks/{task_id}/timeline/versions/timeline_nope")
     assert unknown.status_code == 404
     assert client.get("/api/creation-tasks/task_nope/timeline/versions").status_code == 404
+
+
+def test_history_detail_preserves_original_operation_from_list(history_task):
+    from app.creation.contracts import EditIntent,EditProposal,EditOperation
+    from app.graphic_overlays import TextOverlay
+    repo,task_id,client=history_task
+    base=repo.get_timeline_version(WORKSPACE_ID,'timeline_history_v2')
+    overlay=TextOverlay(id='history-overlay',text='公开演示',start_seconds=0,end_seconds=1,x=.48,font_size=24).model_dump()
+    snapshot=json.loads(json.dumps(base.snapshot))
+    snapshot['montage'].update(graphic_overlays=[overlay],status='ready',output_path=None,subtitle_path=None)
+    payload={'base_version_id':base.id,'graphic_overlays':[overlay]}
+    intent=repo.create_edit_intent(EditIntent('history-overlay-intent',WORKSPACE_ID,task_id,'添加图文标题','montage',
+        ['overlay:history-overlay'],None,'edit_graphic_overlay',{}, {},1,'parsed'))
+    proposal=repo.create_edit_proposal(EditProposal('history-overlay-proposal',WORKSPACE_ID,task_id,intent.id,
+        '添加图文标题',['overlay:history-overlay'],{'operation_type':'EditGraphicOverlay','payload':payload},[],{},[]))
+    now=datetime.now(timezone.utc)
+    operation=EditOperation('history-overlay-operation',WORKSPACE_ID,task_id,proposal.id,'EditGraphicOverlay',payload,
+        base.id,'timeline_history_overlay','applied',created_at=now,applied_at=now)
+    version=TimelineVersion(operation.result_version_id,WORKSPACE_ID,task_id,base.id,3,snapshot,operation.id)
+    repo.confirm_edit_proposal(WORKSPACE_ID,task_id,proposal.id,operation=operation,result_version=version,
+        montage_plan_id=snapshot['montage']['id'],montage_payload=snapshot['montage'])
+    later=replace(version,id='timeline_history_after_overlay',sequence=4,parent_version_id=version.id,created_by_operation_id=None)
+    repo.create_timeline_version(later)
+    listed=client.get(f'/api/creation-tasks/{task_id}/timeline/versions')
+    detail=client.get(f'/api/creation-tasks/{task_id}/timeline/versions/{version.id}')
+    assert listed.status_code==200 and detail.status_code==200
+    summary=next(item for item in listed.json()['items'] if item['id']==version.id)
+    for key,expected in [('operation_id',operation.id),('operation_type','EditGraphicOverlay')]:
+        assert detail.json()['version'][key]==summary[key]==expected
+    assert repo.get_creation_task(WORKSPACE_ID,task_id).current_timeline_version_id==later.id
+
+
+def test_history_detail_without_source_operation_keeps_null(history_task):
+    _,task_id,client=history_task
+    response=client.get(f'/api/creation-tasks/{task_id}/timeline/versions/timeline_history_v1')
+    assert response.status_code==200
+    assert response.json()['version']['operation_id'] is None
+    assert response.json()['version']['operation_type'] is None
