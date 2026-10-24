@@ -1049,7 +1049,7 @@ class MontageRenderer:
                 "-preset",
                 "veryfast",
                 "-crf",
-                "23",
+                "20",
                 "-c:a",
                 "aac",
                 "-ar",

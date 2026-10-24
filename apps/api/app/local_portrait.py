@@ -9,6 +9,8 @@ import sys
 from tempfile import TemporaryDirectory
 from threading import Lock
 
+PORTRAIT_INPUT_CRF = "20"
+
 _portrait_lock=Lock()
 
 
@@ -32,7 +34,7 @@ class LocalPortrait:
     def fingerprint(self):
         if not self.available:
             raise ValueError("本地人像组件未就绪")
-        return hashlib.sha256(f"{_sha256(self.worker)}:{platform.mac_ver()[0]}".encode()).hexdigest()
+        return hashlib.sha256(f"{_sha256(self.worker)}:{platform.mac_ver()[0]}:input-crf={PORTRAIT_INPUT_CRF}".encode()).hexdigest()
 
     def process(self, source: Path, start: float, end: float, strength: float, skin_exposure: float):
         if not self.available:
@@ -58,7 +60,7 @@ class LocalPortrait:
                 processed=root/"portrait.mp4"
                 subprocess.run(["ffmpeg","-v","error","-y","-protocol_whitelist","file,pipe","-ss",str(start),"-t",str(end-start),
                     "-i",str(source),"-vf","scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps=30,setpts=PTS-STARTPTS",
-                    "-an","-c:v","libx264","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",str(prepared)],capture_output=True,check=True,timeout=600)
+                    "-an","-c:v","libx264","-preset","veryfast","-crf",PORTRAIT_INPUT_CRF,"-pix_fmt","yuv420p",str(prepared)],capture_output=True,check=True,timeout=600)
                 request=root/"request.json"
                 response=root/"response.json"
                 request.write_text(json.dumps({"source_path":str(prepared),"output_path":str(processed),"strength":strength,"skin_exposure":skin_exposure}))

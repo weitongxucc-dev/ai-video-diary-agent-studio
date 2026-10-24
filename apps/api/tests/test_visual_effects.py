@@ -340,3 +340,38 @@ def test_crop_command_only_touches_what_it_was_asked_and_never_guesses_a_step():
     # 当前镜头的裁剪位置不可用时如实报错
     with pytest.raises(ValueError,match="裁剪位置不可用"):
         compile_crop_command("完整显示",{"fit_mode":None,"crop_x":None,"crop_y":None})
+
+
+def test_portrait_input_crf_is_in_cache_identity_without_deleting_old_output(tmp_path, monkeypatch):
+    import app.local_portrait as portrait
+    worker = tmp_path / 'worker'
+    worker.write_bytes(b'declared-worker')
+    worker.chmod(0o700)
+    source = tmp_path / 'source.mp4'
+    source.write_bytes(b'declared-source')
+    monkeypatch.setattr(portrait.sys, 'platform', 'darwin')
+    commands = []
+    def run(argv, **kwargs):
+        commands.append(argv)
+        if argv[0] == 'ffmpeg':
+            Path(argv[-1]).write_bytes(b'prepared')
+            return SimpleNamespace(returncode=0)
+        if argv[0] == 'ffprobe':
+            return SimpleNamespace(stdout=json.dumps({'streams': [{'duration': '1', 'nb_frames': '30'}]}))
+        request = json.loads(Path(argv[2]).read_text())
+        Path(request['output_path']).write_bytes(b'portrait-' + portrait.PORTRAIT_INPUT_CRF.encode())
+        Path(argv[4]).write_text(json.dumps({'frame_count': 30, 'face_frame_count': 30}))
+        return SimpleNamespace(returncode=0)
+    from pathlib import Path
+    monkeypatch.setattr(portrait.subprocess, 'run', run)
+    processor = portrait.LocalPortrait(str(worker), tmp_path / 'cache')
+    monkeypatch.setattr(portrait, 'PORTRAIT_INPUT_CRF', '18')
+    old, _ = processor.process(source, 0, 1, .3, 0)
+    old_bytes = old.read_bytes()
+    monkeypatch.setattr(portrait, 'PORTRAIT_INPUT_CRF', '20')
+    current, _ = processor.process(source, 0, 1, .3, 0)
+    assert current != old and old.read_bytes() == old_bytes
+    assert [argv[argv.index('-crf') + 1] for argv in commands if argv[0] == 'ffmpeg'] == ['18', '20']
+    count = len(commands)
+    assert processor.process(source, 0, 1, .3, 0)[0] == current
+    assert len(commands) == count

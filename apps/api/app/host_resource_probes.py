@@ -921,7 +921,7 @@ def pcm_assembly_fields_valid(resources, audio):
     if work.parent != receipt.parent or len({str(work),str(receipt),str(work)+'.sealed.json'}) != 3:
         return False
     inputs, sources = resources.get('inputs'), resources.get('pcm_sources')
-    if (not isinstance(inputs,list) or not isinstance(sources,list) or not 1 <= len(sources) <= (2 if identity is None else 1)
+    if (not isinstance(inputs,list) or not isinstance(sources,list) or not 1 <= len(sources) <= audio.max_input_count - int(identity is not None)
             or len(inputs) != len(sources) + (identity is not None) or len(inputs) != resources['input_count']):
         return False
     if any(not isinstance(item,dict) or type(item.get('size_bytes')) is not int or item['size_bytes'] <= 0

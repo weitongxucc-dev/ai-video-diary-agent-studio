@@ -5064,3 +5064,68 @@ def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_
         case.repo.get_task_event('local', case.segments.video_preparation_id(job, 'section_1'))
     assert all(row['state'] == 'done' for row in case.repo.list_creation_job_request_states('local', job.id))
     case.scheduler.close()
+
+
+def test_pcm_three_declared_inputs_merge_once_without_new_job_or_audio(tmp_path):
+    case = _narration_units_case(tmp_path, section_count=3, audio_input_count=3)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    for _ in range(3):
+        case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    merge = case.scheduler.pick_and_grant()
+    declared = case.scheduler._get(merge.request_id).resources
+    assert declared['input_count'] == len(declared['inputs']) == len(declared['pcm_sources']) == 3
+    assert declared['merge_final'] and declared['merge_section_ids'] == ['section_1', 'section_2', 'section_3']
+    case.executor.execute(merge, case.scheduler)
+    task = case.repo.get_creation_task('local', case.task_id)
+    assert case.repo.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 3
+    assert len(case.merged) == 1 and len(case.merged[0]) == 3 and len(case.generated) == 3
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    assert usage['used_output_bytes'] == 3 * 48044 + 3 * 48000 + 44
+    assert not usage['unsettled'] and len(case.execution.jobs('local', case.task_id)) == 1
+    case.scheduler.close()
+
+
+def test_pcm_sealed_two_input_unit_survives_larger_cap_and_prefix_uses_one_slot(tmp_path, monkeypatch):
+    case = _narration_units_case(tmp_path, section_count=5, audio_input_count=2)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    for _ in range(5):
+        case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    first = case.scheduler.pick_and_grant()
+    request = case.scheduler._get(first.request_id)
+    assert request.resources['input_count'] == 2
+    sealed = dict(request.resources)
+    case.owner.narration_audio_budget = replace(case.owner.narration_audio_budget, max_input_count=3)
+    with case.repo._connect() as conn:
+        assert case.owner.pcm_assembly_baseline(request, conn) == sealed['pcm_assembly']
+    assert case.scheduler._get(first.request_id).resources == sealed
+    prepare = case.stage.prepare_merge
+    def fail_before_output(*args, **kwargs):
+        raise RuntimeError('known pre-output failure')
+    monkeypatch.setattr(case.stage, 'prepare_merge', fail_before_output)
+    case.executor.execute(first, case.scheduler)
+    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    monkeypatch.setattr(case.stage, 'prepare_merge', prepare)
+    case.scheduler.resume_creation_narration(first.request_id, resume_write=lambda conn, current:
+        case.owner.resume_narration_request(conn, current, case.actor))
+    retried = case.scheduler.pick_and_grant()
+    assert retried.request_id == first.request_id
+    assert case.scheduler._get(retried.request_id).resources == sealed
+    case.executor.execute(retried, case.scheduler)
+    following = case.scheduler.pick_and_grant()
+    declared = case.scheduler._get(following.request_id).resources
+    assert declared['input_count'] == len(declared['inputs']) == 3
+    assert len(declared['pcm_sources']) == 2
+    assert declared['merge_section_ids'] == ['section_1', 'section_2', 'section_3', 'section_4']
+    assert not declared['merge_final']
+    case.executor.execute(following, case.scheduler)
+    last = case.scheduler.pick_and_grant()
+    final = case.scheduler._get(last.request_id).resources
+    assert final['input_count'] == 2 and final['merge_final']
+    case.executor.execute(last, case.scheduler)
+    task = case.repo.get_creation_task('local', case.task_id)
+    assert case.repo.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 5
+    assert [len(unit) for unit in case.merged] == [2, 3, 2]
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    assert usage['used_output_bytes'] == 5 * 48044 + 96044 + 96008 + 48008
+    assert not usage['unsettled'] and len(case.generated) == 5
+    case.scheduler.close()

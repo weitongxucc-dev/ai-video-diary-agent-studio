@@ -175,7 +175,8 @@ class CreationStageGrantContext:
         manifest = {'version': 1, 'operation': 'append', 'unit_id': unit_id,
             'job_id': self.grant.owner_id, 'source_digest': resources['merge_source_digest'],
             **baseline, 'expected_file_identity': baseline['file_identity'],
-            'sources': resources['pcm_sources'], 'final': resources['merge_final']}
+            'sources': resources['pcm_sources'], 'final': resources['merge_final'],
+            'max_input_count': resources['input_count']}
         manifest.pop('file_identity')
         manifest.pop('header_bytes_allowance')
         work = Path(baseline['work_path'])
@@ -928,12 +929,12 @@ class CreationJobOwnerVerifier:
             source_digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
             ordered_ids = [section.id for section in script.sections]
             resources = self.pcm_resources(conn, job, common, ready_inputs, source_files,
-                source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation)
+                source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request)
             prefix = 'narration:merge:v1:'
         digest = hashlib.sha256(json.dumps([manifest, resources], sort_keys=True, default=str).encode()).hexdigest()
         return prefix + digest, resources
 
-    def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *, pcm_preparation=None):
+    def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *, pcm_preparation=None, request=None):
         from app.creation.narration_pcm import prepare_sources, prepared_source_facts, work_baseline
         audio = self.narration_audio_budget
         checkpoint = self.repository.creation_narration_merge_checkpoint(job.workspace_id, job.id, connection=conn)
@@ -944,7 +945,16 @@ class CreationJobOwnerVerifier:
             raise RecoveryBlocked('原PCM检查点不属于当前完整来源，须查询原请求')
         if audio.max_input_count < 2 and len(ordered_ids) > 1:
             raise ValueError('原CPU音频输入预算不足以追加两个实际输入')
-        count = min(2,audio.max_input_count) - int(covered > 0)
+        slots = audio.max_input_count - int(covered > 0)
+        count = min(slots, len(ordered_ids) - covered)
+        if request is not None and request.resources.get('execution_mode') == 'cpu_pcm_wav_assembly':
+            # A persisted unit owns its original prefix even when a later unit can use more slots.
+            sealed_ids = request.resources.get('merge_section_ids', [])
+            count = len(sealed_ids) - covered
+            if (not 1 <= count <= slots or sealed_ids != ordered_ids[:covered + count]
+                    or request.resources.get('merge_source_digest') != source_digest
+                    or request.resources.get('input_count') != count + int(covered > 0)):
+                raise RecoveryBlocked('原PCM批次不属于当前来源、检查点或显式输入预算')
         if pcm_preparation is None:
             if conn.in_transaction:
                 raise RecoveryBlocked('PCM格式准备必须在原动作的写事务外完成')
@@ -1106,7 +1116,7 @@ class CreationJobOwnerVerifier:
         self.repository.resume_creation_narration_job(job.workspace_id, job.id, connection=conn)
         intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, request.unit_key, request.policy)
         preparation=self.persisted_pcm_sources(request,conn) if request.resources.get('execution_mode')=='cpu_pcm_wav_assembly' else None
-        return self.verify_submission(intent, actor, connection=conn,pcm_preparation=preparation)
+        return self.verify_submission(intent, actor, connection=conn,pcm_preparation=preparation,request=request)
 
     def edit_facts(self, job, task, event, plan):
         proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
@@ -1168,7 +1178,7 @@ class CreationJobOwnerVerifier:
                     'sample_rate':record.sample_rate,'channels':1,'uses':1})
             source_digest = hashlib.sha256(json.dumps([key,files],sort_keys=True).encode()).hexdigest()
             resources = self.pcm_resources(conn,job,common,ready,files,source_digest,
-                [section.id for section in script.sections],limits,plan,pcm_preparation=pcm_preparation)
+                [section.id for section in script.sections],limits,plan,pcm_preparation=pcm_preparation,request=request)
             digest=hashlib.sha256(json.dumps(resources,sort_keys=True).encode()).hexdigest()
             return 'narration_edit:pcm:'+digest,resources
 
@@ -1214,7 +1224,7 @@ class CreationJobOwnerVerifier:
         plan = self.repository._creation_plan_from_payload(plan_payload)
         return job, task, event, script, plan
 
-    def verify_submission(self, intent: SubmissionIntent, actor: object, *, connection=None, pcm_preparation=None) -> VerifiedWork:
+    def verify_submission(self, intent: SubmissionIntent, actor: object, *, connection=None, pcm_preparation=None, request=None) -> VerifiedWork:
         if intent.unit_key.startswith('native_command:') and self.native_case is not None:
             return self.native_case.verify_submission(intent,actor,self,connection=connection)
         if intent.unit_key.startswith(('segment_video:', 'segment_revision:')) and self.segments is not None:
@@ -1248,7 +1258,7 @@ class CreationJobOwnerVerifier:
             if self.authorization_verdict(task, original, stage, connection=conn) != "ready":
                 raise PermissionError("原任务授权未就绪、已到期或不包含本次操作")
             if verdict == "ready" and job.kind == NARRATION_EDIT_KIND:
-                key, resources = self.narration_edit_facts(job, task, event, plan, connection=conn, pcm_preparation=pcm_preparation)
+                key, resources = self.narration_edit_facts(job, task, event, plan, connection=conn, pcm_preparation=pcm_preparation, request=request)
                 if intent.unit_key != key:
                     raise PermissionError("配音编辑输入已变化，请重新安排")
             elif verdict == "ready" and job.kind == PERSON_EDIT_KIND:
@@ -1260,7 +1270,7 @@ class CreationJobOwnerVerifier:
                 if intent.unit_key != key:
                     raise PermissionError("故事板或源文件已变化，请重新安排成片")
             elif verdict == 'ready' and stage == 'narration' and intent.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
-                key, resources = self.narration_unit_facts(conn, job, task, script, plan, pcm_preparation=pcm_preparation)
+                key, resources = self.narration_unit_facts(conn, job, task, script, plan, pcm_preparation=pcm_preparation, request=request)
                 if key != intent.unit_key:
                     raise PermissionError('配音下一单元或输入版本已变化')
             elif verdict == "ready" and (
@@ -1691,9 +1701,9 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
                 or owner.authorization_verdict(task, actor, stage, connection=conn) != 'ready'):
             raise PermissionError('原配音请求的成员或任务授权不匹配')
         legacy = old.unit_key.startswith('narration:') and old.unit_key.count(':') == 1
-        if (job.kind == KIND and old.unit_key.startswith('narration:segment:v1:')
+        if (job.kind == KIND and old.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:'))
                 and old.state == 'failed' and old.last_grant_generation is not None):
-            return None  # An attempted section belongs to original-unit recovery, not ungranted migration.
+            return None  # Attempted narration units belong to original-unit recovery, not ungranted migration.
         if not legacy and owner.check_current(old, conn) == 'ready':
             if old.state in {'waiting', 'blocked'} and conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND job_id=? "
                     "AND event_type='creation_narration_source_revalidated' AND json_extract(payload_json,'$.new_request_id')=?",

@@ -511,7 +511,7 @@ def _build_cut_command(
         "-preset",
         "veryfast",
         "-crf",
-        "23",
+        "20",
         "-c:a",
         "aac",
         str(output_path),

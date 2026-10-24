@@ -5987,7 +5987,7 @@ def test_serial_lossless_hard_cut_uses_real_synthetic_media_and_original_frames(
     assert [command.count('-i') for command in encodes]==[1,1,2]
     assert all(command[command.index('-c:v')+1]=='ffv1' and command[command.index('-f')+1]=='nut'
         and '-crf' not in command for command in encodes[:2])
-    assert encodes[-1][encodes[-1].index('-crf')+1]=='23'
+    assert encodes[-1][encodes[-1].index('-crf')+1]=='20'
     assert all(options['deadline_monotonic']==context.deadline_monotonic for _,options in commands)
     assert not list((tmp_path/'job').glob('.subtitle-overlays-*'))
     output=tmp_path/'job'/'preview.mp4'

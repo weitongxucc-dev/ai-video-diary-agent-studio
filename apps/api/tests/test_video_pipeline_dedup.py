@@ -107,6 +107,7 @@ def test_refiner_applies_auto_removal_and_preserves_first_pass_video(tmp_path):
     assert refined.edit_plan_path == str(output / "talk_preview_dedup.edit_plan.json")
     assert refined.dedup_report_path == str(output / "talk_preview_dedup_report.json")
     assert "concat=n=2:v=1:a=1" in " ".join(calls[-1])
+    assert calls[-1][calls[-1].index("-crf") + 1] == "20"
     report = json.loads(Path(refined.dedup_report_path).read_text())
     assert report["status"] == "applied"
     assert report["output_video"] == str(output / "talk_preview_dedup.mp4")

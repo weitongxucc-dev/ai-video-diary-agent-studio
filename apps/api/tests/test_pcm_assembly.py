@@ -33,7 +33,7 @@ def manifest(tmp_path, sources):
             "source_digest": "original-inputs", "work_path": str(tmp_path / "working.wav"),
             "receipt_path": str(tmp_path / "unit-1.json"), "expected_file_identity": None,
             "committed_pcm_bytes": 0, "committed_pcm_sha256": pcm.EMPTY_SHA,
-            "sources": sources, "max_new_bytes": 1000, "absolute_max_output_bytes": 1000, "final": False}
+            "sources": sources, "max_input_count": 2, "max_new_bytes": 1000, "absolute_max_output_bytes": 1000, "final": False}
 
 
 def run(value):
@@ -151,3 +151,21 @@ def test_interrupted_append_preserves_unknown_tail_and_original_checkpoint(tmp_p
     with pytest.raises(pcm.AssemblyError, match="work_baseline_mismatch"):
         run(value)
     assert Path(value["work_path"]).stat().st_size == 84
+
+
+def test_explicit_three_input_cap_and_checkpoint_slot_are_enforced(tmp_path):
+    sources = [source(tmp_path / f"source-{i}.wav", b"\x01\x00" * 4) for i in range(3)]
+    value = manifest(tmp_path, sources)
+    with pytest.raises(Exception, match="source_count_invalid"):
+        run(value)
+    value["max_input_count"] = 3
+    receipt = run(value)
+    assert receipt["source_count"] == 3
+    more = manifest(tmp_path, sources[:2])
+    more.update(unit_id="request:2", receipt_path=str(tmp_path / "unit-2.json"),
+        expected_file_identity=receipt["file_identity"], committed_pcm_bytes=receipt["pcm_bytes"],
+        committed_pcm_sha256=receipt["pcm_sha256"])
+    with pytest.raises(Exception, match="source_count_invalid"):
+        run(more)
+    more["max_input_count"] = 3
+    assert run(more)["source_count"] == 3

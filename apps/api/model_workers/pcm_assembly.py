@@ -156,7 +156,9 @@ def execute(manifest: dict, observed: dict) -> dict:
         maximum = integer(manifest, "max_new_bytes")
         absolute = integer(manifest, "absolute_max_output_bytes")
         sources = manifest.get("sources")
-        require(isinstance(sources, list) and 1 <= len(sources) <= (2 if expected is None else 1), "source_count_invalid")
+        input_cap = integer(manifest, "max_input_count")
+        require(isinstance(sources, list) and 1 <= len(sources)
+                and len(sources) + int(expected is not None) <= input_cap, "source_count_invalid")
         opened = []
         appended = 0
         for source in sources:

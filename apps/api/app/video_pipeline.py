@@ -289,7 +289,7 @@ class RetakeVideoRefiner:
             "-preset",
             "veryfast",
             "-crf",
-            "23",
+            "20",
             "-c:a",
             "aac",
             str(output_path),

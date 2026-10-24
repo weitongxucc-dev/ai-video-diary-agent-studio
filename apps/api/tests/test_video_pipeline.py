@@ -57,6 +57,7 @@ def test_ffmpeg_processor_builds_accelerated_preview_command(tmp_path):
     assert str(inbox / "talk.mov") in command
     assert "setpts=PTS/1.05" in command
     assert "atempo=1.05,loudnorm" in command
+    assert command[command.index("-crf") + 1] == "20"
 
 
 def test_ffmpeg_processor_builds_conservative_silence_cut_plan(tmp_path):
