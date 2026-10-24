@@ -416,7 +416,7 @@ def test_streaming_frames_reject_unterminated_record_before_total_output_quota()
             context=StreamingQualityFixture(b'pts_time=' + b'9' * 4096 + b'\n', chunk_size=8192))
 
 
-@pytest.mark.parametrize('outcome', ['complete', 'quota', 'cancel'])
+@pytest.mark.parametrize('outcome', ['complete', 'quota', 'cancel', 'stream', 'stream_cancel', 'stream_deadline'])
 def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, outcome):
     import time
     from app import quality_worker_runtime as worker
@@ -443,25 +443,32 @@ def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, 
     process = Process()
     monkeypatch.setattr(worker.subprocess, 'Popen', lambda *args, **kwargs: process)
     context = object.__new__(worker.QualityWorkerContext)
-    context.budget = replace(fixture_budget(), max_pcm_bytes=100 if outcome == 'quota' else 200)
+    context.budget = replace(fixture_budget(), max_pcm_bytes=100 if outcome in {'quota', 'stream', 'stream_cancel'} else 200)
+    context.resources = {'read_mode': 'stream'} if outcome.startswith('stream') else None
+    context.processing = []
     context.deadline, context._verified_tools = time.monotonic() + 3, {'ffmpeg'}
     consumed = 0
 
     def consume(raw):
         nonlocal consumed
         consumed += len(raw)
-        if outcome == 'cancel':
+        if outcome in {'cancel', 'stream_cancel'}:
             raise worker.QualityWorkerError('cancelled original unit')
+        if outcome == 'stream_deadline':
+            context.deadline = time.monotonic() - 1
 
-    if outcome == 'complete':
-        result = context.run(['ffmpeg'], 2, pcm=True, stdout_consumer=consume)
+    if outcome in {'complete', 'stream'}:
+        result = context.run(['ffmpeg', '-ar', '48000'], 0 if outcome == 'stream' else 2, pcm=True, stdout_consumer=consume)
         assert result.stdout == b'' and consumed == len(payload)
         assert not process.killed
     else:
-        with pytest.raises(worker.QualityWorkerError, match='输出超过|cancelled'):
-            context.run(['ffmpeg'], 2, pcm=True, stdout_consumer=consume)
+        with pytest.raises(worker.QualityWorkerError, match='输出超过|cancelled|总时限'):
+            context.run(['ffmpeg', '-ar', '48000'], 2, pcm=True, stdout_consumer=consume)
         assert process.killed
     assert process.stdout.closed and process.stderr.closed
+    if outcome == 'stream':
+        assert context.processing[0]['stdout_bytes'] == 200 > context.budget.max_pcm_bytes
+        assert context.processing[0]['complete'] is True
 
 
 def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, granted_media):
@@ -490,7 +497,7 @@ def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, g
 import json, sys, time
 from pathlib import Path
 from dataclasses import asdict, replace
-from app.quality_worker_runtime import QualityBudget, QualityWorkerContext, QUALITY_PHASES, QUALITY_PHASE_PROTOCOL, quality_phase_request, file_identity
+from app.quality_worker_runtime import QualityBudget, QualityWorkerContext, QUALITY_PHASES, QUALITY_STREAM_PROTOCOL, quality_phase_request, file_identity
 from app.quality_worker import inspect_request, worker_identity
 from app.quality_checks import inspect_media_quality, quality_report_evidence
 import hashlib
@@ -510,8 +517,8 @@ for name, amplitude in [('normal', .5), ('clipped', 3)]:
             sha = hashlib.file_digest(source_file, 'sha256').hexdigest()
         source=dict(workspace_id='fixture', task_id='fixture', timeline_version_id='v1', source_ref='fixture.mkv',
             artifact_id='fixture', render_ref=sha, size_bytes=target.stat().st_size, file_identity=file_identity(target), path=str(target))
-        sealed=dict(protocol=QUALITY_PHASE_PROTOCOL, source=source, check_id='synthetic-phase-check', thresholds={},
-            budget=asdict(replace(context.budget, worker_sha256=worker_identity())))
+        sealed=dict(protocol=QUALITY_STREAM_PROTOCOL, source=source, check_id='synthetic-phase-check', thresholds={},
+            budget=asdict(replace(context.budget, max_input_bytes=1, max_pcm_bytes=2, max_frame_json_bytes=3, worker_sha256=worker_identity())))
         checkpoints={}
         for phase in QUALITY_PHASES:
             phase_request=quality_phase_request(sealed, {'_phases':checkpoints})
@@ -522,6 +529,12 @@ for name, amplitude in [('normal', .5), ('clipped', 3)]:
                 assert response['evidence']==report
             else:
                 checkpoints[phase]=response['data']
+                if phase=='truncation':
+                    assert response['data']['decoded_streams']['audio']['sample_count']==14400
+                    assert response['data']['decoded_streams']['video']['frame_count']==3
+                if phase=='clipping':
+                    assert response['data']['decoded_pcm']['frame_sample_mapping_matches'] is True
+                    assert [p['sample_count'] for p in response['data']['decoded_pcm']['passes']]==[14400,14400]
     reports.append({key:report[key] for key in ('status','unavailable','clipping_summary')})
 print(json.dumps(reports))
 '''

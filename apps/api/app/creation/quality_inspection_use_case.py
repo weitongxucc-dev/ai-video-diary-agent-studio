@@ -18,8 +18,8 @@ from app.device_runtime import RuntimeUnavailable
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import content_readable
 from app.quality_inspection import final_quality_check_payload
-from app.quality_worker_runtime import (QualityBudget, budget_identity, file_identity, source_receipt,
-    QUALITY_PHASE_PROTOCOL, quality_phase_request, quality_unit_key)
+from app.quality_worker_runtime import (QualityBudget, file_identity, source_receipt,
+    QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request, quality_unit_key, quality_stream_resources)
 
 
 QUALITY_KIND = "quality_check"
@@ -73,12 +73,7 @@ class QualityInspectionUseCase:
         return task, plan, source
 
     def resources(self, source, budget):
-        return {"kind": QUALITY_KIND, "execution_mode": "isolated_quality_python",
-            "input_bytes": source["size_bytes"], "size_bytes": source["size_bytes"],
-            "timeout_seconds": budget.max_timeout_seconds, "threads": budget.decoder_threads,
-            "max_output_bytes": budget.max_report_bytes, "max_pcm_bytes": budget.max_pcm_bytes,
-            "max_frame_json_bytes": budget.max_frame_json_bytes, "max_stderr_bytes": budget.max_stderr_bytes,
-            "budget_digest": budget_identity(budget)}
+        return quality_stream_resources({"source": source, "budget": asdict(budget)}, "metadata", {})
 
     def projection(self, workspace_id, task_id):
         task = self.production.get_creation_task(workspace_id, task_id)
@@ -235,15 +230,14 @@ class QualityInspectionUseCase:
                     return current["check_id"], None
             check_id = self.checks.begin(workspace_id, task_id, task.current_timeline_version_id,
                 source["source_ref"], source["render_ref"], source_identity=source, connection=conn)
-            if self.budget is None or source["size_bytes"] > self.budget.max_input_bytes:
-                error = self.budget_error or ("质检独立资源预算尚未标定，请配置后重新检查。" if self.budget is None
-                    else "成片超过质检独立输入预算，检查未开始。")
+            if self.budget is None:
+                error = self.budget_error or "质检独立资源预算尚未标定，请配置后重新检查。"
                 self.checks.finish(workspace_id, task_id, check_id,
                     evidence={"_source_input": source_receipt(source, check_id)}, error=error, connection=conn)
                 return check_id, None
             request = {"source": source, "check_id": check_id, "actor": actor.identity_payload(),
                 "budget": asdict(self.budget), "resources": self.resources(source, self.budget), "thresholds": {},
-                "protocol": QUALITY_PHASE_PROTOCOL}
+                "protocol": QUALITY_STREAM_PROTOCOL}
             digest = quality_input_digest(request)
             job = self.production.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
                 task_id=task_id, kind=QUALITY_KIND, idempotency_key=f"quality:{check_id}", input_digest=digest), connection=conn)
@@ -259,7 +253,7 @@ class QualityInspectionUseCase:
                 or result.get("receipt") != source_receipt(request["source"], request["check_id"])
                 or len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > budget.max_report_bytes):
             raise ValueError("质检 worker 回执未绑定原请求或超过有限大小")
-        if request.get("protocol") == QUALITY_PHASE_PROTOCOL:
+        if request.get("protocol") in QUALITY_PHASE_PROTOCOLS:
             if (result.get("phase"), result.get("checkpoint_digest")) != (request.get("phase"), request.get("checkpoint_digest")):
                 raise ValueError("质检 worker 回执未绑定当前阶段和前序检查点")
             if request["phase"] in {"metadata", "finalize"} and result.get("file_sha256") != request["source"]["render_ref"]:

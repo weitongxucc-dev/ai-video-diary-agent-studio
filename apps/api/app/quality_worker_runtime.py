@@ -21,11 +21,13 @@ class QualityWorkerError(RuntimeError):
 # This is the ordered inspection algorithm, not a limit on media length.
 QUALITY_PHASES = ("metadata", "black_frames", "truncation", "clipping", "finalize")
 QUALITY_PHASE_PROTOCOL = "quality_phases_v1"
+QUALITY_STREAM_PROTOCOL = "quality_stream_v1"
+QUALITY_PHASE_PROTOCOLS = {QUALITY_PHASE_PROTOCOL, QUALITY_STREAM_PROTOCOL}
 
 
 def quality_phase_request(request: dict, evidence: dict) -> dict:
     """Bind a released unit to the exact, bounded prefix already committed."""
-    if request.get("protocol") != QUALITY_PHASE_PROTOCOL:
+    if request.get("protocol") not in QUALITY_PHASE_PROTOCOLS:
         return request  # Original sealed requests retain their original protocol.
     checkpoints = evidence.get("_phases", {})
     if not isinstance(checkpoints, dict) or set(checkpoints) != set(QUALITY_PHASES[:len(checkpoints)]):
@@ -34,8 +36,37 @@ def quality_phase_request(request: dict, evidence: dict) -> dict:
         raise ValueError("质检已经完成全部阶段")
     digest = hashlib.sha256(json.dumps(checkpoints, ensure_ascii=False, sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-    return {**request, "phase": QUALITY_PHASES[len(checkpoints)],
-            "checkpoints": checkpoints, "checkpoint_digest": digest}
+    phase = QUALITY_PHASES[len(checkpoints)]
+    prepared = {**request, "phase": phase, "checkpoints": checkpoints, "checkpoint_digest": digest}
+    if request.get("protocol") == QUALITY_STREAM_PROTOCOL:
+        prepared["resources"] = quality_stream_resources(request, phase, checkpoints)
+    return prepared
+
+
+def quality_stream_resources(request: dict, phase: str, checkpoints: dict) -> dict:
+    """Full-file bytes are streaming work, never an allocation or a media cap.
+
+    No trustworthy same-backend/codec/shape throughput is sealed yet, so this is
+    one finite preparation attempt. It does not promise completion, renew itself,
+    or infer a duration/speed from a container header. EOF counters from a prior
+    phase inform the next demand; mono/resampler mapping is checked against PCM.
+    """
+    budget = QualityBudget(**request["budget"])
+    source = request["source"]
+    provenance = {"mode": "bounded_preparation", "deadline_source": "sealed_quality_preparation_budget",
+        "deadline_seconds": budget.max_timeout_seconds, "coverage": "complete_stream_required"}
+    audio = checkpoints.get("truncation", {}).get("decoded_streams", {}).get("audio")
+    if phase == "clipping" and audio is not None and audio["complete"]:
+        provenance["decoded_audio"] = {"source": "ffprobe_complete_frame_scan",
+            "sample_count": audio["sample_count"], "sample_rate": audio["sample_rate"],
+            "output_channels": 1, "sample_format": "s16le", "mapping_verification": "pending_pcm_eof",
+            "expected_pcm_bytes_per_pass": audio["sample_count"] * 2 if audio["sample_count"] is not None else None}
+    return {"kind": "quality_check", "execution_mode": "isolated_quality_python", "read_mode": "stream",
+        "phase": phase, "artifact_digest": source["render_ref"], "source_bytes": source["size_bytes"],
+        "input_bytes": source["size_bytes"], "size_bytes": source["size_bytes"],
+        "timeout_seconds": budget.max_timeout_seconds, "threads": budget.decoder_threads,
+        "max_output_bytes": budget.max_report_bytes, "max_stderr_bytes": budget.max_stderr_bytes,
+        "budget_digest": budget_identity(budget), "workload_provenance": provenance}
 
 
 def quality_unit_key(request: dict) -> str:
@@ -117,10 +148,12 @@ def hash_file(path: Path, *, check, max_bytes: int) -> str:
 
 
 class QualityWorkerContext:
-    def __init__(self, budget: QualityBudget, deadline: float):
+    def __init__(self, budget: QualityBudget, deadline: float, *, resources: dict | None = None):
         if os.getpid() != os.getpgrp() or os.getpid() != os.getsid(0):
             raise QualityWorkerError("质检 worker 必须保留已登记的进程组首进程身份")
         self.budget, self.deadline = budget, deadline
+        self.resources = resources
+        self.processing = []
         self._verified_tools: set[str] = set()
 
     def check(self):
@@ -129,11 +162,12 @@ class QualityWorkerContext:
 
     def run(self, command: list[str], timeout: float, *, pcm: bool = False,
             stdout_consumer: Callable[[bytes], None] | None = None):
-        """Drain both pipes while enforcing cumulative output and execution limits.
+        """Drain a full decoder under one finite permit, with bounded buffering.
 
-        PCM and frame callers consume chunks immediately. Their byte quotas still
-        bound work in this grant; they are not allocations or resident-memory caps.
-        Only small metadata commands retain stdout for a completed response.
+        New stream requests bound residency, diagnostics and the process deadline;
+        decoded stdout is consumed immediately and counted to EOF. Header-derived
+        duration is not an execution allowance. Original sealed bulk requests keep
+        their original cumulative quotas. Metadata stdout stays report-bounded.
         """
         if pcm and stdout_consumer is None:
             raise QualityWorkerError("PCM 质检必须使用流式消费者")
@@ -151,9 +185,15 @@ class QualityWorkerContext:
             argv += ["-filter_threads", str(self.budget.decoder_threads),
                      "-filter_complex_threads", str(self.budget.decoder_threads)]
         argv += command[1:]
-        deadline = min(self.deadline, time.monotonic() + timeout)
-        caps = {"stdout": self.budget.max_pcm_bytes if pcm else self.budget.max_frame_json_bytes,
+        streaming = self.resources is not None and self.resources.get("read_mode") == "stream"
+        # No second fixed 30/180-second decoder timer may override the sealed unit.
+        deadline = self.deadline if streaming else min(self.deadline, time.monotonic() + timeout)
+        caps = {"stdout": (None if streaming and stdout_consumer is not None else
+                self.budget.max_report_bytes if streaming else
+                self.budget.max_pcm_bytes if pcm else self.budget.max_frame_json_bytes),
                 "stderr": self.budget.max_stderr_bytes}
+        started = time.monotonic()
+        complete = False
         output = {"stdout": bytearray(), "stderr": bytearray()}
         sizes = {"stdout": 0, "stderr": 0}
         # Deliberately inherit the registered Python worker's PGID. The outer
@@ -170,12 +210,13 @@ class QualityWorkerContext:
                         raise subprocess.TimeoutExpired(command, timeout)
                     for key, _ in selector.select(min(.05, max(0, deadline - time.monotonic()))):
                         label = key.data
-                        data = os.read(key.fileobj.fileno(), min(65536, caps[label] + 1 - sizes[label]))
+                        cap = caps[label]
+                        data = os.read(key.fileobj.fileno(), 65536 if cap is None else min(65536, cap + 1 - sizes[label]))
                         if not data:
                             selector.unregister(key.fileobj)
                         else:
                             sizes[label] += len(data)
-                            if sizes[label] > caps[label]:
+                            if caps[label] is not None and sizes[label] > caps[label]:
                                 raise QualityWorkerError("质检命令输出超过本次已标定上限，检查未完成")
                             if label == "stdout" and stdout_consumer is not None:
                                 stdout_consumer(data)
@@ -183,8 +224,14 @@ class QualityWorkerContext:
                                 output[label].extend(data)
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             self.check()
+            complete = code == 0
             return subprocess.CompletedProcess(command, code, bytes(output["stdout"]), bytes(output["stderr"]))
         finally:
+            self.processing.append({"tool": name, "pcm_s16le_mono": pcm,
+                "stdout_bytes": sizes["stdout"], "stderr_bytes": sizes["stderr"],
+                "elapsed_seconds": time.monotonic() - started, "complete": complete,
+                **({"output_sample_rate": int(command[command.index("-ar") + 1]), "output_channels": 1,
+                    "sample_format": "s16le"} if pcm else {})})
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=self.budget.runtime_sample_seconds)

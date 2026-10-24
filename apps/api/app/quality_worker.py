@@ -11,7 +11,7 @@ from app import quality_checks
 from app import quality_worker_runtime
 from app.quality_worker_runtime import (
     QualityBudget, QualityWorkerContext, QualityWorkerError, file_identity, hash_file, source_receipt,
-    QUALITY_PHASE_PROTOCOL, quality_phase_request,
+    QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request,
 )
 
 
@@ -35,8 +35,15 @@ def worker_identity(*, check=None) -> str:
 
 def inspect_request(request: dict) -> dict:
     budget = QualityBudget(**request["budget"])
+    streaming = request.get("protocol") == QUALITY_STREAM_PROTOCOL
+    resources = None
+    if streaming:
+        prepared = quality_phase_request(request, {"_phases": request["checkpoints"]})
+        if request["resources"] != prepared["resources"]:
+            raise QualityWorkerError("质检流处理声明与固定来源和检查点不一致")
+        resources = prepared["resources"]
     context = QualityWorkerContext(budget, min(float(request["deadline_monotonic"]),
-                                             time.monotonic() + budget.max_timeout_seconds))
+        time.monotonic() + (resources["timeout_seconds"] if streaming else budget.max_timeout_seconds)), resources=resources)
     identity = worker_identity(check=context.check)
     if identity != budget.worker_sha256:
         raise QualityWorkerError("质检 worker 与独立标定版本不一致")
@@ -44,7 +51,7 @@ def inspect_request(request: dict) -> dict:
     path = Path(source["path"])
     if not path.is_absolute() or file_identity(path) != source["file_identity"]:
         raise QualityWorkerError("检查期间成片内容已变化，请重新检查当前成片。")
-    if request.get("protocol") == QUALITY_PHASE_PROTOCOL:
+    if request.get("protocol") in QUALITY_PHASE_PROTOCOLS:
         # Verify the sealed prefix before consuming it; no offset or serialized
         # hashlib internals are trusted as a substitute for the final full hash.
         expected = quality_phase_request(request, {"_phases": request["checkpoints"]})
@@ -53,7 +60,8 @@ def inspect_request(request: dict) -> dict:
         phase = request["phase"]
         digest = None
         if phase in {"metadata", "finalize"}:
-            digest = hash_file(path, check=context.check, max_bytes=budget.max_input_bytes)
+            digest = hash_file(path, check=context.check,
+                max_bytes=source["size_bytes"] if streaming else budget.max_input_bytes)
             if digest != source["render_ref"]:
                 raise QualityWorkerError("成片与登记产物不匹配，请重新生成。")
         data = quality_checks.inspect_quality_phase(path, phase, request["checkpoints"],
@@ -67,6 +75,18 @@ def inspect_request(request: dict) -> dict:
             result["file_sha256"] = digest
         if phase == "finalize":
             result["evidence"] = result.pop("data")
+        elif streaming:
+            result["data"]["_processing"] = context.processing
+            if phase == "clipping":
+                runs = [item for item in context.processing if item["pcm_s16le_mono"]]
+                prior = request["checkpoints"].get("truncation", {}).get("decoded_streams", {}).get("audio")
+                result["data"]["decoded_pcm"] = {"passes": [
+                    {"sample_count": item["stdout_bytes"] // 2, "sample_rate": item["output_sample_rate"],
+                     "channels": item["output_channels"], "sample_format": item["sample_format"],
+                     "complete": item["complete"]} for item in runs],
+                    "frame_sample_mapping_matches": (runs[0]["stdout_bytes"] == prior["sample_count"] * 2
+                        and runs[0]["output_sample_rate"] == prior["sample_rate"]
+                        if runs and prior and prior["sample_count"] is not None else None)}
         return result
     before = hash_file(path, check=context.check, max_bytes=budget.max_input_bytes)
     if before != source["render_ref"]:

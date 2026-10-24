@@ -448,6 +448,10 @@ def _stream_start_known(stream: dict | None) -> bool:
 
 
 def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: QualityWorkerContext | None = None) -> float | None:
+    return _decoded_stream_facts(path, kind, context=context)["end_seconds"]
+
+
+def _decoded_stream_facts(path: str | Path, kind: str, *, context: QualityWorkerContext | None = None) -> dict:
     """该流真正解到的末端：解码帧的时间加这一帧自己的长度，取所有帧的最大值。
 
     - 视频：每个解码帧的 `pts_time` + 该帧 `duration_time`。
@@ -471,14 +475,16 @@ def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: Quality
         raise QualityCheckError("质检命令缺少受许可的 worker 上下文")
     sample_rate = _probe_sample_rate(path, context=context) if kind == "audio" else None
     if kind == "audio" and not sample_rate:
-        return None
+        return {"end_seconds": None, "frame_count": 0, "sample_count": None, "sample_rate": None, "complete": False}
     end: float | None = None
+    count, samples = 0, 0
+    samples_known = kind == "audio"
     pending = b""
     # key=value fields plus separators (including an optional trailing '|').
     record_limit = sum(len(key) + 1 + _FRAME_SCALAR_TEXT_LIMIT for key in fields) + len(fields)
 
     def frame_line(line):
-        nonlocal end
+        nonlocal end, count, samples, samples_known
         if not line.strip():
             return
         frame = {}
@@ -492,6 +498,13 @@ def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: Quality
                 frame[key] = value
         except (UnicodeDecodeError, ValueError) as exc:
             raise QualityCheckError("ffprobe returned invalid frame metadata") from exc
+        count += 1
+        if kind == "audio":
+            value = frame.get("nb_samples", "")
+            if not re.fullmatch(r"[0-9]+", value) or int(value) <= 0:
+                samples_known = False
+            else:
+                samples += int(value)
         pts = _finite(frame.get("pts_time"))
         length = _frame_length_seconds(frame, kind, sample_rate)
         if pts is not None and length is not None:
@@ -523,7 +536,8 @@ def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: Quality
         raise QualityCheckError("ffprobe returned an unsuccessful frame inspection")
     if pending:
         frame_line(pending)
-    return end
+    return {"end_seconds": end, "frame_count": count, "sample_count": samples if samples_known else None,
+            "sample_rate": sample_rate, "complete": True}
 
 
 def _frame_length_seconds(frame: dict, kind: str, sample_rate: int | None) -> float | None:
@@ -576,12 +590,20 @@ def detect_truncation(
     - 缺流、或某条流解不出终点时**不下截断结论**，如实记 `unavailable`：
       量不出来不是"没问题"。
     """
+    findings, unavailable, _ = _inspect_truncation(path, payload=payload, origin=origin,
+        tolerance_seconds=tolerance_seconds, context=context)
+    return findings, unavailable
+
+
+def _inspect_truncation(path, *, payload=None, origin=None,
+        tolerance_seconds=DEFAULT_TAIL_GAP_TOLERANCE_SECONDS, context=None):
     payload = payload if payload is not None else _probe(path, context=context)
     if origin is None:
         origin = _timeline_origin(payload)
     video = _stream_of(payload, "video")
     audio = _stream_of(payload, "audio")
     unavailable: list[QualityUnavailable] = []
+    streams = {}
     if video is None:
         unavailable.append(QualityUnavailable(
             QUALITY_KIND_TRUNCATION, "成片没有视频流，无法判断画面是否被截断"
@@ -591,10 +613,10 @@ def detect_truncation(
             QUALITY_KIND_TRUNCATION, "成片没有音频流，无法判断声音是否被截断"
         ))
     if unavailable:
-        return [], unavailable
+        return [], unavailable, streams
 
-    video_end = _decoded_stream_end_seconds(path, "video", context=context)
-    audio_end = _decoded_stream_end_seconds(path, "audio", context=context)
+    streams = {kind: _decoded_stream_facts(path, kind, context=context) for kind in ("video", "audio")}
+    video_end, audio_end = streams["video"]["end_seconds"], streams["audio"]["end_seconds"]
     if video_end is None:
         unavailable.append(QualityUnavailable(
             QUALITY_KIND_TRUNCATION, "视频流没有解出任何包，画面终点未知"
@@ -604,13 +626,13 @@ def detect_truncation(
             QUALITY_KIND_TRUNCATION, "音频流没有解出任何包，声音终点未知"
         ))
     if unavailable:
-        return [], unavailable
+        return [], unavailable, streams
 
     video_end -= origin
     audio_end -= origin
     gap = abs(video_end - audio_end)
     if gap <= tolerance_seconds:
-        return [], []
+        return [], [], streams
     start = round(min(video_end, audio_end), 3)
     end = round(max(video_end, audio_end), 3)
     if video_end < audio_end:
@@ -623,7 +645,7 @@ def detect_truncation(
             f"声音最后一个采样结束在 {round(audio_end, 3)}s，画面还在播到 "
             f"{round(video_end, 3)}s，尾部 {round(gap, 3)}s 只有画面没有声音"
         )
-    return [QualityFinding(QUALITY_KIND_TRUNCATION, start, end, detail)], []
+    return [QualityFinding(QUALITY_KIND_TRUNCATION, start, end, detail)], [], streams
 
 
 def detect_timestamp_offset(
@@ -716,11 +738,12 @@ def inspect_quality_phase(path, phase, checkpoints, *, context=None,
     payload = checkpoints["metadata"]
     origin = _timeline_origin(payload)
     findings, unavailable, summary = [], [], None
+    decoded_streams = None
     if phase == "black_frames":
         findings = _shifted(detect_black_frames(path, min_duration_seconds=min_black_seconds,
             pixel_threshold=black_pixel_threshold, context=context), origin)
     elif phase == "truncation":
-        findings, unavailable = detect_truncation(path, payload=payload, origin=origin,
+        findings, unavailable, decoded_streams = _inspect_truncation(path, payload=payload, origin=origin,
             tolerance_seconds=truncation_tolerance_seconds, context=context)
     elif phase == "clipping":
         audio = _stream_of(payload, "audio")
@@ -739,7 +762,8 @@ def inspect_quality_phase(path, phase, checkpoints, *, context=None,
     else:
         raise ValueError("未知质检阶段")
     return {"findings": [asdict(item) for item in findings],
-            "unavailable": [asdict(item) for item in unavailable], "clipping_summary": summary}
+            "unavailable": [asdict(item) for item in unavailable], "clipping_summary": summary,
+            **({"decoded_streams": decoded_streams} if decoded_streams is not None else {})}
 
 
 def _report_from_phases(path, checkpoints, *,
