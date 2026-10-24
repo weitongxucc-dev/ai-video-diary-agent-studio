@@ -141,6 +141,10 @@ class FixtureVoiceProvider:
         self.calls = 0
         self.references: list[str] = []
 
+    def generate_granted(self, *, grant_context, **kwargs):
+        grant_context.check()
+        return self.generate(grant_context=grant_context, **kwargs)
+
     def generate(self, *, output_path, reference_audio_path, **_kwargs):
         self.calls += 1
         self.references.append(str(reference_audio_path))

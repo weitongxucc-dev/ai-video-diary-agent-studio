@@ -19,7 +19,6 @@ from app.voice_clone import (
     VoiceCloneError,
     VoiceCloneProvider,
     VoiceCloneResult,
-    Qwen3TTSSubprocessProvider,
     text_to_speech_preflight,
 )
 
@@ -173,7 +172,8 @@ class NarrationGenerator:
             if resolved_reference_audio_path is not None
             else Path(reference_path).expanduser().resolve()
         )
-        result: VoiceCloneResult = self.provider.generate(
+        generate = self.provider.generate_granted if grant_context is not None else self.provider.generate
+        result: VoiceCloneResult = generate(
             text=narration_text,
             reference_audio_path=provider_reference_path,
             reference_text=reference_text,
@@ -279,7 +279,7 @@ class NarrationGenerator:
 
         if grant_context is not None:
             grant_context.check()
-            if not isinstance(self.provider, Qwen3TTSSubprocessProvider):
+            if not callable(getattr(self.provider, "generate_granted", None)):
                 raise ValueError("当前声音提供者没有受许可的隔离子进程执行路径")
 
         tempo = _delivery_tempo(delivery_instruction)
@@ -354,7 +354,8 @@ class NarrationGenerator:
                 else f"narration_{cache_key[:12]}.wav"
             )
         )
-        result: VoiceCloneResult = self.provider.generate(
+        generate = self.provider.generate_granted if grant_context is not None else self.provider.generate
+        result: VoiceCloneResult = generate(
             text=text,
             reference_audio_path=reference_path,
             reference_text=reference_text,
@@ -749,14 +750,14 @@ class VoicePreviewService:
                 if artifact.source != reference_input:
                     raise ValueError("声音参考修订已变化，请重新排队")
                 reference = artifact.path
-            result = self.provider.generate(
+            result = self.provider.generate_granted(
                 text=preview_text.strip(),
                 reference_audio_path=reference,
                 reference_text=voice.reference_text,
                 language=resolved_language,
                 pronunciation_dictionary=pronunciation_dictionary,
                 output_path=output_path,
-                **({"grant_context": grant_context} if grant_context is not None else {}),
+                grant_context=grant_context,
             )
             if grant_context is not None:
                 grant_context.check()

@@ -9,9 +9,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT, ModelCatalog
+
+if TYPE_CHECKING:
+    from app.creation_execution import CreationStageGrantContext
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,19 @@ class VoiceCloneProvider(Protocol):
     ) -> VoiceCloneResult: ...
 
 
+    def generate_granted(
+        self,
+        *,
+        text: str,
+        reference_audio_path: str | Path,
+        reference_text: str,
+        language: str,
+        pronunciation_dictionary: tuple[dict[str, str], ...],
+        output_path: str | Path,
+        grant_context: CreationStageGrantContext,
+    ) -> VoiceCloneResult: ...
+
+
 class UnavailableVoiceCloneProvider:
     model_id = QWEN3_TTS_06B_BASE_8BIT.id
     supported_languages: tuple[str, ...] = ()
@@ -102,6 +118,27 @@ class UnavailableVoiceCloneProvider:
                 pronunciation_dictionary=pronunciation_dictionary,
             )
             or self.message
+        )
+
+
+    def generate_granted(
+        self,
+        *,
+        text: str,
+        reference_audio_path: str | Path,
+        reference_text: str,
+        language: str,
+        pronunciation_dictionary: tuple[dict[str, str], ...],
+        output_path: str | Path,
+        grant_context: CreationStageGrantContext,
+    ) -> VoiceCloneResult:
+        if grant_context is None:
+            raise PermissionError("声音生成需要本次设备许可")
+        grant_context.check()
+        return self.generate(
+            text=text, reference_audio_path=reference_audio_path,
+            reference_text=reference_text, language=language,
+            pronunciation_dictionary=pronunciation_dictionary, output_path=output_path,
         )
 
 
@@ -224,6 +261,27 @@ class Qwen3TTSSubprocessProvider:
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 raise VoiceCloneError(f"声音克隆结果无效：{exc}") from exc
         return result
+
+    def generate_granted(
+        self,
+        *,
+        text: str,
+        reference_audio_path: str | Path,
+        reference_text: str,
+        language: str,
+        pronunciation_dictionary: tuple[dict[str, str], ...],
+        output_path: str | Path,
+        grant_context: CreationStageGrantContext,
+    ) -> VoiceCloneResult:
+        if grant_context is None:
+            raise PermissionError("声音生成需要本次设备许可")
+        grant_context.check()
+        return self.generate(
+            text=text, reference_audio_path=reference_audio_path,
+            reference_text=reference_text, language=language,
+            pronunciation_dictionary=pronunciation_dictionary, output_path=output_path,
+            grant_context=grant_context,
+        )
 
     def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
         cache_root = self.model_path.parent / ".cache"
