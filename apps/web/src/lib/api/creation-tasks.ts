@@ -1,3 +1,4 @@
+import type { CreationTaskStoryboardRegenerationInput, CreationTaskStoryboardRegenerationReceipt } from '../types/creation-tasks';
 import type { TaskMediaJob } from '../types/task-edits';
 import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse } from '../types/creation-tasks';
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
@@ -222,4 +223,12 @@ export function adoptSegmentVisualDecision(taskId: string, jobId: string, sectio
   return creationPlanRequest<import('../types/creation-tasks').SegmentVisualDecisionAdoption>(
     `/api/creation-tasks/${encodeURIComponent(taskId)}/execution/jobs/${encodeURIComponent(jobId)}/sections/${encodeURIComponent(sectionId)}/visual-decision`,
     { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function regenerateCreationTaskStoryboard(taskId: string, input: CreationTaskStoryboardRegenerationInput): Promise<CreationTaskStoryboardRegenerationReceipt> {
+    return request(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export function readCreationTaskStoryboardRegeneration(taskId: string, requestId: string): Promise<CreationTaskStoryboardRegenerationReceipt> {
+    return request(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan/requests/${encodeURIComponent(requestId)}`);
 }

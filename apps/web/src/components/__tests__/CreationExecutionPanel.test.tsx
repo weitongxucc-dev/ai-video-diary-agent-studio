@@ -107,7 +107,7 @@ describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
   });
 });
 
-function visualDecision(adopted = false): import('@/lib/types/creation-tasks').SegmentVisualDecision {
+function visualDecision(adopted = false): Exclude<import('@/lib/types/creation-tasks').SegmentVisualDecision, { status: 'planning_conflict' }> {
   return { task_id: 'task-1', job_id: 'job-1', section_id: 'section-1', decision_digest: 'a'.repeat(64),
     status: adopted ? 'adopted' : 'waiting_for_user', adopted, audio: { persisted: true, artifact_reference: 'narration://original' },
     usage: { settled: true, used_seconds: 1, used_output_bytes: 24000 },
@@ -189,5 +189,58 @@ it('requires original-result readback before either visual submission button can
   rerender(<CreationExecutionPanel {...props} visualDecision={{...visualDecision(true),device_request_id:null}} visualReadRequired />);
   expect(screen.getByRole('button',{name:'继续已采用的原作业'})).toBeDisabled();
   expect(screen.getByRole('button',{name:'回查原决定'})).toBeEnabled();
+  expect(adopt).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("exposes explicit keep-voice storyboard action and unknown-result recovery in compact=%s", async compact => {
+  const regenerate = vi.fn(), read = vi.fn();
+  const props = { taskStage: "montage" as const, taskReason: null, voice: null, availableVoices: [], preview: null,
+    execution: null, busy: false, compact, onStart: vi.fn(), onResume: vi.fn(), onCancel: vi.fn(), onOpenMontage: vi.fn(),
+    onRegenerateStoryboard: regenerate, onReadStoryboard: read };
+  const storyboard = { busy: false, canSubmit: true, refreshPending: false, requestId: null as string | null, receipt: null, error: null };
+  const { rerender } = render(<CreationExecutionPanel {...props} storyboard={storyboard} />);
+  await userEvent.click(screen.getByRole("button", { name: "重新安排画面，保留配音" }));
+  expect(regenerate).toHaveBeenCalledTimes(1);
+  expect(props.onStart).not.toHaveBeenCalled();
+  expect(props.onResume).not.toHaveBeenCalled();
+  expect(props.onCancel).not.toHaveBeenCalled();
+  rerender(<CreationExecutionPanel {...props} storyboard={{ ...storyboard, canSubmit: false, requestId: "original-request" }} />);
+  expect(screen.getByRole("button", { name: "重新安排画面，保留配音" })).toBeDisabled();
+  expect(screen.getByText("上次操作结果尚未核实，请先检查结果；不会重复提交。")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "检查上次操作结果" }));
+  expect(read).toHaveBeenCalledTimes(1);
+  rerender(<CreationExecutionPanel {...props} storyboard={{ ...storyboard, busy: true, canSubmit: false, requestId: "original-request" }} />);
+  expect(screen.getByRole("button", { name: "检查上次操作结果" })).toBeDisabled();
+  const receipt = { request_id: "original-request", task_id: "task-a", job_id: "storyboard-job", status: "succeeded" as const,
+    stage: "montage_plan" as const, script_id: "script-a", narration_cache_key: "original-voice", base_timeline_version_id: "version-1",
+    base_timeline_sequence: 1, result: null, failure_reason: null, result_url: "/original-result" };
+  rerender(<CreationExecutionPanel {...props} storyboard={{ ...storyboard, requestId: "original-request", receipt }} />);
+  expect(screen.getByText("画面编排已更新，请检查候选后重新输出。")).toBeVisible();
+  expect(props.onResume).not.toHaveBeenCalled();
+  expect(props.onStart).not.toHaveBeenCalled();
+});
+
+it("shows a real planning conflict and preserved audio without candidate selection or adoption", async () => {
+  const read = vi.fn(), adopt = vi.fn();
+  const conflict: import('@/lib/types/creation-tasks').SegmentVisualPlanningConflict = {
+    task_id: "task-a", job_id: "job-1", section_id: "section-1", status: "planning_conflict", can_adopt: false,
+    reason: "当前合法素材无法满足目标时长", decision_digest: null, adopted: false,
+    audio: { artifact_reference: "narration:original-audio", persisted: true },
+    usage: { settled: true, used_seconds: 4, used_output_bytes: 1024 },
+    candidate_clips: [], candidate_total_count: 0, candidate_offset: 0, next_offset: null,
+    required_confirmation_ids: [], confirmed_clip_ids: [], device_request_id: null,
+    recovery: { action: "resume_original", requires_revalidation: true, detail: "请处理时长或合法素材冲突后恢复原请求。" },
+  };
+  render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null} availableVoices={[]} preview={null}
+    execution={null} busy={false} visualDecision={conflict} onReadVisualDecision={read} onAdoptVisualDecision={adopt}
+    onStart={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
+  expect(screen.getByRole("alert")).toHaveTextContent(conflict.reason);
+  expect(screen.getByText("原配音已保留，不会重新生成已就绪配音。")).toBeVisible();
+  expect(screen.getByText("当前没有可采用的画面候选，请先处理以上冲突。")).toBeVisible();
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "确认画面并继续原作业" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "查看更多原候选" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "回查原决定" }));
+  expect(read).toHaveBeenCalledWith(conflict);
   expect(adopt).not.toHaveBeenCalled();
 });

@@ -4,8 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { getCreationExecution, getCreationTaskWorkspace, previewCreationExecution } from "@/lib/api";
 import type { CreationExecutionPreview, CreationExecutionStatus, CreationTaskWorkspace } from "@/lib/types";
 import { errorDetails } from './request-errors';
-import { getSegmentVisualDecision, adoptSegmentVisualDecision } from '@/lib/api/creation-tasks';
-import type { SegmentVisualDecision, SegmentVisualDecisionLocator } from '@/lib/types/creation-tasks';
+import { getSegmentVisualDecision, adoptSegmentVisualDecision, regenerateCreationTaskStoryboard, readCreationTaskStoryboardRegeneration } from '@/lib/api/creation-tasks';
+import type { SegmentVisualDecision, SegmentVisualDecisionLocator, CreationTaskStoryboardRegenerationInput, CreationTaskStoryboardRegenerationReceipt } from '@/lib/types/creation-tasks';
+type StoryboardAttempt = {
+    input: CreationTaskStoryboardRegenerationInput;
+    receipt: CreationTaskStoryboardRegenerationReceipt | null;
+    inFlight: boolean;
+    refreshed: boolean;
+};
+const storyboardFinished = (receipt: CreationTaskStoryboardRegenerationReceipt | null) =>
+    receipt !== null && ["succeeded", "failed", "cancelled"].includes(receipt.status);
+
 type ExecutionInput = {
     taskId: string;
     confirmedScriptId: string | null;
@@ -40,11 +49,22 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
     applyWorkspace.current = onWorkspaceRead;
     const receiptRevision = useRef(workspaceReadRevision);
     receiptRevision.current = workspaceReadRevision;
+    // Request locators survive task switches; an unknown POST is never replaced by a new UUID.
+    const storyboardAttempts = useRef(new Map<string, StoryboardAttempt>());
+    const [storyboardAttempt, setStoryboardAttempt] = useState<StoryboardAttempt | null>(null);
+    const [storyboardBusy, setStoryboardBusy] = useState(false);
+    const [storyboardError, setStoryboardError] = useState<string | null>(null);
     const currentTask = useRef(taskId);
     currentTask.current = taskId;
     const pollExecution = useRef<() => void>(() => undefined);
     const workspaceRead = useRef<(execution: CreationExecutionStatus) => Promise<boolean>>(async () => false);
     const commandRequest = useRef(0);
+    useEffect(() => {
+        const attempt = storyboardAttempts.current.get(taskId) ?? null;
+        setStoryboardAttempt(attempt);
+        setStoryboardBusy(attempt?.inFlight ?? false);
+        setStoryboardError(null);
+    }, [taskId, viewActive]);
     useEffect(() => {
         if (!viewActive) return;
         let active = true;
@@ -68,6 +88,11 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
                 if (!active || request !== workspaceRequest || command !== commandRequest.current) return false;
                 if (!applyWorkspace.current(next, readRevision)) return false;
                 snapshot = executionSnapshot(execution);
+                const attempt = storyboardAttempts.current.get(taskId);
+                if (attempt && storyboardFinished(attempt.receipt)) {
+                    attempt.refreshed = true;
+                    setStoryboardAttempt({ ...attempt });
+                }
                 clearReadError();
                 return true;
             } catch (cause) {
@@ -102,11 +127,18 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
                     nextDelay = 2500;
                 if (command === commandRequest.current) {
                     setExecution(current);
-                    const nextSnapshot = executionSnapshot(current);
-                    if (current.job && nextSnapshot !== snapshot) {
-                        await readWorkspace(current);
-                    } else {
-                        clearReadError("execution");
+                    const attempt = storyboardAttempts.current.get(taskId);
+                    if (attempt?.receipt && !attempt.inFlight && attempt.receipt.job_id === current.job?.id
+                        && attempt.receipt.status !== current.job.status) {
+                        await settleStoryboard(attempt, () => readCreationTaskStoryboardRegeneration(taskId, attempt.input.request_id), false);
+                    }
+                    if (active && request === pollRequest && command === commandRequest.current) {
+                        const nextSnapshot = executionSnapshot(current);
+                        if ((current.job && nextSnapshot !== snapshot) || (attempt && storyboardFinished(attempt.receipt) && !attempt.refreshed)) {
+                            await readWorkspace(current);
+                        } else {
+                            clearReadError("execution");
+                        }
                     }
                 }
             }
@@ -133,6 +165,48 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
             setExecutionPreview(preview);
         return getCreationExecution(taskId);
     }
+    async function settleStoryboard(attempt: StoryboardAttempt,
+        operation: () => Promise<CreationTaskStoryboardRegenerationReceipt>, refresh: boolean) {
+        if (attempt.inFlight) return;
+        const readWorkspace = workspaceRead.current;
+        const owns = () => currentTask.current === taskId && workspaceRead.current === readWorkspace;
+        attempt.inFlight = true;
+        attempt.refreshed = false;
+        setStoryboardBusy(true); setStoryboardError(null);
+        try {
+            const receipt = await operation();
+            if (receipt.task_id !== taskId || receipt.request_id !== attempt.input.request_id)
+                throw new Error("画面重排结果与上次操作不一致，请检查上次操作结果。");
+            attempt.receipt = receipt;
+            if (!owns()) return;
+            setStoryboardAttempt({ ...attempt });
+            if (refresh) await changeExecution(() => getCreationExecution(taskId));
+        } catch (cause) {
+            if (owns()) setStoryboardError(errorDetails(cause).message);
+        } finally {
+            attempt.inFlight = false;
+            if (currentTask.current === taskId && storyboardAttempts.current.get(taskId) === attempt) {
+                setStoryboardAttempt({ ...attempt }); setStoryboardBusy(false);
+            }
+        }
+    }
+
+    async function regenerateStoryboard(input: Omit<CreationTaskStoryboardRegenerationInput, "request_id">) {
+        if (currentTask.current !== taskId) return;
+        const previous = storyboardAttempts.current.get(taskId);
+        if (previous && (previous.inFlight || !storyboardFinished(previous.receipt) || !previous.refreshed)) return;
+        const attempt: StoryboardAttempt = { input: { ...input, request_id: crypto.randomUUID() }, receipt: null, inFlight: false, refreshed: false };
+        storyboardAttempts.current.set(taskId, attempt);
+        setStoryboardAttempt(attempt);
+        await settleStoryboard(attempt, () => regenerateCreationTaskStoryboard(taskId, attempt.input), true);
+    }
+
+    async function readStoryboard() {
+        if (currentTask.current !== taskId) return;
+        const attempt = storyboardAttempts.current.get(taskId);
+        if (attempt) await settleStoryboard(attempt, () => readCreationTaskStoryboardRegeneration(taskId, attempt.input.request_id), true);
+    }
+
     async function changeExecution(operation: () => Promise<CreationExecutionStatus>) {
         const readWorkspace = workspaceRead.current;
         const command = ++commandRequest.current;
@@ -171,7 +245,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
                 more ? visualDecision?.next_offset ?? 0 : 0);
             if (epoch !== visualEpoch.current || currentTask.current !== taskId) return;
             if (more) {
-                if (!visualDecision || value.decision_digest !== visualDecision.decision_digest) throw new Error('原画面决定已变化，请关闭后重新查看；未重新提交采用。');
+                if (!visualDecision || value.status === "planning_conflict" || visualDecision.status === "planning_conflict" || value.decision_digest !== visualDecision.decision_digest) throw new Error('原画面决定已变化，请关闭后重新查看；未重新提交采用。');
                 setVisualDecision({ ...value, candidate_clips: [...visualDecision.candidate_clips, ...value.candidate_clips] });
             } else {
                 setVisualDecision(value);
@@ -184,7 +258,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
         }
     }
     async function adoptVisualDecision(confirmedClipIds: string[]) {
-        if (visualPending.current !== null || visualReadRequiredRef.current || !visualDecision || visualDecision.task_id !== taskId) return;
+        if (visualPending.current !== null || visualReadRequiredRef.current || !visualDecision || visualDecision.status === "planning_conflict" || visualDecision.task_id !== taskId) return;
         const saved = visualDecision;
         const epoch = ++visualEpoch.current;
         visualPending.current = epoch; setVisualBusy(true); setVisualError(null);
@@ -207,5 +281,9 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
             if (visualPending.current === epoch) { visualPending.current = null; setVisualBusy(false); }
         }
     }
-    return { visualDecision, visualBusy, visualError, visualReadRequired, readVisualDecision, adoptVisualDecision, closeVisualDecision, executionPreview, execution, executionError, acceptExecution, changeExecution, recheckRequirements, pollExecution: () => pollExecution.current() };
+    const storyboard = { busy: storyboardBusy, requestId: storyboardAttempt?.input.request_id ?? null,
+        receipt: storyboardAttempt?.receipt ?? null, error: storyboardError,
+        refreshPending: !!storyboardAttempt && storyboardFinished(storyboardAttempt.receipt) && !storyboardAttempt.refreshed,
+        canSubmit: !storyboardBusy && (!storyboardAttempt || (storyboardFinished(storyboardAttempt.receipt) && storyboardAttempt.refreshed)) };
+    return { storyboard, regenerateStoryboard, readStoryboard, visualDecision, visualBusy, visualError, visualReadRequired, readVisualDecision, adoptVisualDecision, closeVisualDecision, executionPreview, execution, executionError, acceptExecution, changeExecution, recheckRequirements, pollExecution: () => pollExecution.current() };
 }

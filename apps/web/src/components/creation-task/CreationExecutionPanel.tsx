@@ -6,11 +6,11 @@ import { useEffect, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { Button } from "@/components/ui/button";
 import type { CreationTaskWorkspace as WorkspaceState, CreationExecutionPreview, CreationExecutionStatus } from "@/lib/types";
-import type { SegmentVisualDecision, SegmentVisualDecisionLocator } from "@/lib/types/creation-tasks";
+import type { SegmentVisualDecision, SegmentVisualDecisionLocator, CreationTaskStoryboardRegenerationReceipt } from "@/lib/types/creation-tasks";
 import styles from "../CreationTaskWorkspace.module.css";
 import editorUi from "../VideoEditor.module.css";
 import { executionStageLabels } from './execution-labels';
-export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
+export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
     taskReason: string | null;
     taskStage: WorkspaceState["task"]["stage"];
     voice: WorkspaceState["plan"]["selected_voice"];
@@ -21,12 +21,28 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     visualDecision?: SegmentVisualDecision | null; visualBusy?: boolean; visualError?: string | null; visualReadRequired?: boolean;
     onReadVisualDecision?: (locator: Pick<SegmentVisualDecisionLocator, 'job_id' | 'section_id'>, more?: boolean) => void;
     onAdoptVisualDecision?: (ids: string[]) => void; onCloseVisualDecision?: () => void;
+    storyboard?: { busy: boolean; canSubmit: boolean; refreshPending: boolean; requestId: string | null;
+        receipt: CreationTaskStoryboardRegenerationReceipt | null; error: string | null };
+    onRegenerateStoryboard?: () => void;
+    onReadStoryboard?: () => void;
     compact?: boolean;
     onStart: () => void;
     onResume: () => void;
     onCancel: () => void;
     onOpenMontage: () => void;
 }) {
+    const storyboardControls = storyboard && onRegenerateStoryboard ? <section aria-label="重新安排画面" className={styles.workSection}>
+      <Button variant="outline" disabled={busy || visualBusy || !storyboard.canSubmit} onClick={onRegenerateStoryboard} type="button">重新安排画面，保留配音</Button>
+      <p>重新编排当前文案的镜头，保留原配音、字幕与图层；不会自动生成成片。</p>
+      {storyboard.requestId ? <>
+        <p role="status">{storyboard.receipt?.status === "succeeded" ? "画面编排已更新，请检查候选后重新输出。"
+          : storyboard.receipt?.failure_reason ?? (storyboard.receipt ? "画面重排已提交，请等待完成。"
+            : storyboard.busy ? "正在提交或检查画面重排结果。" : "上次操作结果尚未核实，请先检查结果；不会重复提交。")}</p>
+        <Button variant="outline" disabled={busy || storyboard.busy} onClick={onReadStoryboard} type="button">检查上次操作结果</Button>
+      </> : null}
+      {storyboard.refreshPending ? <p role="status">上次操作结果已取得，但当前任务尚未刷新；请先检查上次操作结果。</p> : null}
+      {storyboard.error ? <p role="alert">{storyboard.error}</p> : null}
+    </section> : null;
     const [detailsOpen, setDetailsOpen] = useState(false);
     const visualMedia = useRef<HTMLDivElement>(null);
     const [selected, setSelected] = useState<string[]>([]);
@@ -43,9 +59,15 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
         {locators.truncated && <p>当前显示 {locators.items.length} / {locators.total_count} 项等待决定；处理后继续回读。</p>}
       </section>}
       {visualError && !visualDecision && <p role="alert">{visualError}</p>}
-      {visualDecision && <HomeCardDialog kind="config" title="确认段落画面" onClose={() => { if (!visualBusy) onCloseVisualDecision?.(); }}
+      {visualDecision && <HomeCardDialog kind="config" title={visualDecision.status === "planning_conflict" ? "画面安排暂时冲突" : "确认段落画面"} onClose={() => { if (!visualBusy) onCloseVisualDecision?.(); }}
         footer={<><Button variant="ghost" disabled={visualBusy} onClick={onCloseVisualDecision}>关闭</Button>
-          <Button disabled={!canAdopt} onClick={() => onAdoptVisualDecision?.(selected)}>确认画面并继续原作业</Button></>}>
+          {visualDecision.status !== "planning_conflict" && <Button disabled={!canAdopt} onClick={() => onAdoptVisualDecision?.(selected)}>确认画面并继续原作业</Button>}</>}>
+        {visualDecision.status === "planning_conflict" ? <>
+          <p role="alert">{visualDecision.reason}</p>
+          <p>{visualDecision.audio.persisted ? "原配音已保留，不会重新生成已就绪配音。" : "原配音保存状态尚未核实，不会自动重新配音。"}</p>
+          <p>当前没有可采用的画面候选，请先处理以上冲突。</p>
+          <p>{visualDecision.recovery.detail}</p>
+        </> : <>
         <p>原配音已保存{visualDecision.usage.settled ? '，用量已对账' : '，用量仍待核对'}；本次只确认画面，不重新配音。</p>
         {visualDecision.adopted && <p role="status">画面采用已保存；沿原作业查看排队与完成状态。</p>}
         {visualDecision.adopted && visualDecision.status !== 'stale' && !visualDecision.device_request_id &&
@@ -62,6 +84,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
         </article>)}</div>
         <p>已展示 {visualDecision.candidate_clips.length} / {visualDecision.candidate_total_count} 个候选；已明确确认 {selected.length} / {required.length} 个待决定画面。</p>
         {visualDecision.next_offset !== null && <Button variant="outline" disabled={visualBusy} onClick={() => onReadVisualDecision?.(visualDecision, true)}>查看更多原候选</Button>}
+        </>}
         {visualError && <p role="alert">{visualError}</p>}
         <Button variant="ghost" disabled={visualBusy} onClick={() => onReadVisualDecision?.(visualDecision)}>回查原决定</Button>
       </HomeCardDialog>}
@@ -117,7 +140,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     </div> : null}
   </section>;
     if (!compact)
-        return <>{content}{visualControls}</>;
+        return <>{content}{storyboardControls}{visualControls}</>;
     return <>
     <section aria-label="制作状态" className={editorUi.productionSummary}>
       <div>{job && job.status !== "succeeded" ? <strong>连续制作 · {statusText}{execution?.current_stage ? ` · ${stageLabels[execution.current_stage]}` : ""}</strong> : !job ? <strong>制作要求</strong> : null}
@@ -130,6 +153,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
       {resumeWaiting && !detailsOpen ? <Button className={editorUi.button} disabled={busy || visualBusy} onClick={onResume} type="button">继续制作</Button> : null}
       {hasInitialExecutionControls && active && job?.status !== "interrupted" && !detailsOpen ? <button className={editorUi.button} type="button" disabled={busy || visualBusy} onClick={onCancel}>停止制作</button> : null}
     </section>
+    {storyboardControls}
     {visualControls}
     <HomeCardDialog kind="detail" title="制作文案与要求" open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
       <div className={styles.productionDetails}>{content}</div>

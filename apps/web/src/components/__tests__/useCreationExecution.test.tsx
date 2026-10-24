@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CreationExecutionStatus, CreationTaskWorkspace } from "@/lib/types";
 import { useCreationExecution } from "../creation-task/useCreationExecution";
 
-const api = vi.hoisted(() => ({ readExecution: vi.fn(), readWorkspace: vi.fn(), preview: vi.fn(), readVisual: vi.fn(), adoptVisual: vi.fn() }));
+const api = vi.hoisted(() => ({ readExecution: vi.fn(), readWorkspace: vi.fn(), preview: vi.fn(), readVisual: vi.fn(), adoptVisual: vi.fn(), regenerateStoryboard: vi.fn(), readStoryboard: vi.fn() }));
 vi.mock("@/lib/api", () => ({
   getCreationExecution: api.readExecution,
   getCreationTaskWorkspace: api.readWorkspace,
@@ -11,7 +11,7 @@ vi.mock("@/lib/api", () => ({
   CreationPlanApiError: class extends Error {},
 }));
 
-vi.mock('@/lib/api/creation-tasks', () => ({ getSegmentVisualDecision: api.readVisual, adoptSegmentVisualDecision: api.adoptVisual }));
+vi.mock('@/lib/api/creation-tasks', () => ({ getSegmentVisualDecision: api.readVisual, adoptSegmentVisualDecision: api.adoptVisual, regenerateCreationTaskStoryboard: api.regenerateStoryboard, readCreationTaskStoryboardRegeneration: api.readStoryboard }));
 
 function execution(taskId: string): CreationExecutionStatus {
   return { task_id: taskId, job: null, stages: [], current_stage: null, waiting_reason: null,
@@ -226,4 +226,95 @@ it('submits a visible choice once with the original digest and never automatical
   api.adoptVisual.mockResolvedValueOnce({decision:recorded,execution:execution('task-a')});
   await act(async()=>{await result.current.adoptVisualDecision(['original-clip']);});
   expect(api.adoptVisual).toHaveBeenCalledTimes(2);
+});
+
+const storyboardInput = { script_id: "script-a", input_digest: "a".repeat(64),
+  expected_timeline_version_id: "version-1", expected_timeline_sequence: 1 };
+function storyboardReceipt(requestId: string, status: "queued" | "succeeded" = "queued", taskId = "task-a") {
+  return { request_id: requestId, task_id: taskId, job_id: `storyboard-${taskId}`, status, stage: "montage_plan" as const,
+    script_id: "script-a", narration_cache_key: "original-voice", base_timeline_version_id: "version-1",
+    base_timeline_sequence: 1, result: null, failure_reason: null, result_url: `/api/creation-tasks/${taskId}/montage/plan/requests/${requestId}` };
+}
+
+it("submits the canonical storyboard input once and refreshes actual execution and workspace", async () => {
+  api.readWorkspace.mockResolvedValue(readback("原作品"));
+  api.regenerateStoryboard.mockImplementation(async (_taskId, input) => storyboardReceipt(input.request_id));
+  const { result } = mountReadback();
+  await act(async () => { await Promise.all([result.current.regenerateStoryboard(storyboardInput), result.current.regenerateStoryboard(storyboardInput)]); });
+  expect(api.regenerateStoryboard).toHaveBeenCalledTimes(1);
+  const input = api.regenerateStoryboard.mock.calls[0][1];
+  expect(input).toEqual({ ...storyboardInput, request_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+  expect(result.current.storyboard.receipt).toEqual(storyboardReceipt(input.request_id));
+  expect(result.current.storyboard.canSubmit).toBe(false);
+  expect(api.readWorkspace).toHaveBeenCalledWith("task-a");
+  expect(result.current.execution?.task_id).toBe("task-a");
+});
+
+it("retains the original UUID after an unknown submit and failed or mismatched reads, without another POST", async () => {
+  api.regenerateStoryboard.mockRejectedValue(new Error("连接中断"));
+  api.readWorkspace.mockResolvedValue(readback("当前作品"));
+  const { result } = mountReadback();
+  await act(async () => { await result.current.regenerateStoryboard(storyboardInput); });
+  const requestId = api.regenerateStoryboard.mock.calls[0][1].request_id;
+  api.readStoryboard.mockRejectedValueOnce(new Error("原请求暂不可查"))
+    .mockResolvedValueOnce(storyboardReceipt(requestId, "succeeded", "task-b"))
+    .mockResolvedValueOnce(storyboardReceipt("other-request", "succeeded"))
+    .mockResolvedValue(storyboardReceipt(requestId, "succeeded"));
+  for (let i = 0; i < 3; i++) {
+    await act(async () => { await result.current.readStoryboard(); await result.current.regenerateStoryboard(storyboardInput); });
+    expect(result.current.storyboard.requestId).toBe(requestId);
+    expect(result.current.storyboard.canSubmit).toBe(false);
+    expect(result.current.storyboard.receipt).toBeNull();
+  }
+  expect(api.regenerateStoryboard).toHaveBeenCalledTimes(1);
+  api.readWorkspace.mockRejectedValue(new Error("当前任务刷新失败"));
+  await act(async () => { await result.current.readStoryboard(); });
+  expect(api.readStoryboard).toHaveBeenLastCalledWith("task-a", requestId);
+  expect(result.current.storyboard.receipt?.status).toBe("succeeded");
+  expect(result.current.storyboard.refreshPending).toBe(true);
+  expect(result.current.storyboard.canSubmit).toBe(false);
+  await act(async () => { await result.current.regenerateStoryboard(storyboardInput); });
+  expect(api.regenerateStoryboard).toHaveBeenCalledTimes(1);
+  api.readWorkspace.mockResolvedValue(readback("当前事实已刷新"));
+  await act(async () => { await result.current.readStoryboard(); });
+  expect(api.readStoryboard).toHaveBeenLastCalledWith("task-a", requestId);
+  expect(result.current.storyboard.refreshPending).toBe(false);
+  expect(result.current.storyboard.canSubmit).toBe(true);
+  expect(result.current.storyboard.error).toBeNull();
+});
+
+it("does not publish a late storyboard receipt into another task and retains its locator when returning", async () => {
+  let resolve!: (value: ReturnType<typeof storyboardReceipt>) => void;
+  api.regenerateStoryboard.mockReturnValue(new Promise(done => { resolve = done; }));
+  const { result, rerender } = renderHook(({ taskId }) => useCreationExecution({ taskId, confirmedScriptId: null,
+    timelineVersionId: null, voiceId: undefined, voiceVersion: undefined, workspaceReadRevision: 0, onWorkspaceRead: vi.fn(() => true) }),
+    { initialProps: { taskId: "task-a" } });
+  let pending!: Promise<void>;
+  act(() => { pending = result.current.regenerateStoryboard(storyboardInput); });
+  const requestId = api.regenerateStoryboard.mock.calls[0][1].request_id;
+  rerender({ taskId: "task-b" });
+  await act(async () => { resolve(storyboardReceipt(requestId)); await pending; });
+  expect(result.current.storyboard.requestId).toBeNull();
+  expect(api.readWorkspace).not.toHaveBeenCalled();
+  rerender({ taskId: "task-a" });
+  expect(result.current.storyboard.requestId).toBe(requestId);
+  expect(result.current.storyboard.busy).toBe(false);
+  await act(async () => { await result.current.regenerateStoryboard(storyboardInput); });
+  expect(api.regenerateStoryboard).toHaveBeenCalledTimes(1);
+});
+
+it("uses the existing execution poll to read the same storyboard receipt when that job completes", async () => {
+  api.readWorkspace.mockResolvedValue(readback("当前作品"));
+  api.regenerateStoryboard.mockImplementation(async (_taskId, input) => storyboardReceipt(input.request_id));
+  const current = { ...finishedExecution(), job: { ...finishedExecution().job!, id: "storyboard-task-a", status: "queued" as const } };
+  api.readExecution.mockResolvedValue(current);
+  const { result } = mountReadback();
+  await act(async () => { await result.current.regenerateStoryboard(storyboardInput); });
+  const requestId = result.current.storyboard.requestId!;
+  api.readStoryboard.mockResolvedValue(storyboardReceipt(requestId, "succeeded"));
+  api.readExecution.mockResolvedValue({ ...current, job: { ...current.job, status: "succeeded" } });
+  act(() => { result.current.pollExecution(); });
+  await waitFor(() => expect(result.current.storyboard.receipt?.status).toBe("succeeded"));
+  expect(api.readStoryboard).toHaveBeenCalledWith("task-a", requestId);
+  expect(result.current.storyboard.canSubmit).toBe(true);
 });

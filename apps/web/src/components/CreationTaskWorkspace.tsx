@@ -218,6 +218,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     onWorkspaceRead: acceptWorkspace,
   });
   const { executionPreview, execution, executionError } = executionController;
+  const storyboardInput = executionPreview?.task_id === task.id && executionPreview.script_id === task.confirmed_script_id
+    && task.current_timeline_version_id && task.timeline_sequence >= 1 ? {
+      script_id: executionPreview.script_id, input_digest: executionPreview.input_digest,
+      expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence,
+    } : null;
   const assistantConversation = useAssistantConversation({ scope_kind: "task", scope_id: task.id });
   const selectedProfileReference = useAssistantProfileReference()?.reference;
   const materialReference = useAssistantMaterialReference();
@@ -561,6 +566,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setBusy("execution");
     await executionController.changeExecution(operation);
     if (currentTaskId.current === task.id) setBusy(null);
+  }
+
+  async function changeStoryboard(query = false) {
+    if (busy !== null || (!query && !storyboardInput)) return;
+    setBusy("execution");
+    try {
+      if (query) await executionController.readStoryboard();
+      else if (storyboardInput) await executionController.regenerateStoryboard(storyboardInput);
+    } finally { if (currentTaskId.current === task.id) setBusy(null); }
   }
 
   async function handleNarrationVoice(mode: "select" | "query" | "replay" = "select") {
@@ -1432,7 +1446,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           {([ ["prepare", "制作准备"], ["result", "成片检查"] ] as const).map(([pane, label]) => <button key={pane} id={`review-${pane}-${task.id}`} role="tab" disabled={pane === "result" && !hasReviewOutput} aria-selected={reviewPane === pane} aria-controls={`review-panel-${pane}-${task.id}`} tabIndex={reviewPane === pane ? 0 : -1} onKeyDown={reviewTabKey} onClick={() => setReviewChoice({ taskId: task.id, pane })} type="button">{label}</button>)}
         </div> : null}
         <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-prepare-${task.id}`} aria-labelledby={activeView === "review" ? `review-prepare-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "prepare"}>
-        {task.confirmed_script_id && (executionPreview || execution?.job) && activeView === "review" ? <CreationExecutionPanel visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
+        {task.confirmed_script_id && (executionPreview || execution?.job) && activeView === "review" ? <CreationExecutionPanel storyboard={{ ...executionController.storyboard,
+          canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
+          onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
           visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
           onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
         </div>
@@ -1477,7 +1493,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches} approvedAssetCount={workspace.plan.approved_asset_count} approvedClipCount={workspace.plan.approved_clip_count} /> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} renders={workspace.person_renders} selectedPerson={workspace.plan.selected_person} lipsyncQuality={workspace.plan.lipsync_quality} presenterShareTarget={workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null} presenterShareActual={workspace.montage?.presenter_share_actual} capability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} /> : null}
         {activeView === "publish" ? <PublishStageView ready={Boolean(workspace.montage?.output_url)} onOpenReview={() => openView("review")} /> : null}
-        {task.confirmed_script_id && (executionPreview || execution?.job) && ["script", "narration", "montage"].includes(activeView) ? <CreationExecutionPanel visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
+        {task.confirmed_script_id && (executionPreview || execution?.job) && ["script", "narration", "montage"].includes(activeView) ? <CreationExecutionPanel storyboard={{ ...executionController.storyboard,
+          canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
+          onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
           visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
           onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}><DesktopVoiceRecorder scriptText={latestScript?.sections.map((section) => section.content).join("\n")} onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}

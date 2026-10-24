@@ -429,10 +429,10 @@ export type CreationExecutionPreview = {
 };
 export type SegmentVisualDecisionLocator = {
   job_id: string; section_id: string; phase: "segment_video"; section_title: string; adopted: boolean;
-  decision_digest: string; detail_url: string;
+  decision_digest: string | null; detail_url: string;
 };
 export type SegmentVisualDecisionPage = { items: SegmentVisualDecisionLocator[]; total_count: number; truncated: boolean };
-export type SegmentVisualDecision = {
+type SegmentVisualCandidateDecision = {
   task_id: string; job_id: string; section_id: string; decision_digest: string;
   status: "waiting_for_user" | "adopted" | "stale"; adopted: boolean;
   audio: { artifact_reference: string; persisted: boolean };
@@ -443,6 +443,17 @@ export type SegmentVisualDecision = {
   required_confirmation_ids: string[]; confirmed_clip_ids: string[];
   device_request_id: string | null;
 };
+export type SegmentVisualPlanningConflict = {
+  task_id: string; job_id: string; section_id: string;
+  status: "planning_conflict"; can_adopt: false; reason: string;
+  decision_digest: null; adopted: false;
+  audio: { artifact_reference: string; persisted: boolean };
+  usage: SegmentVisualCandidateDecision["usage"];
+  candidate_clips: []; candidate_total_count: 0; candidate_offset: 0; next_offset: null;
+  required_confirmation_ids: []; confirmed_clip_ids: []; device_request_id: null;
+  recovery: { action: "resume_original"; requires_revalidation: true; detail: string };
+};
+export type SegmentVisualDecision = SegmentVisualCandidateDecision | SegmentVisualPlanningConflict;
 export type SegmentVisualDecisionAdoption = {
   decision: SegmentVisualDecision; queue: { request_id: string; replayed: boolean } | null; execution: CreationExecutionStatus;
 };
@@ -588,4 +599,27 @@ export type CreationTaskNativeOperations = {
     total_count: number;
     truncated: boolean;
     offset: number;
+};
+
+export type CreationTaskStoryboardRegenerationInput = {
+    request_id: string;
+    script_id: string;
+    input_digest: string;
+    expected_timeline_version_id: string;
+    expected_timeline_sequence: number;
+};
+
+export type CreationTaskStoryboardRegenerationReceipt = {
+    request_id: string;
+    task_id: string;
+    job_id: string;
+    status: NonNullable<CreationExecutionStatus["job"]>["status"];
+    stage: "montage_plan";
+    script_id: string;
+    narration_cache_key: string;
+    base_timeline_version_id: string;
+    base_timeline_sequence: number;
+    result: Record<string, unknown> | null;
+    failure_reason: string | null;
+    result_url: string;
 };
