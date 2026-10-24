@@ -33,6 +33,7 @@ def state(tmp_path, monkeypatch):
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version,
         "zh-CN", voice.model_id)
+    plan.duration_target_seconds = 4
     with state.repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
     state.segments = [replace(item, audio_reference=state.repo.narration_artifact_reference(state.narration.cache_key))
@@ -61,7 +62,7 @@ def state(tmp_path, monkeypatch):
     state.actor = CreationExecutionActor("ws", state.member.member_id)
     def forbidden(*args, **kwargs):
         pytest.fail("storyboard-only work must not execute narration, rendering or a synchronous job")
-    state.execution = CreationExecution(state.repo, run_narration=forbidden,
+    state.execution = CreationExecution(state.repo,
         run_montage_plan=forbidden, run_render=forbidden, render_is_valid=lambda *_: False)
     state.stage = main._montage_stage_use_case(state.repo)
     state.builds = []
@@ -149,6 +150,7 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     assert state.scheduler.pick_and_grant() is None and len(state.builds) == 1
     assert state.repo.list_timeline_versions("ws", state.task.id)[-1].snapshot["montage"] == version.snapshot["montage"]
     undone = state.client.post(state.base_url + "/timeline/undo", json={
+        "request_id": str(uuid4()),
         "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
     assert undone.status_code == 200, undone.text
     assert state.repo.get_creation_task_montage_plan("ws", state.task.id)["id"] == before["id"]
@@ -342,3 +344,77 @@ def test_concurrent_same_UUID_claims_one_job_and_device_request(state):
     assert len(state.repo.list_creation_job_request_states("ws", receipts[0]["job_id"])) == 1
     run(state)
     assert len(state.builds) == len(state.repo.list_edit_operations("ws", state.task.id)) == 1
+
+
+def test_original_ready_audio_replans_30_through_existing_storyboard_request(state):
+    # This port consumes declared source metadata; physical rendering is covered separately.
+    asset = state.repo.get_asset('ws', state.asset.id)
+    state.repo._save_asset(replace(asset, duration_seconds=40,
+        segments=[replace(asset.segments[0], end_seconds=40)]))
+    task = state.repo.get_creation_task('ws', state.task.id)
+    plan = state.repo.get_creation_plan('ws', task.plan_id)
+    plan.duration_target_seconds = 30
+    with state.repo._connect() as conn:
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
+    before = state.repo.get_creation_task_montage_plan('ws', task.id)
+    segments = state.repo.list_narration_segments('ws', task.id, task.confirmed_script_id)
+    state.executor.montage_stage = main._montage_stage_use_case(state.repo)
+    receipt = enqueue(state)
+    run(state)
+    completed = state.client.get(receipt['result_url']).json()
+    assert completed['status'] == 'succeeded', state.repo.get_job_run('ws', receipt['job_id']).failure_reason
+    after = state.repo.get_creation_task_montage_plan('ws', task.id)
+    assert after['duration_seconds'] == 30
+    assert sum(cue['duration_seconds'] for cue in after['cues']) == 4
+    assert after['audio_timeline'] == before['audio_timeline']
+    assert after['narration_audio_path'] == before['narration_audio_path']
+    assert after['graphic_overlays'] == before['graphic_overlays']
+    assert after['clips'][-1]['timeline_end_seconds'] == 30
+    assert state.repo.list_narration_segments('ws', task.id, task.confirmed_script_id) == segments
+
+
+@pytest.mark.parametrize('aggregate', [False, True])
+def test_replanned_sparse_voice_preserves_ranges_envelopes_and_translated_captions(aggregate):
+    from app.audio_timeline import narration_audio_timeline
+    from app.creation.contracts import SubtitleCue, SubtitleTrack
+    from app.creation.storyboard_regeneration import move_preserved_voice, move_preserved_subtitles
+    from app.montage import CreationTaskMontagePlan, NarrationCue
+    a, b = 'narration://artifact/a', 'narration://artifact/b'
+    old_graph = narration_audio_timeline(a, 2 if aggregate else 1)
+    if not aggregate:
+        extra = narration_audio_timeline(b, 1).tracks[0].clips[0]
+        old_graph.tracks[0].clips.append(extra.model_copy(update={'id': 'second-voice', 'timeline_start_ms': 1000}))
+    old_graph.tracks[0].gain_db = -4
+    old_graph.tracks[0].clips[0].fade_in_ms = 100
+    cues = [NarrationCue('first', 'one', '第一段', 1), NarrationCue('second', 'two', '第二段', 1)]
+    previous = CreationTaskMontagePlan('p', 'ws', 'task', 'script', 'title', 'ready', cues, [], 2, 0,
+        narration_audio_path=a, audio_timeline=old_graph)
+    new_graph = narration_audio_timeline(a, 1)
+    extra = narration_audio_timeline(b, 1).tracks[0].clips[0]
+    new_graph.tracks[0].clips.append(extra.model_copy(update={'id': 'new-second', 'timeline_start_ms': 2000}))
+    candidate = replace(previous, duration_seconds=4, audio_timeline=new_graph,
+        cues=[replace(cues[0], timeline_start_seconds=0), replace(cues[1], timeline_start_seconds=2)])
+    if not aggregate:
+        locked = old_graph.model_copy(deep=True)
+        locked.tracks[0].locked = True
+        with pytest.raises(ValueError, match='配音轨已锁定'):
+            move_preserved_voice(replace(previous, audio_timeline=locked), candidate)
+    moved = move_preserved_voice(previous, candidate)
+    assert moved.tracks[0].gain_db == -4
+    assert [clip.timeline_start_ms for clip in moved.tracks[0].clips] == [0, 2000]
+    assert sum(clip.duration_ms for clip in moved.tracks[0].clips) == 2000
+    assert moved.tracks[0].clips[0].fade_in_ms == 100
+    assert old_graph.tracks[0].clips[0].timeline_start_ms == 0
+    assert moved.tracks[1:] == old_graph.tracks[1:]
+    if aggregate:
+        assert [(clip.source_ref, clip.source_start_ms, clip.source_end_ms) for clip in moved.tracks[0].clips] == [(a, 0, 1000), (a, 1000, 2000)]
+    else:
+        assert [(clip.source_ref, clip.source_start_ms, clip.source_end_ms) for clip in moved.tracks[0].clips] == [(a, 0, 1000), (b, 0, 1000)]
+    zh = SubtitleTrack('zh', 'ws', 'task', 'base', 'zh-CN', None, {},
+        [SubtitleCue('zh-two', 'second', '保留修改后的字稿', 1, 2)], 'timeline', None, None, None, 'valid')
+    en = replace(zh, id='en', language='en-US', source_language='zh-CN',
+        cues=[SubtitleCue('en-two', 'zh-two', 'Preserved translation', 1, 2)])
+    shifted = move_preserved_subtitles(previous, candidate, [zh, en])
+    assert [(t.cues[0].start_seconds, t.cues[0].end_seconds) for t in shifted] == [(2, 3), (2, 3)]
+    assert [t.cues[0].text for t in shifted] == ['保留修改后的字稿', 'Preserved translation']
+    assert zh.cues[0].start_seconds == en.cues[0].start_seconds == 1

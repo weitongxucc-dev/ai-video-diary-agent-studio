@@ -4966,3 +4966,101 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     assert repo.get_narration_artifact('local', 'cache_1') == audio
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
     assert scheduler._get(original_request).state == 'done'
+
+
+@pytest.mark.parametrize('revision', [False, True])
+def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp_path, monkeypatch, revision):
+    from app.creation.duration_requirement import DurationConflict
+    from app.creation_execution import next_creation_intent
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    if revision:
+        for _ in range(2):
+            case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+        for row in case.repo.list_creation_job_request_states('local', case.job.id):
+            if row['state'] in {'waiting', 'blocked'}:
+                case.scheduler.cancel(row['id'], case.actor)
+        before, receipt, runtime = _submit_section_revision(case)
+        job = case.repo.get_job_run('local', receipt['job_id'])
+    else:
+        job = case.job
+    original = case.segments.prepare_video
+    def conflict(*args, **kwargs):
+        raise DurationConflict('已付配音可用；当前合法画面不足以覆盖目标，请补充素材后恢复原请求')
+    monkeypatch.setattr(case.segments, 'prepare_video', conflict)
+    grant = case.scheduler.pick_and_grant()
+    case.executor.execute(grant, case.scheduler)
+    updated = case.repo.get_job_run('local', job.id)
+    assert updated.status == 'queued' and updated.failure_reason == 'waiting_for_user', updated.failure_reason
+    assert case.scheduler._get(grant.request_id).state == 'done'
+    view = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
+    assert view['status'] == 'planning_conflict' and not view['can_adopt']
+    assert view['candidate_clips'] == [] and view['audio']['persisted']
+    assert view['audio']['artifact_reference'] == view['kept_audio_reference']
+    assert {'adopted', 'request_id', 'revision_request_id', 'expected_segment_version', 'candidate_offset',
+        'next_offset', 'confirmed_clip_ids', 'device_request_id'} <= view.keys()
+    assert not view['adopted'] and view['next_offset'] is None and view['confirmed_clip_ids'] == []
+    locators = case.segments.visual_decision_locators('local', case.task_id, case.actor, job_id=job.id)
+    assert locators['total_count'] == len(locators['items']) == 1
+    assert locators['items'][0]['decision_digest'] is None
+    assert view['usage']['settled'] and view['usage']['used_output_bytes'] > 0
+    assert case.scheduler.pick_and_grant() is None
+    saved_usage = dict(view['usage'])
+    monkeypatch.setattr(case.segments, 'prepare_video', original)
+    _require_section_visual_decision(case, monkeypatch)
+    if revision:
+        monkeypatch.setattr(case.stage, 'prepare_revision', lambda *a, **k: pytest.fail('paid audio regenerated'))
+        case.segments.resume_request('local', case.task_id, 'revision_1', case.actor, runtime=runtime)
+    else:
+        assert case.repo.list_narration_segments('local', case.task_id, case.script_id)[0].status == 'ready'
+        monkeypatch.setattr(case.stage, 'prepare_segment', lambda *a, **k: pytest.fail('paid audio regenerated'))
+        intent = next_creation_intent(case.repo, case.scheduler, updated)
+        assert intent is None
+    candidate = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
+    assert candidate['status'] == 'waiting_for_user'
+    locators = case.segments.visual_decision_locators('local', case.task_id, case.actor, job_id=job.id)
+    assert locators['total_count'] == len(locators['items']) == 1
+    assert locators['items'][0]['decision_digest'] == candidate['decision_digest']
+    case.segments.adopt_visual_decision('local', case.task_id, job.id, 'section_1', case.actor,
+        decision_digest=candidate['decision_digest'], confirmed_clip_ids=candidate['required_confirmation_ids'],
+        runtime=runtime if revision else SimpleNamespace(scheduler=case.scheduler, wake=lambda: None,
+            registrations={'creation_job': SimpleNamespace(owner=case.owner)}))
+    video = case.scheduler.pick_and_grant()
+    assert video.owner_id == job.id and video.unit_key.startswith('segment_video:')
+    assert case.segments.visual_usage(updated) == saved_usage
+    case.scheduler.cancel(video.request_id, case.actor)
+    case.scheduler.close()
+
+
+def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_path, monkeypatch):
+    from app.creation.duration_requirement import DurationConflict
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    for _ in range(2):
+        case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    for row in case.repo.list_creation_job_request_states('local', case.job.id):
+        if row['state'] in {'waiting', 'blocked'}:
+            case.scheduler.cancel(row['id'], case.actor)
+    _, receipt, runtime = _submit_section_revision(case)
+    job = case.repo.get_job_run('local', receipt['job_id'])
+    prepare = case.segments.prepare_video
+    def conflict(*args, **kwargs):
+        raise DurationConflict('合法画面待补充，原配音保留')
+    monkeypatch.setattr(case.segments, 'prepare_video', conflict)
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    usage = case.segments.visual_usage(job)
+    def cancel_after_preparation(*args, **kwargs):
+        prepared = prepare(*args, **kwargs)
+        case.repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
+            impact='用户暂停原请求', repair_action='保持取消，不自动恢复')
+        return prepared
+    monkeypatch.setattr(case.segments, 'prepare_video', cancel_after_preparation)
+    with pytest.raises(ValueError, match='原段落作业已停止'):
+        case.segments.resume_request('local', case.task_id, 'revision_1', case.actor, runtime=runtime)
+    current = case.repo.get_job_run('local', job.id)
+    assert current.status == 'cancelled' and current.failure_reason == 'user_cancelled'
+    assert case.segments.visual_usage(current) == usage
+    with pytest.raises(KeyError):
+        case.repo.get_task_event('local', case.segments.video_preparation_id(job, 'section_1'))
+    assert all(row['state'] == 'done' for row in case.repo.list_creation_job_request_states('local', job.id))
+    case.scheduler.close()

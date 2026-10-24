@@ -66,6 +66,9 @@ class QualityInspectionUseCase:
             "timeline_version_id": task.current_timeline_version_id, "source_ref": plan.output_path,
             "artifact_id": record.id, "render_ref": record.sha256, "size_bytes": record.size_bytes,
             "file_identity": file_identity(path), "path": str(path)}
+        from app.creation.duration_requirement import DurationRequirement
+        source['duration_requirement'] = DurationRequirement.from_plan(
+            self.production.get_creation_plan(workspace_id, task.plan_id)).payload()
         return task, plan, source
 
     def resources(self, source, budget):
@@ -169,6 +172,13 @@ class QualityInspectionUseCase:
             version = self.production.get_timeline_version(source["workspace_id"], source["timeline_version_id"])
             if version.task_id != source["task_id"] or source["source_ref"] not in version.snapshot.get("output_refs", []):
                 raise ValueError("质检固定版本与登记产物不一致")
+        from app.creation.duration_requirement import DurationRequirement
+        task = self.production.get_creation_task(source['workspace_id'], source['task_id'])
+        current_requirement = DurationRequirement.from_plan(
+            self.production.get_creation_plan(task.workspace_id, task.plan_id))
+        if ('duration_requirement' not in source
+                or DurationRequirement(**source['duration_requirement']) != current_requirement):
+            raise ValueError("质检固定的交付时长约定已变化，请重新检查当前成片")
         path = self.outputs.artifact_store.resolve_file(source["source_ref"])
         if str(path) != source["path"] or file_identity(path) != source["file_identity"]:
             raise ValueError("检查期间成片内容已变化，请重新检查当前成片。")
@@ -248,6 +258,31 @@ class QualityInspectionUseCase:
                 or result["evidence"].get("status") not in {"clean", "issues_found", "unavailable"}
                 or len(json.dumps(result, ensure_ascii=False).encode()) > budget.max_report_bytes):
             raise ValueError("质检 worker 回执未绑定原请求或超过有限大小")
+
+        from app.creation.duration_requirement import DurationRequirement
+        evidence = result['evidence']
+        requirement = DurationRequirement(**request['source']['duration_requirement'])
+        assessment = requirement.assess(evidence.get('video_duration_seconds'), evidence.get('video_frame_rate'))
+        evidence['duration_assessment'] = {**requirement.payload(), 'status': assessment}
+        new_check = 'delivery_duration' not in evidence.get('kinds_checked', [])
+        if new_check:
+            evidence.setdefault('kinds_checked', []).append('delivery_duration')
+        if assessment != 'met' and new_check:
+            evidence['is_clean'] = False
+            if assessment == 'mismatch':
+                evidence['status'] = 'issues_found'
+                evidence.setdefault('findings', []).append({'kind': 'delivery_duration', 'start_seconds': 0,
+                    'end_seconds': evidence.get('video_duration_seconds') or 0,
+                    'duration_seconds': evidence.get('video_duration_seconds'),
+                    'detail': f'成片技术有效不代表时长达标：目标 {requirement.target_seconds:g} 秒，'
+                              f'实际视频 {evidence.get("video_duration_seconds")} 秒。'})
+            else:
+                if evidence['status'] == 'clean': evidence['status'] = 'unavailable'
+                evidence.setdefault('unavailable', []).append({'kind': 'delivery_duration',
+                    'reason': '缺少实际视频时基或帧率，不能证明交付时长', 'status': 'unavailable'})
+
+        if len(json.dumps(result, ensure_ascii=False).encode()) > budget.max_report_bytes:
+            raise ValueError("包含交付时长判断的报告超过本次许可上限")
 
     def settle(self, connection, job, check_id, *, status, result=None, error=None):
         record = self.checks.get_check(job.workspace_id, job.task_id, check_id, connection=connection)

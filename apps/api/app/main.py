@@ -2972,6 +2972,7 @@ def _creation_plan_preflight(
         goal=payload.goal, name=payload.name, target_count=payload.target_count,
         language=payload.language, aspect_ratio=payload.aspect_ratio,
         duration_target_seconds=payload.duration_target_seconds,
+        duration_mode=payload.duration_mode, duration_range_seconds=payload.duration_range_seconds,
         presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
         template_id=payload.template_id, template_version=payload.template_version,
         selected_knowledge=(payload.selected_knowledge.knowledge_item_id, payload.selected_knowledge.version) if payload.selected_knowledge is not None else None,
@@ -3016,6 +3017,8 @@ def _creation_plan_preview_response(plan: CreationPlan) -> CreationPlanPreviewRe
             "language": plan.language,
             "aspect_ratio": plan.aspect_ratio,
             "duration_target_seconds": plan.duration_target_seconds,
+            "duration_mode": plan.duration_mode,
+            "duration_range_seconds": plan.duration_range_seconds,
             "presenter_share_target": plan.presenter_share_target,
             "lipsync_quality": plan.lipsync_quality,
             "knowledge_references": [item.__dict__ for item in plan.knowledge_references],
@@ -6082,6 +6085,12 @@ def create_creation_request(request: Request, payload: CreationRequestCreateRequ
         turn, goal, source_input = _creation_request_input(request, str(payload.assistant_turn_id))
         if str(payload.request_key) != (source_input["input_id"] if source_input else turn["id"]):
             raise HTTPException(status_code=409, detail="制作目标必须沿本轮固定身份保存，不能重复建立。")
+    from app.creation.intent_use_case import CreationIntentUseCase
+    try:
+        CreationIntentUseCase.require_duration_authority(payload.duration_mode,
+            delegated=payload.assistant_turn_id is not None)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     stated_count, stated_duration = _explicit_creation_constraints(goal)
     if stated_count is not None and stated_count != payload.target_count:
         raise HTTPException(status_code=409, detail="总数量与用户原句不一致，没有保存错误的制作目标。")

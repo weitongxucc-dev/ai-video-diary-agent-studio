@@ -506,6 +506,8 @@ class CreationPlan:
     updated_at: datetime = field(default_factory=utc_now)
     creation_intent: dict[str, object] | None = None
     adoption: dict[str, object] | None = None
+    duration_mode: str = "exact"
+    duration_range_seconds: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)

@@ -2319,6 +2319,8 @@ class CreationJobUnitExecutor:
 
         pcm_preparation=None
         def continue_unit(conn, current):
+            if video_preparation is not None and video_preparation.event_type == 'segment_visual_planning_conflict':
+                return None
             usage = self.repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)
             limits = usage['budget']
             current_task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
@@ -2342,8 +2344,12 @@ class CreationJobUnitExecutor:
                 segment = None
             pcm_preparation=owner.prepare_pcm_sources(job,generated=artifact if segment is not None else None,
                 section_id=segment.source_section_id if segment is not None else None) if segment is not None or not resources['merge_final'] else None
-            video_preparation = (self.segments.prepare_video(job,event.payload,task,segment.source_section_id,
-                artifact,owner,text=segment.text) if self.segments is not None and segment is not None else None)
+            from app.creation.duration_requirement import DurationConflict
+            try:
+                video_preparation = (self.segments.prepare_video(job,event.payload,task,segment.source_section_id,
+                    artifact,owner,text=segment.text) if self.segments is not None and segment is not None else None)
+            except DurationConflict as conflict:
+                video_preparation = self.segments.planning_conflict_event(job,task,segment.source_section_id,artifact,conflict)
             if artifact is not None:
                 try:
                     output_stat = Path(artifact.audio_path).stat()

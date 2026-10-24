@@ -10,8 +10,13 @@ import re
 
 
 class CreationIntentUseCase:
-    DELIVERY_FIELDS = ("language", "aspect_ratio", "duration_target_seconds",
+    DELIVERY_FIELDS = ("language", "aspect_ratio", "duration_target_seconds", "duration_mode", "duration_range_seconds",
                        "presenter_share_target", "lipsync_quality")
+
+    @staticmethod
+    def require_duration_authority(mode, *, delegated):
+        if mode == "approximate" and delegated:
+            raise ValueError("对话尚未冻结可信的近似时长范围，请先由成员明确确认结构化时长约定。")
 
     @staticmethod
     def is_bilingual_variant_goal(goal: str) -> bool:
@@ -137,7 +142,9 @@ class CreationIntentUseCase:
 
     @classmethod
     def frozen_delivery_inputs(cls, requirements: dict, plan: dict) -> dict:
-        values = {key: plan[key] for key in cls.DELIVERY_FIELDS}
+        defaults = {"duration_mode": "exact", "duration_range_seconds": None}
+        values = {key: plan.get(key, defaults[key]) if key in defaults else plan[key]
+                  for key in cls.DELIVERY_FIELDS}
         for key in ("selected_voice", "selected_person"):
             reference = plan.get(key)
             values[key] = ({"profile_id": reference["profile_id"], "version": reference["version"]}

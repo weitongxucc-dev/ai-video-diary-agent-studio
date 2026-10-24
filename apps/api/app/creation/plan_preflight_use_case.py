@@ -33,6 +33,8 @@ class CreationPlanPreflightInput:
     selected_voice: tuple[str, str] | None
     selected_person: tuple[str, str] | None
     provided_fields: frozenset[str]
+    duration_mode: str = "exact"
+    duration_range_seconds: tuple[float, float] | None = None
 
 
 PreflightRejectionCode = Literal["template_version_required", "template_id_required",
@@ -361,6 +363,9 @@ class CreationPlanPreflightUseCase:
                 for model in model_snapshot if model["id"] in required_model_ids],
             "confirmation_points": ["确认资料与来源事实", "确认选题", "审核成片与发布"],
         }
+        if payload.duration_mode != "exact":
+            fingerprint_payload.update(duration_mode=payload.duration_mode,
+                duration_range_seconds=payload.duration_range_seconds)
         fingerprint = hashlib.sha256(
             json.dumps(
                 fingerprint_payload,
@@ -378,6 +383,8 @@ class CreationPlanPreflightUseCase:
             language=payload.language,
             aspect_ratio=payload.aspect_ratio,
             duration_target_seconds=payload.duration_target_seconds,
+            duration_mode=payload.duration_mode,
+            duration_range_seconds=payload.duration_range_seconds,
             presenter_share_target=payload.presenter_share_target,
             lipsync_quality=payload.lipsync_quality,
             knowledge_references=knowledge_references,

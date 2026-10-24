@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.creation.duration_requirement import DurationRequirement, DurationConflict, stream_duration_seconds
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.device_scheduler import DeviceScheduler, Grant
 from app.host_resource_probes import (
@@ -76,6 +77,7 @@ class NarrationCue:
     text: str
     duration_seconds: float
     narration_segment_id: str = ""
+    timeline_start_seconds: float | None = None
     subtitle_emphasis: list[str] = field(default_factory=list)
     subtitle_style: dict[str, object] = field(default_factory=dict)
     subtitle_emphasis_ranges: list[tuple[int, int]] | None = None
@@ -153,6 +155,8 @@ class CreationTaskMontagePlan:
     # 整条配音源做的，标记表示这次响度要落在混音里的整源上，而不是分段后再在母线上补一次。
     # 已经有自定义音轨的方案本来就是省略 loudnorm 的，不受此标记影响。
     narration_linkage_created_audio_timeline: bool = False
+    delivery_window: dict | None = None
+    duration_requirement: dict | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -423,6 +427,7 @@ class MontagePlanner:
         narration_segment_durations_by_section: dict[str, float] | None = None,
         person_render_by_section: dict[str, tuple[str, float]] | None = None,
         presenter_share_target: int = 0,
+        delivery_windows=None,
     ) -> CreationTaskMontagePlan:
         if script.workspace_id != workspace_id or script.task_id != task_id:
             raise ValueError("文案不属于当前创作任务")
@@ -456,9 +461,25 @@ class MontagePlanner:
         visual_cues = [replace(section_cues[0], text=sections_by_id[section_id].content,
             duration_seconds=round(sum(cue.duration_seconds for cue in section_cues), 3))
             for section_id, section_cues in cues_by_section.items()]
+        if delivery_windows is not None:
+            windows = {window.section_id: window for window in delivery_windows}
+            shifted = []
+            for section_id, section_cues in cues_by_section.items():
+                window = windows[section_id]
+                speech = sum(cue.duration_seconds for cue in section_cues)
+                if speech > window.duration_seconds + .001:
+                    raise DurationConflict("真实配音超过本段画面窗口，须按实测重新规划未采用窗口或重确认受影响画面。")
+                at = window.start_seconds
+                for cue in section_cues:
+                    shifted.append(replace(cue, timeline_start_seconds=at))
+                    at += cue.duration_seconds
+            cues = shifted
+            visual_cues = [replace(cue, duration_seconds=windows[cue.source_section_id].duration_seconds)
+                           for cue in visual_cues]
         person_render_by_section = person_render_by_section or {}
         if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in visual_cues):
-            raise ValueError("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
+            error = DurationConflict if delivery_windows is not None else ValueError
+            raise error("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
         visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
@@ -474,8 +495,37 @@ class MontagePlanner:
         asset_usage: dict[str, int] = {}
         timeline_cursor = 0.0
         person_source_cursor: dict[str, float] = {}
+        source_ranges = []
+        covered = {}
+        if delivery_windows is not None:
+            for asset, segment in sorted(b_roll_candidates, key=lambda item: (item[0].id, item[1].start_seconds, item[1].end_seconds)):
+                begin = max(segment.start_seconds, covered.get(asset.id, segment.start_seconds))
+                if begin < segment.end_seconds:
+                    source_ranges.append([asset, segment, begin, segment.end_seconds])
+                    covered[asset.id] = segment.end_seconds
+            needed = sum(cue.duration_seconds for cue in visual_cues if cue.source_section_id not in person_render_by_section)
+            available = sum(end - begin for _asset, _segment, begin, end in source_ranges)
+            needed_frames = round(needed * 30)
+            capacities = [math.floor((end - begin) * 30 + 1e-9) for _asset, _segment, begin, end in source_ranges]
+            if sum(capacities) >= needed_frames:
+                for item, capacity in zip(source_ranges, capacities):
+                    item.extend([capacity, 1.0])
+            else:
+                total, previous = 0.0, 0
+                for item in source_ranges:
+                    length = item[3] - item[2]
+                    total += length
+                    end_frame = round(needed_frames * total / available) if available else 0
+                    capacity = end_frame - previous
+                    item.extend([capacity, length * 30 / capacity if capacity else 1.0])
+                    previous = end_frame
+            if any(item[5] < .25 for item in source_ranges) or not source_ranges and needed_frames:
+                raise DurationConflict("授权动态素材不足以覆盖目标时长；请补充素材或明确调整时长，不循环或冻结画面")
         for cue in visual_cues:
-            clip_duration = round(cue.duration_seconds, 3)
+            if delivery_windows is not None:
+                timeline_cursor = windows[cue.source_section_id].start_seconds
+            clip_duration = (windows[cue.source_section_id].end_seconds - timeline_cursor
+                             if delivery_windows is not None else round(cue.duration_seconds, 3))
             if cue.source_section_id in person_render_by_section:
                 render_id, render_duration = person_render_by_section[cue.source_section_id]
                 source_start = person_source_cursor.get(cue.source_section_id, 0.0)
@@ -496,6 +546,42 @@ class MontagePlanner:
                 ))
                 person_source_cursor[cue.source_section_id] = source_end
                 timeline_cursor += clip_duration
+                continue
+            if delivery_windows is not None:
+                end = windows[cue.source_section_id].end_seconds
+                while timeline_cursor < end - .0005:
+                    available = [item for item in source_ranges if item[4] > 0]
+                    if not available:
+                        raise DurationConflict("授权动态源区间已用尽，不能循环补足时长")
+                    ranked = sorted(((_score_candidate(retrieval_cues[cue.id], asset, segment,
+                        segment_usage.get(segment.id, 0), asset_usage.get(asset.id, 0),
+                        visual_score=_cosine_similarity(cue_vectors.get(cue.id), segment_vectors.get(segment.id)),
+                        visual_only=True), item) for item in available for asset, segment in [item[:2]]),
+                        key=lambda item: item[0][0], reverse=True)
+                    (score, lexical_score, visual_score, asset, segment, reasons), selected = ranked[0]
+                    begin, visual_rate = selected[2], selected[5]
+                    frames = min(round((end - timeline_cursor) * 30), selected[4])
+                    if frames < 1:
+                        raise DurationConflict("画面区间不足一个输出帧，须重新确认目标窗口")
+                    stop = min(end, (round(timeline_cursor * 30) + frames) / 30)
+                    source_end = min(selected[3], begin + frames / 30 * visual_rate)
+                    selected[2] = source_end
+                    selected[4] -= frames
+                    reasons.insert(0, f"画面要求：{retrieval_cues[cue.id].text}")
+                    if visual_rate < 1:
+                        reasons.insert(0, f"仅画面 {visual_rate:.4f} 倍播放以满足目标时长；原配音不变，请确认节奏")
+                    semantic_confirmed = (visual_score is not None and self.semantic_auto_confirm_threshold is not None
+                        and visual_score >= self.semantic_auto_confirm_threshold)
+                    clips.append(MontageClip(id=f"clip_{uuid4().hex[:10]}", cue_id=cue.id,
+                        asset_id=asset.id, segment_id=segment.id, source_path=media_reference_for_asset(asset.id),
+                        source_start_seconds=begin, source_end_seconds=source_end,
+                        timeline_start_seconds=timeline_cursor, timeline_end_seconds=stop,
+                        match_score=round(score, 3), match_reasons=reasons,
+                        needs_confirmation=visual_rate < 1 or lexical_score < .12 and not semantic_confirmed,
+                        role="b_roll"))
+                    timeline_cursor = stop
+                    segment_usage[segment.id] = segment_usage.get(segment.id, 0) + 1
+                    asset_usage[asset.id] = asset_usage.get(asset.id, 0) + 1
                 continue
             # Source talking-head footage is not aligned with generated narration.
             duration_candidates = [
@@ -699,7 +785,8 @@ class MontageRenderer:
                                                      cancel_event=cancel_event,
                                                      deadline_monotonic=deadline_monotonic)
             # Allow encoder padding, but reject a changed voice before bounding the picture output.
-            if abs(narration_duration - plan.duration_seconds) > 0.25:
+            expected_voice = plan.duration_seconds if plan.audio_timeline is not None else sum(cue.duration_seconds for cue in plan.cues)
+            if abs(narration_duration - expected_voice) > 0.25:
                 raise ValueError("配音与剪辑时长不一致，请按当前配音重新生成故事板后渲染。")
             if job_staging_path is None:
                 raise ValueError("CreationTask 渲染必须提供 job-scoped 暂存目录")
@@ -801,6 +888,9 @@ class MontageRenderer:
                 raise OSError("成片超出本次受许可输出上限")
             _validate_rendered_media(output_path, expected_size=canvas_size(plan.aspect_ratio) if isinstance(plan, CreationTaskMontagePlan) else (1080,1920),
                                      expected_duration_seconds=plan.duration_seconds,
+                                     duration_requirement=(DurationRequirement(**plan.duration_requirement)
+                                         if isinstance(plan, CreationTaskMontagePlan) and plan.duration_requirement
+                                         and plan.delivery_window is None else None),
                                      scheduler=scheduler, grant=grant, cancel_event=cancel_event,
                                      deadline_monotonic=deadline_monotonic)
         except subprocess.CalledProcessError as exc:
@@ -1714,7 +1804,7 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
                              expected_duration_seconds: float | None = None,
                              scheduler: DeviceScheduler | None = None, grant: Grant | None = None,
                              cancel_event: threading.Event | None = None,
-                             deadline_monotonic: float | None = None) -> None:
+                             deadline_monotonic: float | None = None, duration_requirement=None) -> None:
     if not output_path.is_file() or output_path.stat().st_size <= 0:
         raise OSError("FFmpeg 未生成有效输出文件")
     command = [
@@ -1722,7 +1812,7 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,width,height,duration",
+            "stream=codec_type,codec_name,width,height,duration,avg_frame_rate,duration_ts,time_base",
             "-show_entries",
             "format=duration",
             "-of",
@@ -1765,6 +1855,8 @@ def _validate_rendered_media(output_path: Path, *, expected_size=(1080,1920),
         raise OSError("渲染输出缺少 AAC 音频轨")
     if (video_stream.get("width"), video_stream.get("height")) != expected_size:
         raise OSError(f"渲染输出画幅不符合 {expected_size[0]}×{expected_size[1]}")
+    if duration_requirement is not None:
+        duration_requirement.require(stream_duration_seconds(video_stream), video_stream.get("avg_frame_rate"))
     if expected_duration_seconds is not None:
         if not math.isfinite(expected_duration_seconds) or expected_duration_seconds <= 0:
             raise ValueError("成片计划时长无效")

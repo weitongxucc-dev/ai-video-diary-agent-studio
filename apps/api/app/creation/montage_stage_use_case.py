@@ -23,6 +23,34 @@ def stage_failure(*, status_code, error, reason, impact, repair_action, retryabl
     })
 
 
+def voice_timeline(script, audio, windows):
+    from app.audio_timeline import AudioTimeline, narration_audio_timeline
+    voice = narration_audio_timeline(audio[script.sections[0].id].audio_reference,
+        float(audio[script.sections[0].id].duration_seconds)).tracks[0]
+    voice.clips = []
+    for section in script.sections:
+        segment = audio[section.id]
+        clip = narration_audio_timeline(segment.audio_reference, float(segment.duration_seconds)).tracks[0].clips[0]
+        voice.clips.append(clip.model_copy(update={'id': f'audio-narration-{segment.id}',
+            'timeline_start_ms': round(windows[section.id].start_seconds * 1000)}))
+    return AudioTimeline(tracks=[voice])
+
+
+def delivery_windows_for_task(repository, task, script, segments, *, exclude_section=None, measured_override=None):
+    from app.creation.duration_requirement import DurationRequirement, SectionWindow, measured_section_windows
+    requirement = DurationRequirement.from_plan(repository.get_creation_plan(task.workspace_id, task.plan_id))
+    adopted = []
+    for section in script.sections:
+        state = repository.stage_segment_state(task.workspace_id, task.id, section.id)
+        window = state['montage'].get('delivery_window') if state is not None else None
+        if window is not None and section.id != exclude_section:
+            adopted.append(SectionWindow(**window))
+    measured = {segment.source_section_id: float(segment.duration_seconds)
+                for segment in segments if segment.duration_seconds is not None and segment.status == 'ready'}
+    measured.update(measured_override or {})
+    return requirement, measured_section_windows(requirement, script.sections, measured, adopted=adopted)
+
+
 class MontageStageUseCase:
     def __init__(self, repository, metadata, person_stage, montage_planner):
         self.repository = repository
@@ -91,7 +119,7 @@ class MontageStageUseCase:
         if task.confirmed_script_id is None or task.narration_cache_key is None:
             raise ValueError("confirmed script or narration missing")
         montage = self._build_candidate(task, creation_plan, grant_context)
-        return self.include_adopted_sections(task,montage) if task.montage_plan_id is None else montage
+        return montage
 
     def _build_candidate(self, task, creation_plan, grant_context):
         workspace_id = task.workspace_id
@@ -128,7 +156,9 @@ class MontageStageUseCase:
             authorizations = owner.task_authorizations
             if authorizations is not None:
                 asset_ids = authorizations.material_asset_ids(workspace_id, task.id)
+        requirement, windows = delivery_windows_for_task(self.repository, task, script, narration_segments)
         montage = planner.build_for_creation_task(
+            delivery_windows=windows,
             duration_target_seconds=creation_plan.duration_target_seconds,
             workspace_id=workspace_id,
             task_id=task.id,
@@ -155,6 +185,10 @@ class MontageStageUseCase:
                                       for section_id in selected_sections},
             presenter_share_target=creation_plan.presenter_share_target,
         )
+        montage.duration_requirement = requirement.payload()
+        montage.audio_timeline = voice_timeline(script, segments_by_section,
+            {window.section_id: window for window in windows})
+        montage.narration_linkage_created_audio_timeline = True
         for section_id in selected_sections:
             segment = segments_by_section[section_id]
             selected_voice = creation_plan.selected_voice
@@ -198,42 +232,49 @@ class MontageStageUseCase:
         from app.audio_timeline import AudioTimeline,narration_audio_timeline
         script = self.repository.effective_creation_script(task.workspace_id,task.id)
         audio = {item.source_section_id:item for item in self.repository.list_narration_segments(task.workspace_id,task.id,script.id)}
+        requirement, windows = delivery_windows_for_task(self.repository, task, script, list(audio.values()))
+        windows = {window.section_id: window for window in windows}
         cues,clips,cursor = [],[],0.0
         for section in script.sections:
             state = self.repository.stage_segment_state(task.workspace_id,task.id,section.id)
+            window = windows[section.id]
             if state is not None:
                 if state['narration_reference'] != audio[section.id].audio_reference:
                     raise ValueError('已采用段画面与当前配音不一致，须先恢复该段依赖')
                 local = creation_task_montage_plan_from_payload(state['montage'])
                 section_cues,section_clips,duration = local.cues,local.clips,local.duration_seconds
+                if (abs(duration - window.duration_seconds) > .001
+                        or local.delivery_window != {'section_id': section.id,
+                            'start_seconds': window.start_seconds, 'end_seconds': window.end_seconds}):
+                    raise ValueError(f'已采用段 {section.id} 的画面窗口与目标不一致；请保留原配音并重新确认该段画面。')
                 origin = 0.0
             else:
                 section_cues = [cue for cue in montage.cues if cue.source_section_id==section.id]
                 cue_ids = {cue.id for cue in section_cues}
                 section_clips = [clip for clip in montage.clips if clip.cue_id in cue_ids]
                 origin = min((clip.timeline_start_seconds for clip in section_clips),default=cursor)
-                duration = float(audio[section.id].duration_seconds)
+                duration = window.duration_seconds
             if not section_cues or not section_clips:
                 raise ValueError('完整故事板缺少实际段落镜头，未发布半条作品')
-            cues.extend(section_cues)
+            cues.extend(replace(cue, timeline_start_seconds=(
+                cue.timeline_start_seconds if cue.timeline_start_seconds is not None else 0) - origin + cursor)
+                for cue in section_cues)
             clips.extend(replace(clip,timeline_start_seconds=clip.timeline_start_seconds-origin+cursor,
                 timeline_end_seconds=clip.timeline_end_seconds-origin+cursor) for clip in section_clips)
-            cursor += duration
+            cursor = window.end_seconds
+        ranges = {}
+        for clip in sorted(clips, key=lambda item: (item.asset_id, item.source_start_seconds)):
+            if clip.source_start_seconds < ranges.get(clip.asset_id, -1):
+                raise ValueError('已采用段重复消耗同一画面区间；请通过重新生成故事板入口确认完整目标画面，原配音与检查点保留。')
+            ranges[clip.asset_id] = clip.source_end_seconds
         timeline = montage.audio_timeline
         created_graph = montage.narration_linkage_created_audio_timeline
         if timeline is None or not any(track.role=='narration' for track in timeline.tracks):
-            voice = narration_audio_timeline(audio[script.sections[0].id].audio_reference,
-                float(audio[script.sections[0].id].duration_seconds)).tracks[0]
-            voice.clips = []
-            at = 0
-            for section in script.sections:
-                segment = audio[section.id]
-                clip = narration_audio_timeline(segment.audio_reference,float(segment.duration_seconds)).tracks[0].clips[0]
-                voice.clips.append(clip.model_copy(update={'id':f'audio-narration-{segment.id}','timeline_start_ms':at}))
-                at += clip.duration_ms
+            voice = voice_timeline(script, audio, windows).tracks[0]
             other_tracks = [track.model_copy(deep=True) for track in timeline.tracks] if timeline else []
             timeline,created_graph = AudioTimeline(tracks=[voice,*other_tracks]),True
         return replace(montage,cues=cues,clips=clips,duration_seconds=round(cursor,3),
+            duration_requirement=requirement.payload(),
             audio_timeline=timeline,narration_linkage_created_audio_timeline=created_graph,
             low_confidence_clip_count=sum(clip.needs_confirmation for clip in clips),
             status='waiting_for_user' if any(clip.needs_confirmation for clip in clips) else 'ready')

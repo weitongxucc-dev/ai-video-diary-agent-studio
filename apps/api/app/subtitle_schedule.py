@@ -98,6 +98,10 @@ def narration_schedule(cues, duration_seconds: float) -> list[TimedCaption]:
     result = []
     cursor = 0.0
     for cue in cues:
+        if cue.timeline_start_seconds is not None:
+            if not math.isfinite(cue.timeline_start_seconds) or cue.timeline_start_seconds < cursor:
+                raise ValueError("旁白字幕起点无效或重叠")
+            cursor = cue.timeline_start_seconds
         end = cursor + cue.duration_seconds
         if not math.isfinite(end) or end <= cursor or end > duration_seconds + .03:
             raise ValueError("旁白字幕区间必须位于成片内")

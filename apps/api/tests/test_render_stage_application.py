@@ -1,4 +1,4 @@
-"""One actual two-second render normal through the public creation queue."""
+"""A real render with a shorter unchanged voice and explicit caption/audio gaps."""
 from dataclasses import asdict, replace
 import hashlib
 import json
@@ -44,6 +44,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         voice_usage_scopes=('narration',))
     plan = repo.get_creation_plan('local', 'plan_local')
     plan.presenter_share_target = 0
+    plan.duration_target_seconds = 15
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version, 'zh-CN', voice.model_id)
     plan.owner_user_id = member.member_id
@@ -67,10 +68,12 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         pronunciation_version='fixture-rules', status='ready')
     repo.complete_creation_task_narration(record, segments=[segment])
     asset, material_ref = register_synthetic_video_asset(repo, workspace_id='local', member_id=member.member_id,
-        path=tmp_path / 'library/source.mp4', asset_id='declared-render-broll', seconds=6)
+        path=tmp_path / 'library/source.mp4', asset_id='declared-render-broll', seconds=21)
     monkeypatch.setattr(main, 'auth_context', SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, 'local_members_service', members)
     monkeypatch.setattr(main, 'production_repo', repo)
+    from app.quality_inspection import QualityCheckRepository
+    monkeypatch.setattr(main, 'quality_check_repo', QualityCheckRepository(repo.database_path))
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
     monkeypatch.setattr(main, 'video_job_runner', VideoJobRunner(repo))
     monkeypatch.setattr(main, 'settings', replace(main.settings, video_output_path=str(tmp_path / 'outputs'),
@@ -80,32 +83,47 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     case = main._render_stage_use_case(repo)
     assert case.repository is case.metadata.repository is case.person_preview.repository is repo
     assert case.person_preview.metadata is case.metadata and case.video_job_runner is main.video_job_runner and case.settings is main.settings
-    cue = NarrationCue('declared-render-cue', segment.source_section_id, segment.text, 2, segment.id)
+    cue = NarrationCue('declared-render-cue', segment.source_section_id, segment.text, 2, segment.id, timeline_start_seconds=.5)
     clip = MontageClip('declared-render-clip', cue.id, asset.id, asset.segments[0].id, material_ref,
-        0, 2, 0, 2, 1, ['声明的合成 B-roll'], False)
+        0, 5, 0, 5, 1, ['声明的合成 B-roll'], False)
     montage = CreationTaskMontagePlan('declared-render-montage', 'local', task_id, script_id, '合成成片 normal',
-        'ready', [cue], [clip], 2, 0, narration_audio_path=segment.audio_reference)
+        'ready', [cue], [clip, replace(clip, id='declared-middle-clip', segment_id=asset.segments[1].id,
+            source_start_seconds=7, source_end_seconds=12, timeline_start_seconds=5, timeline_end_seconds=10),
+            replace(clip, id='declared-tail-clip', segment_id=asset.segments[2].id, source_start_seconds=14,
+                source_end_seconds=19, timeline_start_seconds=10, timeline_end_seconds=15)],
+        15, 0, narration_audio_path=segment.audio_reference)
+    from app.audio_timeline import narration_audio_timeline
+    montage.audio_timeline = narration_audio_timeline(segment.audio_reference, 2)
+    montage.audio_timeline.tracks[0].clips[0].timeline_start_ms = 500
+    voice_hash = hashlib.sha256(audio.read_bytes()).hexdigest()
     repo.save_creation_task_montage_plan('local', task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     base = case.metadata.ensure_montage_base('local', repo.get_creation_task('local', task_id), montage)
     caption_ref, caption_transform = case.metadata.publish_subtitle_text(workspace_id='local', task_id=task_id,
         proposal_id='declared-render-caption', kind='subtitle_fixture', input_refs=['timeline:' + base.id],
-        content='1\n00:00:00,000 --> 00:00:02,000\n' + segment.text + '\n', engine='fixture-subtitle-text', parameters={'language': 'zh-CN'})
+        content='1\n00:00:00,500 --> 00:00:02,500\n' + segment.text + '\n', engine='fixture-subtitle-text', parameters={'language': 'zh-CN'})
     repo.create_subtitle_track(SubtitleTrack('declared-render-caption', 'local', task_id, base.id, 'zh-CN', None, {},
-        [SubtitleCue('declared-caption-cue', cue.id, segment.text, 0, 2)], 'timeline', None, caption_ref, caption_transform, 'valid'))
+        [SubtitleCue('declared-caption-cue', cue.id, segment.text, .5, 2.5)], 'timeline', None, caption_ref, caption_transform, 'valid'))
     gib=1024**3
     # Exact values from the accepted person normal's actual queued render prerequisite.
     budget=PresenterBudget(1,8*1024**2,20,4*1024**2,1,90,3*gib//2,16,.1,2*gib,32*1024**2)
     montage_budget=MontageBudget(10,20,1_000_000,1_000_000,30,1_000_000)
     render=CpuRenderBudget(300,400_000_000,1920,1920,10_000_000,20,0,8_000_000,1,90,512*1024**2,64*1024**2,16)
-    host_budget=HostBudget(91,gib,16*gib,gib,10**9,128*1024**2,presenter=budget,presenter_cpu_render=render,cpu_render=render,montage=montage_budget)
+    from test_host_resource_probes import _render_budget
+    render = replace(render, running_cpu_policy=_render_budget().running_cpu_policy)
+    from test_creation_audio_mix import audio_budget as calibrated_audio_budget
+    audio_budget = replace(calibrated_audio_budget(), max_output_duration_seconds=15)
+    monkeypatch.setattr(main, 'cpu_audio_budget_from_env', lambda: audio_budget)
+    host_budget=HostBudget(91,gib,16*gib,gib,10**9,128*1024**2,presenter=budget,presenter_cpu_render=render,cpu_render=render,montage=montage_budget,cpu_audio=audio_budget)
     swap=psutil.swap_memory();disk=psutil.disk_io_counters();devices=psutil.disk_io_counters(perdisk=True)
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))
     monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:devices if kwargs.get('perdisk') else disk)
-    resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget)
+    from tests.host_memory_boundary import IsolatedMemoryMonitor
+    resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget, memory_monitor=IsolatedMemoryMonitor())
     observations = {'renders': [], 'paired_publications': [], 'grant_validity': [], 'qc_triggers': []}
     original_render, original_publish = PicturePreviewRenderer.render_montage, repo.publish_creation_task_render
-    original_valid, original_qc = RenderStageUseCase.valid_with_grant, main._start_creation_task_quality_check
+    from app.creation.quality_inspection_use_case import QualityInspectionUseCase
+    original_valid, original_qc = RenderStageUseCase.valid_with_grant, QualityInspectionUseCase.start_for_render
 
     def observe_render(renderer, *args, **kwargs):
         observations['renders'].append({'request_id': kwargs['render_context'].grant.request_id})
@@ -121,21 +139,27 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         observations['grant_validity'].append({'request_id': grant.grant.request_id, 'valid': value})
         return value
 
-    def observe_qc(*args, **kwargs):
-        observations['qc_triggers'].append(list(args))
-        return original_qc(*args, **kwargs)
+    def observe_qc(service, runtime, workspace_id, target_id, job_id):
+        observations['qc_triggers'].append([workspace_id, target_id, job_id])
+        return original_qc(service, runtime, workspace_id, target_id, job_id)
 
     monkeypatch.setattr(PicturePreviewRenderer, 'render_montage', observe_render)
     monkeypatch.setattr(repo, 'publish_creation_task_render', observe_publish)
     monkeypatch.setattr(RenderStageUseCase, 'valid_with_grant', observe_valid)
-    monkeypatch.setattr(main, '_start_creation_task_quality_check', observe_qc)
+    monkeypatch.setattr(QualityInspectionUseCase, 'start_for_render', observe_qc)
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant,verify_identity=main._verify_creation_identity,
-        presenter_budget=budget,presenter_cpu_render_budget=render,cpu_render_budget=render,montage_budget=montage_budget)
+        presenter_budget=budget,presenter_cpu_render_budget=render,cpu_render_budget=render,montage_budget=montage_budget,
+        audio_mix_facts=lambda workspace, target, montage, *, actor: main._task_audio().mix_facts(
+            workspace, target, montage.audio_timeline, montage.duration_seconds, actor=actor,
+            normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget))
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',
         device_access=MemberDeviceAccess(members,identity_verifier=main._verify_creation_identity),
         registrations={'creation_job':registration},resources=resources,processes=HostProcessProbe())
+    quality_service = main._quality_inspection_use_case(repo)
+    registration.executor.on_render_completed = lambda workspace, target, job: quality_service.start_for_render(runtime, workspace, target, job)
     monkeypatch.setattr(main, 'device_runtime', runtime)
+    monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
     client=TestClient(main.app,headers={'X-Local-Member-Token':token})
     url='/api/creation-tasks/'+task_id
     destination=os.environ.get('RENDER_STAGE_EVIDENCE_DIR')
@@ -168,6 +192,11 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         facts={a.kind:file_fact(main.artifact_store.resolve_file(a.logical_ref)) for a in artifacts}
         assert all(a.sha256==facts[a.kind]['sha256'] and a.size_bytes==facts[a.kind]['size_bytes'] for a in artifacts)
         assert segment.text in Path(facts['subtitle_track']['path']).read_text()
+        assert '00:00:00,500 --> 00:00:02,500' in Path(facts['subtitle_track']['path']).read_text()
+        assert rendered['duration_seconds'] == 15
+        assert rendered['cues'][0]['duration_seconds'] == 2
+        assert rendered['audio_timeline']['tracks'][0]['clips'][0]['source_end_ms'] == 2000
+        assert hashlib.sha256(audio.read_bytes()).hexdigest() == voice_hash
         edges=[e for e in repo.list_dependency_edges('local',task_id) if e.created_by_transform_id==transform.id]
         assert {(e.upstream_ref,e.downstream_ref) for e in edges}=={(u,d) for u in transform.input_refs for d in transform.output_refs}
         event=repo.get_task_event('local',f'event_{outer.id}_render_succeeded')

@@ -203,3 +203,19 @@ def test_persisted_clean_never_survives_output_changes(system, change):
     result = client.get(url, headers=headers).json()
     assert result["stale"] is True and result["result_status"] is None
     assert result["findings"] == result["unavailable"] == []
+
+
+def test_delivery_judgment_uses_video_not_container_duration_and_is_idempotent(system):
+    from dataclasses import asdict
+    client, repo, store, checks, headers, other_token, tmp_path = system
+    seed_render(system)
+    service = client.quality_service
+    _, _, source = service.source_metadata('local', 'task')
+    request = {'budget': asdict(service.budget), 'source': source, 'check_id': 'declared-duration-check'}
+    result = metadata_result(request)
+    result['evidence'].update(video_duration_seconds=1.92, video_frame_rate='25/1', duration_seconds=2)
+    service.validate_result(request, result)
+    assert result['evidence']['duration_assessment']['status'] == 'mismatch'
+    assert result['evidence']['status'] == 'issues_found' and not result['evidence']['is_clean']
+    service.validate_result(request, result)
+    assert len([f for f in result['evidence']['findings'] if f['kind'] == 'delivery_duration']) == 1

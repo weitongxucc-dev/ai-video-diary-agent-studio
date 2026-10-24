@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from app.creation.duration_requirement import DurationRequirement, DurationConflict
 from app.canvas import canvas_size
 from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TaskEvent, TimelineVersion, TransformRun
 from app.creation.editing.metadata_use_case import InvalidMontage
@@ -86,6 +87,11 @@ class RenderStageUseCase:
             )
         except KeyError as exc:
             raise RenderRejected(status_code=404, detail="creation task montage plan not found") from exc
+        requirement = DurationRequirement.from_plan(self.repository.get_creation_plan(workspace_id, task.plan_id))
+        try:
+            requirement.require(plan.duration_seconds, 30)
+        except DurationConflict as exc:
+            raise RenderRejected(status_code=409, detail=str(exc)) from exc
         if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered", "failed"}:
             raise RenderRejected(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
         if not plan.narration_audio_path:
@@ -743,6 +749,8 @@ class RenderStageUseCase:
             )
             _validate_rendered_media(path, expected_size=canvas_size(str(plan["aspect_ratio"])),
                                      expected_duration_seconds=float(plan["duration_seconds"]),
+                                     duration_requirement=DurationRequirement.from_plan(
+                                         self.repository.get_creation_plan(workspace_id, task.plan_id)),
                                      **media_options)
             return True
         except (KeyError, FileNotFoundError, ValueError, OSError):
@@ -792,7 +800,13 @@ class RenderStageUseCase:
             raise RenderRejected(status_code=exc.status_code, detail=exc.detail) from exc
 
     def render_montage(self, workspace_id, plan, narration_audio_path, *, job_staging_path=None, subtitle_tracks=None, render_context=None):
+        original_requirement = plan.duration_requirement
+        task = self.repository.get_creation_task(workspace_id, plan.task_id)
+        plan.duration_requirement = DurationRequirement.from_plan(
+            self.repository.get_creation_plan(workspace_id, task.plan_id)).payload()
         try:
             return self.metadata.picture_renderer.render_montage(workspace_id, plan, narration_audio_path, job_staging_path=job_staging_path, subtitle_tracks=subtitle_tracks, render_context=render_context)
         except PicturePreviewRejected as exc:
             raise RenderRejected(status_code=exc.status_code, detail=exc.detail) from exc
+        finally:
+            plan.duration_requirement = original_requirement

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 from uuid import uuid4
@@ -12,6 +12,97 @@ from app.creation.transactions import EditChangeSet, clone_cover_asset, clone_su
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 
 OPERATION = "regenerate_storyboard"
+
+
+def speech_windows(plan):
+    from app.subtitle_schedule import narration_schedule
+    result = {}
+    for cue, caption in zip(plan.cues, narration_schedule(plan.cues, plan.duration_seconds)):
+        if cue.source_section_id not in result:
+            result[cue.source_section_id] = [caption.start_seconds, caption.end_seconds]
+        else:
+            result[cue.source_section_id][1] = caption.end_seconds
+    return result
+
+
+def move_preserved_voice(previous, candidate):
+    from app.audio_timeline import AudioEditRequest, apply_audio_edit
+    before, after = speech_windows(previous), speech_windows(candidate)
+    if (before.keys() != after.keys() or any(abs((b[1] - b[0]) - (after[key][1] - after[key][0])) > .001
+                                           for key, b in before.items())):
+        raise ValueError("故事板重算必须保留原正文和真实配音时长")
+    if before == after:
+        return deepcopy(previous.audio_timeline)
+    if previous.audio_timeline is None:
+        return candidate.audio_timeline
+    graph = previous.audio_timeline.model_copy(deep=True)
+    old_voice = [track for track in graph.tracks if track.role == 'narration']
+    new_voice = [track for track in candidate.audio_timeline.tracks if track.role == 'narration']
+    if len(old_voice) != 1 or len(new_voice) != 1:
+        raise ValueError("配音轨不能确定逐段归属，请先核对原音轨；原配音与采用版本未改变")
+    old, new = old_voice[0], new_voice[0]
+    if old.locked:
+        raise ValueError('配音轨已锁定，请先明确解锁再调整语音位置')
+    # A single unchanged aggregate can be split using the existing envelope-safe edit.
+    if len(old.clips) == 1 and len(new.clips) > 1:
+        clip = old.clips[0]
+        end = round(sum(right - left for left, right in before.values()) * 1000)
+        if (clip.source_ref != previous.narration_audio_path or clip.source_start_ms != 0
+                or clip.source_end_ms != end or clip.timeline_start_ms != 0 or clip.playback_rate != 1
+                or round(max(value[1] for value in before.values()) * 1000) != end):
+            raise ValueError("整条配音有独立裁剪或变速，不能猜测分段；请先核对原音轨")
+        at = 0
+        for start, stop in list(before.values())[:-1]:
+            at += round((stop - start) * 1000)
+            tail = next(track for track in graph.tracks if track.role == 'narration').clips[-1]
+            graph = apply_audio_edit(graph, AudioEditRequest(action='split', target_id=tail.id,
+                values={'at_ms': at}), round(candidate.duration_seconds * 1000))
+        old = next(track for track in graph.tracks if track.role == 'narration')
+        destinations = [round(value[0] * 1000) for value in after.values()]
+    else:
+        def source_key(clip):
+            return (clip.source_ref, clip.source_start_ms, clip.source_end_ms, clip.playback_rate)
+        lookup = {source_key(clip): clip.timeline_start_ms for clip in new.clips}
+        if len(lookup) != len(new.clips) or len(old.clips) != len(new.clips) or any(source_key(c) not in lookup for c in old.clips):
+            raise ValueError("原配音片段与候选不能唯一关联，请先核对原音轨；不替换原声")
+        destinations = [lookup[source_key(clip)] for clip in old.clips]
+    for clip, destination in zip(old.clips, destinations):
+        if clip.locked and clip.timeline_start_ms != destination:
+            raise ValueError("配音片段已锁定，请先明确解锁再调整画面节奏")
+        clip.timeline_start_ms = destination
+    return graph
+
+
+def move_preserved_subtitles(previous, candidate, tracks):
+    before, after = speech_windows(previous), speech_windows(candidate)
+    if before == after:
+        return tracks
+    by_cue = {cue.id: cue.source_section_id for cue in previous.cues}
+    subtitles = {cue.id: cue.source_cue_id for track in tracks for cue in track.cues}
+    result = []
+    for track in tracks:
+        cues = []
+        for cue in track.cues:
+            if cue.source_cue_id is None:
+                cues.append(cue)
+                continue
+            source, seen = cue.source_cue_id, set()
+            while source not in by_cue and source in subtitles:
+                if source in seen:
+                    raise ValueError("字幕关联形成循环，不能猜测配音时轴")
+                seen.add(source)
+                source = subtitles[source]
+            if source is None:
+                cues.append(cue)
+                continue
+            section = by_cue.get(source)
+            if section is None or section not in after:
+                raise ValueError("原字幕缺少可确定的段落关联，请先核对字幕，不会静默平移")
+            delta = after[section][0] - before[section][0]
+            cues.append(replace(cue, start_seconds=round(cue.start_seconds + delta, 3),
+                end_seconds=round(cue.end_seconds + delta, 3)))
+        result.append(replace(track, cues=cues) if cues != track.cues else track)
+    return result
 
 
 def narration_signature(repository, task) -> str:
@@ -124,20 +215,36 @@ class StoryboardRegeneration:
         base = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
         previous = creation_task_montage_plan_from_payload(base.snapshot["montage"])
         candidate = self.montage_stage.build_candidate(job.workspace_id, job.task_id, grant_context=context)
-        if abs(candidate.duration_seconds - previous.duration_seconds) > 1 / 30:
-            raise ValueError("故事板重算不能改变当前声音时轴")
+        from app.creation.duration_requirement import DurationRequirement
+        DurationRequirement.from_plan(self.repository.get_creation_plan(task.workspace_id, task.plan_id)).require(
+            candidate.duration_seconds, 30)
+        voice = move_preserved_voice(previous, candidate)
         # The task owns one montage object; immutable TimelineVersions own its revisions.
         candidate.id = previous.id
-        for field in ("aspect_ratio", "narration_audio_path", "graphic_overlays", "audio_timeline", "narration_linkage_created_audio_timeline"):
+        for field in ("aspect_ratio", "narration_audio_path", "graphic_overlays", "narration_linkage_created_audio_timeline"):
             setattr(candidate, field, deepcopy(getattr(previous, field)))
+        candidate.audio_timeline = voice
         candidate.output_path = candidate.subtitle_path = None
         if len(json.dumps(creation_task_montage_plan_to_payload(candidate)).encode()) > context.max_output_bytes:
             raise ValueError("故事板输出超过阶段预算")
         metadata = self.montage_stage.metadata
         metadata.picture_renderer.validate_material_use(job.workspace_id, candidate)
         version_id = f"timeline_{uuid4().hex}"
-        tracks = [clone_subtitle_track(track, timeline_version_id=version_id) for track in
-            metadata.current_subtitle_tracks(job.workspace_id, task, current_version=base, montage=previous)]
+        original_tracks = metadata.current_subtitle_tracks(job.workspace_id, task, current_version=base, montage=previous)
+        shifted_tracks = move_preserved_subtitles(previous, candidate, original_tracks)
+        proposal_id = f"proposal_{uuid4().hex}"
+        tracks = []
+        for original, shifted in zip(original_tracks, shifted_tracks):
+            if shifted.cues != original.cues and shifted.status == 'valid':
+                from app.creation.editing.metadata_use_case import execution_subtitle_track
+                from app.subtitle_tracks import render_srt
+                artifact_ref, transform_id = metadata.publish_subtitle_text(workspace_id=job.workspace_id,
+                    task_id=task.id, proposal_id=proposal_id, kind='subtitle_retime',
+                    input_refs=[f'timeline:{base.id}', candidate.narration_audio_path],
+                    content=render_srt(execution_subtitle_track(shifted)), engine='timeline-clock-v1',
+                    parameters={'language': shifted.language, 'operation': 'RegenerateStoryboard'})
+                shifted = replace(shifted, artifact_ref=artifact_ref, transform_id=transform_id)
+            tracks.append(clone_subtitle_track(shifted, timeline_version_id=version_id))
         cover = metadata.cover_asset_for_version(job.workspace_id, task.id, base)
         cover = clone_cover_asset(cover, timeline_version_id=version_id) if cover is not None else None
         source = {key: event[key] for key in ("member_id", "identity_kind", "device_id", "user_id") if key in event}
@@ -146,7 +253,7 @@ class StoryboardRegeneration:
         intent = EditIntent(f"intent_{uuid4().hex}", job.workspace_id, job.task_id, "重新生成故事板", "montage",
             [f"timeline:{base.id}"], None, "RegenerateStoryboard", values, {"keep_narration": True}, 1, "parsed")
         invalidated = [ref for ref in (previous.output_path, previous.subtitle_path) if ref]
-        proposal = EditProposal(f"proposal_{uuid4().hex}", job.workspace_id, job.task_id, intent.id,
+        proposal = EditProposal(proposal_id, job.workspace_id, job.task_id, intent.id,
             "重新生成故事板，保留原配音与其他轨道", [f"timeline:{base.id}"],
             {"operation_type": "RegenerateStoryboard", "payload": values}, invalidated, {}, [])
         change = prepare_change_set(proposal=proposal, base_version=base, operation_type="RegenerateStoryboard",

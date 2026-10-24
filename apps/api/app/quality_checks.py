@@ -19,6 +19,8 @@ QualityCheckError，由调用方决定怎么呈现，绝不静默返回"已通�
 """
 from __future__ import annotations
 
+from app.creation.duration_requirement import stream_duration_seconds as _stream_duration_seconds
+
 import array
 import json
 import math
@@ -128,6 +130,8 @@ class QualityReport:
     clip_full_scale_duty_threshold: float = DEFAULT_CLIP_FULL_SCALE_DUTY
     timeline_origin_seconds: float = 0.0
     clipping_summary: dict | None = None
+    video_duration_seconds: float | None = None
+    video_frame_rate: str | None = None
 
     @property
     def is_clean(self) -> bool:
@@ -318,7 +322,7 @@ def _probe(path: str | Path, *, context: QualityWorkerContext | None = None) -> 
         "ffprobe", "-v", "error",
         "-show_entries",
         "format=duration:stream=codec_type,start_time,duration,duration_ts,time_base,"
-        "sample_rate,nb_frames",
+        "sample_rate,nb_frames,avg_frame_rate",
         "-of", "json", str(path),
     ], PROBE_TIMEOUT_SECONDS, context=context)
     try:
@@ -348,20 +352,6 @@ def _stream_start_known(stream: dict | None) -> bool:
     return stream is not None and _finite(stream.get("start_time")) is not None
 
 
-def _stream_duration_seconds(stream: dict | None) -> float | None:
-    """流自身时长。优先 duration，其次 duration_ts × time_base；都没有就是未知。"""
-    if stream is None:
-        return None
-    value = _finite(stream.get("duration"))
-    if value is not None:
-        return value
-    ticks, time_base = stream.get("duration_ts"), stream.get("time_base")
-    if ticks is not None and time_base:
-        try:
-            return float(ticks) * float(Fraction(time_base))
-        except (ValueError, ZeroDivisionError):
-            return None
-    return None
 
 
 def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: QualityWorkerContext | None = None) -> float | None:
@@ -634,6 +624,8 @@ def inspect_media_quality(
         clip_full_scale_duty_threshold=clip_full_scale_duty_threshold,
         timeline_origin_seconds=round(origin, 3),
         clipping_summary=clipping_summary,
+        video_duration_seconds=_stream_duration_seconds(_stream_of(payload, "video")),
+        video_frame_rate=(_stream_of(payload, "video") or {}).get("avg_frame_rate"),
     )
 
 
@@ -711,6 +703,8 @@ def quality_report_evidence(report: QualityReport) -> dict:
         "engine": report.engine,
         "validation_scope": report.validation_scope,
         "duration_seconds": report.duration_seconds,
+        "video_duration_seconds": report.video_duration_seconds,
+        "video_frame_rate": report.video_frame_rate,
         "timeline_origin_seconds": report.timeline_origin_seconds,
         "status": report.status,
         "is_clean": report.is_clean,
