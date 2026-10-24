@@ -5,13 +5,13 @@ import {createBusinessRequest} from '../diary/transport.ts';
 import {registerScriptTools} from '../diary/script-tools.ts';
 import {createTaskContext} from '../diary/task-context.ts';
 
-function rejectedTool(detail, credentials = {}) {
+function rejectedTool(detail, credentials = {}, scriptContext = {creation_intent: {kind: 'goal_delegation'}}) {
   const tools = {}, calls = [], source = {turnId: 'trusted-turn', inputId: 'input-one'};
   const request = createBusinessRequest({apiBase: 'https://api.invalid', selectedTaskVersion: null,
     verifyTaskVersion() {}, readCredentials: () => credentials, readActionSource: () => source,
     getSignal: () => undefined, fetchRequest: async (url, init) => {
       calls.push({url, init});
-      if (url.endsWith('/script-context')) return Response.json({creation_intent: {kind: 'goal_delegation'}});
+      if (url.endsWith('/script-context')) return Response.json(scriptContext);
       if (url.endsWith('/script-draft')) return Response.json({detail}, {status: 502});
       throw new Error('unexpected write after rejected draft');
     }});
@@ -19,7 +19,7 @@ function rejectedTool(detail, credentials = {}) {
     readActionSource: () => source, isTaskRead: () => true, hasPreview: () => false,
     readCurrentTaskFacts: async () => {throw new Error('rejection cannot refresh saved task facts');},
     markPreview() {throw new Error('rejection is not a saved preview');},
-    getScriptDraftUpdatedAt: () => null, setScriptDraftUpdatedAt() {throw new Error('rejection cannot advance draft CAS');}});
+    getScriptDraftUpdatedAt: () => scriptContext.draft?.updated_at ?? null, setScriptDraftUpdatedAt() {throw new Error('rejection cannot advance draft CAS');}});
   return {tool: tools.preview_script_draft, calls, source};
 }
 const draft = {title: '设备介绍', sections: [{title: '现场', content: '多人协作。', visual_prompt: '展示现场',
@@ -204,6 +204,31 @@ test('an invalid review cannot attach a candidate locator or permit the same inp
   assert.equal(JSON.stringify(result).includes('private-invalid-review-explanation'), false);
   await state.tool.execute('blocked', draft);
   assert.equal(state.calls.filter(call => call.url.endsWith('/script-draft')).length, 1);
+});
+
+test('legacy replacement rejects a partial payload for a larger or unknown existing body before POST', async () => {
+  for (const count of [45, undefined, 17]) {
+    const state = rejectedTool({}, {}, {draft:{id:'original',updated_at:'v1',sections:null,
+      sections_loaded:false,...(count===undefined?{}:{sections_total_count:count})}});
+    const sections=Array.from({length:count===17?10:20},(_,i)=>({...draft.sections[0],id:'section-'+i}));
+    await assert.rejects(()=>state.tool.execute('partial',{title:'原稿',sections}));
+    assert.equal(state.calls.filter(call=>call.init.method==='POST').length,0);
+    assert.equal(state.calls.length,1);
+  }
+});
+
+test('explicit complete rewrite can shorten a large draft without a full-reading permission ledger', async () => {
+  const rejection={error:'script_fact_unsupported',reason_code:'unsupported_fact',section_index:1,retryable:true};
+  for(const context of [{},...[3,45].map(count=>({draft:{id:'original',updated_at:'v1',sections:null,sections_loaded:false,sections_total_count:count}}))]){
+    const state=rejectedTool(rejection,{},context);
+    const candidate={title:'完整改写',...(context.draft?{edit_mode:'replace_all'}:{}),sections:Array.from({length:3},(_,i)=>({...draft.sections[0],id:'section-'+i}))};
+    const result=await state.tool.execute('complete',candidate);
+    const posts=state.calls.filter(call=>call.init.method==='POST');
+    assert.equal(posts.length,1);const body=JSON.parse(posts[0].init.body);assert.equal(body.sections.length,3);
+    assert.equal(body.edit_mode,context.draft?'replace_all':undefined);
+    assert.equal(body.expected_updated_at,context.draft?'v1':undefined);
+    assert.equal(result.details.failure.error,'script_fact_unsupported');
+  }
 });
 
 test('empty evidence references remain subject to independent script review', async () => {

@@ -4,6 +4,8 @@ import {BusinessRequestError, safeScriptCandidateLocation, safeScriptReviewIssue
 import type {BusinessFailure, ScriptDraftFailure} from './transport.ts';
 import {rankByQuery, tokenizeQuery} from '../retrieval.ts';
 
+const LEGACY_DRAFT_REPLACEMENT_MAX_SECTIONS = 20;
+
 export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, readCurrentTaskFacts, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
   request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; readCurrentTaskFacts: () => Promise<any>; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
 }) {
@@ -121,12 +123,14 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
   pi.registerTool({
     name: "preview_script_draft",
     label: "保存待确认文案",
-    description: "保存当前任务完整旁白及真实来源。content全部会朗读；片头、署名等画面要求只放visual_prompt，不能单独作为旁白段。提交前按本轮目标语言、字数及时长检查。已保存自主委托时采用这个实际版本并继续；讨论仅保留草稿。固定定稿不能经此工具改写。",
+    description: "以完整replacement保存当前任务旁白及真实来源，不是把一页合并回原稿。metadata或一页读取不证明正文完整；局部修改应使用已声明的patch，不能省略未加载段。此旧接口的单次载荷不代表作品规模上限。content全部会朗读；片头、署名等画面要求只放visual_prompt，不能单独作为旁白段。提交前按本轮目标语言、字数及时长检查。已保存自主委托时采用这个实际版本并继续；讨论仅保留草稿。固定定稿不能经此工具改写。",
     parameters: {
       type: "object",
       properties: {
+        edit_mode: {type: "string", enum: ["replace_all"],
+          description: "仅明确要完整替换已有稿时指定；不是局部更新或已读全文证明。首次新稿可省，局部窗不得借此声明省略原段。"},
         title: { type: "string", minLength: 1, maxLength: 160 },
-        sections: { type: "array", minItems: 1, maxItems: 20, items: {
+        sections: { type: "array", minItems: 1, maxItems: LEGACY_DRAFT_REPLACEMENT_MAX_SECTIONS, items: {
           type: "object",
           properties: {
             id: { type: "string", minLength: 1, maxLength: 120 },
@@ -144,7 +148,7 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
       },
       required: ["title", "sections"], additionalProperties: false,
     },
-    execute: async (_id: string, params: { title: string; sections: { id?: string; title: string; content: string; visual_prompt: string; evidence_reference_ids: string[] }[] }) => {
+    execute: async (_id: string, params: { title: string; edit_mode?: "replace_all"; sections: { id?: string; title: string; content: string; visual_prompt: string; evidence_reference_ids: string[] }[] }) => {
       if (!taskId) throw new Error("当前步骤不能保存文案草稿");
       const source = readActionSource();
       const inputKey = source.inputId ?? source.turnId;
@@ -152,7 +156,15 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
       if (!isTaskRead()) throw new Error("请先读取当前任务和允许使用的资料");
       if (hasPreview()) throw new Error("本轮已有尚未采用的方案，不能另写文案");
       const context = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`);
-      const submitted = {title: params.title, sections: params.sections.map((section, index) => ({
+      if (context.draft && params.edit_mode !== "replace_all") {
+        const count = context.draft.sections_total_count;
+        if (!Number.isSafeInteger(count) || count < 0)
+          throw new Error("当前稿总段数尚未提供，不能把未完整读取的稿件提交为整稿replacement；先核对正式文案metadata或使用已声明的局部写接口。");
+        if (count > LEGACY_DRAFT_REPLACEMENT_MAX_SECTIONS)
+          throw new Error("当前稿超出旧接口单次载荷，不能把一页默认为完整replacement。局部修改保留全部原段并走已声明的局部写接口；只有本轮明确整稿重写时才显式选择replace_all提交完整新稿。这不是作品段数上限，也不要求新增人工许可。");
+        throw new Error("已有稿必须明确选择完整replace_all并绑定原版本；局部修改不能用整稿replacement省略其他段。请使用已声明的局部写接口，无需新增人工许可。");
+      }
+      const submitted = {title: params.title, ...(params.edit_mode ? {edit_mode:params.edit_mode} : {}), sections: params.sections.map((section, index) => ({
         ...section, id: section.id || `section_${String(index + 1).padStart(2, "0")}`,
       }))};
       let draft;
