@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections.abc import Callable
 import hashlib
 import json
 import math
@@ -101,7 +102,16 @@ class QualityWorkerContext:
         if time.monotonic() >= self.deadline:
             raise QualityWorkerError("质检单元总时限已到，检查未完成")
 
-    def run(self, command: list[str], timeout: float, *, pcm: bool = False):
+    def run(self, command: list[str], timeout: float, *, pcm: bool = False,
+            stdout_consumer: Callable[[bytes], None] | None = None):
+        """Drain both pipes while enforcing cumulative output and execution limits.
+
+        PCM and frame callers consume chunks immediately. Their byte quotas still
+        bound work in this grant; they are not allocations or resident-memory caps.
+        Only small metadata commands retain stdout for a completed response.
+        """
+        if pcm and stdout_consumer is None:
+            raise QualityWorkerError("PCM 质检必须使用流式消费者")
         self.check()
         name = command[0]
         if name not in {"ffmpeg", "ffprobe"}:
@@ -120,6 +130,7 @@ class QualityWorkerContext:
         caps = {"stdout": self.budget.max_pcm_bytes if pcm else self.budget.max_frame_json_bytes,
                 "stderr": self.budget.max_stderr_bytes}
         output = {"stdout": bytearray(), "stderr": bytearray()}
+        sizes = {"stdout": 0, "stderr": 0}
         # Deliberately inherit the registered Python worker's PGID. The outer
         # granted runner owns termination and proof for this whole descendant group.
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -134,13 +145,17 @@ class QualityWorkerContext:
                         raise subprocess.TimeoutExpired(command, timeout)
                     for key, _ in selector.select(min(.05, max(0, deadline - time.monotonic()))):
                         label = key.data
-                        data = os.read(key.fileobj.fileno(), min(65536, caps[label] + 1 - len(output[label])))
+                        data = os.read(key.fileobj.fileno(), min(65536, caps[label] + 1 - sizes[label]))
                         if not data:
                             selector.unregister(key.fileobj)
                         else:
-                            output[label].extend(data)
-                            if len(output[label]) > caps[label]:
+                            sizes[label] += len(data)
+                            if sizes[label] > caps[label]:
                                 raise QualityWorkerError("质检命令输出超过本次已标定上限，检查未完成")
+                            if label == "stdout" and stdout_consumer is not None:
+                                stdout_consumer(data)
+                            else:
+                                output[label].extend(data)
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             self.check()
             return subprocess.CompletedProcess(command, code, bytes(output["stdout"]), bytes(output["stderr"]))

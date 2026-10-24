@@ -280,3 +280,197 @@ def test_frozen_worker_identity_hashes_binary_content_and_honors_deadline(tmp_pa
         raise QualityWorkerError('original deadline expired')
     with pytest.raises(QualityWorkerError, match='original deadline expired'):
         quality_worker.worker_identity(check=expired)
+
+
+class StreamingQualityFixture:
+    """Chunked decoded bytes only; no subprocess or media capability claim."""
+    def __init__(self, raw, chunk_size=13):
+        self.raw, self.chunk_size, self.calls = raw, chunk_size, 0
+
+    def run(self, command, timeout, *, stdout_consumer, pcm=False):
+        import subprocess
+        self.calls += 1
+        for offset in range(0, len(self.raw), self.chunk_size):
+            stdout_consumer(self.raw[offset:offset + self.chunk_size])
+        return subprocess.CompletedProcess(command, 0, b'', b'')
+
+
+def test_streaming_clipping_preserves_cross_chunk_runs_and_all_event_totals():
+    import struct
+    from app.quality_checks import detect_clipping, CLIP_FINDING_EVENT_LIMIT
+    count = CLIP_FINDING_EVENT_LIMIT + 7
+    # A negative s16 minimum has magnitude 32768. The last plateau has no
+    # trailing zero, exercising both the byte carry and end-of-stream flush.
+    samples = ([0] + [-32768] * 8) * count
+    context = StreamingQualityFixture(struct.pack('<' + 'h' * len(samples), *samples))
+    result = detect_clipping('declared.wav', sample_rate=1000,
+        audio_start_seconds=1, timeline_origin_seconds=.5, context=context)
+    assert context.calls == 2
+    assert result.unavailable == []
+    assert len(result.findings) == CLIP_FINDING_EVENT_LIMIT
+    summary = result.summary
+    assert summary['event_count'] == count
+    assert summary['findings_truncated_count'] == 7
+    assert summary['total_clipped_seconds'] == round(count * .008, 3)
+    assert summary['first_start_seconds'] == .501
+    assert summary['last_end_seconds'] == round(.5 + len(samples) / 1000, 3)
+    assert summary['full_scale_duty'] == round(8 / 9, 6)
+    assert result.findings[0].start_seconds == .501
+
+
+@pytest.mark.parametrize('samples, reason', [([], '没有解出'), ([0] * 9, '全为静音')])
+def test_streaming_empty_or_silent_pcm_remains_unknown(samples, reason):
+    import struct
+    from app.quality_checks import detect_clipping
+    result = detect_clipping('declared.wav', sample_rate=1000,
+        context=StreamingQualityFixture(struct.pack('<' + 'h' * len(samples), *samples)))
+    assert not result.findings and result.summary is None
+    assert reason in result.unavailable[0].reason
+
+
+def test_streaming_clipping_uses_global_peak_and_rejects_partial_sample():
+    import struct
+    from app.quality_checks import detect_clipping, QualityCheckError
+    samples = [100] * 50 + [0] * 50 + [1000] * 8
+    result = detect_clipping('declared.wav', sample_rate=1000,
+        context=StreamingQualityFixture(struct.pack('<' + 'h' * len(samples), *samples)))
+    assert result.findings == [] and result.unavailable == []  # 8/108 < 10%
+    with pytest.raises(QualityCheckError, match='不完整采样'):
+        detect_clipping('declared.wav', sample_rate=1000, context=StreamingQualityFixture(b'\x00'))
+
+
+def test_streaming_frames_use_max_decoded_end_and_reject_malformed_records():
+    from app.quality_checks import _decoded_stream_end_seconds, QualityCheckError
+    context = StreamingQualityFixture(b'pts_time=2.0|duration_time=0.04\n'
+        b'pts_time=1.0|duration_time=0.04\npts_time=9.0|duration_time=N/A', chunk_size=7)
+    assert _decoded_stream_end_seconds('declared.mkv', 'video', context=context) == 2.04
+    with pytest.raises(QualityCheckError, match='invalid frame metadata'):
+        _decoded_stream_end_seconds('declared.mkv', 'video',
+            context=StreamingQualityFixture(b'pts_time=1|pts_time=2|duration_time=.04\n'))
+
+
+def test_streaming_frames_reject_unterminated_record_before_total_output_quota():
+    from app.quality_checks import _decoded_stream_end_seconds, QualityCheckError
+
+    class UnterminatedFrame:
+        consumed = 0
+
+        def run(self, command, timeout, *, stdout_consumer):
+            # No aggregate quota in this declared port: the parser itself must
+            # bound its carry, without waiting for EOF or the runtime byte cap.
+            while self.consumed < 1024 * 1024:
+                self.consumed += 17
+                stdout_consumer(b'9' * 17)
+            pytest.fail('unterminated frame record was retained without a format bound')
+
+    source = UnterminatedFrame()
+    with pytest.raises(QualityCheckError, match='scalar protocol limit'):
+        _decoded_stream_end_seconds('declared.mkv', 'video', context=source)
+    assert source.consumed < 1024
+    with pytest.raises(QualityCheckError, match='scalar protocol limit'):
+        _decoded_stream_end_seconds('declared.mkv', 'video',
+            context=StreamingQualityFixture(b'pts_time=' + b'9' * 4096 + b'\n', chunk_size=8192))
+
+
+@pytest.mark.parametrize('outcome', ['complete', 'quota', 'cancel'])
+def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, outcome):
+    import time
+    from app import quality_worker_runtime as worker
+    payload = b'0123456789' * 20
+
+    def pipe(data):
+        reader, writer = os.pipe()
+        os.write(writer, data)
+        os.close(writer)
+        return os.fdopen(reader, 'rb')
+
+    class Process:
+        def __init__(self):
+            self.stdout, self.stderr = pipe(payload), pipe(b'')
+            self.returncode, self.killed = None, False
+        def poll(self):
+            return self.returncode
+        def wait(self, timeout):
+            self.returncode = -9 if self.killed else 0
+            return self.returncode
+        def kill(self):
+            self.killed = True
+
+    process = Process()
+    monkeypatch.setattr(worker.subprocess, 'Popen', lambda *args, **kwargs: process)
+    context = object.__new__(worker.QualityWorkerContext)
+    context.budget = replace(fixture_budget(), max_pcm_bytes=100 if outcome == 'quota' else 200)
+    context.deadline, context._verified_tools = time.monotonic() + 3, {'ffmpeg'}
+    consumed = 0
+
+    def consume(raw):
+        nonlocal consumed
+        consumed += len(raw)
+        if outcome == 'cancel':
+            raise worker.QualityWorkerError('cancelled original unit')
+
+    if outcome == 'complete':
+        result = context.run(['ffmpeg'], 2, pcm=True, stdout_consumer=consume)
+        assert result.stdout == b'' and consumed == len(payload)
+        assert not process.killed
+    else:
+        with pytest.raises(worker.QualityWorkerError, match='输出超过|cancelled'):
+            context.run(['ffmpeg'], 2, pcm=True, stdout_consumer=consume)
+        assert process.killed
+    assert process.stdout.closed and process.stderr.closed
+
+
+def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, granted_media):
+    """Two 0.3s synthetic clips through an actual grant, not device calibration."""
+    import shutil
+    import sys
+    from dataclasses import asdict
+    from app.granted_subprocess import run_granted_command
+
+    binaries = {name: shutil.which(name) for name in ('ffmpeg', 'ffprobe')}
+    if not all(binaries.values()):
+        pytest.skip('synthetic streaming verification requires ffmpeg/ffprobe')
+    identities = {}
+    for name, path in binaries.items():
+        with open(path, 'rb') as source:
+            identities[name + '_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
+    budget = replace(fixture_budget(), max_input_bytes=1024 ** 2, max_pcm_bytes=128 * 1024,
+        max_frame_json_bytes=64 * 1024, max_report_bytes=64 * 1024, max_stderr_bytes=64 * 1024,
+        max_timeout_seconds=15, max_process_rss_bytes=512 * 1024 ** 2,
+        additional_memory_bytes=512 * 1024 ** 2, additional_disk_bytes=1024 ** 2,
+        max_tool_bytes=max(Path(path).stat().st_size for path in binaries.values()),
+        ffmpeg_path=binaries['ffmpeg'], ffprobe_path=binaries['ffprobe'], **identities)
+    request = tmp_path / 'streaming-native.json'
+    request.write_text(json.dumps({'budget': asdict(budget), 'root': str(tmp_path)}))
+    program = '''
+import json, sys, time
+from pathlib import Path
+from app.quality_worker_runtime import QualityBudget, QualityWorkerContext
+from app.quality_checks import inspect_media_quality, quality_report_evidence
+request=json.loads(Path(sys.argv[1]).read_text())
+context=QualityWorkerContext(QualityBudget(**request['budget']), time.monotonic()+15)
+reports=[]
+for name, amplitude in [('normal', .5), ('clipped', 3)]:
+    target=Path(request['root'])/(name+'.mkv')
+    result=context.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+        'testsrc=size=64x48:rate=10:duration=0.3','-f','lavfi','-i',
+        f'aevalsrc={amplitude}*sin(2*PI*440*t):s=48000:d=0.3',
+        '-c:v','ffv1','-threads:v','1','-pix_fmt','yuv420p','-c:a','pcm_s16le',str(target)],3)
+    if result.returncode: raise RuntimeError(result.stderr.decode())
+    report=quality_report_evidence(inspect_media_quality(target,context=context))
+    reports.append({key:report[key] for key in ('status','unavailable','clipping_summary')})
+print(json.dumps(reports))
+'''
+    with granted_media() as context:
+        result = run_granted_command(context.scheduler, context.grant,
+            [sys.executable, '-c', program, str(request)], timeout_seconds=20,
+            max_stdout_bytes=64 * 1024, max_stderr_bytes=64 * 1024,
+            cancel_event=context.cancel_event)
+    assert result.returncode == 0, result.stderr.decode()
+    normal, clipped = json.loads(result.stdout)
+    assert normal['status'] == 'clean'
+    assert clipped['unavailable'] == []
+    assert clipped['clipping_summary']['event_count'] > 0
+    assert clipped['clipping_summary']['full_scale_duty'] > .7
+    assert clipped['clipping_summary']['first_start_seconds'] >= 0
+    assert clipped['clipping_summary']['last_end_seconds'] <= .301

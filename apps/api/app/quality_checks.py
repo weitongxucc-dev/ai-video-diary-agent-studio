@@ -28,7 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
 
@@ -53,7 +53,7 @@ DEFAULT_CLIP_FULL_SCALE_DUTY = 0.10
 # 单个满幅游程至少这么长才算一段平台，短于此的只是采样恰好落在波峰。
 DEFAULT_CLIP_MIN_PLATEAU_SAMPLES = 8
 # 削平事件多时（重削的音频可达上千段），聚合摘要里的事件列举上限。超过上限的
-# 一律不静默丢弃：摘要里显式带上被截断的条数，完整事件仍逐条留在 findings。
+# 一律不静默丢弃：摘要里显式带上被截断的条数，逐条 findings 另有下述列举上限。
 CLIP_EVENT_LIST_LIMIT = 50
 # 单份报告里逐条保留的削平事件上限。重削音频的事件密度实测可达 880 段/秒，
 # 十分钟成片就是几十万条、上百 MB JSON，下游存不下。超出的**不静默丢弃**：
@@ -84,6 +84,11 @@ QUALITY_KINDS: tuple[str, ...] = (
 )
 
 _BLACK_PATTERN = re.compile(r"black_start:([0-9.]+)\s+black_end:([0-9.]+)")
+# This compact protocol requests only timestamps/durations or sample counts.
+# 64 ASCII bytes per scalar accommodate signed integer/rational timestamps,
+# decimal precision, scientific notation and N/A. This bounds one record, not
+# the number of frames or the total inspection output/work quota.
+_FRAME_SCALAR_TEXT_LIMIT = 64
 
 
 class QualityCheckError(RuntimeError):
@@ -177,6 +182,75 @@ def detect_black_frames(
     ]
 
 
+@dataclass(frozen=True)
+class ClippingInspection:
+    """Bounded examples and exact aggregates from the complete decoded stream."""
+    findings: list[QualityFinding]
+    unavailable: list[QualityUnavailable]
+    summary: dict | None = None
+
+
+@dataclass
+class _ClippingEvents:
+    """Retain bounded examples while accounting for every detected interval."""
+
+    event_limit: int = CLIP_EVENT_LIST_LIMIT
+    findings_limit: int = CLIP_FINDING_EVENT_LIMIT
+    count: int = 0
+    total_seconds: float = 0.0
+    first_start: float | None = None
+    last_end: float | None = None
+    examples: list[QualityFinding] = field(default_factory=list)
+
+    def add(self, finding):
+        self.count += 1
+        self.total_seconds += finding.duration_seconds
+        self.first_start = finding.start_seconds if self.first_start is None else min(self.first_start, finding.start_seconds)
+        self.last_end = finding.end_seconds if self.last_end is None else max(self.last_end, finding.end_seconds)
+        if len(self.examples) < max(self.event_limit, self.findings_limit):
+            self.examples.append(finding)
+
+    def summary(self, duty):
+        if not self.count:
+            return None
+        return {
+            "event_count": self.count,
+            "total_clipped_seconds": round(self.total_seconds, 3),
+            "first_start_seconds": self.first_start,
+            "last_end_seconds": self.last_end,
+            "full_scale_duty": round(duty, 6) if duty is not None else None,
+            "event_list_limit": self.event_limit,
+            "events": [{"start_seconds": item.start_seconds, "end_seconds": item.end_seconds,
+                        "duration_seconds": item.duration_seconds} for item in self.examples[:self.event_limit]],
+            "events_truncated": self.count > self.event_limit,
+            "truncated_event_count": max(0, self.count - self.event_limit),
+            "findings_event_limit": self.findings_limit,
+            "findings_truncated": self.count > self.findings_limit,
+            "findings_truncated_count": max(0, self.count - self.findings_limit),
+        }
+
+
+class _PCMChunks:
+    """Decode s16le at arbitrary pipe boundaries, retaining at most one byte."""
+
+    def __init__(self, consume):
+        self.consume, self.pending = consume, b""
+
+    def feed(self, raw):
+        raw = self.pending + raw
+        complete = len(raw) - len(raw) % 2
+        self.pending = raw[complete:]
+        values = array.array("h")
+        values.frombytes(raw[:complete])
+        if sys.byteorder == "big":  # pragma: no cover - platform dependent
+            values.byteswap()
+        self.consume(values)
+
+    def finish(self):
+        if self.pending:
+            raise QualityCheckError("PCM 解码结果含不完整采样，削平检查未完成")
+
+
 def detect_clipping(
     path: str | Path,
     *,
@@ -184,58 +258,84 @@ def detect_clipping(
     audio_start_seconds: float = 0.0,
     min_plateau_samples: int = DEFAULT_CLIP_MIN_PLATEAU_SAMPLES,
     full_scale_duty_threshold: float = DEFAULT_CLIP_FULL_SCALE_DUTY,
+    timeline_origin_seconds: float = 0.0,
     context: QualityWorkerContext | None = None,
-) -> tuple[list[QualityFinding], list[QualityUnavailable], float | None]:
+) -> ClippingInspection:
     """削波/削平：按**真实解码出的采样**判断。
 
     峰值触到满幅本身不是削平——任何满幅正弦每个周期都会触顶。削平的物理表现是
     波形被削掉顶端后**长时间停在数字满幅上**，因此这里量的是"贴近满幅的采样占比"
     （flat-top duty），并在超过阈值时按游程给出可定位的区间。
 
-    返回 (问题, 没量成的项)：没有音频流、没有采样率、解不出采样时记
+    返回有界问题示例、全量聚合及没量成的项：没有音频流、没有采样率、解不出采样时记
     `unavailable`，绝不返回空列表冒充"没问题"。
     """
     if sample_rate is None:
         sample_rate = _probe_sample_rate(path, context=context)
     if not sample_rate:
-        return [], [QualityUnavailable(
+        return ClippingInspection([], [QualityUnavailable(
             QUALITY_KIND_CLIPPING, "音频流没有采样率，无法按样本判断削平"
-        )], None
-    samples = _decoded_pcm_samples(path, sample_rate, context=context)
-    if samples is None:
-        return [], [QualityUnavailable(
-            QUALITY_KIND_CLIPPING, "音频解码不出采样，削平未知"
-        )], None
-    if not samples:
-        return [], [QualityUnavailable(
-            QUALITY_KIND_CLIPPING, "音频没有解出任何采样，削平未知"
-        )], None
+        )])
+    peak, sample_count = 0, 0
 
-    peak = max(abs(value) for value in samples)
+    def levels(samples):
+        nonlocal peak, sample_count
+        sample_count += len(samples)
+        peak = max(peak, max((abs(value) for value in samples), default=0))
+
+    # The existing threshold is relative to the peak of the complete stream.
+    # Two bounded passes preserve that meaning without keeping all PCM in RAM.
+    # Both passes consume the same worker deadline and retain per-command quotas.
+    if not _decode_pcm(path, sample_rate, levels, context=context):
+        return ClippingInspection([], [QualityUnavailable(
+            QUALITY_KIND_CLIPPING, "音频解码不出采样，削平未知"
+        )])
+    if not sample_count:
+        return ClippingInspection([], [QualityUnavailable(
+            QUALITY_KIND_CLIPPING, "音频没有解出任何采样，削平未知"
+        )])
     if peak <= 0:
-        return [], [QualityUnavailable(
+        return ClippingInspection([], [QualityUnavailable(
             QUALITY_KIND_CLIPPING, "音频全为静音，没有可判断的波形"
-        )], None
+        )])
 
     ceiling = peak * CLIP_FULL_SCALE_TOLERANCE
-    runs: list[tuple[int, int]] = []
+    events = _ClippingEvents()
+    kept_ranges: list[tuple[int, int]] = []
     run_start: int | None = None
-    at_full_scale = 0
-    for index, value in enumerate(samples):
-        if abs(value) >= ceiling:
-            at_full_scale += 1
-            if run_start is None:
-                run_start = index
-        elif run_start is not None:
-            runs.append((run_start, index))
-            run_start = None
-    if run_start is not None:
-        runs.append((run_start, len(samples)))
+    at_full_scale, index = 0, 0
 
-    duty = at_full_scale / len(samples)
+    def record(start, end):
+        if end - start < min_plateau_samples:
+            return
+        finding = _clipping_finding(audio_start_seconds + start / sample_rate,
+            audio_start_seconds + end / sample_rate, end - start, sample_rate, 0)
+        events.add(_shifted([finding], timeline_origin_seconds)[0])
+        if len(kept_ranges) < events.findings_limit:
+            kept_ranges.append((start, end))
+
+    def plateaus(samples):
+        nonlocal at_full_scale, index, run_start
+        for value in samples:
+            if abs(value) >= ceiling:
+                at_full_scale += 1
+                if run_start is None:
+                    run_start = index
+            elif run_start is not None:
+                record(run_start, index)
+                run_start = None
+            index += 1
+
+    if not _decode_pcm(path, sample_rate, plateaus, context=context) or index != sample_count:
+        return ClippingInspection([], [QualityUnavailable(
+            QUALITY_KIND_CLIPPING, "两次音频解码未得到一致采样范围，削平未知"
+        )])
+    if run_start is not None:
+        record(run_start, index)
+    duty = at_full_scale / sample_count
     if duty < full_scale_duty_threshold:
         # 贴近满幅的采样很少：这是正常波形，不是削平。
-        return [], [], duty
+        return ClippingInspection([], [])
 
     findings = [
         _clipping_finding(
@@ -245,44 +345,37 @@ def detect_clipping(
             sample_rate,
             duty,
         )
-        for start, end in runs
-        if end - start >= min_plateau_samples
+        for start, end in kept_ranges
     ]
     if not findings:
         # 满幅占比够高却没有一段连续平台：波形在满幅上很碎，不足以说被削平。
-        return [], [QualityUnavailable(
+        return ClippingInspection([], [QualityUnavailable(
             QUALITY_KIND_CLIPPING,
             f"贴近满幅的采样占 {duty:.1%}，但没有一段连续平台，削平与否无法断定",
-        )], duty
-    return findings, [], duty
+        )])
+    return ClippingInspection(_shifted(findings, timeline_origin_seconds), [], events.summary(duty))
 
 
-def _decoded_pcm_samples(
-    path: str | Path, sample_rate: int,
+def _decode_pcm(
+    path: str | Path, sample_rate: int, consume,
     *, context: QualityWorkerContext | None = None,
-) -> list[int] | None:
-    """解码音频为单声道有符号 16bit 采样。解不出来返回 None（未知）。"""
+) -> bool:
+    """Consume mono s16le without retaining the complete decoded stream."""
     if context is None:
         raise QualityCheckError("质检命令缺少受许可的 worker 上下文")
+    decoder = _PCMChunks(consume)
     try:
         completed = context.run(["ffmpeg", "-hide_banner", "-nostats", "-v", "error",
              "-i", str(path), "-vn", "-ac", "1", "-ar", str(sample_rate),
-             "-f", "s16le", "-"], RUN_TIMEOUT_SECONDS, pcm=True)
+             "-f", "s16le", "-"], RUN_TIMEOUT_SECONDS, pcm=True, stdout_consumer=decoder.feed)
     except subprocess.TimeoutExpired as exc:
         raise QualityCheckError("ffmpeg 解码音频超时，削平检测未完成") from exc
     except OSError as exc:
         raise QualityCheckError(f"ffmpeg 无法执行：{exc}") from exc
     if completed.returncode != 0:
-        return None
-    raw = completed.stdout
-    if len(raw) < 2:
-        return None
-    count = len(raw) // 2
-    values = array.array("h")
-    values.frombytes(raw[: count * 2])
-    if sys.byteorder == "big":  # pragma: no cover - 取决于运行平台字节序
-        values.byteswap()
-    return list(values)
+        return False
+    decoder.finish()
+    return True
 
 
 def _clipping_finding(
@@ -368,35 +461,68 @@ def _decoded_stream_end_seconds(path: str | Path, kind: str, *, context: Quality
     """
     if kind == "video":
         selector = "v:0"
-        entries = "frame=pts_time,duration_time"
+        fields = {"pts_time", "duration_time"}
+        entries = "frame=pts_time,duration_time:frame_side_data="
     else:
         selector = "a:0"
-        entries = "frame=pts_time,nb_samples"
-    completed = _run([
-        "ffprobe", "-v", "error", "-select_streams", selector,
-        "-show_entries", entries, "-of", "json", str(path),
-    ], PROBE_TIMEOUT_SECONDS, context=context)
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise QualityCheckError("ffprobe returned invalid frame metadata") from exc
-    frames = payload.get("frames")
-    if not isinstance(frames, list) or not frames:
-        return None
-
+        fields = {"pts_time", "nb_samples"}
+        entries = "frame=pts_time,nb_samples:frame_side_data="
+    if context is None:
+        raise QualityCheckError("质检命令缺少受许可的 worker 上下文")
     sample_rate = _probe_sample_rate(path, context=context) if kind == "audio" else None
     if kind == "audio" and not sample_rate:
         return None
-
     end: float | None = None
-    for frame in frames:
+    pending = b""
+    # key=value fields plus separators (including an optional trailing '|').
+    record_limit = sum(len(key) + 1 + _FRAME_SCALAR_TEXT_LIMIT for key in fields) + len(fields)
+
+    def frame_line(line):
+        nonlocal end
+        if not line.strip():
+            return
+        frame = {}
+        try:
+            for item in line.decode("ascii").split("|"):
+                if not item:
+                    continue
+                key, value = item.split("=", 1)
+                if key not in fields or key in frame or len(value) > _FRAME_SCALAR_TEXT_LIMIT:
+                    raise ValueError("unexpected frame field")
+                frame[key] = value
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise QualityCheckError("ffprobe returned invalid frame metadata") from exc
         pts = _finite(frame.get("pts_time"))
-        if pts is None:
-            continue
         length = _frame_length_seconds(frame, kind, sample_rate)
-        if length is None:
-            continue  # 这一帧量不出长度就不参与取最大值，不拿 pts 当末端。
-        end = pts + length if end is None else max(end, pts + length)
+        if pts is not None and length is not None:
+            end = pts + length if end is None else max(end, pts + length)
+
+    def frames(raw):
+        nonlocal pending
+        offset = 0
+        while offset < len(raw):
+            newline = raw.find(b"\n", offset)
+            end = len(raw) if newline < 0 else newline
+            if len(pending) + end - offset > record_limit:
+                raise QualityCheckError("ffprobe frame record exceeds the scalar protocol limit")
+            pending += raw[offset:end]
+            if newline >= 0:
+                frame_line(pending)
+                pending = b""
+            offset = end + 1
+
+    command = [
+        "ffprobe", "-v", "error", "-select_streams", selector,
+        "-show_entries", entries, "-of", "compact=p=0:nk=0", str(path),
+    ]
+    try:
+        completed = context.run(command, PROBE_TIMEOUT_SECONDS, stdout_consumer=frames)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise QualityCheckError("ffprobe 无法完成逐帧检查") from exc
+    if completed.returncode:
+        raise QualityCheckError("ffprobe returned an unsuccessful frame inspection")
+    if pending:
+        frame_line(pending)
     return end
 
 
@@ -600,19 +726,17 @@ def inspect_media_quality(
             QUALITY_KIND_CLIPPING, "成片没有音频流，无法按样本判断削平"
         ))
     else:
-        clip_findings, clip_unavailable, clip_duty = detect_clipping(
+        clipping = detect_clipping(
             target,
             sample_rate=_probe_sample_rate(target, context=context),
             audio_start_seconds=(
                 _stream_start_seconds(audio) if _stream_start_known(audio) else 0.0
             ),
+            timeline_origin_seconds=origin,
         context=context)
-        clip_findings = _shifted(clip_findings, origin)
-        # 摘要先按**全部**事件算准，再对逐条证据限流：这样即便列举被截，
-        # 总量仍然准确，丢失的条数也显式可查。
-        clipping_summary = _clipping_summary(clip_findings, clip_duty)
-        findings.extend(clip_findings[:CLIP_FINDING_EVENT_LIMIT])
-        unavailable.extend(clip_unavailable)
+        clipping_summary = clipping.summary
+        findings.extend(clipping.findings)
+        unavailable.extend(clipping.unavailable)
 
     findings.sort(key=lambda item: (item.start_seconds, item.kind))
     return QualityReport(
@@ -641,31 +765,10 @@ def _clipping_summary(
     首末区间和一个有界的列举。列举超上限时显式带 `events_truncated` 和
     `truncated_event_count`，绝不静默丢弃。
     """
-    if not findings:
-        return None
-    total = round(sum(item.duration_seconds for item in findings), 3)
-    kept = findings[:limit]
-    return {
-        "event_count": len(findings),
-        "total_clipped_seconds": total,
-        "first_start_seconds": min(item.start_seconds for item in findings),
-        "last_end_seconds": max(item.end_seconds for item in findings),
-        "full_scale_duty": round(duty, 6) if duty is not None else None,
-        "event_list_limit": limit,
-        "events": [
-            {
-                "start_seconds": item.start_seconds,
-                "end_seconds": item.end_seconds,
-                "duration_seconds": item.duration_seconds,
-            }
-            for item in kept
-        ],
-        "events_truncated": len(findings) > limit,
-        "truncated_event_count": max(0, len(findings) - limit),
-        "findings_event_limit": findings_limit,
-        "findings_truncated": len(findings) > findings_limit,
-        "findings_truncated_count": max(0, len(findings) - findings_limit),
-    }
+    events = _ClippingEvents(event_limit=limit, findings_limit=findings_limit)
+    for finding in findings:
+        events.add(finding)
+    return events.summary(duty)
 
 
 def _shifted(
