@@ -769,19 +769,18 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                                     "items": {"type": "string", "minLength": 1, "maxLength": 200}}}}}}}}}
         generation_requirements = {"spoken_language": input.language,
             "presenter_share_target": input.presenter_share_target,
-            "section_count": input.script_section_count or "1-20", "every_section_requires_evidence": True}
+            "every_section_requires_evidence": True}
+        sections_schema = report_schema["properties"]["script"]["properties"]["sections"]
         chinese_budget_instruction = ""
         if input.language == "zh-CN":
             requested_sections = input.script_section_count or 5
             total_characters = int(input.duration_target_seconds * CHINESE_CHARACTERS_PER_SECOND)
             section_characters = total_characters // requested_sections
-            sections_schema = report_schema["properties"]["script"]["properties"]["sections"]
             sections_schema["maxItems"] = requested_sections
             if input.script_section_count is not None:
                 sections_schema["minItems"] = requested_sections
             sections_schema["items"]["properties"]["content"]["maxLength"] = section_characters
-            generation_requirements.update(section_count=input.script_section_count or "1-5",
-                total_content_character_budget=total_characters,
+            generation_requirements.update(total_content_character_budget=total_characters,
                 section_character_budgets=[{"index": index, "content_max_characters": section_characters}
                     for index in range(1, requested_sections + 1)])
             chinese_budget_instruction = (
@@ -789,6 +788,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 "正文中的标点、空格和其他文字也计入字符预算，标题和画面意图不占正文预算。"
                 "每段只写该段必要的有据内容，尽量低于上限以保留停顿余量，不用长段替代请求预算。"
             )
+        section_range = f"{sections_schema['minItems']}–{sections_schema['maxItems']}"
+        generation_requirements["section_count"] = input.script_section_count or section_range.replace("–", "-")
         payload = {
             "model": self._model,
             "messages": [
@@ -811,8 +812,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                             "选题提纲是内容要点，不是一项对应一个段落；须将要点整合进指定段数。"
                             "同一段落可以包含多个短句，不要把每个句子单独拆成 sections 项。"
                             if input.script_section_count is not None else
-                            "未指定模板段数时，建议整合为3–5个较少但完整的段落；合法范围仍是1–20段，不为凑段拆句。"
+                            "未指定模板段数时，建议整合为3–5个较少但完整的段落，不为凑段拆句。"
                         )
+                        + f"本次工具schema允许{section_range}段正文。"
                         + chinese_budget_instruction
                         + f"全部口播正文总时长不能超过 {input.duration_target_seconds} 秒。"
                         f"按中文每秒 {CHINESE_CHARACTERS_PER_SECOND:g} 字、英文每秒 {LATIN_WORDS_PER_SECOND:g} 词估算，混合时两部分相加。"

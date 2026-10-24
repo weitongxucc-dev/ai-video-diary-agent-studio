@@ -1724,3 +1724,25 @@ def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure
         assert shape['issue_index'] == 1
         assert type(shape['detail_length']) is int or shape['detail_length'] is None
     assert 'private-' not in text and FACT not in text and len(text) < 1200
+
+
+@pytest.mark.parametrize('language', ['zh-CN', 'en-US'])
+@pytest.mark.parametrize('template_count', [None, 2])
+def test_generation_section_prompt_and_requirements_follow_actual_schema(language, template_count):
+    document = draft() if language == 'zh-CN' else draft(content='Set material use.')
+    document['script']['language'] = language
+    if template_count:
+        document['script']['sections'].append(copy.deepcopy(document['script']['sections'][0]))
+    calls = []
+    result = provider(document, reviewed(document), calls).generate(replace(inputs(),
+        language=language, script_section_count=template_count))
+    payload = calls[0][1]
+    sections = payload['tools'][0]['function']['parameters']['properties']['script']['properties']['sections']
+    minimum, maximum = sections['minItems'], sections['maxItems']
+    system = payload['messages'][0]['content']
+    requirements = json.loads(payload['messages'][1]['content'])['requirements']
+    assert f"本次工具schema允许{minimum}–{maximum}段正文" in system
+    assert requirements['section_count'] == (template_count or f'{minimum}-{maximum}')
+    assert minimum <= len(result.sections) <= maximum
+    if template_count:
+        assert len(result.sections) == template_count

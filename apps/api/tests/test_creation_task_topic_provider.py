@@ -660,7 +660,8 @@ def test_script_generation_prompt_is_compact_without_overriding_template_section
     instruction = calls[0]["messages"][0]["content"]
     if section_count is None:
         assert "建议整合为3–5" in instruction
-        assert "合法范围仍是1–20" in instruction  # A single valid section is still accepted.
+        sections = calls[0]["tools"][0]["function"]["parameters"]["properties"]["script"]["properties"]["sections"]
+        assert f"本次工具schema允许{sections['minItems']}–{sections['maxItems']}段正文" in instruction
     else:
         assert "建议整合为3–5" not in instruction
         assert f"sections 必须恰好有 {section_count} 项" in instruction
