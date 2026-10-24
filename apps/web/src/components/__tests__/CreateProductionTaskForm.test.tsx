@@ -126,6 +126,32 @@ describe("CreateProductionTaskForm", () => {
     expect(screen.getByText("声音生成 · 安装检查通过")).toBeInTheDocument();
   });
 
+  it("submits a long target duration through the visible preflight form", async () => {
+    mocks.previewCreationPlan.mockResolvedValue(preview({ duration_target_seconds: 1800 }));
+    renderForm();
+    fireEvent.change(screen.getByRole("spinbutton", { name: "目标时长（秒）" }), { target: { value: "1800" } });
+    const check = screen.getByRole("button", { name: "检查可用内容" });
+    await waitFor(() => expect(check).toBeEnabled());
+    fireEvent.click(check);
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({ duration_target_seconds: 1800 })));
+    expect(await screen.findByText("预检目标时长：1800 秒")).toBeInTheDocument();
+    expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an invalid target duration even when native form validation is bypassed", async () => {
+    renderForm();
+    const duration = screen.getByRole("spinbutton", { name: "目标时长（秒）" });
+    const form = screen.getByRole("button", { name: "检查可用内容" }).closest("form")!;
+    for (const value of ["", "0", "-1", "1.5", "9007199254740992"]) {
+      fireEvent.change(duration, { target: { value } });
+      fireEvent.submit(form);
+      expect(await screen.findByRole("alert")).toHaveTextContent("目标时长必须为有效的正整数秒数。");
+      expect(mocks.previewCreationPlan).not.toHaveBeenCalled();
+      expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
+    }
+    expect(duration).toHaveValue(9007199254740992);
+  });
+
   it("keeps confirmation disabled when the returned preflight has a blocking issue", async () => {
     mocks.previewCreationPlan.mockResolvedValue(preview({
       confirmable: false,

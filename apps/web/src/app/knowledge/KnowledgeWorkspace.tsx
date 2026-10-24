@@ -429,7 +429,9 @@ export function ScriptLibraryPanel() {
   const [sourceFailure, setSourceFailure] = useState<{ key: string; message: string } | null>(null);
   const [name, setName] = useState("");
   const [ratio, setRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
-  const [duration, setDuration] = useState(60);
+  const [duration, setDuration] = useState("60");
+  const durationSeconds = Number(duration);
+  const durationValid = Number.isSafeInteger(durationSeconds) && durationSeconds > 0;
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [listRetry, setListRetry] = useState(0);
@@ -498,11 +500,11 @@ export function ScriptLibraryPanel() {
     }
   }
   async function reuse() {
-    if (!selected) return;
+    if (!selected || !durationValid) return;
     setBusy(true); setError(null);
     try {
       const result = await reuseScriptLibraryEntry(selected.id, {
-        name, aspect_ratio: ratio, duration_target_seconds: duration, requirements_confirmed: confirmed,
+        name, aspect_ratio: ratio, duration_target_seconds: durationSeconds, requirements_confirmed: confirmed,
       });
       router.push(`/tasks/${encodeURIComponent(result.task_id)}`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "文案复用失败"); }
@@ -537,10 +539,10 @@ export function ScriptLibraryPanel() {
       {error ? <p role="alert">{error}</p> : null}
       <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmedKey(null); }} /></label>
       <label className={styles.correctionField}><span>新任务画幅</span><AppSelect value={ratio} onValueChange={newValue => { setRatio(newValue as typeof ratio); setConfirmedKey(null); }}><AppSelectOption value="9:16">9:16</AppSelectOption><AppSelectOption value="16:9">16:9</AppSelectOption><AppSelectOption value="1:1">1:1</AppSelectOption></AppSelect></label>
-      <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={15} max={600} value={duration} onChange={event => { setDuration(Number(event.target.value)); setConfirmedKey(null); }} /></label>
+      <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={1} step={1} value={duration} onChange={event => { setDuration(event.target.value); setConfirmedKey(null); }} /></label>
       <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmedKey(event.target.checked ? selectedKey : null)} />确认以上新任务要求，正文仍需重新确认</label>
       <p>仅复制文案到独立新draft，不复制旧确认、配音或成片，不调用模型。</p>
-      <button disabled={busy || !confirmed || !readable || !name.trim() || duration < 15 || duration > 600} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
+      <button disabled={busy || !confirmed || !readable || !name.trim() || !durationValid} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
     </section> : null}
   </section>;
 }

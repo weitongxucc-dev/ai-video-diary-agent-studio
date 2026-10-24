@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   parseKnowledgeReferenceId: vi.fn(),
   listScriptLibraryEntries: vi.fn(),
   getScriptLibrarySources: vi.fn(),
+  reuseScriptLibraryEntry: vi.fn(),
 }));
 vi.mock("@/lib/assistant-reference", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/assistant-reference")>(), referenceAssistantKnowledge: api.referenceAssistantKnowledge }));
 vi.mock("@/lib/source-api", () => ({
@@ -36,6 +37,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
   listScriptLibraryEntries: api.listScriptLibraryEntries,
   getScriptLibrarySources: api.getScriptLibrarySources,
+  reuseScriptLibraryEntry: api.reuseScriptLibraryEntry,
   getKnowledgeGrants: api.getKnowledgeGrants,
   grantKnowledgeToWorkspace: api.grantKnowledgeToWorkspace,
   revokeKnowledgeGrant: api.revokeKnowledgeGrant,
@@ -389,6 +391,42 @@ describe("knowledge workspace grants", () => {
     expect(await screen.findByRole("heading", { name: "已确认文案 · 版本 2" })).toBeInTheDocument();
     expect(screen.getByText("先讲产品用途。")).toBeInTheDocument();
     expect(api.listScriptLibraryEntries).toHaveBeenCalledWith("", "");
+  });
+
+  it("reuses a script with a long target duration through the visible form", async () => {
+    window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
+    api.reuseScriptLibraryEntry.mockResolvedValue({ task_id: "task-new" });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+    await screen.findByText("本人文案没有外部事实引用。");
+    fireEvent.change(screen.getByRole("textbox", { name: "新任务名称" }), { target: { value: "长作品" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "目标时长（秒）" }), { target: { value: "1800" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "确认以上新任务要求，正文仍需重新确认" }));
+    const create = screen.getByRole("button", { name: "创建待确认新稿" });
+    expect(create).toBeEnabled();
+    fireEvent.click(create);
+    await waitFor(() => expect(api.reuseScriptLibraryEntry).toHaveBeenCalledWith(scriptEntry.id, {
+      name: "长作品", aspect_ratio: "9:16", duration_target_seconds: 1800, requirements_confirmed: true,
+    }));
+    await waitFor(() => expect(create).toBeEnabled());
+  });
+
+  it("does not reuse a script with an invalid target duration or replace an empty input", async () => {
+    window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
+    render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
+    await screen.findByText("本人文案没有外部事实引用。");
+    fireEvent.change(screen.getByRole("textbox", { name: "新任务名称" }), { target: { value: "新作品" } });
+    const duration = screen.getByRole("spinbutton", { name: "目标时长（秒）" });
+    for (const value of ["", "0", "-1", "1.5", "9007199254740992"]) {
+      fireEvent.change(duration, { target: { value } });
+      if (value === "") expect(duration).toHaveValue(null);
+      fireEvent.click(screen.getByRole("checkbox", { name: "确认以上新任务要求，正文仍需重新确认" }));
+      const create = screen.getByRole("button", { name: "创建待确认新稿" });
+      expect(create).toBeDisabled();
+      fireEvent.click(create);
+      expect(api.reuseScriptLibraryEntry).not.toHaveBeenCalled();
+    }
   });
 
   it.each([

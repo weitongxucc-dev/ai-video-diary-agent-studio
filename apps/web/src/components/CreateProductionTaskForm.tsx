@@ -288,10 +288,14 @@ export function CreateProductionTaskForm({
   }
 
   function input(value = draftFields()): CreationPlanInput {
+    const durationSeconds = Number(value.duration);
+    if (!Number.isSafeInteger(durationSeconds) || durationSeconds <= 0) {
+      throw new Error("目标时长必须为有效的正整数秒数。");
+    }
     return {
       ...(value.template ? { template_id: value.template.id, template_version: value.template.version } : {}),
       goal: value.goal.trim(), ...(value.name.trim() ? { name: value.name.trim() } : {}), target_count: Number(value.targetCount),
-      language: value.language, aspect_ratio: value.aspectRatio, duration_target_seconds: Number(value.duration),
+      language: value.language, aspect_ratio: value.aspectRatio, duration_target_seconds: durationSeconds,
       presenter_share_target: value.presenterShare, lipsync_quality: value.lipsyncQuality,
       ...(value.knowledgePin ? { selected_knowledge: value.knowledgePin } : {}),
       ...(value.voicePin ? {selected_voice: value.voicePin} : {}), ...(value.personPin ? {selected_person: value.personPin} : {}),
@@ -395,7 +399,7 @@ export function CreateProductionTaskForm({
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
           <label><span>成片数量</span><input disabled={isPending} max={Number.MAX_SAFE_INTEGER} min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
           <label><span>语言</span><AppSelect disabled name="language" value={language}><AppSelectOption value="zh-CN">中文（当前版本）</AppSelectOption></AppSelect></label>
-          <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} max="600" min="15" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板默认 {template.settings.duration_target_seconds ?? 60} 秒，可调整本次时长。</small> : null}</label>
+          <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} min="1" step="1" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板默认 {template.settings.duration_target_seconds ?? 60} 秒，可调整本次时长。</small> : null}</label>
         </div>
         <p className="creation-plan-form__ratio">画幅：{aspectRatio}（{template ? "继承所选模板" : "当前本地服务支持的画幅"}）</p>
         {profilesError ? <p role="alert">{profilesError}</p> : null}
