@@ -2812,7 +2812,7 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
 from app.voice_clone import Qwen3TTSSubprocessProvider
 
 
-def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True):
+def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True, local_policy=False):
     from app.creation.narration_stage_use_case import NarrationStageUseCase
     from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
     from app.narration import NarrationArtifact
@@ -2835,6 +2835,14 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
     script = repo.get_creation_task_script('local', script_id)
     plan = repo.get_creation_plan('local', task.plan_id)
     execution = _execution(repo)
+    if local_policy:
+        from app.creation.task_budget_use_case import TaskBudgetUseCase
+        repo.authorize_execution_budget_scope('local', task_id, actor, scope_id='isolated-local-goal',
+            expected_revision=-1, request_id='trusted-local-delegation', source_ref='isolated-test:local-goal',
+            target_task_ids=[task_id], limits={'execution_seconds': None, 'generated_bytes': None},
+            policy_kind='local_goal', authorization_guard=lambda conn: None)
+        execution.budget_policy_for = TaskBudgetUseCase(repo, scope_for=lambda ws, tid, current:
+            {'scope_id': 'isolated-local-goal', 'revision': 0}).local_start_policy
     job = execution.start('local', task_id, script_id, revision_digest(script, plan), actor=actor)
     budget = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
         input_scope='single_call_experiment_v1')
@@ -5128,4 +5136,82 @@ def test_pcm_sealed_two_input_unit_survives_larger_cap_and_prefix_uses_one_slot(
     usage = case.repo.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == 5 * 48044 + 96044 + 96008 + 48008
     assert not usage['unsettled'] and len(case.generated) == 5
+    case.scheduler.close()
+
+
+def test_local_goal_twenty_sections_keep_finite_units_without_task_total_cap(tmp_path):
+    case = _narration_units_case(tmp_path, section_count=20, audio_input_count=5, local_policy=True)
+    start = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+    assert start.payload['execution_budget_policy']['policy_kind'] == 'scope'
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    for _ in range(20):
+        grant = case.scheduler.pick_and_grant()
+        request = case.scheduler._get(grant.request_id)
+        assert request.resources['section_count'] == 1
+        assert request.resources['timeout_seconds'] <= case.owner.narration_budget.max_timeout_seconds
+        assert request.resources['max_output_bytes'] <= case.owner.narration_budget.max_output_bytes
+        assert request.resources['parent_timeout_seconds'] is None
+        assert request.resources['parent_max_output_bytes'] is None
+        case.executor.execute(grant, case.scheduler)
+    while case.repo.get_creation_task('local', case.task_id).narration_cache_key is None:
+        grant = case.scheduler.pick_and_grant()
+        assert grant.unit_key.startswith('narration:merge:')
+        assert case.scheduler._get(grant.request_id).resources['input_count'] <= 5
+        case.executor.execute(grant, case.scheduler)
+    usage = case.repo.creation_narration_usage('local', case.job.id)
+    assert usage['budget']['parent_timeout_seconds'] is None
+    assert usage['budget']['parent_max_output_bytes'] is None
+    assert usage['used_seconds'] > 0 and usage['used_output_bytes'] > 0 and not usage['unsettled']
+    scope = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
+    assert scope['execution_seconds'] == pytest.approx(usage['used_seconds'])
+    assert scope['generated_bytes'] == usage['used_output_bytes']
+    assert scope['reserved_seconds'] == scope['reserved_bytes'] == 0
+    assert scope['unit_count'] > 20
+    assert len(case.generated) == 20
+    assert all(item.status == 'ready' for item in case.repo.list_narration_segments('local', case.task_id, case.script_id))
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    assert case.repo.get_task_event('local', start.id) == start
+    case.scheduler.close()
+
+
+def test_scope_shrink_before_real_grant_start_rolls_back_started_and_pending_segments(tmp_path):
+    from app.creation.execution_budget_scope import BudgetScopeExhausted
+    case = _narration_units_case(tmp_path, local_policy=True)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    resources = case.scheduler._get(grant.request_id).resources
+    case.repo.authorize_execution_budget_scope('local', case.task_id, case.actor,
+        scope_id='isolated-local-goal', expected_revision=0, request_id='explicit-limit-after-grant',
+        source_ref='isolated-test:smaller-explicit-limit', target_task_ids=[case.task_id],
+        limits={'execution_seconds': resources['timeout_seconds'] - 1, 'generated_bytes': None},
+        policy_kind='explicit_total', authorization_guard=lambda conn: None)
+    with pytest.raises(BudgetScopeExhausted):
+        case.executor.execute(grant, case.scheduler)
+    assert case.repo.get_job_run('local', case.job.id).status == 'queued'
+    assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
+    assert case.repo.creation_narration_usage('local', case.job.id)['budget'] is None
+    assert case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['unit_count'] == 0
+    assert case.generated == []
+    case.scheduler.close()
+
+
+def test_legacy_tts_sealed_parent_declaration_keeps_actual_remaining_context(tmp_path, monkeypatch):
+    case = _narration_units_case(tmp_path)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    used = case.repo.creation_narration_usage('local', case.job.id)
+    grant = case.scheduler.pick_and_grant()
+    original = case.scheduler._get(grant.request_id)
+    assert original.resources['max_output_bytes'] == used['budget']['parent_max_output_bytes']
+    assert original.resources['timeout_seconds'] == used['budget']['parent_timeout_seconds']
+    assert used['used_output_bytes'] > 0
+    prepare = case.stage.prepare_segment
+    def bounded(*args, **kwargs):
+        context = kwargs['grant_context']
+        assert context.max_output_bytes == used['budget']['parent_max_output_bytes'] - used['used_output_bytes']
+        return prepare(*args, **kwargs)
+    monkeypatch.setattr(case.stage, 'prepare_segment', bounded)
+    case.executor.execute(grant, case.scheduler)
+    assert len(case.generated) == 2
+    assert case.scheduler._get(original.id).resources == original.resources
     case.scheduler.close()

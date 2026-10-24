@@ -33,13 +33,14 @@ class SegmentProductionUseCase:
         from app.creation.section_change_use_case import SectionTimelineChange
         return SectionTimelineChange(self.repository,self.artifact_store)
 
-    def __init__(self, repository, *, narration_stage, renderer, artifact_store, output_root, source_repository=None):
+    def __init__(self, repository, *, narration_stage, renderer, artifact_store, output_root, source_repository=None, budget_policy_for=None):
         self.repository = repository
         self.narration_stage = narration_stage
         self.renderer = renderer
         self.artifact_store = artifact_store
         self.output_root = Path(output_root)
         self.source_repository = source_repository
+        self.budget_policy_for = budget_policy_for
 
     def require_actor(self, workspace_id, task_id, actor, *, connection=None):
         task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
@@ -224,7 +225,10 @@ class SegmentProductionUseCase:
             if write_guard is not None:
                 write_guard(conn)
             self.verify_revision(workspace_id, task_id, actor, command, connection=conn)
-        job = self.repository.create_segment_revision_job(task, actor, encoded, rules, write_guard=submit_guard)
+        revision_digest = hashlib.sha256(json.dumps(encoded, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+        policy = (self.budget_policy_for(workspace_id, task_id, actor, revision_digest, operation='segment_revision')
+            if self.budget_policy_for is not None else None)
+        job = self.repository.create_segment_revision_job(task, actor, encoded, rules, write_guard=submit_guard, budget_policy=policy)
         runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id, job.input_digest,
             self.revision_key(job), SchedulePolicy()), actor)
         runtime.wake()
@@ -482,8 +486,8 @@ class SegmentProductionUseCase:
             budget = measured['budget']
             usage = {'settled':measured['consumption_known'],'used_seconds':measured['used_seconds'],
                 'used_output_bytes':measured['used_output_bytes'],'remaining_budget':None if budget is None else {
-                    'seconds':budget['parent_timeout_seconds']-measured['used_seconds'],
-                    'output_bytes':budget['parent_max_output_bytes']-measured['used_output_bytes']}}
+                    'seconds':None if budget['parent_timeout_seconds'] is None else budget['parent_timeout_seconds']-measured['used_seconds'],
+                    'output_bytes':None if budget['parent_max_output_bytes'] is None else budget['parent_max_output_bytes']-measured['used_output_bytes']}}
         return usage
 
     def read_visual_decision(self, workspace_id, task_id, job_id, section_id, actor, *, offset=0, limit=8):

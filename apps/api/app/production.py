@@ -5037,7 +5037,7 @@ class ProductionRepository:
             'failure': json.loads(refusal['payload_json']) if refusal is not None and operation is None else None}
 
     def create_creation_execution_job(self, run, *, start_payload, event_type="creation_execution_started",
-                                      write_guard=None, execution_source=None, source_preparation=None):
+                                      write_guard=None, execution_source=None, source_preparation=None, budget_scope_actor=None):
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
@@ -5056,6 +5056,12 @@ class ProductionRepository:
             if {key:value for key,value in event.payload.items() if key != 'source_binding_event_id'} != {
                     key:value for key,value in start_payload.items() if key != 'source_binding_event_id'}:
                 raise PermissionError("已有制作任务的原输入与身份不同")
+            policy = start_payload.get('execution_budget_policy')
+            if policy is not None and policy.get('policy_kind') == 'scope':
+                if budget_scope_actor is None:
+                    raise PermissionError('授权范围绑定需要本次可信执行身份')
+                self.bind_execution_budget_scope(run.workspace_id, current.id, budget_scope_actor,
+                    scope_id=policy['scope_id'], expected_revision=policy['revision'], connection=conn)
             if execution_source is not None:
                 self.bind_creation_execution_source(current,execution_source,connection=conn)
             return current
@@ -5517,14 +5523,14 @@ class ProductionRepository:
         return self.append_task_event(TaskEvent(id=f'event_{job.id}_native_released',workspace_id=job.workspace_id,
             task_id=job.task_id,job_id=job.id,event_type='native_execution_released',payload={'release_state':'released'}))
 
-    def create_segment_revision_job(self, task, actor, command, rules_check, *, write_guard=None):
+    def create_segment_revision_job(self, task, actor, command, rules_check, *, write_guard=None, budget_policy=None):
         from app.creation.narration_pcm import prepare_narration_source
         plan = self.get_creation_plan(task.workspace_id, task.plan_id)
         with prepare_narration_source(self, task, plan, actor) as prepared:
             return self._create_segment_revision_job(task, actor, command, rules_check,
-                prepared, write_guard=write_guard)
+                prepared, write_guard=write_guard, budget_policy=budget_policy)
 
-    def _create_segment_revision_job(self, task, actor, command, rules_check, prepared, *, write_guard=None):
+    def _create_segment_revision_job(self, task, actor, command, rules_check, prepared, *, write_guard=None, budget_policy=None):
         encoded = json.dumps(command, ensure_ascii=False, sort_keys=True, default=str)
         input_digest = hashlib.sha256(encoded.encode()).hexdigest()
         run = JobRun(id=f'job_{uuid4().hex}', workspace_id=task.workspace_id, task_id=task.id,
@@ -5549,10 +5555,14 @@ class ProductionRepository:
             source_id = self.seal_creation_narration_source(job, prepared, input_digest=input_digest,
                 origin_event_id=f'event_{job.id}_start', connection=conn)
             payload = {**actor.identity_payload(), 'command': command, 'rules_check': rules_check,
-                'input_digest': input_digest, 'script_id': command['script_id'], 'plan_id': current.plan_id, 'source_binding_event_id': source_id}
+                'input_digest': input_digest, 'script_id': command['script_id'], 'plan_id': current.plan_id, 'source_binding_event_id': source_id,
+                **({'execution_budget_policy': budget_policy} if budget_policy is not None else {})}
             self.append_task_event(TaskEvent(id=f'event_{job.id}_start', workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type='segment_revision_requested', payload=payload,
                 created_at=job.created_at), connection=conn)
+            if budget_policy is not None and budget_policy.get('policy_kind') == 'scope':
+                self.bind_execution_budget_scope(job.workspace_id, job.id, actor, scope_id=budget_policy['scope_id'],
+                    expected_revision=budget_policy['revision'], connection=conn)
         return job
 
     def list_segment_revision_requests(self, workspace_id, task_id, member_id, *, limit=30):
@@ -6045,6 +6055,31 @@ class ProductionRepository:
                 'supplier_usage_refs': [], 'pricing_or_invoice_refs': []},
             'estimates': {'eta_seconds': None, 'cost': None}, 'in_flight': in_flight}
 
+    def authorize_execution_budget_scope(self, workspace_id, origin_task_id, actor, **command):
+        from app.creation.execution_budget_scope import ExecutionBudgetScopes
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            scopes = ExecutionBudgetScopes(self)
+            scopes.install_indexes(conn)
+            return scopes.authorize(conn, workspace_id, origin_task_id, actor, **command)
+
+    def bind_execution_budget_scope(self, workspace_id, job_id, actor, *, scope_id, expected_revision, connection=None):
+        from app.creation.execution_budget_scope import ExecutionBudgetScopes
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                return self.bind_execution_budget_scope(workspace_id, job_id, actor,
+                    scope_id=scope_id, expected_revision=expected_revision, connection=conn)
+        return ExecutionBudgetScopes(self).bind(connection, workspace_id, job_id, actor,
+            scope_id=scope_id, expected_revision=expected_revision)
+
+    def execution_budget_scope_usage(self, workspace_id, scope_id):
+        from app.creation.execution_budget_scope import ExecutionBudgetScopes
+        with self._connect() as conn:
+            scopes = ExecutionBudgetScopes(self)
+            current = scopes.current(conn, workspace_id, scope_id)
+            return {'authorization': current.payload, 'usage': scopes.usage(conn, workspace_id, scope_id)}
+
     def creation_narration_usage(self, workspace_id, job_id, *, connection=None):
         """The budget checkpoint indexes receipts; only settlements own cumulative facts."""
         with nullcontext(connection) if connection is not None else self._connect() as conn:
@@ -6060,8 +6095,18 @@ class ProductionRepository:
                     from app.device_scheduler import RecoveryBlocked
                     raise RecoveryBlocked('配音预算检查点的原消耗回执不存在，不能按零恢复')
                 receipts.append(json.loads(receipt['payload_json']) if receipt is not None else None)
+            from app.creation.execution_budget_scope import ExecutionBudgetScopes
+            scopes = ExecutionBudgetScopes(self)
+            try:
+                binding = scopes.binding(conn, workspace_id, job_id)
+            except KeyError:
+                scope = None
+            else:
+                authorization = scopes.current(conn, workspace_id, binding.payload['scope_id'])
+                scope = {'authorization': authorization.payload,
+                    'usage': scopes.usage(conn, workspace_id, binding.payload['scope_id'])}
         settled, active = receipts
-        return {'budget': budget, 'used_seconds': settled['total_seconds'] if settled is not None else 0,
+        return {'budget': budget, 'scope': scope, 'used_seconds': settled['total_seconds'] if settled is not None else 0,
                 'used_output_bytes': settled['total_output_bytes'] if settled is not None else 0,
                 'consumption_known': active is None, 'unsettled': [active] if active is not None else []}
 
@@ -6204,13 +6249,26 @@ class ProductionRepository:
                 raise PermissionError('配音许可与当前文案阶段不一致')
             if usage['budget'] is None:
                 budget = {key: resources[key] for key in ('parent_timeout_seconds', 'parent_max_output_bytes', 'script_id', 'input_contract')}
+                if usage['scope'] is not None:
+                    from app.creation.execution_budget import narration_limits
+                    from types import SimpleNamespace
+                    expected = narration_limits(usage, SimpleNamespace(
+                        max_timeout_seconds=resources['timeout_seconds'], max_output_bytes=resources['max_output_bytes']))
+                    if any(budget[key] != expected[key] for key in expected):
+                        raise PermissionError('累计额度声明与可信任务策略不一致')
+                    budget.update(policy_kind='scope', scope_id=usage['scope']['authorization']['scope_id'])
+                elif budget['parent_timeout_seconds'] is None or budget['parent_max_output_bytes'] is None:
+                    raise PermissionError('历史任务不能缺字段解除原封存预算')
                 budget.update(settled_event_id=None, active_event_id=None)
                 self.append_task_event(TaskEvent(id=f'event_{job.id}_narration_budget', workspace_id=job.workspace_id,
                     task_id=job.task_id, job_id=job.id, event_type='creation_narration_budget', payload=budget), connection=conn)
                 usage['budget'] = budget
             budget = usage['budget']
-            remaining_seconds = budget['parent_timeout_seconds'] - usage['used_seconds']
-            remaining_bytes = budget['parent_max_output_bytes'] - usage['used_output_bytes']
+            from app.creation.execution_budget import finite_unit_limit
+            remaining_seconds = finite_unit_limit(resources['timeout_seconds'], None if budget['parent_timeout_seconds'] is None
+                else budget['parent_timeout_seconds'] - usage['used_seconds'])
+            remaining_bytes = finite_unit_limit(resources['max_output_bytes'], None if budget['parent_max_output_bytes'] is None
+                else budget['parent_max_output_bytes'] - usage['used_output_bytes'])
             if remaining_seconds <= 0 or remaining_bytes <= 0:
                 raise ValueError('原配音阶段累计额度已耗尽，不能重置额度重启')
             current_segments = self.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
@@ -6235,6 +6293,18 @@ class ProductionRepository:
             self.append_task_event(TaskEvent(id=start_id,
                 workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                 event_type='creation_narration_unit_started', payload=payload), connection=conn)
+            if usage['scope'] is not None:
+                from app.creation.execution_budget_scope import ExecutionBudgetScopes
+                from app.creation_execution import CreationExecutionActor
+                scopes = ExecutionBudgetScopes(self)
+                actor = CreationExecutionActor.from_event(job.workspace_id, self.creation_execution_input(
+                    job.workspace_id, job.id, connection=conn))
+                scopes.reserve(conn, job.workspace_id, job.id, actor, request_id=grant.request_id,
+                    permit_generation=grant.generation, started_event_id=start_id,
+                    receipt_id=f'event_{job.id}_narration_settled_{grant.generation}',
+                    authorization_revision=usage['scope']['authorization']['revision'],
+                    maximum={'execution_seconds': min(remaining_seconds, resources['timeout_seconds']),
+                        'generated_bytes': min(remaining_bytes, resources['max_output_bytes'])})
             budget['active_event_id'] = start_id
             conn.execute('UPDATE task_events SET payload_json=? WHERE workspace_id=? AND id=?',
                 (json.dumps(budget), job.workspace_id, f'event_{job.id}_narration_budget'))
@@ -6279,6 +6349,10 @@ class ProductionRepository:
         self.append_task_event(TaskEvent(id=event_id, workspace_id=grant.workspace_id,
             task_id=start['task_id'], job_id=grant.owner_id, event_type='creation_narration_unit_settled',
             payload=payload), connection=connection)
+        if usage['scope'] is not None:
+            from app.creation.execution_budget_scope import ExecutionBudgetScopes
+            ExecutionBudgetScopes(self).settle(connection, grant.workspace_id, grant.owner_id,
+                request_id=grant.request_id, permit_generation=grant.generation, receipt_id=event_id)
         budget = {**usage['budget'], 'settled_event_id': event_id, 'active_event_id': None}
         connection.execute('UPDATE task_events SET payload_json=? WHERE workspace_id=? AND id=?',
             (json.dumps(budget), grant.workspace_id, f'event_{grant.owner_id}_narration_budget'))
@@ -9317,7 +9391,6 @@ class ProductionRepository:
             or not section.title.strip()
             or not section.content.strip()
             or not section.visual_prompt.strip()
-            or not section.evidence_reference_ids
             for section in script.sections
         ):
             raise ValueError("文案段落必须包含画面建议和来源证据")
@@ -9604,7 +9677,7 @@ class ProductionRepository:
             ):
                 raise ValueError("当前创作任务不允许修改这份待确认文案")
             if script.source_reply_reference is None and any(
-                not section.visual_prompt.strip() or not section.evidence_reference_ids
+                not section.visual_prompt.strip()
                 for section in sections
             ):
                 raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
@@ -9828,7 +9901,7 @@ class ProductionRepository:
                     raise ValueError("此文案已按定稿锁定，不能通过重复确认改写正文；请明确采用新的定稿。")
                 return task, script
             if not title.strip() or not sections or any(not part.content.strip() or not part.visual_prompt.strip()
-                    or not part.evidence_reference_ids for part in sections):
+                    for part in sections):
                 raise ValueError("确认文案必须包含正文、画面建议和来源证据")
             if task.confirmed_script_id and task.confirmed_script_id != script.id:
                 current = conn.execute("SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",

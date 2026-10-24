@@ -3,8 +3,20 @@ from __future__ import annotations
 
 
 class TaskBudgetUseCase:
-    def __init__(self, repository):
+    def __init__(self, repository, *, scope_for=None):
         self.repository = repository
+        self.scope_for = scope_for
+
+    def local_start_policy(self, workspace_id, task_id, actor, input_digest, *, operation):
+        if actor is None:
+            raise PermissionError('本地目标执行策略需要可信发起成员')
+        self.require_actor(workspace_id, task_id, actor)
+        if operation not in {'creation', 'segment_revision', 'narration_edit'}:
+            raise ValueError('本地目标执行策略不适用于该动作')
+        if self.scope_for is None:
+            raise PermissionError('本地执行需要可信目标入口提供已核验授权scope，不按Job自造额度')
+        reference = self.scope_for(workspace_id, task_id, actor)
+        return {'policy_kind': 'scope', 'scope_id': reference['scope_id'], 'revision': reference['revision']}
 
     def require_actor(self, workspace_id, task_id, actor):
         task = self.repository.get_creation_task(workspace_id, task_id)

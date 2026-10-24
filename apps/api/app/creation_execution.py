@@ -28,6 +28,7 @@ from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
 from app.production import (CreationPlan, CreationTask, CreationTaskScript, NarrationSegment)
 from app.creation.contracts import (JobRun, TaskEvent)
 from app.repository import reset_workspace_context, set_workspace_context
+from app.creation.execution_budget import narration_limits, narration_remaining, finite_unit_limit, exhausted
 from app.task_runtime import JobContext, JobFailure, JobResult, TaskRuntime
 
 
@@ -846,11 +847,10 @@ class CreationJobOwnerVerifier:
         if unresolved and (request is None or not original_recovery and request.state not in {'granted', 'yield_requested'} or len(unresolved) != 1
                 or unresolved[0]['usage_id'] != f'{request.id}:{request.last_grant_generation}'):
             raise RecoveryBlocked('原配音请求的时间或产物消耗未知，须先核对原单元')
-        limits = usage['budget'] or {'parent_timeout_seconds': min(300.0, budget.max_timeout_seconds),
-            'parent_max_output_bytes': min(3 * 1024 * 1024, budget.max_output_bytes)}
-        if (usage['used_seconds'] >= limits['parent_timeout_seconds']
-                or usage['used_output_bytes'] >= limits['parent_max_output_bytes']):
-            raise ValueError('原配音阶段累计300秒或3MiB额度已耗尽，不能重置')
+        limits = narration_limits(usage, budget)
+        if exhausted(limits, usage['used_seconds'], usage['used_output_bytes']):
+            raise ValueError('原任务明确累计配额已耗尽，保留已付音频与消耗后续作')
+        remaining_seconds, remaining_bytes = narration_remaining(usage, limits, request=request)
         from app.creation.narration_pcm import narration_reference_facts
         reference_preparation=(pcm_preparation or {}).get('_narration_reference')
         if reference_preparation is None:
@@ -917,8 +917,10 @@ class CreationJobOwnerVerifier:
                 'input_scope': budget.input_scope, 'budget_basis': 'controlled_experiment_unverified_legacy_cap',
                 'text_chars': len(section.content) + len(inputs.voice.reference_text), 'section_count': 1,
                 'reference_bytes': stat.st_size, 'duration_seconds': plan.duration_target_seconds,
-                'max_output_bytes': limits['parent_max_output_bytes'], 'threads': budget.max_threads,
-                'timeout_seconds': limits['parent_timeout_seconds']}
+                'max_output_bytes': finite_unit_limit(budget.max_output_bytes,
+                    remaining_bytes if usage.get('scope') is not None else limits['parent_max_output_bytes']), 'threads': budget.max_threads,
+                'timeout_seconds': finite_unit_limit(budget.max_timeout_seconds,
+                    remaining_seconds if usage.get('scope') is not None else limits['parent_timeout_seconds'])}
             prefix = f'narration:segment:v1:{section.id}:'
         else:
             audio = self.narration_audio_budget
@@ -965,9 +967,10 @@ class CreationJobOwnerVerifier:
             raise RecoveryBlocked('原PCM检查点没有可追加的片段')
         work = Path(source_files[0][1]).parent / ('.pcm-job-' + hashlib.sha256(job.id.encode()).hexdigest()[:24]) / 'narration.wav'
         usage = self.repository.creation_narration_usage(job.workspace_id,job.id,connection=conn)
-        absolute = min(audio.max_output_bytes, limits['parent_max_output_bytes'])
+        absolute = finite_unit_limit(audio.max_output_bytes, limits['parent_max_output_bytes'])
+        remaining_seconds, remaining_bytes = narration_remaining(usage, limits, request=request)
         baseline = work_baseline(work, checkpoint['pcm'] if checkpoint else None,
-            limits['parent_max_output_bytes']-usage['used_output_bytes'],absolute,
+            finite_unit_limit(audio.max_output_bytes, remaining_bytes),absolute,
             sum(item['pcm_frames']*2 for item in sources))
         covered_after = covered + len(sources)
         receipt_key = hashlib.sha256(json.dumps([source_digest,ordered_ids[:covered_after],baseline],sort_keys=True).encode()).hexdigest()[:24]
@@ -988,7 +991,7 @@ class CreationJobOwnerVerifier:
             'source_sample_rate_limit':audio.max_sample_rate,'source_channels_limit':audio.max_channels,
             'output_sample_rate_limit':24000,'output_channels_limit':1,
             'max_output_bytes':absolute,'threads':audio.max_threads,
-            'timeout_seconds':min(audio.max_timeout_seconds,limits['parent_timeout_seconds']-usage['used_seconds'])}
+            'timeout_seconds':finite_unit_limit(audio.max_timeout_seconds, remaining_seconds)}
         if (sum(item['duration_seconds'] for item in inputs)>plan.duration_target_seconds
                 or audio_resource_refusal(resources,audio) is not None):
             raise ValueError('原PCM追加超出已有CPU音频预算')
@@ -1146,8 +1149,8 @@ class CreationJobOwnerVerifier:
                     or usage['unsettled'][0]['usage_id'] != f'{request.id}:{request.last_grant_generation}'
                     or not original_recovery and request.state not in {'granted','yield_requested'}):
                 raise RecoveryBlocked('原局部配音用量未知，须先查询同一Job')
-            limits = usage['budget'] or {'parent_timeout_seconds':min(300.0,self.narration_budget.max_timeout_seconds),
-                'parent_max_output_bytes':min(3*1024*1024,self.narration_budget.max_output_bytes)}
+            limits = narration_limits(usage, self.narration_budget)
+            remaining_seconds, remaining_bytes = narration_remaining(usage, limits, request=request)
             common = {'input_contract':'narration_units_v1','script_id':task.confirmed_script_id,
                 'narration_reference':resources['narration_reference'],
                 'parent_timeout_seconds':limits['parent_timeout_seconds'],
@@ -1156,8 +1159,8 @@ class CreationJobOwnerVerifier:
             if candidate is None:
                 return key,{**resources,**common,'narration_phase':'segment_edit',
                     'input_scope':self.narration_budget.input_scope,
-                    'max_output_bytes':min(resources['max_output_bytes'],limits['parent_max_output_bytes']-usage['used_output_bytes']),
-                    'timeout_seconds':min(resources['timeout_seconds'],limits['parent_timeout_seconds']-usage['used_seconds'])}
+                    'max_output_bytes':finite_unit_limit(resources['max_output_bytes'], remaining_bytes),
+                    'timeout_seconds':finite_unit_limit(resources['timeout_seconds'], remaining_seconds)}
             if candidate['source_key'] != key:
                 raise RecoveryBlocked('局部配音候选的原版本或来源已变化')
             target = self.repository.get_narration_artifact(job.workspace_id,candidate['cache_key'],connection=conn)
@@ -2343,8 +2346,7 @@ class CreationJobUnitExecutor:
             limits = usage['budget']
             current_task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             if (current_task.stage == 'narration'
-                    and (usage['used_seconds'] >= limits['parent_timeout_seconds']
-                         or usage['used_output_bytes'] >= limits['parent_max_output_bytes'])):
+                    and exhausted(limits, usage['used_seconds'], usage['used_output_bytes'])):
                 self.repository.exhaust_creation_narration_budget(current, job.task_id, connection=conn)
                 return None
             intent = next_creation_intent(self.repository, scheduler, job, connection=conn, pcm_preparation=pcm_preparation)
@@ -3008,8 +3010,10 @@ class CreationExecution:
         run_montage_plan: Callable[[str, str], object],
         run_render: Callable[[str, str], object],
         render_is_valid: Callable[[str, str], bool],
+        budget_policy_for=None,
     ) -> None:
         self.repository = repository
+        self.budget_policy_for = budget_policy_for
         self.runtime = TaskRuntime(repository)
         self.actions = {
             "montage_plan": run_montage_plan,
@@ -3052,6 +3056,10 @@ class CreationExecution:
         source_context = (prepare_narration_source(self.repository, task, plan, actor)
             if actor is not None and task.stage == 'narration' and plan.selected_voice is not None and narration is None and not existing
             else nullcontext(None))
+        original = next((job for job in self.jobs(workspace_id, task_id) if job.idempotency_key == key), None)
+        policy = (self.repository.get_task_event(workspace_id, f'event_{original.id}_start').payload.get('execution_budget_policy')
+            if original is not None else self.budget_policy_for(workspace_id, task_id, actor, digest, operation='creation')
+            if self.budget_policy_for is not None else None)
         with source_context as source_preparation:
             run = self.repository.create_creation_execution_job(
                 JobRun(
@@ -3063,8 +3071,9 @@ class CreationExecution:
                     input_digest=digest,
                 )
                 , start_payload={"script_id":script_id,"plan_id":task.plan_id,"input_digest":digest,
+                    **({'execution_budget_policy': policy} if policy is not None else {}),
                     **(actor.identity_payload() if actor is not None else {"member_id":member_id} if member_id is not None else {})},
-                write_guard=write_guard,execution_source=execution_source,source_preparation=source_preparation)
+                write_guard=write_guard,execution_source=execution_source,source_preparation=source_preparation, budget_scope_actor=actor)
         if member_id is not None:
             start_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
             if start_event.payload.get("member_id") != member_id:
