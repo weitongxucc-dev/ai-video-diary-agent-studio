@@ -306,8 +306,22 @@ def test_reordered_nested_patch_cannot_repeat_a_rejected_typed_input(tmp_path, a
     seen = invoke(tmp_path, failure=True, steps=[{"tool": "preview_typed_edit", "args": action},
         {"tool": "preview_typed_edit", "args": reordered}])
     assert seen["results"][0]["result"]["details"]["correction_allowed"]
-    assert not seen["results"][1]["ok"] and "相同预览" in seen["results"][1]["error"]
+    assert seen["results"][1]["result"]["isError"] is True
     assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
+
+
+def test_parameter_corrections_are_not_capped_at_three_candidates(tmp_path):
+    steps = [{"tool": "preview_typed_edit", "args": {"operation_type": "TrimClip",
+              "clip_id": "second", "source_start_seconds": position}}
+             for position in (1, 2, 3, 4)]
+    seen = invoke(tmp_path, steps=[*steps, steps[-1]], failure=True)
+    assert all(item["ok"] and item["result"]["details"]["correction_allowed"]
+               for item in seen["results"][:4])
+    assert seen["results"][4]["result"]["isError"] is True
+    posts = [call for call in seen["calls"] if call["method"] == "POST"]
+    assert len(posts) == 4
+    assert len({call["body"]["request_id"] for call in posts}) == 4
+    assert {call["body"]["expected_timeline_version_id"] for call in posts} == {"version-current"}
 
 
 def test_known_parameter_rejection_allows_distinct_bounded_correction(tmp_path):
@@ -315,7 +329,7 @@ def test_known_parameter_rejection_allows_distinct_bounded_correction(tmp_path):
     correction = {"tool": "preview_typed_edit", "args": {**first["args"], "source_start_seconds": 2}}
     seen = invoke(tmp_path, steps=[first, first, correction], failure=True, failure_once=True)
     assert seen["results"][0]["result"]["details"]["correction_allowed"] is True
-    assert not seen["results"][1]["ok"]  # Identical rejected input remains sealed.
+    assert seen["results"][1]["result"]["isError"] is True  # Identical input remains sealed.
     assert seen["results"][2]["result"]["details"]["kind"] == "edit_preview"
     posts = [call for call in seen["calls"] if call["method"] == "POST"]
     assert len(posts) == 2 and posts[0]["body"]["request_id"] != posts[1]["body"]["request_id"]
@@ -330,7 +344,8 @@ def test_unknown_or_auth_version_denial_does_not_enable_changed_input_replay(tmp
     first = seen["results"][0]["result"]["details"]
     assert first["correction_allowed"] is False
     assert first["status"] == ("result_unknown" if mode == "lost_receipt" else "rejected")
-    assert not seen["results"][1]["ok"] and sum(call["method"] == "POST" for call in seen["calls"]) == 1
+    assert seen["results"][1]["result"]["isError"] is True
+    assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
 
 
 def test_fine_reads_expose_real_units_and_truthful_truncation(tmp_path):

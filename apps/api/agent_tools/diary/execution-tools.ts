@@ -8,6 +8,14 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
   readCurrentTaskFacts: () => Promise<any>; typedRequestId: (turn: string, call: string) => string;
 }) {
   if (taskId) {
+    pi.registerTool({name: "read_execution_capabilities", label: "读取执行单元能力",
+      description: "只读当前任务可用执行单元的配置、限制单位与范围、验证未知状态和续作缺口。已配置不等于实测通过或整片可完成；不进行资源准入、执行、提额或制作。",
+      parameters: {type: "object", properties: {}, additionalProperties: false},
+      execute: async () => {
+        const result = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/execution-capabilities`);
+        const details = {kind: "execution_capabilities", capabilities: result};
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      }});
     let storyboardAttempt: {inputKey: string; requestId: string} | null = null;
     const storyboardPath = `/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan`;
     const storyboardRequestPath = (id: string) => `${storyboardPath}/requests/${encodeURIComponent(id)}`;

@@ -206,6 +206,20 @@ test('an invalid review cannot attach a candidate locator or permit the same inp
   assert.equal(state.calls.filter(call => call.url.endsWith('/script-draft')).length, 1);
 });
 
+test('empty evidence references remain subject to independent script review', async () => {
+  const {tool,calls} = rejectedTool({error:'script_fact_unsupported',
+    reason:'独立核查发现未获来源支持的断言',reason_code:'unsupported_fact',section_index:1,retryable:true});
+  const candidate = {title:'提问',sections:[{...draft.sections[0],content:'你会怎样开始？',evidence_reference_ids:[]}]};
+  assert.equal(tool.parameters.properties.sections.items.properties.evidence_reference_ids.minItems,0);
+  const result = await tool.execute('empty-references',candidate);
+  const submitted = calls.find(call=>call.url.endsWith('/script-draft'));
+  assert.deepEqual(JSON.parse(submitted.init.body).sections[0].evidence_reference_ids,[]);
+  assert.equal(result.details.failure.error,'script_fact_unsupported');
+  assert.equal(result.details.failure.reason_code,'unsupported_fact');
+  assert.equal(result.details.kind,'script_draft_rejected');
+  assert.equal(calls.some(call=>call.url.includes('/confirm') || call.url.includes('/execution/')),false);
+});
+
 test('script schema separates spoken text, visual instructions and complete evidence references', () => {
   const {tool} = rejectedTool({});
   const fields = tool.parameters.properties.sections.items.properties;

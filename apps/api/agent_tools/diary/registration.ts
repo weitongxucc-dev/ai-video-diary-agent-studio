@@ -5,7 +5,7 @@ const inputBoundActions = new Set([
   'apply_typed_edit', 'preview_typed_edit', 'preview_media_script', 'preview_media_script_tool',
   'observe_task_output', 'save_media_script_tool', 'update_media_script_tool', 'revoke_media_script_tool',
   'start_creation_execution', 'resume_creation_execution', 'cancel_creation_execution',
-  'read_creation_execution', 'read_segment_visual_decision',
+  'read_creation_execution', 'read_segment_visual_decision', 'read_execution_capabilities',
   'regenerate_storyboard', 'read_storyboard_regeneration',
   'select_narration_voice',
   'preview_edit_selection', 'discard_edit_proposal', 'undo_last_edit', 'redo_last_edit',

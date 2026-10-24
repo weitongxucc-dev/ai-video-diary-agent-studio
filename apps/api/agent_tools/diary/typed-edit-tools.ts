@@ -7,7 +7,6 @@ import {createHash} from 'node:crypto';
 export function createTypedEditTools({request, taskId, selectedTaskVersion, isTaskRead, readActionSource, typedRequestId, getEditCapabilities, getDeclaredCapabilities = getEditCapabilities, hasCreationAction, hasEditControlWrite, markPreview}: {
   request: BusinessRequest; taskId: string | undefined; selectedTaskVersion: TaskVersion | null; isTaskRead: () => boolean; readActionSource: () => ActionSource; typedRequestId: (turn: string, call: string) => string; getEditCapabilities: () => any; getDeclaredCapabilities?: () => any; hasCreationAction: () => boolean; hasEditControlWrite: () => boolean; markPreview: () => void;
 }) {
-  let typedAttempts = 0;
   let typedPreviewBlocked = false;
   const typedInputs = new Set<string>();
   function registerNarrationRevision(pi: ToolRegistrar) {
@@ -188,12 +187,12 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
       const parameters = typedEditSchema(getDeclaredCapabilities());
       pi.registerTool({
         name: "preview_typed_edit", label: "预览类型化修改",
-        description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。音频EditAudioTimeline的audio_edit指定真实target_id、update片段或track音轨、非空values patch；画面AdjustVisualEffects指定真实clip_ids和非空effects patch。先读当前对象，降低6dB须用当前gain_db计算新绝对值，只传指定字段，遗漏保留、重置显式提交；淡入淡出音频用毫秒，画面用秒。duck_under_voice只音乐轨；本轮不开放音量关键点写入、solo持久化或独立音频变速。不绕过人像/资源许可。只生成提案/实际预览，不应用或宣称成片。最多3个不同候选，同输入、未知结果或授权/版本拒绝不重放。",
+        description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。音频EditAudioTimeline的audio_edit指定真实target_id、update片段或track音轨、非空values patch；画面AdjustVisualEffects指定真实clip_ids和非空effects patch。先读当前对象，降低6dB须用当前gain_db计算新绝对值，只传指定字段，遗漏保留、重置显式提交；淡入淡出音频用毫秒，画面用秒。duck_under_voice只音乐轨；本轮不开放音量关键点写入、solo持久化或独立音频变速。不绕过人像/资源许可。只生成提案/实际预览，不应用或宣称成片。按当前授权、实际成本与进展有限探索；同输入、未知结果或授权/版本拒绝不重放，无进展不盲循环。",
         parameters,
         execute: async (_id: string, params: Record<string, unknown>) => {
           if (!isTaskRead() || !selectedTaskVersion) throw new Error("请先读取本轮可信任务与版本");
           if (hasCreationAction() || hasEditControlWrite()) throw new Error("本轮已有执行或历史控制动作");
-          if (typedPreviewBlocked || typedAttempts >= 3) throw new Error("本轮预览尚待核验结果或达到3次上限；不重复未知操作");
+          if (typedPreviewBlocked) throw new Error("本轮预览尚待核验结果；不重复未知操作");
           if (Object.keys(params).some(key => isHostEditField(key) || !Object.hasOwn(parameters.properties, key)))
             throw new Error("模型参数包含未知字段或可信宿主字段，未提交预览");
           const capability = getEditCapabilities()?.operations.find((item: any) => item.operation_type === params.operation_type);
@@ -205,7 +204,7 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
           const input = JSON.stringify(params, (_key, value) => value && typeof value === "object" && !Array.isArray(value)
             ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value);
           if (typedInputs.has(input)) throw new Error("本轮已提交相同预览，不重复请求");
-          typedInputs.add(input); typedAttempts++; typedPreviewBlocked = true; markPreview();
+          typedInputs.add(input); typedPreviewBlocked = true; markPreview();
           const requestId = typedRequestId(turn, _id);
           const queryUrl = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${requestId}?phase=preview`;
           let preview: any;
@@ -228,7 +227,7 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
               base_version_id: selectedTaskVersion.timeline_version_id, base_sequence: selectedTaskVersion.timeline_sequence,
               failure_reason: boundedText(error instanceof Error ? error.message : String(error), 500),
               correction_allowed: parameterRejected,
-              instruction: parameterRejected ? "参数已明确拒绝，没有生成修改；可在原授权和版本内纠正参数准备另一候选，不重发相同输入，仍受本轮3次上限。"
+              instruction: parameterRejected ? "参数已明确拒绝，没有生成修改；可在原授权和版本内纠正参数准备另一候选，不重发相同输入；按实际成本与进展有限探索，无进展则停止。"
                 : "原请求身份已保留；先回读实际结果，不自动重POST或换绑最新版本。"};
             return {isError: true, content: [{type: "text", text: JSON.stringify(details)}], details};
           }

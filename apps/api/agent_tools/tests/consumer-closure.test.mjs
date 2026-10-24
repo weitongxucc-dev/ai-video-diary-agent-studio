@@ -202,6 +202,44 @@ console.log('common host calls: PASS');`, pathToFileURL(join(tree.root,'Resource
   assert.match(stdout,/common host calls: PASS/);
 });
 
+test('execution capability tool reads the bound task through the host without execution or admission', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+import assert from 'node:assert/strict';
+const {createBusinessRequest,RequestNotSubmitted}=await import(process.argv[1]);
+const {registerExecutionTools}=await import(process.argv[2]);
+const {createToolCallScope}=await import(process.argv[3]);
+const calls=[],tools=new Map();
+const facts={admission:'not_evaluated',whole_task_support:'not_inferred',capabilities:[
+ {purpose:'pcm_append',configured:true,verification_status:'unknown'},
+ {purpose:'final_audio_mix',configured:false,verification_status:'unknown'}]};
+const source={turnId:'turn:original',inputId:'input:original',inputTurnId:'turn:original'};
+const request=createBusinessRequest({taskId:'task:original',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw new Error('credentials forbidden')},getSignal:()=>undefined,
+ fetchRequest(){throw new Error('HTTP forbidden')},
+ businessCall:async(operation,args)=>{calls.push({operation,args});return {ok:true,value:facts}}});
+const scoped=createToolCallScope(()=>source).bind({registerTool:tool=>tools.set(tool.name,tool)});
+registerExecutionTools(scoped,{request,taskId:'task:original',isTaskRead:()=>false,
+ hasCreationAction:()=>false,markCreationAction(){throw new Error('must not start creation')}});
+const result=await tools.get('read_execution_capabilities').execute('call:capabilities',{},undefined);
+assert.deepEqual(calls,[{operation:'read_execution_capabilities',args:{task_id:'task:original'}}]);
+assert.deepEqual(result.details.capabilities,facts);
+assert.equal(result.structuredContent.input_id,'input:original');
+assert.equal(result.details.capabilities.whole_task_support,'not_inferred');
+for(const [path,options] of [
+ ['/api/creation-tasks/task%3Aoriginal/assistant/execution-capabilities?admit=true',{}],
+ ['/api/creation-tasks/task%3Aoriginal/assistant/execution-capabilities',{method:'POST',body:'{}'}]]){
+ await assert.rejects(()=>request(path,options),RequestNotSubmitted);
+}
+assert.equal(calls.length,1);
+console.log('execution capability read-only host: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','execution-tools.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','registration.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/execution capability read-only host: PASS/);
+});
+
 test('segment visual decision tools read the original receipt and cannot auto-adopt over the business host', async t => {
   const tree=await resourceTree(t);
   const {stdout}=await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`

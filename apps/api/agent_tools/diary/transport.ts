@@ -194,6 +194,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       '/execution/preview': 'read_creation_execution_preview',
       '/assistant/script-context': 'read_assistant_script_context',
       '/assistant/edit-capabilities': 'read_task_edit_capabilities',
+      '/assistant/execution-capabilities': 'read_execution_capabilities',
       '/assistant/media-script-capabilities': 'read_media_script_capabilities',
       '/observations': 'read_task_observations',
     };

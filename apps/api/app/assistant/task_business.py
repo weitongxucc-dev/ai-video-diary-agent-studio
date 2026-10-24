@@ -63,7 +63,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -79,6 +79,7 @@ class TaskBusiness:
         self.timeline_restores=timeline_restores
         self.exact_case_for=exact_case_for
         self.media_jobs_list=media_jobs_list
+        self.execution_capabilities=execution_capabilities
 
     def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -488,6 +489,10 @@ class TaskBusiness:
         if operation=='read_creator_memory': return sealed['memory']
         if operation=='read_assistant_script_context': return self.script_context(ws,task_id,actor.user_id or actor.member_id)
         if operation=='read_task_edit_capabilities': return self.edit_capabilities(task)
+        if operation=='read_execution_capabilities':
+            if self.execution_capabilities is None:
+                raise TaskBusinessRejected('执行能力读面尚未装配',status_code=503)
+            return self.execution_capabilities(task)
         if operation=='read_media_script_capabilities': return self.script_capabilities(task,actor.user_id or actor.member_id)
         if operation=='read_media_script_tool_capabilities': return self.tool_capabilities()
         if operation=='read_creation_execution_preview': return self.execution.preview(ws,task_id)
