@@ -16,7 +16,7 @@ from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SourceRef, VerifiedWork
 from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout, run_granted_command
 from app.host_resource_probes import HostResourceRefusal
-from app.quality_worker_runtime import QualityBudget, QualityWorkerError, quality_phase_request, quality_unit_key
+from app.quality_worker_runtime import QualityBudget, QualityWorkerError, quality_phase_request, quality_unit_key, quality_request_byte_limit
 from app.creation.quality_inspection_use_case import QUALITY_KIND
 
 
@@ -42,13 +42,14 @@ def run_quality_worker(context, request, temporary_root):
     temporary_root.mkdir(parents=True, exist_ok=True)
     input_path = temporary_root / f"quality_{request['check_id']}_{context.grant.generation}.json"
     encoded = json.dumps({**request, "deadline_monotonic": context.deadline_monotonic}, ensure_ascii=False).encode()
-    if len(encoded) > budget.max_report_bytes:
-        raise QualityWorkerError("质检封存请求超过本次已标定大小")
+    request_limit = quality_request_byte_limit(request)
+    if len(encoded) > request_limit:
+        raise QualityWorkerError("质检封存请求超过有限阶段协议包容量")
     input_path.write_bytes(encoded)
     command = [sys.executable]
     if not getattr(sys, "frozen", False):
         command.append(str(Path(__file__).resolve().parents[2] / 'server.py'))
-    command += ["--quality-worker", str(input_path), str(budget.max_report_bytes)]
+    command += ["--quality-worker", str(input_path), str(request_limit)]
     environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
     environment.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1")
     try:

@@ -69,6 +69,13 @@ def quality_stream_resources(request: dict, phase: str, checkpoints: dict) -> di
         "budget_digest": budget_identity(budget), "workload_provenance": provenance}
 
 
+def quality_request_byte_limit(request: dict) -> int:
+    # One immutable request plus at most one bounded receipt for each completed
+    # non-final phase. This is protocol storage, independent of media length.
+    limit = request["budget"]["max_report_bytes"]
+    return len(QUALITY_PHASES) * limit if request.get("protocol") == QUALITY_STREAM_PROTOCOL else limit
+
+
 def quality_unit_key(request: dict) -> str:
     base = f"quality:{request['check_id']}"
     return f"{base}:{request['phase']}" if "phase" in request else base
@@ -161,7 +168,8 @@ class QualityWorkerContext:
             raise QualityWorkerError("质检单元总时限已到，检查未完成")
 
     def run(self, command: list[str], timeout: float, *, pcm: bool = False,
-            stdout_consumer: Callable[[bytes], None] | None = None):
+            stdout_consumer: Callable[[bytes], None] | None = None,
+            stderr_consumer: Callable[[bytes], None] | None = None):
         """Drain a full decoder under one finite permit, with bounded buffering.
 
         New stream requests bound residency, diagnostics and the process deadline;
@@ -191,7 +199,7 @@ class QualityWorkerContext:
         caps = {"stdout": (None if streaming and stdout_consumer is not None else
                 self.budget.max_report_bytes if streaming else
                 self.budget.max_pcm_bytes if pcm else self.budget.max_frame_json_bytes),
-                "stderr": self.budget.max_stderr_bytes}
+                "stderr": None if streaming and stderr_consumer is not None else self.budget.max_stderr_bytes}
         started = time.monotonic()
         complete = False
         output = {"stdout": bytearray(), "stderr": bytearray()}
@@ -218,8 +226,9 @@ class QualityWorkerContext:
                             sizes[label] += len(data)
                             if caps[label] is not None and sizes[label] > caps[label]:
                                 raise QualityWorkerError("质检命令输出超过本次已标定上限，检查未完成")
-                            if label == "stdout" and stdout_consumer is not None:
-                                stdout_consumer(data)
+                            consumer = stdout_consumer if label == "stdout" else stderr_consumer
+                            if consumer is not None:
+                                consumer(data)
                             else:
                                 output[label].extend(data)
             code = process.wait(timeout=max(0, deadline - time.monotonic()))

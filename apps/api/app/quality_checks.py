@@ -83,7 +83,10 @@ QUALITY_KINDS: tuple[str, ...] = (
     QUALITY_KIND_TIMESTAMP_OFFSET,
 )
 
-_BLACK_PATTERN = re.compile(r"black_start:([0-9.]+)\s+black_end:([0-9.]+)")
+_BLACK_NUMBER = r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+_BLACK_PATTERN = re.compile(
+    r"^\[(?:Parsed_)?blackdetect(?:_[0-9]+)? @ 0x[0-9a-fA-F]+\]\s+"
+    rf"black_start:({_BLACK_NUMBER})\s+black_end:({_BLACK_NUMBER})\s+black_duration:{_BLACK_NUMBER}\s*$")
 # This compact protocol requests only timestamps/durations or sample counts.
 # 64 ASCII bytes per scalar accommodate signed integer/rational timestamps,
 # decimal precision, scientific notation and N/A. This bounds one record, not
@@ -137,6 +140,14 @@ class QualityReport:
     clipping_summary: dict | None = None
     video_duration_seconds: float | None = None
     video_frame_rate: str | None = None
+    black_frame_summary: dict | None = None
+
+    @property
+    def has_issues(self) -> bool:
+        # A byte-bounded report may retain zero examples; complete aggregates
+        # still prove issues and must never turn such a report into clean.
+        return bool(self.findings or (self.black_frame_summary or {}).get("event_count")
+                    or (self.clipping_summary or {}).get("event_count"))
 
     @property
     def is_clean(self) -> bool:
@@ -144,12 +155,12 @@ class QualityReport:
 
         任何一类没量成（unavailable 非空），这里一律 False：未知不是通过。
         """
-        return not self.findings and not self.unavailable
+        return not self.has_issues and not self.unavailable
 
     @property
     def status(self) -> str:
         """给界面用的三态：问题 / 通过 / 未检测完成。"""
-        if self.findings:
+        if self.has_issues:
             return "issues_found"
         return "clean" if not self.unavailable else QUALITY_UNAVAILABLE
 
@@ -157,29 +168,87 @@ class QualityReport:
         return tuple(item for item in self.findings if item.kind == kind)
 
 
-def detect_black_frames(
-    path: str | Path,
-    *,
-    min_duration_seconds: float = DEFAULT_BLACK_MIN_SECONDS,
-    pixel_threshold: float = DEFAULT_BLACK_PIXEL_THRESHOLD,
-    context: QualityWorkerContext | None = None,
-) -> list[QualityFinding]:
-    """全黑画面区间。没有检出返回空列表。"""
-    completed = _run([
-        "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
-        "-vf", f"blackdetect=d={min_duration_seconds}:pix_th={pixel_threshold}",
-        "-an", "-f", "null", "-",
-    ], RUN_TIMEOUT_SECONDS, context=context)
-    # 黑场一直延伸到片尾时 ffmpeg 也会给出 black_end（停在最后一个完整帧）。
-    return [
-        QualityFinding(
-            QUALITY_KIND_BLACK_FRAME,
-            round(float(start), 3),
-            round(float(end), 3),
-            f"画面全黑 {round(float(end) - float(start), 3)}s",
-        )
-        for start, end in _BLACK_PATTERN.findall(completed.stderr)
-    ]
+@dataclass(frozen=True)
+class BlackFrameInspection:
+    findings: list[QualityFinding]
+    summary: dict | None
+    diagnostic_bytes: int
+
+
+class _BlackFrameLines:
+    """Separate complete blackdetect events from genuinely bounded diagnostics."""
+
+    def __init__(self, diagnostic_limit, *, origin=0.0, example_bytes):
+        self.diagnostic_limit, self.origin = diagnostic_limit, origin
+        self.pending = b""
+        self.diagnostics = bytearray()
+        # Three numeric blackdetect fields and its filter/address prefix. This
+        # bounds one log record, not video duration or the number of intervals.
+        self.record_limit = max(diagnostic_limit,
+            len("black_start: black_end: black_duration: ") + 4 * _FRAME_SCALAR_TEXT_LIMIT)
+        minimum_example = len(json.dumps(asdict(QualityFinding(QUALITY_KIND_BLACK_FRAME, 0, 0, ""))))
+        slots = example_bytes // minimum_example
+        self.events = _IntervalEvents(event_limit=min(CLIP_EVENT_LIST_LIMIT, slots),
+            findings_limit=min(CLIP_FINDING_EVENT_LIMIT, slots))
+
+    def line(self, raw):
+        text = raw.decode("utf-8")
+        matches = _BLACK_PATTERN.findall(text)
+        if matches:
+            for start, end in matches:
+                start, end = float(start), float(end)
+                if not math.isfinite(start) or not math.isfinite(end) or end < start:
+                    raise QualityCheckError("blackdetect returned an invalid interval")
+                finding = QualityFinding(QUALITY_KIND_BLACK_FRAME, round(start, 3), round(end, 3),
+                    f"画面全黑 {round(end - start, 3)}s")
+                self.events.add(_shifted([finding], self.origin)[0])
+        else:
+            if text.startswith(("[blackdetect @", "[Parsed_blackdetect_")) and "black_start:" in text:
+                raise QualityCheckError("blackdetect returned an invalid interval record")
+            if len(self.diagnostics) + len(raw) > self.diagnostic_limit:
+                raise QualityCheckError("质检命令诊断输出超过本次许可上限，检查未完成")
+            self.diagnostics.extend(raw)
+
+    def feed(self, raw):
+        offset = 0
+        while offset < len(raw):
+            newline = raw.find(b"\n", offset)
+            end = len(raw) if newline < 0 else newline + 1
+            if len(self.pending) + end - offset > self.record_limit:
+                raise QualityCheckError("blackdetect log record exceeds the bounded protocol")
+            self.pending += raw[offset:end]
+            if newline >= 0:
+                self.line(self.pending)
+                self.pending = b""
+            offset = end
+
+    def finish(self):
+        if self.pending:
+            self.line(self.pending)
+            self.pending = b""
+
+
+def detect_black_frames(path: str | Path, *, min_duration_seconds: float = DEFAULT_BLACK_MIN_SECONDS,
+        pixel_threshold: float = DEFAULT_BLACK_PIXEL_THRESHOLD, timeline_origin_seconds: float = 0.0,
+        context: QualityWorkerContext | None = None) -> BlackFrameInspection:
+    """Scan every black interval; retain finite examples and complete totals."""
+    if context is None:
+        raise QualityCheckError("质检命令缺少受许可的 worker 上下文")
+    lines = _BlackFrameLines(context.budget.max_stderr_bytes, origin=timeline_origin_seconds,
+        example_bytes=context.budget.max_report_bytes)
+    try:
+        completed = context.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
+            "-vf", f"blackdetect=d={min_duration_seconds}:pix_th={pixel_threshold}",
+            "-an", "-f", "null", "-"], RUN_TIMEOUT_SECONDS, stderr_consumer=lines.feed)
+    except subprocess.TimeoutExpired as exc:
+        raise QualityCheckError("ffmpeg 黑场检查超时，检查未完成") from exc
+    except OSError as exc:
+        raise QualityCheckError(f"ffmpeg 无法执行：{exc}") from exc
+    lines.finish()
+    if completed.returncode:
+        raise QualityCheckError(lines.diagnostics.decode("utf-8").strip() or "ffmpeg blackdetect failed")
+    return BlackFrameInspection(lines.events.examples[:lines.events.findings_limit],
+        lines.events.summary(None, kind=QUALITY_KIND_BLACK_FRAME), len(lines.diagnostics))
 
 
 @dataclass(frozen=True)
@@ -191,7 +260,7 @@ class ClippingInspection:
 
 
 @dataclass
-class _ClippingEvents:
+class _IntervalEvents:
     """Retain bounded examples while accounting for every detected interval."""
 
     event_limit: int = CLIP_EVENT_LIST_LIMIT
@@ -210,15 +279,15 @@ class _ClippingEvents:
         if len(self.examples) < max(self.event_limit, self.findings_limit):
             self.examples.append(finding)
 
-    def summary(self, duty):
+    def summary(self, duty, *, kind=QUALITY_KIND_CLIPPING):
         if not self.count:
             return None
         return {
             "event_count": self.count,
-            "total_clipped_seconds": round(self.total_seconds, 3),
+            ("total_clipped_seconds" if kind == QUALITY_KIND_CLIPPING else "total_black_seconds"): round(self.total_seconds, 3),
             "first_start_seconds": self.first_start,
             "last_end_seconds": self.last_end,
-            "full_scale_duty": round(duty, 6) if duty is not None else None,
+            **({"full_scale_duty": round(duty, 6) if duty is not None else None} if kind == QUALITY_KIND_CLIPPING else {}),
             "event_list_limit": self.event_limit,
             "events": [{"start_seconds": item.start_seconds, "end_seconds": item.end_seconds,
                         "duration_seconds": item.duration_seconds} for item in self.examples[:self.event_limit]],
@@ -300,7 +369,7 @@ def detect_clipping(
         )])
 
     ceiling = peak * CLIP_FULL_SCALE_TOLERANCE
-    events = _ClippingEvents()
+    events = _IntervalEvents()
     kept_ranges: list[tuple[int, int]] = []
     run_start: int | None = None
     at_full_scale, index = 0, 0
@@ -739,9 +808,11 @@ def inspect_quality_phase(path, phase, checkpoints, *, context=None,
     origin = _timeline_origin(payload)
     findings, unavailable, summary = [], [], None
     decoded_streams = None
+    black = None
     if phase == "black_frames":
-        findings = _shifted(detect_black_frames(path, min_duration_seconds=min_black_seconds,
-            pixel_threshold=black_pixel_threshold, context=context), origin)
+        black = detect_black_frames(path, min_duration_seconds=min_black_seconds,
+            pixel_threshold=black_pixel_threshold, timeline_origin_seconds=origin, context=context)
+        findings = black.findings
     elif phase == "truncation":
         findings, unavailable, decoded_streams = _inspect_truncation(path, payload=payload, origin=origin,
             tolerance_seconds=truncation_tolerance_seconds, context=context)
@@ -763,7 +834,8 @@ def inspect_quality_phase(path, phase, checkpoints, *, context=None,
         raise ValueError("未知质检阶段")
     return {"findings": [asdict(item) for item in findings],
             "unavailable": [asdict(item) for item in unavailable], "clipping_summary": summary,
-            **({"decoded_streams": decoded_streams} if decoded_streams is not None else {})}
+            **({"decoded_streams": decoded_streams} if decoded_streams is not None else {}),
+            **({"black_frame_summary": black.summary, "diagnostic_bytes": black.diagnostic_bytes} if black is not None else {})}
 
 
 def _report_from_phases(path, checkpoints, *,
@@ -785,6 +857,7 @@ def _report_from_phases(path, checkpoints, *,
         engine="ffmpeg/ffprobe present" if shutil.which("ffmpeg") else "ffmpeg missing",
         clip_full_scale_duty_threshold=clip_full_scale_duty_threshold,
         timeline_origin_seconds=round(origin, 3), clipping_summary=checkpoints["clipping"]["clipping_summary"],
+        black_frame_summary=checkpoints["black_frames"].get("black_frame_summary"),
         video_duration_seconds=_stream_duration_seconds(_stream_of(payload, "video")),
         video_frame_rate=(_stream_of(payload, "video") or {}).get("avg_frame_rate"))
 
@@ -801,7 +874,7 @@ def _clipping_summary(
     首末区间和一个有界的列举。列举超上限时显式带 `events_truncated` 和
     `truncated_event_count`，绝不静默丢弃。
     """
-    events = _ClippingEvents(event_limit=limit, findings_limit=findings_limit)
+    events = _IntervalEvents(event_limit=limit, findings_limit=findings_limit)
     for finding in findings:
         events.add(finding)
     return events.summary(duty)
@@ -863,4 +936,58 @@ def quality_report_evidence(report: QualityReport) -> dict:
             for item in report.unavailable
         ],
         "clipping_summary": report.clipping_summary,
+        "black_frame_summary": report.black_frame_summary,
     }
+
+
+def fit_quality_result(result: dict, max_bytes: int, *, check=None) -> dict:
+    """Fit examples to a real JSON envelope without dropping complete totals.
+
+    Identity, coverage, unavailable findings, measured facts and non-aggregated
+    finding kinds are immutable here. Only black/clipping examples are optional;
+    their summaries always retain the full detected count and interval totals.
+    """
+    def size(value):
+        if check is not None:
+            check()
+        return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+
+    if size(result) <= max_bytes:
+        return result
+    key = "evidence" if "evidence" in result else "data"
+    payload = result.get(key, {})
+    summaries = {QUALITY_KIND_BLACK_FRAME: "black_frame_summary", QUALITY_KIND_CLIPPING: "clipping_summary"}
+    findings = payload.get("findings", [])
+    optional = {kind for kind, summary_key in summaries.items() if payload.get(summary_key) is not None}
+    count = sum(item["kind"] in optional for item in findings)
+
+    def candidate(keep):
+        selected, used = [], 0
+        for finding in findings:
+            if finding["kind"] not in optional or used < keep:
+                selected.append(finding)
+            if finding["kind"] in optional:
+                used += 1
+        value = {**payload, "findings": selected}
+        for kind in optional:
+            summary_key = summaries[kind]
+            summary = dict(payload[summary_key])
+            examples = sum(item["kind"] == kind for item in selected)
+            events = summary["events"][:keep]
+            summary.update(findings_event_limit=examples, findings_truncated=summary["event_count"] > examples,
+                findings_truncated_count=max(0, summary["event_count"] - examples), events=events,
+                event_list_limit=len(events), events_truncated=summary["event_count"] > len(events),
+                truncated_event_count=max(0, summary["event_count"] - len(events)))
+            value[summary_key] = summary
+        return {**result, key: value}
+
+    low, high = 0, count
+    if not optional or size(candidate(0)) > max_bytes:
+        raise ValueError("质检必要来源、测量和完整摘要超过报告包容量，不能截断或判为通过")
+    while low < high:
+        middle = (low + high + 1) // 2
+        if size(candidate(middle)) <= max_bytes:
+            low = middle
+        else:
+            high = middle - 1
+    return candidate(low)

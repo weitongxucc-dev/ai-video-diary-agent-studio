@@ -18,8 +18,9 @@ from app.device_runtime import RuntimeUnavailable
 from app.montage import creation_task_montage_plan_from_payload
 from app.production import content_readable
 from app.quality_inspection import final_quality_check_payload
+from app.quality_checks import fit_quality_result
 from app.quality_worker_runtime import (QualityBudget, file_identity, source_receipt,
-    QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request, quality_unit_key, quality_stream_resources)
+    QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request, quality_unit_key, quality_stream_resources, quality_request_byte_limit)
 
 
 QUALITY_KIND = "quality_check"
@@ -261,11 +262,12 @@ class QualityInspectionUseCase:
             if request["phase"] != "finalize":
                 if not isinstance(result.get("data"), dict):
                     raise ValueError("质检阶段缺少有限检查结果")
-                # All persisted phase summaries must fit the same sealed report
+                # A fixed finite set of phase summaries fits the sealed protocol
                 # envelope. No PCM, frame list, or exported hash state is stored.
                 candidate = {**request["checkpoints"], request["phase"]: result["data"]}
-                if len(json.dumps(candidate, ensure_ascii=False, allow_nan=False).encode()) > budget.max_report_bytes:
-                    raise ValueError("质检阶段累计摘要超过本次报告上限")
+                prefix_limit = quality_request_byte_limit(request)
+                if len(json.dumps(candidate, ensure_ascii=False, allow_nan=False).encode()) > prefix_limit:
+                    raise ValueError("质检阶段累计摘要超过有限协议包容量")
                 return
         if (not isinstance(result.get("evidence"), dict)
                 or result["evidence"].get("status") not in {"clean", "issues_found", "unavailable"}):
@@ -293,7 +295,12 @@ class QualityInspectionUseCase:
                 evidence.setdefault('unavailable', []).append({'kind': 'delivery_duration',
                     'reason': '缺少实际视频时基或帧率，不能证明交付时长', 'status': 'unavailable'})
 
-        if len(json.dumps(result, ensure_ascii=False).encode()) > budget.max_report_bytes:
+        if request.get("protocol") == QUALITY_STREAM_PROTOCOL:
+            bounded = fit_quality_result(result, budget.max_report_bytes)
+            if bounded is not result:
+                result.clear()
+                result.update(bounded)
+        elif len(json.dumps(result, ensure_ascii=False).encode()) > budget.max_report_bytes:
             raise ValueError("包含交付时长判断的报告超过本次许可上限")
 
     def complete_result(self, connection, job, check_id, result):

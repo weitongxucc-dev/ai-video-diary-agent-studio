@@ -183,7 +183,7 @@ def final_quality_check_payload(record: dict | None, plan: CreationTaskMontagePl
         "check_state": "none", "result_status": None, "stale": False,
         "check_id": None, "timeline_version_id": timeline_version_id,
         "render_ref": None, "checked_at": None, "error": None,
-        "findings": [], "unavailable": [], "clipping_summary": None,
+        "findings": [], "unavailable": [], "clipping_summary": None, "black_frame_summary": None,
         "validation_scope": "deterministic_media_errors_only",
     }
     if record is None:
@@ -214,4 +214,5 @@ def final_quality_check_payload(record: dict | None, plan: CreationTaskMontagePl
     ]
     payload["unavailable"] = evidence["unavailable"]
     payload["clipping_summary"] = evidence.get("clipping_summary")
+    payload["black_frame_summary"] = evidence.get("black_frame_summary")
     return payload

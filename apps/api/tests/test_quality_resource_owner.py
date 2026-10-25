@@ -416,7 +416,7 @@ def test_streaming_frames_reject_unterminated_record_before_total_output_quota()
             context=StreamingQualityFixture(b'pts_time=' + b'9' * 4096 + b'\n', chunk_size=8192))
 
 
-@pytest.mark.parametrize('outcome', ['complete', 'quota', 'cancel', 'stream', 'stream_cancel', 'stream_deadline'])
+@pytest.mark.parametrize('outcome', ['complete', 'quota', 'cancel', 'stream', 'stream_cancel', 'stream_deadline', 'stream_stderr', 'stream_diagnostics'])
 def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, outcome):
     import time
     from app import quality_worker_runtime as worker
@@ -430,7 +430,8 @@ def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, 
 
     class Process:
         def __init__(self):
-            self.stdout, self.stderr = pipe(payload), pipe(b'')
+            is_stderr = outcome in {'stream_stderr', 'stream_diagnostics'}
+            self.stdout, self.stderr = pipe(b'' if is_stderr else payload), pipe(payload if is_stderr else b'')
             self.returncode, self.killed = None, False
         def poll(self):
             return self.returncode
@@ -443,7 +444,8 @@ def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, 
     process = Process()
     monkeypatch.setattr(worker.subprocess, 'Popen', lambda *args, **kwargs: process)
     context = object.__new__(worker.QualityWorkerContext)
-    context.budget = replace(fixture_budget(), max_pcm_bytes=100 if outcome in {'quota', 'stream', 'stream_cancel'} else 200)
+    context.budget = replace(fixture_budget(), max_pcm_bytes=100 if outcome in {'quota', 'stream', 'stream_cancel'} else 200,
+        max_stderr_bytes=100 if outcome in {'stream_stderr', 'stream_diagnostics'} else 1024)
     context.resources = {'read_mode': 'stream'} if outcome.startswith('stream') else None
     context.processing = []
     context.deadline, context._verified_tools = time.monotonic() + 3, {'ffmpeg'}
@@ -457,22 +459,26 @@ def test_streaming_worker_drains_with_bounded_output_and_cleans_up(monkeypatch, 
         if outcome == 'stream_deadline':
             context.deadline = time.monotonic() - 1
 
-    if outcome in {'complete', 'stream'}:
-        result = context.run(['ffmpeg', '-ar', '48000'], 0 if outcome == 'stream' else 2, pcm=True, stdout_consumer=consume)
+    consumers = {'stderr_consumer': consume} if outcome == 'stream_stderr' else {'pcm': True, 'stdout_consumer': consume}
+    if outcome in {'complete', 'stream', 'stream_stderr'}:
+        result = context.run(['ffmpeg', '-ar', '48000'], 0 if outcome == 'stream' else 2, **consumers)
         assert result.stdout == b'' and consumed == len(payload)
         assert not process.killed
     else:
         with pytest.raises(worker.QualityWorkerError, match='输出超过|cancelled|总时限'):
-            context.run(['ffmpeg', '-ar', '48000'], 2, pcm=True, stdout_consumer=consume)
+            context.run(['ffmpeg', '-ar', '48000'], 2, **consumers)
         assert process.killed
     assert process.stdout.closed and process.stderr.closed
     if outcome == 'stream':
         assert context.processing[0]['stdout_bytes'] == 200 > context.budget.max_pcm_bytes
         assert context.processing[0]['complete'] is True
+    if outcome == 'stream_stderr':
+        assert context.processing[0]['stderr_bytes'] == 200 > context.budget.max_stderr_bytes
 
 
-def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, granted_media):
-    """Two 0.3s synthetic clips through an actual grant, not device calibration."""
+@pytest.mark.parametrize("case", ["normal", "clipped", "black"])
+def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, granted_media, case):
+    """One 0.3s synthetic clip through an actual grant, not device calibration."""
     import shutil
     import sys
     from dataclasses import asdict
@@ -492,7 +498,7 @@ def test_streaming_native_compact_frames_and_pcm_agree_on_tiny_media(tmp_path, g
         max_tool_bytes=max(Path(path).stat().st_size for path in binaries.values()),
         ffmpeg_path=binaries['ffmpeg'], ffprobe_path=binaries['ffprobe'], **identities)
     request = tmp_path / 'streaming-native.json'
-    request.write_text(json.dumps({'budget': asdict(budget), 'root': str(tmp_path)}))
+    request.write_text(json.dumps({'budget': asdict(budget), 'root': str(tmp_path), 'case': case}))
     program = '''
 import json, sys, time
 from pathlib import Path
@@ -504,15 +510,16 @@ import hashlib
 request=json.loads(Path(sys.argv[1]).read_text())
 context=QualityWorkerContext(QualityBudget(**request['budget']), time.monotonic()+15)
 reports=[]
-for name, amplitude in [('normal', .5), ('clipped', 3)]:
+for name, amplitude in [('normal', .5), ('clipped', 3), ('black', .5)]:
+    if name != request['case']: continue
     target=Path(request['root'])/(name+'.mkv')
     result=context.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
-        'testsrc=size=64x48:rate=10:duration=0.3','-f','lavfi','-i',
+        ('color=black:size=64x48:rate=10:duration=0.3' if name=='black' else 'testsrc=size=64x48:rate=10:duration=0.3'),'-f','lavfi','-i',
         f'aevalsrc={amplitude}*sin(2*PI*440*t):s=48000:d=0.3',
         '-c:v','ffv1','-threads:v','1','-pix_fmt','yuv420p','-c:a','pcm_s16le',str(target)],3)
     if result.returncode: raise RuntimeError(result.stderr.decode())
     report=quality_report_evidence(inspect_media_quality(target,context=context))
-    if name == 'normal':
+    if name in {'normal', 'black'}:
         with target.open('rb') as source_file:
             sha = hashlib.file_digest(source_file, 'sha256').hexdigest()
         source=dict(workspace_id='fixture', task_id='fixture', timeline_version_id='v1', source_ref='fixture.mkv',
@@ -535,7 +542,7 @@ for name, amplitude in [('normal', .5), ('clipped', 3)]:
                 if phase=='clipping':
                     assert response['data']['decoded_pcm']['frame_sample_mapping_matches'] is True
                     assert [p['sample_count'] for p in response['data']['decoded_pcm']['passes']]==[14400,14400]
-    reports.append({key:report[key] for key in ('status','unavailable','clipping_summary')})
+    reports.append({key:report[key] for key in ('status','unavailable','clipping_summary','black_frame_summary')})
 print(json.dumps(reports))
 '''
     with granted_media() as context:
@@ -544,13 +551,20 @@ print(json.dumps(reports))
             max_stdout_bytes=64 * 1024, max_stderr_bytes=64 * 1024,
             cancel_event=context.cancel_event)
     assert result.returncode == 0, result.stderr.decode()
-    normal, clipped = json.loads(result.stdout)
-    assert normal['status'] == 'clean'
-    assert clipped['unavailable'] == []
-    assert clipped['clipping_summary']['event_count'] > 0
-    assert clipped['clipping_summary']['full_scale_duty'] > .7
-    assert clipped['clipping_summary']['first_start_seconds'] >= 0
-    assert clipped['clipping_summary']['last_end_seconds'] <= .301
+    report, = json.loads(result.stdout)
+    if case == "normal":
+        assert report['status'] == 'clean'
+    elif case == "clipped":
+        assert report['unavailable'] == []
+        assert report['clipping_summary']['event_count'] > 0
+        assert report['clipping_summary']['full_scale_duty'] > .7
+        assert report['clipping_summary']['first_start_seconds'] >= 0
+        assert report['clipping_summary']['last_end_seconds'] <= .301
+    else:
+        assert report['status'] == 'issues_found'
+        summary = report['black_frame_summary']
+        assert summary['event_count'] == 1
+        assert (summary['first_start_seconds'], summary['last_end_seconds'], summary['total_black_seconds']) == (0, .2, .2)
 
 
 def test_quality_phase_cancellation_preserves_prefix_without_completing_current_phase(tmp_path):
@@ -593,3 +607,85 @@ def test_quality_phase_cancellation_preserves_prefix_without_completing_current_
         assert calls == ["metadata", "black_frames"]
     finally:
         assert runtime.stop(1)
+
+
+def test_black_event_stream_keeps_all_totals_and_bounds_diagnostics_and_report():
+    from app.quality_checks import (detect_black_frames, QualityCheckError, QualityFinding,
+        QualityReport, quality_report_evidence, fit_quality_result, _BlackFrameLines, _clipping_summary)
+    import subprocess
+
+    count = 2051
+    raw = b"codec ready\n" + b"".join(
+        f"[blackdetect @ 0x1] black_start:{2 + i * .4:.3f} black_end:{2 + i * .4 + .2:.3f} black_duration:0.2\n".encode()
+        for i in range(count))
+
+    class Context:
+        budget = replace(fixture_budget(), max_stderr_bytes=16)
+        def run(self, command, timeout, *, stderr_consumer):
+            for offset in range(0, len(raw), 13):
+                stderr_consumer(raw[offset:offset+13])
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    inspected = detect_black_frames("declared.mp4", timeline_origin_seconds=2, context=Context())
+    summary = inspected.summary
+    assert inspected.diagnostic_bytes == len(b"codec ready\n")
+    assert summary['event_count'] == count
+    assert summary['total_black_seconds'] == pytest.approx(count * .2)
+    assert (summary['first_start_seconds'], summary['last_end_seconds']) == (0, (count-1)*.4+.2)
+    assert len(inspected.findings) < count and summary['findings_truncated']
+    assert len(summary['events']) <= summary['event_list_limit']
+
+    clipped = [QualityFinding('clipping', 1, 1.2, 'declared clipped samples')]
+    tail = QualityFinding('truncation', 898, 900, 'decoded tail gap')
+    report = QualityReport("declared.mp4", tuple(inspected.findings + clipped + [tail]), (), 900, "declared-port",
+        clipping_summary=_clipping_summary(clipped, .2), black_frame_summary=summary)
+    original = {"evidence": quality_report_evidence(report), "receipt": {"check_id": "original", "render_ref": "a"*64},
+        "worker_sha256": "b"*64}
+    bounded = fit_quality_result(original, 2200)
+    assert len(json.dumps(bounded, ensure_ascii=False).encode()) <= 2200
+    assert bounded['receipt'] == original['receipt'] and bounded['worker_sha256'] == original['worker_sha256']
+    assert bounded['evidence']['status'] == 'issues_found' and not bounded['evidence']['is_clean']
+    assert bounded['evidence']['black_frame_summary']['event_count'] == count
+    assert bounded['evidence']['black_frame_summary']['total_black_seconds'] == pytest.approx(count * .2)
+    assert bounded['evidence']['clipping_summary']['event_count'] == 1
+    assert any(item['kind']=='truncation' and item['detail']==tail.detail for item in bounded['evidence']['findings'])
+    kept = sum(f['kind']=='black_frame' for f in bounded['evidence']['findings'])
+    assert bounded['evidence']['black_frame_summary']['findings_truncated_count'] == count-kept
+    assert QualityReport('declared', (), (), 900, 'declared-port', black_frame_summary=summary).status == 'issues_found'
+    with pytest.raises(ValueError, match='不能截断'):
+        fit_quality_result(original, 1)
+    negative_clock = _BlackFrameLines(16, origin=-1, example_bytes=1024)
+    negative_clock.feed(b'[blackdetect @ 0x1] black_start:-1 black_end:-.5 black_duration:5e-1\n')
+    assert (negative_clock.events.examples[0].start_seconds, negative_clock.events.examples[0].end_seconds) == (0, .5)
+    lines = _BlackFrameLines(16, example_bytes=1024)
+    with pytest.raises(QualityCheckError, match='诊断输出'):
+        lines.feed(b'genuine decoder error\n')
+    with pytest.raises(QualityCheckError, match='诊断输出'):
+        _BlackFrameLines(16, example_bytes=1024).feed(b'metadata: black_start:0 black_end:1 black_duration:1\n')
+    with pytest.raises(QualityCheckError, match='invalid interval'):
+        _BlackFrameLines(16, example_bytes=1024).feed(b'[blackdetect @ 0x1] black_start:broken\n')
+    with pytest.raises(QualityCheckError, match='bounded protocol'):
+        _BlackFrameLines(16, example_bytes=1024).feed(b'9'*4096)
+    class TimedOut(Context):
+        def run(self, command, timeout, **kwargs):
+            raise subprocess.TimeoutExpired(command, timeout)
+    with pytest.raises(QualityCheckError, match='检查超时'):
+        detect_black_frames('declared.mp4', context=TimedOut())
+
+
+def test_sealed_phase_envelope_preserves_multiple_bounded_reports():
+    from dataclasses import asdict
+    from app.quality_worker_runtime import QUALITY_STREAM_PROTOCOL, quality_request_byte_limit
+    source = _unit_source(dict(workspace_id='local', task_id='task', timeline_version_id='v1',
+        source_ref='fixture.mp4', render_ref='a'*64))
+    budget = replace(fixture_budget(), max_report_bytes=2048)
+    prefix = {'metadata': {'declared_metadata': 'm'*1200}, 'black_frames': {'declared_summary': 'b'*1200}}
+    sealed = {'protocol': QUALITY_STREAM_PROTOCOL, 'budget': asdict(budget), 'source': source, 'check_id': 'original'}
+    request = quality_phase_request(sealed, {'_phases': prefix})
+    result = metadata_result(request)
+    service = object.__new__(QualityInspectionUseCase)
+    service.validate_result(request, result)
+    assert len(json.dumps(prefix).encode()) > budget.max_report_bytes
+    assert len(json.dumps(request).encode()) <= quality_request_byte_limit(request)
+    assert quality_request_byte_limit(request) == len(QUALITY_PHASES)*budget.max_report_bytes
+    assert quality_request_byte_limit({**request, 'protocol':'quality_phases_v1'}) == budget.max_report_bytes

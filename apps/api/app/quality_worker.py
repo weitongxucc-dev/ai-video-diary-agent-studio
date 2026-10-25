@@ -87,7 +87,7 @@ def inspect_request(request: dict) -> dict:
                     "frame_sample_mapping_matches": (runs[0]["stdout_bytes"] == prior["sample_count"] * 2
                         and runs[0]["output_sample_rate"] == prior["sample_rate"]
                         if runs and prior and prior["sample_count"] is not None else None)}
-        return result
+        return quality_checks.fit_quality_result(result, budget.max_report_bytes, check=context.check) if streaming else result
     before = hash_file(path, check=context.check, max_bytes=budget.max_input_bytes)
     if before != source["render_ref"]:
         raise QualityWorkerError("成片与登记产物不匹配，请重新生成。")
