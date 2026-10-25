@@ -380,7 +380,17 @@ export type CreationTaskVoiceOption = {
     runnable: boolean;
     runnable_reason: string | null;
 };
+export type CreationTaskQualityContinuation = {
+    job_id: string;
+    failed_request_id: string | null;
+    phase: string;
+    completed_phases: string[];
+    can_request: boolean;
+    reason_code: "actor_unavailable" | "runtime_unavailable" | "original_actor_required" | "source_changed" | "policy_unavailable" | "algorithm_changed" | "request_in_flight" | "failed_request_unavailable" | null;
+    release_check: "on_submit";
+};
 export type CreationTaskQualityCheck = {
+    continuation: CreationTaskQualityContinuation | null;
     check_state: "none" | "checking" | "failed" | "done";
     result_status: "clean" | "issues_found" | "unavailable" | null;
     stale: boolean;

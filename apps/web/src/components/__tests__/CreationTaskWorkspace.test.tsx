@@ -5057,7 +5057,7 @@ it('shows complete black-frame totals separately from samples and keeps delivery
   const check:import('@/lib/types').CreationTaskQualityCheck={check_state:'done',result_status:'issues_found',stale:false,
     check_id:'quality-check',timeline_version_id:'version',render_ref:'render',checked_at:'2026-10-24T00:00:00Z',error:null,
     findings:[{kind:'black_frame',start_seconds:0,end_seconds:.1,duration_seconds:.1,detail:'已列举的黑帧片段',clip_ids:['clip-1']},durationFinding],unavailable:[],
-    clipping_summary:null,black_frame_summary:{event_count:3,total_black_seconds:.3,first_start_seconds:0,last_end_seconds:2.1,
+    continuation:null,clipping_summary:null,black_frame_summary:{event_count:3,total_black_seconds:.3,first_start_seconds:0,last_end_seconds:2.1,
       event_list_limit:2,events:[{start_seconds:0,end_seconds:.1,duration_seconds:.1},{start_seconds:1,end_seconds:1.1,duration_seconds:.1}],
       events_truncated:true,truncated_event_count:1,findings_event_limit:1,findings_truncated:true,findings_truncated_count:2},
     validation_scope:'deterministic_media_errors_only'};

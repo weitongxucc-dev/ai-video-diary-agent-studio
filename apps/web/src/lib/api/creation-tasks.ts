@@ -176,6 +176,9 @@ export async function getCreationTaskQualityCheck(taskId: string): Promise<impor
 export function checkCreationTaskQuality(taskId: string): Promise<import("../types").CreationTaskQualityCheck> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/quality-check`, { method: "POST", body: JSON.stringify({}) });
 }
+export function continueCreationTaskQuality(taskId: string, input: { job_id: string; failed_request_id: string }): Promise<{ check_id: string; job_id: string; request_id: string }> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/quality-check/continue`, { method: "POST", body: JSON.stringify(input) });
+}
 export function previewCreationTaskEdit(taskId: string, input: {
     raw_command: string;
     context_stage: string;
