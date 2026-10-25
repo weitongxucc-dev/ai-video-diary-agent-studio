@@ -18,7 +18,7 @@ from app.voice_clone import (
 )
 
 
-def _provider(tmp_path: Path, responder):
+def _provider(tmp_path: Path, responder, *, temporary_root=None):
     runtime_python = tmp_path / "python"
     worker = tmp_path / "worker.py"
     model = tmp_path / "model"
@@ -36,6 +36,7 @@ def _provider(tmp_path: Path, responder):
         runtime_python_path=runtime_python,
         worker_path=worker,
         model_path=model,
+        temporary_root=temporary_root,
         runner=runner,
     )
 
@@ -613,3 +614,19 @@ def test_granted_qwen_lower_io_priority_is_process_scoped_and_offline(tmp_path, 
     assert options["output_paths"] == output_paths
     assert voices.os.environ["RAYON_NUM_THREADS"] == "64"
     assert not any(key.endswith("KEY") for key in options["env"])
+
+
+def test_voice_catalog_factory_binds_declared_temporary_and_catalog_cache_roots(tmp_path):
+    from types import SimpleNamespace
+    from app.voice_clone import voice_clone_provider_from_catalog
+    original = _provider(tmp_path, lambda *_: None)
+    catalog = SimpleNamespace(status=lambda _model: SimpleNamespace(ready=True,
+        runtime_python_path=original.runtime_python_path,worker_path=original.worker_path,
+        model_path=original.model_path))
+    declared = tmp_path / 'device-temporary'
+    provider = voice_clone_provider_from_catalog(catalog,temporary_root=declared)
+    assert provider.temporary_root == declared.resolve()
+    assert provider.cache_root == (original.model_path.parent / '.cache').resolve()
+    assert provider.runtime_python_path == original.runtime_python_path
+    assert provider.worker_path == original.worker_path and provider.model_path == original.model_path
+    assert not declared.exists()  # Binding alone does not start execution or create work directories.

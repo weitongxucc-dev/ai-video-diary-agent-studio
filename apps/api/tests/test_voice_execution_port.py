@@ -101,10 +101,14 @@ def test_cancelled_grant_never_reaches_adapter(tmp_path, narration_input):
     assert provider.context is None and not (tmp_path / "output").exists()
 
 
-def test_qwen_granted_port_requires_context_and_never_uses_offline_runner(tmp_path):
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_qwen_granted_port_requires_context_and_never_uses_offline_runner(tmp_path, explicit_root):
     def forbidden(*args):
         raise AssertionError("must not use offline runner")
-    provider = _provider(tmp_path, forbidden)
+    declared_root = tmp_path / "nested" / ".." / "declared-temporary" if explicit_root else None
+    provider = _provider(tmp_path, forbidden, temporary_root=declared_root)
+    expected_root = declared_root.resolve() if explicit_root else (tmp_path / ".cache" / "tmp").resolve()
+    assert provider.temporary_root == expected_root and provider.cache_root == (tmp_path / ".cache").resolve()
     reference = tmp_path / "reference.wav"
     _write_wav(reference)
     kwargs = dict(text="Hello.", reference_audio_path=reference, reference_text="Reference.",
@@ -115,7 +119,13 @@ def test_qwen_granted_port_requires_context_and_never_uses_offline_runner(tmp_pa
     calls = []
     def run(command, **options):
         calls.append((command, options))
-        request = json.loads(Path(command[command.index("--request") + 1]).read_text())
+        request_path = Path(command[command.index("--request") + 1])
+        response_path = Path(command[command.index("--response") + 1])
+        assert request_path.parent.parent == expected_root and response_path.parent == request_path.parent
+        assert options["env"]["TMPDIR"] == str(expected_root)
+        assert options["env"]["XDG_CACHE_HOME"] == str(provider.cache_root)
+        assert options["env"]["HF_HOME"] == str(provider.cache_root / "huggingface")
+        request = json.loads(request_path.read_text())
         _write_wav(Path(request["output_path"]))
         Path(command[command.index("--response") + 1]).write_text(json.dumps({
             "schema_version": 1, "model_id": provider.model_id, "audio_path": request["output_path"],

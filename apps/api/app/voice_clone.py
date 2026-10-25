@@ -153,11 +153,15 @@ class Qwen3TTSSubprocessProvider:
         runtime_python_path: str | Path,
         worker_path: str | Path,
         model_path: str | Path,
+        temporary_root: str | Path | None = None,
         runner: Callable[[list[str]], None] | None = None,
     ) -> None:
         self.runtime_python_path = Path(runtime_python_path).expanduser()
         self.worker_path = Path(worker_path).expanduser()
         self.model_path = Path(model_path).expanduser()
+        self.cache_root = (self.model_path.parent / ".cache").resolve()
+        self.temporary_root = (Path(temporary_root).expanduser().resolve()
+                               if temporary_root is not None else self.cache_root / "tmp")
         self._runner = runner or self._run_command
 
     @property
@@ -214,7 +218,8 @@ class Qwen3TTSSubprocessProvider:
         if not reference.is_file() or reference.suffix.lower() != ".wav":
             raise VoiceCloneError("声音参考文件必须是存在的 WAV 文件")
         output.parent.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix="ai_video_voice_") as temporary_dir:
+        self.temporary_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix="ai_video_voice_", dir=self.temporary_root) as temporary_dir:
             request_path = Path(temporary_dir) / "request.json"
             response_path = Path(temporary_dir) / "response.json"
             request_path.write_text(
@@ -284,8 +289,8 @@ class Qwen3TTSSubprocessProvider:
         )
 
     def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
-        cache_root = self.model_path.parent / ".cache"
-        temporary_root = cache_root / "tmp"
+        cache_root = self.cache_root
+        temporary_root = self.temporary_root
         temporary_root.mkdir(parents=True, exist_ok=True)
         environment = (dict(os.environ) if grant_context is None else {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -324,7 +329,7 @@ class Qwen3TTSSubprocessProvider:
             )
 
 
-def voice_clone_provider_from_catalog(catalog: ModelCatalog) -> VoiceCloneProvider:
+def voice_clone_provider_from_catalog(catalog: ModelCatalog, *, temporary_root: str | Path | None = None) -> VoiceCloneProvider:
     status = catalog.status(QWEN3_TTS_06B_BASE_8BIT)
     if not status.ready or not status.runtime_python_path or not status.worker_path:
         return UnavailableVoiceCloneProvider(status.message)
@@ -332,6 +337,7 @@ def voice_clone_provider_from_catalog(catalog: ModelCatalog) -> VoiceCloneProvid
         runtime_python_path=status.runtime_python_path,
         worker_path=status.worker_path,
         model_path=status.model_path,
+        temporary_root=temporary_root,
     )
 
 
