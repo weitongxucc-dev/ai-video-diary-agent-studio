@@ -341,7 +341,7 @@ export type CreationTaskQualityCheck = {
     checked_at: string | null;
     error: string | null;
     findings: {
-        kind: "black_frame" | "truncation" | "clipping" | "timestamp_offset";
+        kind: "black_frame" | "truncation" | "clipping" | "timestamp_offset" | "delivery_duration";
         start_seconds: number;
         end_seconds: number;
         duration_seconds: number;
@@ -359,6 +359,23 @@ export type CreationTaskQualityCheck = {
         first_start_seconds: number;
         last_end_seconds: number;
         full_scale_duty: number | null;
+        event_list_limit: number;
+        events: {
+            start_seconds: number;
+            end_seconds: number;
+            duration_seconds: number;
+        }[];
+        events_truncated: boolean;
+        truncated_event_count: number;
+        findings_event_limit: number;
+        findings_truncated: boolean;
+        findings_truncated_count: number;
+    } | null;
+    black_frame_summary: {
+        event_count: number;
+        total_black_seconds: number;
+        first_start_seconds: number;
+        last_end_seconds: number;
         event_list_limit: number;
         events: {
             start_seconds: number;

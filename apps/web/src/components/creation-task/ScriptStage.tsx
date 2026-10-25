@@ -240,6 +240,7 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
                 title: submittedDraft.title,
                 sections: submittedDraft.sections,
                 expected_updated_at: submittedDraft.updated_at,
+                edit_mode: "replace_all",
             });
             setDraft((current) => current === submittedDraft
                 ? saved

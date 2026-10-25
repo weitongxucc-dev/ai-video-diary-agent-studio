@@ -357,7 +357,7 @@ beforeEach(() => {
   const qualityCheck: CreationTaskQualityCheck = {
     check_state: "none", result_status: null, stale: false, check_id: null,
     timeline_version_id: "timeline-version-1", render_ref: null, checked_at: null,
-    error: null, findings: [], unavailable: [], clipping_summary: null,
+    error: null, findings: [], unavailable: [], clipping_summary: null, black_frame_summary: null,
     validation_scope: "deterministic_media_errors_only",
   };
   mocks.getQualityCheck.mockResolvedValue(qualityCheck);

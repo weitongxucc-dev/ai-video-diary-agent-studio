@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getCreationTaskNarrationVoiceSelection } from "../api/creation-tasks";
+import { getCreationTaskNarrationVoiceSelection, saveAssistantScriptDraft, confirmCreationTaskScript } from "../api/creation-tasks";
 import {
   confirmCreationTaskTopic,
   CreationPlanApiError,
@@ -115,4 +115,22 @@ describe("creation-task topic API", () => {
     expect(fetch).toHaveBeenCalledWith("/api/creation-tasks/task%2F1/narration/voice/requests/original-request", expect.objectContaining({cache:"no-store"}));
     expect(fetch.mock.calls[0][1].method).toBeUndefined();
   });
+});
+
+it.each(['save','confirm'] as const)('preserves explicit replace_all intent for script %s without inventing it',async(action)=>{
+  const fetch=vi.fn().mockImplementation(async()=>new Response(JSON.stringify({})));
+  vi.stubGlobal('fetch',fetch);
+  const input={title:'完整文案',expected_updated_at:'2026-10-24T00:00:00Z',sections:[{
+    id:'section-1',title:'正文',content:'完整正文',visual_prompt:'完整画面',evidence_reference_ids:[],
+  }]};
+  const submit=(value:typeof input & {edit_mode?:'replace_all'})=>action==='save'
+    ? saveAssistantScriptDraft('task/1',value)
+    : confirmCreationTaskScript('task/1','script/1',value);
+  await submit({...input,edit_mode:'replace_all'});
+  await submit(input);
+  const [explicit,unspecified]=fetch.mock.calls;
+  expect(explicit[0]).toBe(action==='save'?'/api/creation-tasks/task%2F1/assistant/script-draft':'/api/creation-tasks/task%2F1/scripts/script%2F1/confirm');
+  expect(explicit[1].method).toBe('POST');
+  expect(JSON.parse(explicit[1].body)).toEqual({...input,edit_mode:'replace_all'});
+  expect(JSON.parse(unspecified[1].body)).toEqual(input);
 });

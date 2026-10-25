@@ -84,6 +84,7 @@ export function confirmCreationTaskScript(taskId: string, scriptId: string, inpu
     title: string;
     sections: CreationTaskScriptSection[];
     expected_updated_at: string;
+    edit_mode?: "replace_all";
 }): Promise<CreationTaskScriptsResponse> {
     return creationPlanRequest<CreationTaskScriptsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/confirm`, { method: "POST", body: JSON.stringify(input) });
 }
@@ -122,6 +123,7 @@ export function saveAssistantScriptDraft(taskId: string, input: {
     title: string;
     sections: CreationTaskScriptSection[];
     expected_updated_at?: string;
+    edit_mode?: "replace_all";
 }): Promise<Extract<CreationTaskScript, { sections_loaded: true }>> {
     return creationPlanRequest<Extract<CreationTaskScript, { sections_loaded: true }>>(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-draft`, { method: "POST", body: JSON.stringify(input) });
 }

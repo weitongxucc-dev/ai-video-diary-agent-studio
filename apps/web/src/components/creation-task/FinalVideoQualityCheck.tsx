@@ -6,6 +6,10 @@ import styles from "../CreationTaskWorkspace.module.css";
 import { errorDetails } from './request-errors';
 import { HomeCardDialog } from "../HomeCardDialog";
 import { Button } from "../ui/button";
+const findingLabels: Record<CreationTaskQualityCheck["findings"][number]["kind"], string> = {
+    black_frame: "黑帧", truncation: "尾部截断", clipping: "音频削波",
+    timestamp_offset: "起点时间戳错位", delivery_duration: "交付时长偏差",
+};
 export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate, compact = false }: {
     compact?: boolean;
     taskId: string;
@@ -73,7 +77,7 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
     const content = <section className={styles.qualityCheck} aria-label="成片质量检查">
     <div className={styles.qualityHeading}><strong role="status" aria-label="成片质量检查状态">{label}</strong>
       <button className={styles.secondaryButton} type="button" disabled={!outputUrl || submitting || current?.check_state === "checking"} onClick={() => void check()}>重新检查成片</button></div>
-    <p>检查黑帧、尾部截断、音频削波和起点时间戳错位；内容质量仍需人工确认。</p>
+    <p>检查黑帧、尾部截断、音频削波、起点时间戳错位和交付时长偏差；内容质量仍需人工确认。</p>
     {error || current?.error ? <p role="alert">{error ?? current?.error}</p> : null}
     {current?.checked_at ? <small>检查时间：{new Date(current.checked_at).toLocaleString()}</small> : null}
     {current?.check_state === "done" && current.clipping_summary ? <div aria-label="音频削平摘要">
@@ -85,10 +89,19 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
         削平区间摘要仅保留 {current.clipping_summary.event_list_limit} 条，另有 {current.clipping_summary.truncated_event_count} 段未在区间摘要中列举；总量仍完整。
       </p> : null}
     </div> : null}
+    {current?.check_state === "done" && current.black_frame_summary ? <div aria-label="黑帧摘要">
+      <p>黑帧共 {current.black_frame_summary.event_count} 段，累计 {current.black_frame_summary.total_black_seconds} 秒。</p>
+      {current.black_frame_summary.findings_truncated ? <p>
+        黑帧问题明细已限流至 {current.black_frame_summary.findings_event_limit} 条，另有 {current.black_frame_summary.findings_truncated_count} 段未逐条列出；总量包含这些事件。
+      </p> : null}
+      {current.black_frame_summary.events_truncated ? <p>
+        黑帧区间摘要仅保留 {current.black_frame_summary.event_list_limit} 条，另有 {current.black_frame_summary.truncated_event_count} 段未在区间摘要中列举；总量仍完整。
+      </p> : null}
+    </div> : null}
     {current?.findings.map((finding, index) => <article key={`${finding.kind}:${index}`}>
       <button type="button" onClick={() => { setDetailsOpen(false); onLocate(finding); }}>
         定位 {finding.start_seconds.toFixed(2)}–{finding.end_seconds.toFixed(2)} 秒
-      </button><span>{finding.detail}</span>
+      </button><strong>{findingLabels[finding.kind]}</strong><span>{finding.detail}</span>
     </article>)}
     {current?.unavailable.map((item, index) => <p key={`${item.kind}:${index}`}>
       检测不可用：{item.reason}</p>)}

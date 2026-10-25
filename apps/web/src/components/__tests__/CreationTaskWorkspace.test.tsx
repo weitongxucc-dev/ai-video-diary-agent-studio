@@ -997,7 +997,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByRole("button", { name: "确认文案" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "确认文案" }));
     await waitFor(() => expect(mocks.confirmScript).toHaveBeenCalledWith(task.id, draft.id, {
-      title: draft.title, expected_updated_at: draft.updated_at,
+      title: draft.title, expected_updated_at: draft.updated_at, edit_mode: "replace_all",
       sections: [{ ...draft.sections[0], content: rejected ? "这是全国第一。" : "一起开始吧。" }],
     }));
     if (rejected) {
@@ -5024,4 +5024,56 @@ it('ignores an old automatic edit read after the script version changes',async()
   expect(screen.getByLabelText('第 1 段正文')).toHaveValue('新版本正文');
   fireEvent.click(screen.getByRole('button',{name:'确认文案'}));
   expect(confirm).toHaveBeenCalledWith(expect.objectContaining({updated_at:newScript.updated_at,sections:[expect.objectContaining({content:'新版本正文'})]}));
+});
+
+it('sends explicit replace_all from the complete editor for save and confirmation at the saved version',async()=>{
+  const task={...baseTask,stage:'script' as const,stage_status:'waiting_for_user' as const,status:'waiting_for_user' as const,confirmed_script_id:null};
+  const draft:Extract<import('@/lib/types').CreationTaskScript,{sections_loaded:true}>={...sectionReaderScript(),task_id:task.id,
+    selection_status:'draft',sections_loaded:true,sections_total_count:1,
+    sections:[{id:'complete-section',title:'正文',content:'完整正文',visual_prompt:'完整画面',evidence_reference_ids:[]}]};
+  const saved={...draft,updated_at:'2026-10-24T00:05:00Z'};
+  const initial={...workspace(task),scripts:[draft]};
+  mocks.getWorkspace.mockResolvedValue(initial);
+  mocks.getAssistantScriptContext.mockResolvedValue({reply_origin:null,sources:[]});
+  mocks.saveScriptDraft.mockResolvedValue(saved);
+  mocks.confirmScript.mockResolvedValue({});
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await screen.findByLabelText('第 1 段正文');
+  fireEvent.click(screen.getByRole('button',{name:'保存草稿'}));
+  await waitFor(()=>expect(mocks.saveScriptDraft).toHaveBeenCalledWith(task.id,{
+    title:draft.title,sections:draft.sections,expected_updated_at:draft.updated_at,edit_mode:'replace_all',
+  }));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled());
+  fireEvent.click(screen.getByRole('button',{name:'确认文案'}));
+  await waitFor(()=>expect(mocks.confirmScript).toHaveBeenCalledWith(task.id,draft.id,{
+    title:saved.title,sections:saved.sections,expected_updated_at:saved.updated_at,edit_mode:'replace_all',
+  }));
+});
+
+it('shows complete black-frame totals separately from samples and keeps delivery-duration findings locatable',async()=>{
+  const durationFinding:import('@/lib/types').CreationTaskQualityCheck['findings'][number]={
+    kind:'delivery_duration',start_seconds:0,end_seconds:30,duration_seconds:30,detail:'交付目标为 45 秒，当前为 30 秒。',clip_ids:[],
+  };
+  const check:import('@/lib/types').CreationTaskQualityCheck={check_state:'done',result_status:'issues_found',stale:false,
+    check_id:'quality-check',timeline_version_id:'version',render_ref:'render',checked_at:'2026-10-24T00:00:00Z',error:null,
+    findings:[{kind:'black_frame',start_seconds:0,end_seconds:.1,duration_seconds:.1,detail:'已列举的黑帧片段',clip_ids:['clip-1']},durationFinding],unavailable:[],
+    clipping_summary:null,black_frame_summary:{event_count:3,total_black_seconds:.3,first_start_seconds:0,last_end_seconds:2.1,
+      event_list_limit:2,events:[{start_seconds:0,end_seconds:.1,duration_seconds:.1},{start_seconds:1,end_seconds:1.1,duration_seconds:.1}],
+      events_truncated:true,truncated_event_count:1,findings_event_limit:1,findings_truncated:true,findings_truncated_count:2},
+    validation_scope:'deterministic_media_errors_only'};
+  mocks.getQualityCheck.mockResolvedValue(check);
+  const onLocate=vi.fn();
+  const view=render(<FinalVideoQualityCheck taskId="task" versionId="version" outputUrl="/video" onLocate={onLocate}/>);
+  const summary=await screen.findByLabelText('黑帧摘要');
+  expect(summary).toHaveTextContent('黑帧共 3 段，累计 0.3 秒。');
+  expect(summary).toHaveTextContent('黑帧问题明细已限流至 1 条，另有 2 段未逐条列出');
+  expect(summary).toHaveTextContent('黑帧区间摘要仅保留 2 条，另有 1 段未在区间摘要中列举');
+  expect(screen.getByText('交付时长偏差')).toBeInTheDocument();
+  expect(screen.getByText(durationFinding.detail)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'定位 0.00–30.00 秒'}));
+  expect(onLocate).toHaveBeenCalledWith(durationFinding);
+  mocks.getQualityCheck.mockResolvedValue({...check,black_frame_summary:null});
+  view.rerender(<FinalVideoQualityCheck taskId="task" versionId="version" outputUrl="/new-video" onLocate={onLocate}/>);
+  await waitFor(()=>expect(screen.queryByLabelText('黑帧摘要')).not.toBeInTheDocument());
+  expect(await screen.findByText(durationFinding.detail)).toBeInTheDocument();
 });
