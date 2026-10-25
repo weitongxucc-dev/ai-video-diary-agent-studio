@@ -20,7 +20,7 @@ from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from
 from app.production import CreationTask, MediaAuthorityError
 from app.task_runtime import JobFailure, JobResult
 
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v21"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v22"
 
 
 class RenderRejected(Exception):

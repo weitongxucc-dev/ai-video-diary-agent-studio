@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import math
+import os
 import json
 import re
+import stat
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import subprocess
@@ -15,7 +17,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.device_scheduler import DeviceScheduler, Grant
+from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked
+
+
+AUDIO_MIX_CONTRACT_VERSION = 'audio-mix/v2'
 
 
 # FFmpeg loudnorm can emit NaN for fully silent input; preserve silence for encoders.
@@ -360,6 +365,7 @@ def build_audio_mix_command(
     *, solo_track_ids: set[str] | None = None, start_seconds: float = 0, end_seconds: float | None = None,
     probe_duration: Callable[[Path], float] | None = None,
     normalized_narration: dict[Path, Path] | None = None,
+    apply_master: bool = True,
 ) -> list[str]:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("音频时间线时长无效")
@@ -431,12 +437,14 @@ def build_audio_mix_command(
         mix(regular, "mixed")
     else:
         filters.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={duration_seconds}[mixed]")
-    filters.append(f"[mixed]alimiter=limit=0.95:level=false:latency=true,atrim=start={start_seconds}:end={end},asetpts=PTS-STARTPTS[out]")
-    command.extend(["-filter_complex", ";".join(filters), "-map", "[out]", "-c:a", "pcm_s16le", "-ar", "48000", str(output)])
+    master = "alimiter=limit=0.95:level=false:latency=true" if apply_master else "anull"
+    filters.append(f"[mixed]{master},atrim=start={start_seconds}:end={end},asetpts=PTS-STARTPTS[out]")
+    command.extend(["-filter_complex", ";".join(filters), "-map", "[out]", "-c:a",
+                    "pcm_s16le" if apply_master else "pcm_f32le", "-ar", "48000", str(output)])
     return command
 
 
-def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_sources):
+def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_sources, *, apply_master=True):
     """Bound the mixed PCM and any whole-source narration files together."""
     normalized = []
     if normalize_voice_sources:
@@ -450,11 +458,39 @@ def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_
                 raise ValueError("整源旁白归一化缺少已保存的时长，未处理媒体")
             normalized.append({"reference": source["reference"], "path": source["path"],
                                "duration_seconds": duration, "max_output_bytes": math.ceil(duration * 192000) + 65536})
-    mix_bytes = math.ceil(duration_seconds * 192000) + 65536
+    mix_bytes = math.ceil(duration_seconds * (192000 if apply_master else 384000)) + 65536
     return {"normalize_voice_sources": bool(normalize_voice_sources),
             "normalized_source_outputs": normalized, "mix_output_bytes": mix_bytes,
             "temporary_output_bytes": mix_bytes + sum(item["max_output_bytes"] for item in normalized),
             "output_duration_limit_seconds": max([duration_seconds, *(item["duration_seconds"] for item in normalized)])}
+
+
+def _measured_audio_outputs(output_paths, normalization_directory):
+    paths = set(map(Path, output_paths))
+    observed = set()
+    try:
+        if normalization_directory is not None:
+            def scan_error(error):
+                raise error
+            for parent, directories, files in os.walk(normalization_directory, onerror=scan_error, followlinks=False):
+                observed.update(Path(parent) / name for name in (*directories, *files))
+            paths.update(observed)
+        total = 0
+        for path in paths:
+            try:
+                info = path.lstat()
+            except FileNotFoundError as exc:
+                if path in observed:
+                    raise RecoveryBlocked('已产生音频输出在计量前消失，保留原消耗占用') from exc
+                continue  # An output planned before the encoder starts may never be created.
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise RecoveryBlocked('音频输出不是可核实的普通文件，不能按零结算')
+            total += info.st_size
+        return total
+    except OSError as exc:
+        raise RecoveryBlocked('音频中间输出无法完整量测，保留原消耗占用待核查') from exc
 
 
 def render_audio_mix(*args, **kwargs) -> Path:
@@ -466,6 +502,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
     threads = kwargs.pop("threads", None)
     normalize_voice_sources = kwargs.pop("normalize_voice_sources", False)
     produced_source_paths = {path.resolve() for path in kwargs.pop("produced_source_paths", ())}
+    output_measured = kwargs.pop("output_measured", None)
     if scheduler is None or grant is None:
         raise PermissionError("音轨渲染必须提供设备许可")
     if grant is not None:
@@ -481,32 +518,38 @@ def render_audio_mix(*args, **kwargs) -> Path:
                if normalize_voice_sources else nullcontext(None))
     with staging as directory:
         output_paths = [args[3]]
-        if directory is not None:
-            kwargs["normalized_narration"] = _render_narration_normalizations(
-                directory, args[0], args[2], kwargs.get("probe_duration") or probe_audio_source,
-                scheduler=scheduler, grant=grant, cancel_event=cancel_event,
-                deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
-                threads=threads, solo_track_ids=kwargs.get("solo_track_ids"), output_paths=output_paths)
-            produced_source_paths.update(path.resolve() for path in kwargs["normalized_narration"].values())
-        command = build_audio_mix_command(*args, **kwargs)
-        if grant is not None:
-            bounded = []
-            for argument in command:
-                if argument == "-i":
-                    bounded.extend(["-threads", str(threads)])
-                bounded.append(argument)
-            command = bounded
-            command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
-            mix_duration = kwargs.get("end_seconds") or args[1]
-            mix_duration -= kwargs.get("start_seconds", 0)
-            mix_ceiling = min(max_output_bytes, math.ceil(mix_duration * 192000) + 65536)
-            command[-1:-1] = ["-threads:a", str(threads), "-fs", str(mix_ceiling)]
-            _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
-                                       cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
-                                       output_paths=output_paths, max_output_file_bytes=max_output_bytes)
-            if Path(command[-1]).stat().st_size > mix_ceiling:
-                raise OSError("音轨中间产物超出本次受许可输出上限")
-        return Path(command[-1])
+        try:
+            if directory is not None:
+                kwargs["normalized_narration"] = _render_narration_normalizations(
+                    directory, args[0], args[2], kwargs.get("probe_duration") or probe_audio_source,
+                    scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+                    deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
+                    threads=threads, solo_track_ids=kwargs.get("solo_track_ids"), output_paths=output_paths)
+                produced_source_paths.update(path.resolve() for path in kwargs["normalized_narration"].values())
+            command = build_audio_mix_command(*args, **kwargs)
+            if grant is not None:
+                bounded = []
+                for argument in command:
+                    if argument == "-i":
+                        bounded.extend(["-threads", str(threads)])
+                    bounded.append(argument)
+                command = bounded
+                command[3:3] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
+                mix_duration = kwargs.get("end_seconds") or args[1]
+                mix_duration -= kwargs.get("start_seconds", 0)
+                pcm_bytes_per_second = 192000 if kwargs.get('apply_master', True) else 384000
+                mix_ceiling = min(max_output_bytes, math.ceil(mix_duration * pcm_bytes_per_second) + 65536)
+                command[-1:-1] = ["-threads:a", str(threads), "-fs", str(mix_ceiling)]
+                _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
+                                           cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
+                                           output_paths=output_paths, max_output_file_bytes=max_output_bytes)
+                if Path(command[-1]).stat().st_size > mix_ceiling:
+                    raise OSError("音轨中间产物超出本次受许可输出上限")
+            return Path(command[-1])
+        finally:
+            if output_measured is not None:
+                output_measured(_measured_audio_outputs(output_paths, directory))
+
 
 
 def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
@@ -683,6 +726,8 @@ def probe_audio_source(path: Path, *, scheduler=None, grant=None, cancel_event=N
 
 
 def _tempo_filters(rate: float) -> list[str]:
+    if rate == 1:
+        return []
     tempos = []
     remaining = rate
     while remaining > 2:

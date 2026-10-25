@@ -220,9 +220,14 @@ class PicturePreviewRenderer:
         declared = resources.get("audio_mix")
         if not isinstance(declared, dict):
             raise PermissionError("当前成片未封存音轨混音用途")
-        facts = self.audio.mix_facts(workspace_id, plan.task_id, plan.audio_timeline, plan.duration_seconds,
-            actor=actor, normalize_voice_sources=plan.narration_linkage_created_audio_timeline,
-            budget=context.scheduler.resources.budget.cpu_audio)
+        if declared.get('prepared_master') is not None:
+            job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
+            facts = self.audio.master_mix_facts(job, plan, actor=actor,
+                budget=context.scheduler.resources.budget.cpu_audio)
+        else:
+            facts = self.audio.mix_facts(workspace_id, plan.task_id, plan.audio_timeline, plan.duration_seconds,
+                actor=actor, normalize_voice_sources=plan.narration_linkage_created_audio_timeline,
+                budget=context.scheduler.resources.budget.cpu_audio)
         if "audio_mix_candidates" in resources:
             key = media_digest([plan.audio_timeline.model_dump(), plan.duration_seconds,
                 plan.narration_linkage_created_audio_timeline])
@@ -319,9 +324,13 @@ class PicturePreviewRenderer:
                         "deadline_monotonic": audio_context.deadline_monotonic,
                         "max_output_bytes": audio_resources["max_output_bytes"],
                         "threads": audio_resources["threads"]}
-                    render_audio_mix(plan.audio_timeline, plan.duration_seconds,
-                        lambda reference: source_paths[reference], mixed_audio,
-                        normalize_voice_sources=audio_resources["normalize_voice_sources"], **audio_options)
+                    prepared = audio_resources.get('prepared_master')
+                    if prepared is not None:
+                        mixed_audio = source_paths[prepared['logical_ref']]
+                    else:
+                        render_audio_mix(plan.audio_timeline, plan.duration_seconds,
+                            lambda reference: source_paths[reference], mixed_audio,
+                            normalize_voice_sources=audio_resources["normalize_voice_sources"], **audio_options)
                     audio_context.check()
                     if self.audio_mix_sources(workspace_id, plan, audio_context)[0] != audio_facts:
                         raise ValueError("混音期间音频来源或许可发生变化")

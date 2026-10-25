@@ -44,7 +44,7 @@ from _media_preview_test_fixtures import (
 )
 
 
-def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True, task_suffix: str = ""):
+def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True, task_suffix: str = "", duration_seconds: int = 30):
     library = tmp_path / "library"
     library.mkdir(exist_ok=True)
     repo = ProductionRepository(database_path=tmp_path / "isolated.sqlite3", video_library_path=library)
@@ -52,7 +52,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
     plan = CreationPlan(
         id=f"plan_{workspace_id}{task_suffix}", workspace_id=workspace_id,
         goal="一条测试视频", name="测试", target_count=1, language="zh-CN",
-        aspect_ratio="9:16", duration_target_seconds=30,
+        aspect_ratio="9:16", duration_target_seconds=duration_seconds,
         knowledge_references=[], source_references=[],
         selected_voice=CreationPlanVoiceReference(
             profile_id="voice_1", version="v1", person_profile_id="person_1", person_version="v1",
@@ -78,10 +78,17 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
         "created_at": now, "updated_at": now,
         "confirmed_at": now if confirmed else None,
     }
+    from app.production import CreationTaskScript, CreationTaskScriptSection
+    seeded_script = CreationTaskScript(**{key: value for key, value in payload.items()
+        if key not in {'sections', 'created_at', 'updated_at', 'confirmed_at'}},
+        sections=[CreationTaskScriptSection(**section) for section in payload['sections']],
+        created_at=datetime.fromisoformat(now), updated_at=datetime.fromisoformat(now),
+        confirmed_at=datetime.fromisoformat(now) if confirmed else None)
     with sqlite3.connect(repo.database_path) as conn:
+        conn.execute('BEGIN')
         conn.execute(
             "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
-            (script_id, workspace_id, task_id, payload["run_id"], json.dumps(payload), now),
+            (script_id, workspace_id, task_id, payload["run_id"], repo._script_payload(conn, seeded_script), now),
         )
         if confirmed:
             task.confirmed_script_id = script_id
@@ -2812,11 +2819,11 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
 from app.voice_clone import Qwen3TTSSubprocessProvider
 
 
-def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True, local_policy=False):
+def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True, local_policy=False, duration_seconds=30):
     from app.creation.narration_stage_use_case import NarrationStageUseCase
     from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
     from app.narration import NarrationArtifact
-    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local')
+    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=duration_seconds)
     actor = CreationExecutionActor('local', 'original-member')
     register_synthetic_profiles(repo, workspace_id='local', member_id=actor.member_id,
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh', model_id='test',
@@ -2827,10 +2834,11 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
             owned = json.loads(row['payload']); owned['owner_user_id'] = actor.member_id
             conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
         row = conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script_id,)).fetchone()
-        payload = json.loads(row['payload'])
-        payload['sections'] = [{**payload['sections'][0], 'id': f'section_{ordinal}', 'content': '原文' * 130}
-            for ordinal in range(1, section_count + 1)]
-        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (json.dumps(payload), script_id))
+        from app.production import CreationTaskScriptSection
+        seeded = repo._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
+        seeded.sections = [CreationTaskScriptSection(**{**asdict(seeded.sections[0]),
+            'id': f'section_{ordinal}', 'content': '原文' * 130}) for ordinal in range(1, section_count + 1)]
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo._script_payload(conn, seeded), script_id))
     task = repo.get_creation_task('local', task_id)
     script = repo.get_creation_task_script('local', script_id)
     plan = repo.get_creation_plan('local', task.plan_id)
