@@ -731,7 +731,7 @@ describe("CreationTaskWorkspace", () => {
       id: "draft-1", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
       title: "待确认文案", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "真实草稿正文。",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "真实草稿正文。",
         visual_prompt: "现场画面", evidence_reference_ids: ["knowledge:one:v1"] }],
     };
     mocks.getWorkspace.mockResolvedValue({ ...initial, scripts: [draft], task: {
@@ -761,7 +761,7 @@ describe("CreationTaskWorkspace", () => {
     const draft = { id: "late-A", task_id: task.id, run_id: "run-A", topic_id: "topic-1",
       title: "旧A稿", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-A", title: "旧A段落", content: "旧A回读正文", visual_prompt: "画面",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-A", title: "旧A段落", content: "旧A回读正文", visual_prompt: "画面",
         evidence_reference_ids: ["knowledge:one:v1"] }] };
     let finishReadA!: (value: WorkspaceState) => void;
     mocks.getWorkspace.mockResolvedValueOnce(initial)
@@ -803,7 +803,7 @@ describe("CreationTaskWorkspace", () => {
     const draft = { id: "current-script", task_id: task.id, run_id: "run", topic_id: "topic",
       title: "当前已保存文案", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: "2026-10-10T04:26:40Z", confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section", title: "当前段落", content: "当前API真实文案", visual_prompt: "当前画面",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section", title: "当前段落", content: "当前API真实文案", visual_prompt: "当前画面",
         evidence_reference_ids: ["knowledge:one:v1"] }] };
     mocks.getWorkspace.mockResolvedValue({ ...initial, task: { ...task, stage: "script",
       stage_status: "waiting_for_user", status: "waiting_for_user", stage_reason: null,
@@ -820,7 +820,7 @@ describe("CreationTaskWorkspace", () => {
     const draft = { id: "local-script", task_id: task.id, run_id: "run", topic_id: "topic",
       title: "已保存稿", language: "zh-CN" as const, selection_status: "draft" as const,
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section", title: "段落", content: "原文", visual_prompt: "原画面",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section", title: "段落", content: "原文", visual_prompt: "原画面",
         evidence_reference_ids: ["knowledge:one:v1"] }] };
     initial.scripts = [draft];
     let finish!: (value: WorkspaceState) => void;
@@ -935,7 +935,7 @@ describe("CreationTaskWorkspace", () => {
       title: "回复草稿", language: "zh-CN", selection_status: "draft",
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
       source_reply_reference: { conversation_id: "conversation-id", turn_id: "turn-id", response_digest: "a".repeat(64) },
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "reply-section", title: "回复", content: "这是来自对话的正文。",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "reply-section", title: "回复", content: "这是来自对话的正文。",
         visual_prompt: "", evidence_reference_ids: [] }],
     };
     const initial = workspace(task);
@@ -980,7 +980,7 @@ describe("CreationTaskWorkspace", () => {
       id: "empty-reference-draft", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
       title: "开场", language: "zh-CN", selection_status: "draft",
       created_at: task.created_at, updated_at: task.updated_at, confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "你想从哪里开始？",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "你想从哪里开始？",
         visual_prompt: "淡入标题。", evidence_reference_ids: [] }],
     };
     const initial = { ...workspace(task), scripts: [draft] };
@@ -1012,7 +1012,7 @@ describe("CreationTaskWorkspace", () => {
       id: "empty-reference-fields", task_id: "task-1", run_id: "run", topic_id: "topic", title: "开场",
       language: "zh-CN", selection_status: "draft", created_at: baseTask.created_at,
       updated_at: baseTask.updated_at, confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "一起开始吧。",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "一起开始吧。",
         visual_prompt: "淡入标题。", evidence_reference_ids: [] }],
     };
     const confirm = vi.fn();
@@ -1033,7 +1033,7 @@ describe("CreationTaskWorkspace", () => {
       id: "late-edit-draft", task_id: task.id, run_id: "run-1", topic_id: "topic-1",
       title: "待确认文案", language: "zh-CN", selection_status: "draft",
       created_at: task.created_at, updated_at: "v1", confirmed_at: null,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "提交时正文",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "提交时正文",
         visual_prompt: "提交时画面", evidence_reference_ids: ["source:one"] }],
     };
     const initial = workspace(task);
@@ -1766,7 +1766,7 @@ describe("CreationTaskWorkspace", () => {
       id: "script-1", task_id: baseTask.id, run_id: "run-2", topic_id: "topic-1", title: "真实文案",
       language: "zh-CN", selection_status: "confirmed", created_at: baseTask.created_at,
       updated_at: baseTask.updated_at, confirmed_at: baseTask.updated_at,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "这是已经确认的口播正文。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开头", content: "这是已经确认的口播正文。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
     }];
 
     stubLoadedScriptWindows(initial.scripts);
@@ -1805,7 +1805,7 @@ describe("CreationTaskWorkspace", () => {
       id: "script-1", task_id: failedTask.id, run_id: "run-2", topic_id: "topic-1", title: "原文案",
       language: "zh-CN", selection_status: "confirmed", created_at: failedTask.created_at,
       updated_at: failedTask.updated_at, confirmed_at: failedTask.updated_at,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "正文", content: "原来的正文过长。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "正文", content: "原来的正文过长。", visual_prompt: "人物主镜头", evidence_reference_ids: ["evidence-1"] }],
     }];
     const repaired = workspace({
       ...failedTask,
@@ -1938,7 +1938,7 @@ describe("CreationTaskWorkspace", () => {
     const script: WorkspaceState["scripts"][number] = {
       id:"script-source-read", task_id:"task-1", run_id:"run", topic_id:"topic", title:"已有文案", language:"zh-CN",
       selection_status:"confirmed", created_at:baseTask.created_at, updated_at:baseTask.updated_at, confirmed_at:baseTask.updated_at,
-      sections_loaded: true as const, sections_total_count: 1, sections:[{id:"section-1", title:"正文", content:"原正文", visual_prompt:"原画面", evidence_reference_ids:["knowledge:fixed:v1"]}],
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections:[{id:"section-1", title:"正文", content:"原正文", visual_prompt:"原画面", evidence_reference_ids:["knowledge:fixed:v1"]}],
     };
     const confirm = vi.fn();
     render(<ScriptEditor taskId="task-1" script={script} busy={false} repairing={false} onConfirm={confirm} />);
@@ -2837,7 +2837,7 @@ describe("CreationTaskWorkspace", () => {
       id: "script-1", task_id: task.id, run_id: "run-1", topic_id: "topic-1", title: "已确认文案",
       language: "zh-CN", selection_status: "confirmed", created_at: task.created_at,
       updated_at: task.updated_at, confirmed_at: task.updated_at,
-      sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "当前文案",
+      draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections: [{ id: "section-1", title: "开场", content: "当前文案",
         visual_prompt: "现场", evidence_reference_ids: [] }],
     }];
     const recording = {
@@ -4400,7 +4400,7 @@ describe("作品视图与真实版本",()=>{
   expect(screen.getByLabelText("剪辑成片预览")).toBeVisible();expect(screen.getByRole("link",{name:"打开发布工作区"})).toHaveAttribute("href","/history");
  });
  it("distinguishes the actual confirmed script and the unconfirmed latest draft",async()=>{
-  const initial=subtitleCoverWorkspace();const original={id:"original-script",task_id:initial.task.id,run_id:"fixture-run",topic_id:"fixture-topic",title:"文案",language:"zh-CN" as const,selection_status:"confirmed" as const,created_at:initial.task.created_at,updated_at:initial.task.updated_at,confirmed_at:initial.task.updated_at,estimated_duration_seconds:3,sections_loaded: true as const, sections_total_count: 1, sections:[{id:"fixture-section",title:"正文",content:"固定正文",visual_prompt:"已有测试画面",evidence_reference_ids:[]}],warnings:[]};
+  const initial=subtitleCoverWorkspace();const original={id:"original-script",task_id:initial.task.id,run_id:"fixture-run",topic_id:"fixture-topic",title:"文案",language:"zh-CN" as const,selection_status:"confirmed" as const,created_at:initial.task.created_at,updated_at:initial.task.updated_at,confirmed_at:initial.task.updated_at,estimated_duration_seconds:3,draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections:[{id:"fixture-section",title:"正文",content:"固定正文",visual_prompt:"已有测试画面",evidence_reference_ids:[]}],warnings:[]};
   const confirmed={...original,id:"confirmed-script",title:"实际确认稿",selection_status:"confirmed" as const,sections:[{...original.sections[0],content:"已经确认的正文"}]};
   const draft={...confirmed,id:"new-draft",title:"实际新草稿",selection_status:"draft" as const,sections:[{...confirmed.sections[0],content:"尚未确认的新正文"}]};
   initial.scripts=[draft,confirmed];initial.task={...initial.task,confirmed_script_id:confirmed.id,can_revise_script:false};mocks.getWorkspace.mockResolvedValue(initial);
@@ -4743,7 +4743,7 @@ it('shows the actual review protocol failure and recovery without hiding them as
 
 function sectionReaderScript(id = 'reader-script'): import('@/lib/types').CreationTaskScript {
   return {id, task_id:'reader-task', run_id:'run', topic_id:'topic', title:'窗口文案', language:'zh-CN',
-    sections_loaded: true as const, sections_total_count: 1, sections:[{id:'cached',title:'旧首屏',content:'不可用旧首屏替代窗口读取',visual_prompt:'旧画面',evidence_reference_ids:[]}],
+    draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections:[{id:'cached',title:'旧首屏',content:'不可用旧首屏替代窗口读取',visual_prompt:'旧画面',evidence_reference_ids:[]}],
     selection_status:'confirmed',created_at:'2026-10-24T00:00:00Z',updated_at:'2026-10-24T00:00:00Z',confirmed_at:'2026-10-24T00:00:00Z'};
 }
 function sectionReaderPage(script: import('@/lib/types').CreationTaskScript, after = 0, version = script.updated_at): import('@/lib/types').CreationTaskScriptSectionWindow {
@@ -5076,4 +5076,29 @@ it('shows complete black-frame totals separately from samples and keeps delivery
   view.rerender(<FinalVideoQualityCheck taskId="task" versionId="version" outputUrl="/new-video" onLocate={onLocate}/>);
   await waitFor(()=>expect(screen.queryByLabelText('黑帧摘要')).not.toBeInTheDocument());
   expect(await screen.findByText(durationFinding.detail)).toBeInTheDocument();
+});
+
+it.each([false,true])('does not equate all stored sections with a complete draft when sections_loaded=%s',async(loaded)=>{
+  const stored=sectionReaderScript();
+  const partial:import('@/lib/types').CreationTaskScript=loaded
+    ? {...stored,draft_complete:false}
+    : {...stored,draft_complete:false,sections_loaded:false,sections:null};
+  const complete={...partial,draft_complete:true,updated_at:'2026-10-24T00:08:00Z'};
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
+    const version=new URL(url,'http://local').searchParams.get('expected_updated_at')??partial.updated_at;
+    const page=sectionReaderPage(partial,0,version);
+    return new Response(JSON.stringify({...page,items:page.items.slice(0,1),total_count:1,next_after_ordinal:null,truncated:false}));
+  }));
+  const confirm=vi.fn();
+  const view=render(<ScriptEditor taskId={partial.task_id} script={partial} busy={false} repairing={false} onConfirm={confirm}/>);
+  await screen.findByText('窗口正文 reader-script 1');
+  expect(screen.getByText(/当前为部分稿，已存 1 段不代表目标已完整/)).toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('第 1 段正文')).not.toBeInTheDocument();
+  expect(confirm).not.toHaveBeenCalled();
+  view.rerender(<ScriptEditor taskId={complete.task_id} script={complete} busy={false} repairing={false} onConfirm={confirm}/>);
+  await screen.findByLabelText('第 1 段正文');
+  expect(screen.queryByText(/当前为部分稿/)).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled();
 });

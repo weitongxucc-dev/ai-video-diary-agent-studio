@@ -179,6 +179,10 @@ type ScriptEditorProps = {
     onConfirm: (script: LoadedScript) => void;
 };
 export function ScriptEditor(props: ScriptEditorProps) {
+    if (!props.script.draft_complete) return <>
+        <p role="status">当前为部分稿，已存 {props.script.sections_total_count} 段不代表目标已完整。当前仅可查看，尚不能通过整稿入口保存或确认。</p>
+        <ConfirmedScriptView script={props.script}/>
+    </>;
     if (props.script.sections_loaded) return <CompleteScriptEditor {...props} script={props.script}/>;
     return <ScriptEditorLoader key={`${props.taskId}:${props.script.id}:${props.script.updated_at}`} {...props}/>;
 }
@@ -244,7 +248,7 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
             });
             setDraft((current) => current === submittedDraft
                 ? saved
-                : { ...current, updated_at: saved.updated_at });
+                : { ...current, updated_at: saved.updated_at, draft_complete: saved.draft_complete });
         }
         catch (cause) {
             setDraftError(cause instanceof Error ? cause.message : "草稿没有保存成功；当前编辑内容仍保留在本页。");
@@ -261,7 +265,7 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
       <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })}/><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })}/></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sourceRead.status === "loading" ? <p role="status">正在读取当前任务资料…</p> : sourceRead.status === "failed" ? <p>资料尚未读回，请检查读取错误。</p> : sourceRead.sources.length ? sourceRead.sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })}/>{source.title}</label>) : <p>当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。</p>}</fieldset></article>)}</div>
       {sourceRead.status === "failed" ? <p role="alert">{sourceRead.message}</p> : null}
       {draftError ? <p role="alert">{draftError}</p> : null}
-      {script.selection_status === "draft" ? <Button variant="outline" className={styles.secondaryButton} disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => void saveDraft()} type="button">{savingDraft ? "正在保存草稿…" : "保存草稿"}</Button> : null}
-      <div className={styles.primaryAction}><Button className="modern-primary-button" disabled={busy || savingDraft || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim())} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}{repairing ? "确认修订文案" : "确认文案"}</Button></div>
+      {script.selection_status === "draft" ? <Button variant="outline" className={styles.secondaryButton} disabled={busy || savingDraft || !draft.draft_complete || !draft.title.trim() || draft.sections.some((section) => !section.content.trim())} onClick={() => void saveDraft()} type="button">{savingDraft ? "正在保存草稿…" : "保存草稿"}</Button> : null}
+      <div className={styles.primaryAction}><Button className="modern-primary-button" disabled={busy || savingDraft || !draft.draft_complete || !draft.title.trim() || draft.sections.some((section) => !section.content.trim() || !section.visual_prompt.trim())} onClick={() => onConfirm(draft)} type="button">{busy ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}{repairing ? "确认修订文案" : "确认文案"}</Button></div>
     </section>);
 }

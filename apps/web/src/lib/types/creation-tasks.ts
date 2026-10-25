@@ -107,6 +107,7 @@ export type CreationTaskScriptSection = {
     evidence_reference_ids: string[];
 };
 export type CreationTaskScript = {
+    draft_complete: boolean;
     id: string;
     task_id: string;
     run_id: string;
