@@ -36,6 +36,7 @@ class QualityGrantContext:
 
 
 def run_quality_worker(context, request, temporary_root):
+    started = time.monotonic()
     context.check()
     budget = QualityBudget(**request["budget"])
     temporary_root = Path(temporary_root)
@@ -66,6 +67,19 @@ def run_quality_worker(context, request, temporary_root):
     value = json.loads(result.stdout)
     if result.returncode or "error" in value:
         raise QualityWorkerError(value.get("error") or "质检 worker 未正常完成")
+    if "measurement" in value:
+        # Normal return from run_granted_command proves the entire child group
+        # released. The permit itself is committed/released later by the owner.
+        # Unlike worker/command timers this includes startup, tool verification,
+        # hashing, pipe draining and the released-child observation.
+        grant = context.grant
+        value["measurement"]["execution"] = {
+            "request_id": grant.request_id, "generation": grant.generation,
+            "attempt_number": grant.attempt_number, "unit_key": grant.unit_key,
+            "input_digest": grant.input_digest, "process_released": True,
+            "elapsed_seconds": time.monotonic() - started}
+        from app.quality_checks import fit_quality_result
+        value = fit_quality_result(value, budget.max_report_bytes)
     return value
 
 

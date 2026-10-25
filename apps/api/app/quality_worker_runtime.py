@@ -25,6 +25,75 @@ QUALITY_STREAM_PROTOCOL = "quality_stream_v1"
 QUALITY_PHASE_PROTOCOLS = {QUALITY_PHASE_PROTOCOL, QUALITY_STREAM_PROTOCOL}
 
 
+def phase_measurement(request, result, *, commands, elapsed_seconds):
+    """Completed phase facts, not a speed promise or an execution allowance.
+
+    stdout/stderr are transport counters. Only the existing full EOF parsers,
+    PCM decoder and full-file SHA supply media work counts. In particular a
+    successful black scan does not invent a frame count from container metadata.
+    """
+    phase, budget = request["phase"], request["budget"]
+    data = result.get("data", {})
+    metadata = data if phase == "metadata" else request["checkpoints"]["metadata"]
+    fields = ("codec_type", "codec_name", "width", "height", "pix_fmt", "channels",
+              "sample_rate", "time_base", "avg_frame_rate")
+    streams = [{key: stream[key] for key in fields if key in stream}
+               for stream in metadata.get("streams", [])]
+    return {"version": 1, "phase": phase, "checkpoint_digest": request["checkpoint_digest"],
+        "source_receipt": source_receipt(request["source"], request["check_id"]),
+        "backend": {key: budget[key] for key in
+            ("ffmpeg_sha256", "ffprobe_sha256", "worker_sha256", "decoder_threads")},
+        "media_streams": streams, "worker_elapsed_seconds": elapsed_seconds,
+        "commands": commands, "complete": True,
+        "workload": {"source_bytes": request["source"]["size_bytes"],
+            "full_sha_bytes": request["source"]["size_bytes"] if "file_sha256" in result else 0,
+            "decoded_streams": data.get("decoded_streams", {}),
+            "pcm_passes": data.get("decoded_pcm", {}).get("passes", []),
+            "full_black_scan": phase == "black_frames",
+            "unavailable": bool(data.get("unavailable"))}}
+
+
+def validate_phase_measurement(request, result):
+    """Legacy receipts may lack measurement; a present measurement must bind.
+
+    The parent adds execution only after run_granted_command proves the child
+    group released. The committed request is checked separately before learning.
+    """
+    measurement = result.get("measurement")
+    if measurement is None:
+        return
+    if not isinstance(measurement, dict):
+        raise ValueError("质检测量回执无效")
+    elapsed = measurement.get("worker_elapsed_seconds")
+    commands = measurement.get("commands")
+    if (type(elapsed) not in (float, int) or not math.isfinite(elapsed) or elapsed <= 0
+            or not isinstance(commands, list)):
+        raise ValueError("质检测量缺少实际耗时")
+    for item in commands:
+        if (not isinstance(item, dict) or item.get("tool") not in {"ffmpeg", "ffprobe"}
+                or item.get("complete") is not True
+                or type(item.get("elapsed_seconds")) not in (int, float)
+                or not math.isfinite(item["elapsed_seconds"]) or item["elapsed_seconds"] < 0
+                or any(type(item.get(key)) is not int or item[key] < 0
+                       for key in ("stdout_bytes", "stderr_bytes"))):
+            raise ValueError("未完整执行的命令不可作为质检测量")
+    if sum(item["elapsed_seconds"] for item in commands) > elapsed:
+        raise ValueError("质检命令耗时超过阶段实际耗时")
+    expected = phase_measurement(request, result, commands=commands, elapsed_seconds=elapsed)
+    if {key: value for key, value in measurement.items() if key != "execution"} != expected:
+        raise ValueError("质检测量未绑定实际阶段、来源或解码工作量")
+    execution = measurement.get("execution")
+    if execution is not None:
+        duration = execution.get("elapsed_seconds") if isinstance(execution, dict) else None
+        if (not isinstance(execution, dict) or execution.get("process_released") is not True
+                or type(duration) not in (int, float) or not math.isfinite(duration) or duration < elapsed
+                or any(type(execution.get(key)) is not int or execution[key] <= 0
+                       for key in ("generation", "attempt_number"))
+                or any(not isinstance(execution.get(key), str) or not execution[key]
+                       for key in ("request_id", "unit_key", "input_digest"))):
+            raise ValueError("质检测量缺少已释放执行回执")
+
+
 def quality_phase_request(request: dict, evidence: dict) -> dict:
     """Bind a released unit to the exact, bounded prefix already committed."""
     if request.get("protocol") not in QUALITY_PHASE_PROTOCOLS:

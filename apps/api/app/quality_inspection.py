@@ -16,7 +16,8 @@ from uuid import uuid4
 
 from app.montage import CreationTaskMontagePlan
 from app.quality_checks import quality_report_evidence
-from app.quality_worker_runtime import source_receipt
+from app.quality_worker_runtime import (source_receipt, quality_phase_request,
+    quality_unit_key, validate_phase_measurement, QUALITY_PHASES)
 
 
 class QualityCheckRepository:
@@ -49,6 +50,53 @@ class QualityCheckRepository:
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def read_measurements(self, workspace_id, task_id, check_id, *, job_id, input_digest):
+        """Read finite committed measurements against their original grant row.
+
+        Earlier successful phases remain useful even if a later phase failed.
+        An uncommitted worker result or a failed/cancelled/unknown request never
+        supplies a measurement. No scan of unrelated checks or user media.
+        """
+        with self._connect() as conn:
+            record = self.get_check(workspace_id, task_id, check_id, connection=conn)
+            evidence = record["evidence"]
+            phases = dict(evidence.get("_phases", {}))
+            if "_measurement" in evidence:
+                phases["finalize"] = evidence
+            result = []
+            prefix = {}
+            for phase in QUALITY_PHASES:
+                if phase not in phases:
+                    break
+                data = phases[phase]
+                request = quality_phase_request(evidence["_request"], {"_phases": prefix})
+                prefix[phase] = data
+                measurement = data.get("_measurement")
+                if not isinstance(measurement, dict) or measurement.get("phase") != phase:
+                    continue
+                response = {"measurement": measurement,
+                    "evidence" if phase == "finalize" else "data": data}
+                if phase in {"metadata", "finalize"}:
+                    response["file_sha256"] = record["render_ref"]
+                try:
+                    validate_phase_measurement(request, response)
+                except (ValueError, TypeError, KeyError):
+                    continue
+                execution = measurement.get("execution", {})
+                row = conn.execute("SELECT workspace_id,owner_type,owner_id,input_digest,unit_key,"
+                    "attempt_number,last_grant_generation,state,checkpoint_ref FROM device_work_requests WHERE id=?",
+                    (execution.get("request_id"),)).fetchone()
+                event_id = (f"event_{job_id}_quality_terminal" if phase == "finalize"
+                            else f"event_{job_id}_quality_{phase}")
+                if (measurement.get("complete") is True and execution.get("process_released") is True
+                        and not measurement["workload"]["unavailable"]
+                        and execution.get("unit_key") == quality_unit_key(request)
+                        and row is not None and tuple(row) == (workspace_id, "quality_check", job_id,
+                            input_digest, execution.get("unit_key"), execution.get("attempt_number"),
+                            execution.get("generation"), "done", event_id)):
+                    result.append(measurement)
+            return result
 
     def begin(self, workspace_id: str, task_id: str, timeline_version_id: str | None,
               source_ref: str | None, render_ref: str | None, *,

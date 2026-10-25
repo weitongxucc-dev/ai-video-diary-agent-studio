@@ -484,7 +484,7 @@ def _probe(path: str | Path, *, context: QualityWorkerContext | None = None) -> 
         "ffprobe", "-v", "error",
         "-show_entries",
         "format=duration:stream=codec_type,start_time,duration,duration_ts,time_base,"
-        "sample_rate,nb_frames,avg_frame_rate",
+        "sample_rate,nb_frames,avg_frame_rate,codec_name,width,height,pix_fmt,channels",
         "-of", "json", str(path),
     ], PROBE_TIMEOUT_SECONDS, context=context)
     try:

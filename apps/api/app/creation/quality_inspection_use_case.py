@@ -20,7 +20,8 @@ from app.production import content_readable
 from app.quality_inspection import final_quality_check_payload
 from app.quality_checks import fit_quality_result
 from app.quality_worker_runtime import (QualityBudget, file_identity, source_receipt,
-    QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request, quality_unit_key, quality_stream_resources, quality_request_byte_limit)
+    QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request, quality_unit_key, quality_stream_resources, quality_request_byte_limit,
+    validate_phase_measurement)
 
 
 QUALITY_KIND = "quality_check"
@@ -259,6 +260,7 @@ class QualityInspectionUseCase:
                 raise ValueError("质检 worker 回执未绑定当前阶段和前序检查点")
             if request["phase"] in {"metadata", "finalize"} and result.get("file_sha256") != request["source"]["render_ref"]:
                 raise ValueError("质检阶段缺少完整文件 SHA 回执")
+            validate_phase_measurement(request, result)
             if request["phase"] != "finalize":
                 if not isinstance(result.get("data"), dict):
                     raise ValueError("质检阶段缺少有限检查结果")
@@ -307,6 +309,22 @@ class QualityInspectionUseCase:
         record = self.checks.get_check(job.workspace_id, job.task_id, check_id, connection=connection)
         request = quality_phase_request(record["evidence"]["_request"], record["evidence"])
         self.validate_result(request, result)
+        measurement = result.get("measurement")
+        if measurement is not None:
+            execution = measurement.get("execution")
+            if execution is None:
+                raise ValueError("质检测量缺少真实许可执行绑定")
+            row = connection.execute("SELECT workspace_id,owner_type,owner_id,input_digest,unit_key,"
+                "attempt_number,last_grant_generation FROM device_work_requests WHERE id=?",
+                (execution["request_id"],)).fetchone()
+            if row is None or tuple(row) != (job.workspace_id, QUALITY_KIND, job.id, job.input_digest,
+                    quality_unit_key(request), execution["attempt_number"], execution["generation"]):
+                raise ValueError("质检测量未绑定原许可尝试")
+            # This write shares the phase/checkpoint and released-permit commit.
+            # A staged worker response alone is never exposed as usable evidence.
+            result = {**result}
+            field = "evidence" if request["phase"] == "finalize" else "data"
+            result[field] = {**result[field], "_measurement": measurement}
         if "phase" not in request or request["phase"] == "finalize":
             return self.settle(connection, job, check_id, status="succeeded", result=result)
         self.checks.save_phase(job.workspace_id, job.task_id, check_id, request["phase"], result["data"], connection=connection)
@@ -317,6 +335,20 @@ class QualityInspectionUseCase:
                 **({"file_sha256": result["file_sha256"]} if "file_sha256" in result else {})})
         self.production.append_task_event(event, connection=connection)
         return event.id
+
+    def read_measurements(self, workspace_id, job_id, actor):
+        """At most the protocol's committed phases, never staged/failed work.
+
+        These are eligible learning inputs, not a calibrated capacity claim.
+        Device/shape applicability and policy remain the device profile owner's
+        responsibility; no deadline is inferred by this read port.
+        """
+        job, original, record, sealed = self.read(workspace_id, job_id)
+        if not self.same_actor(workspace_id, original, actor):
+            raise PermissionError("质检测量不属于当前执行身份")
+        self.require_actor(workspace_id, job.task_id, actor)
+        return self.checks.read_measurements(workspace_id, job.task_id, record["check_id"],
+            job_id=job_id, input_digest=job.input_digest)
 
     def next_unit(self, connection, job, check_id, actor):
         """Trusted continuation from the prefix just saved by complete_result.

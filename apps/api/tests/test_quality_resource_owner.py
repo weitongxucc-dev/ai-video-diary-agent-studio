@@ -689,3 +689,142 @@ def test_sealed_phase_envelope_preserves_multiple_bounded_reports():
     assert len(json.dumps(request).encode()) <= quality_request_byte_limit(request)
     assert quality_request_byte_limit(request) == len(QUALITY_PHASES)*budget.max_report_bytes
     assert quality_request_byte_limit({**request, 'protocol':'quality_phases_v1'}) == budget.max_report_bytes
+
+
+def test_quality_worker_measurement_records_shape_work_and_eof(tmp_path, monkeypatch):
+    """Declared decoder ports, not a measured device capacity claim."""
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app import quality_worker
+    from app.quality_worker_runtime import (QUALITY_STREAM_PROTOCOL, file_identity,
+        phase_measurement, validate_phase_measurement)
+    path = tmp_path / 'declared-media'
+    path.write_bytes(b'declared')
+    source = {**_unit_source(dict(workspace_id='local', task_id='task', timeline_version_id='v1',
+        source_ref='fixture', render_ref=unit_hash(path))), 'path': str(path),
+        'size_bytes': path.stat().st_size, 'file_identity': file_identity(path)}
+    sealed = dict(protocol=QUALITY_STREAM_PROTOCOL, source=source, check_id='measurement',
+        budget=asdict(fixture_budget()), thresholds={})
+    metadata = {'streams': [{'codec_type': 'video', 'codec_name': 'ffv1', 'width': 64,
+        'height': 48, 'pix_fmt': 'yuv420p'}, {'codec_type': 'audio', 'codec_name': 'pcm_s16le',
+        'channels': 1, 'sample_rate': '48000'}]}
+    command = dict(tool='ffprobe', pcm_s16le_mono=False, stdout_bytes=701,
+        stderr_bytes=0, elapsed_seconds=.2, complete=True)
+    class Context:
+        def __init__(self, *args, **kwargs):
+            self.processing = [dict(command)]
+        def check(self):
+            pass
+        def run(self, argv, *args, **kwargs):
+            entries = argv[argv.index('-show_entries') + 1]
+            assert all(key in entries for key in ('codec_name', 'width', 'height', 'pix_fmt', 'channels'))
+            return SimpleNamespace(returncode=0, stdout=json.dumps(metadata).encode(), stderr=b'')
+    monkeypatch.setattr(quality_worker, 'QualityWorkerContext', Context)
+    monkeypatch.setattr(quality_worker, 'worker_identity', lambda **kwargs: fixture_budget().worker_sha256)
+    times = iter([100., 100.01, 101.])
+    monkeypatch.setattr(quality_worker, 'time', SimpleNamespace(monotonic=lambda: next(times)))
+    request = quality_phase_request(sealed, {'_phases': {}})
+    response = quality_worker.inspect_request({**request, 'deadline_monotonic': 110.})
+    measured = response['measurement']
+    assert measured['worker_elapsed_seconds'] == 1
+    assert measured['commands'][0]['elapsed_seconds'] == .2
+    assert measured['media_streams'] == metadata['streams']
+    assert measured['workload']['full_sha_bytes'] == path.stat().st_size
+    assert measured['backend']['worker_sha256'] == response['worker_sha256']
+    assert 'execution' not in measured
+    validate_phase_measurement(request, response)
+    # A decoder failure represented as unavailable must retain that verdict;
+    # it must neither fail the whole check nor publish a throughput sample.
+    times = iter([102., 102.01])
+    monkeypatch.setattr(quality_worker, 'time', SimpleNamespace(monotonic=lambda: next(times)))
+    monkeypatch.setattr(quality_worker.quality_checks, 'inspect_quality_phase',
+        lambda *args, **kwargs: {'findings': [], 'unavailable': [{'kind': 'black_frame', 'reason': 'declared decode failure'}]})
+    command['complete'] = False
+    black_request = quality_phase_request(sealed, {'_phases': {'metadata': response['data']}})
+    unavailable = quality_worker.inspect_request({**black_request, 'deadline_monotonic': 110.})
+    assert unavailable['data']['unavailable']
+    assert 'measurement' not in unavailable
+    command['complete'] = True
+    prefix = {'metadata': response['data'], 'black_frames': {}}
+    frame_request = quality_phase_request(sealed, {'_phases': prefix})
+    frames = {'video': {'frame_count': 3, 'complete': True},
+              'audio': {'sample_count': 14400, 'sample_rate': 48000, 'complete': True}}
+    frame_result = {'data': {'decoded_streams': frames}}
+    frame_result['measurement'] = phase_measurement(frame_request, frame_result,
+        commands=[command], elapsed_seconds=1.)
+    assert frame_result['measurement']['workload']['decoded_streams'] == frames
+    assert 'stdout_bytes' not in frame_result['measurement']['workload']
+    validate_phase_measurement(frame_request, frame_result)
+    frame_result['measurement']['commands'] = [{**command, 'complete': False}]
+    with pytest.raises(ValueError, match='未完整执行'):
+        validate_phase_measurement(frame_request, frame_result)
+    prefix['truncation'] = {'decoded_streams': frames}
+    pcm_request = quality_phase_request(sealed, {'_phases': prefix})
+    passes = [dict(sample_count=14400, sample_rate=48000, channels=1,
+        sample_format='s16le', complete=True)] * 2
+    pcm_result = {'data': {'decoded_pcm': {'passes': passes}}}
+    pcm_measurement = phase_measurement(pcm_request, pcm_result, commands=[], elapsed_seconds=1.)
+    assert pcm_measurement['workload']['pcm_passes'] == passes
+    assert pcm_measurement['workload']['full_sha_bytes'] == 0
+
+
+@pytest.mark.parametrize('fail_next', [False, True])
+def test_quality_measurement_requires_commit_and_keeps_successful_prefix_on_failure(tmp_path, monkeypatch, fail_next):
+    from types import SimpleNamespace
+    from app.creation import quality_execution
+    from app.quality_worker_runtime import phase_measurement
+    repository = ProductionRepository(tmp_path / 'studio.sqlite', tmp_path / 'library')
+    plan = CreationPlan(id='plan', workspace_id='local', goal='测量', name='测量', target_count=1,
+        language='zh-CN', aspect_ratio='16:9', duration_target_seconds=2, knowledge_references=[],
+        source_references=[], selected_voice=None, pronunciation_references=[], approved_asset_count=0,
+        approved_clip_count=0, material_rule_summary='', model_snapshot=[], confirmation_points=[],
+        blockers=[], preflight_fingerprint='isolated')
+    task = CreationTask(id='task', workspace_id='local', plan_id='plan', name='测量',
+        scenario='knowledge_explanation', stage='review')
+    repository.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
+    actor = CreationExecutionActor('local', 'owner')
+    store = ArtifactStore(tmp_path / 'artifacts')
+    checks = QualityCheckRepository(repository.database_path)
+    outputs = OutputObservationUseCase(repository, store, TaskAudio(repository, store, tmp_path), tmp_path, None)
+    service = QualityInspectionUseCase(repository, checks, outputs, budget=fixture_budget(),
+        verify_identity=lambda current: 'ready' if current == actor else 'unauthorized', temporary_root=tmp_path / 'worker')
+    seed_source(repository, store)
+    observations = []
+    def command(scheduler, grant, argv, **kwargs):
+        request = json.loads(Path(argv[-2]).read_text())
+        result = metadata_result(request)
+        if fail_next and request['phase'] == 'black_frames':
+            return SimpleNamespace(returncode=1, stdout=b'{"error":"declared deadline failure"}')
+        result['measurement'] = phase_measurement(request, result, commands=[], elapsed_seconds=.000001)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(result).encode())
+    monkeypatch.setattr(quality_execution, 'run_granted_command', command)
+    def worker(context, request, root):
+        result = quality_execution.run_quality_worker(context, request, root)
+        observations.append(result['measurement'])
+        assert len(service.read_measurements('local', context.grant.owner_id, actor)) == len(observations) - 1
+        return result
+    runtime = build_metadata_runtime(tmp_path, service, worker)
+    try:
+        check_id = service.start(runtime, actor, 'local', 'task', force=True)
+        job_id = f'job_quality_{check_id}'
+        assert runtime.run_once() is True
+        measured, = service.read_measurements('local', job_id, actor)
+        assert measured == observations[0]
+        execution = measured['execution']
+        assert execution['input_digest'] == repository.get_job_run('local', job_id).input_digest
+        assert execution['process_released'] is True
+        assert execution['elapsed_seconds'] >= measured['worker_elapsed_seconds']
+        with pytest.raises(PermissionError):
+            service.read_measurements('local', job_id, CreationExecutionActor('local', 'other'))
+        for _ in range(1 if fail_next else len(QUALITY_PHASES) - 1):
+            assert runtime.run_once() is True
+        assert repository.get_job_run('local', job_id).status == ('failed' if fail_next else 'succeeded')
+        assert service.read_measurements('local', job_id, actor) == observations
+        assert list(checks.get_check('local', 'task', check_id)['evidence']['_phases']) == (
+            ['metadata'] if fail_next else list(QUALITY_PHASES[:-1]))
+        with repository._connect() as conn:
+            conn.execute('UPDATE device_work_requests SET last_grant_generation=last_grant_generation+1 WHERE id=?',
+                (execution['request_id'],))
+        assert service.read_measurements('local', job_id, actor) == observations[1:]
+    finally:
+        assert runtime.stop(1)

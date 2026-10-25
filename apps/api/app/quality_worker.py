@@ -34,6 +34,7 @@ def worker_identity(*, check=None) -> str:
 
 
 def inspect_request(request: dict) -> dict:
+    started = time.monotonic()
     budget = QualityBudget(**request["budget"])
     streaming = request.get("protocol") == QUALITY_STREAM_PROTOCOL
     resources = None
@@ -87,6 +88,13 @@ def inspect_request(request: dict) -> dict:
                     "frame_sample_mapping_matches": (runs[0]["stdout_bytes"] == prior["sample_count"] * 2
                         and runs[0]["output_sample_rate"] == prior["sample_rate"]
                         if runs and prior and prior["sample_count"] is not None else None)}
+        if (streaming and all(item["complete"] for item in context.processing)
+                and not result.get("data", {}).get("unavailable")):
+            # An unavailable inspection keeps its original quality semantics;
+            # partial decoder observations must not become calibration samples.
+            from app.quality_worker_runtime import phase_measurement
+            result["measurement"] = phase_measurement(request, result,
+                commands=context.processing, elapsed_seconds=time.monotonic() - started)
         return quality_checks.fit_quality_result(result, budget.max_report_bytes, check=context.check) if streaming else result
     before = hash_file(path, check=context.check, max_bytes=budget.max_input_bytes)
     if before != source["render_ref"]:
