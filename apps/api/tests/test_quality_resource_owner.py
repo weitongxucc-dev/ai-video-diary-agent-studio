@@ -828,3 +828,99 @@ def test_quality_measurement_requires_commit_and_keeps_successful_prefix_on_fail
         assert service.read_measurements('local', job_id, actor) == observations[1:]
     finally:
         assert runtime.stop(1)
+
+def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_prefix(tmp_path):
+    """Real repository/scheduler/owner transaction, declared worker, no media."""
+    from app.quality_worker_runtime import phase_measurement
+    repository = ProductionRepository(tmp_path / 'studio.sqlite', tmp_path / 'library')
+    plan = CreationPlan(id='plan', workspace_id='local', goal='恢复', name='恢复', target_count=1,
+        language='zh-CN', aspect_ratio='16:9', duration_target_seconds=2, knowledge_references=[],
+        source_references=[], selected_voice=None, pronunciation_references=[], approved_asset_count=0,
+        approved_clip_count=0, material_rule_summary='', model_snapshot=[], confirmation_points=[],
+        blockers=[], preflight_fingerprint='isolated')
+    task = CreationTask(id='task', workspace_id='local', plan_id='plan', name='恢复',
+        scenario='knowledge_explanation', stage='review')
+    repository.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
+    actor = CreationExecutionActor('local', 'owner')
+    store = ArtifactStore(tmp_path / 'artifacts')
+    checks = QualityCheckRepository(repository.database_path)
+    outputs = OutputObservationUseCase(repository, store, TaskAudio(repository, store, tmp_path), tmp_path, None)
+    service = QualityInspectionUseCase(repository, checks, outputs, budget=fixture_budget(),
+        verify_identity=lambda current: 'ready' if current == actor else 'unauthorized', temporary_root=tmp_path / 'worker')
+    seed_source(repository, store)
+    calls, failures = [], [True, True]
+    def worker(context, request, root):
+        calls.append((request['phase'], request['budget']['max_timeout_seconds']))
+        assert quality_phase_request(request, {'_phases': request['checkpoints']}) == request
+        if request['phase'] == 'black_frames' and failures:
+            failures.pop()
+            raise RuntimeError('declared finite preparation timeout')
+        result = metadata_result(request)
+        result['measurement'] = phase_measurement(request, result, commands=[], elapsed_seconds=.001)
+        grant = context.grant
+        result['measurement']['execution'] = dict(request_id=grant.request_id, generation=grant.generation,
+            attempt_number=grant.attempt_number, unit_key=grant.unit_key, input_digest=grant.input_digest,
+            process_released=True, elapsed_seconds=.002)
+        return result
+    runtime = build_metadata_runtime(tmp_path, service, worker)
+    try:
+        check_id = service.start(runtime, actor, 'local', 'task', force=True)
+        job_id = f'job_quality_{check_id}'
+        assert runtime.run_once() is True
+        assert runtime.run_once() is True
+        job, _, record, sealed = service.read('local', job_id)
+        original_prefix = record['evidence']['_phases']
+        with repository._connect() as conn:
+            failed = dict(conn.execute("SELECT * FROM device_work_requests WHERE owner_id=? AND state='failed'", (job_id,)).fetchone())
+        with pytest.raises(ValueError, match='当前设备策略来源'):
+            service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor)
+        profile = dict(profile_id='declared-profile', revision=None, digest='a'*64, source_kind='device_profile')
+        service.current_policy = lambda: {'budget': service.budget, 'profile': profile}
+        with pytest.raises(ValueError, match='当前运行设备档'):
+            service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor)
+        profile['revision'] = 2
+        service.budget = replace(service.budget, worker_sha256='4'*64)
+        with pytest.raises(ValueError, match='算法或工具'):
+            service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor)
+        assert runtime.stop(1)
+        service.budget = replace(fixture_budget(), max_timeout_seconds=12.)
+        runtime = build_metadata_runtime(tmp_path, service, worker)
+        first_successor = service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor)
+        assert service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor) == first_successor
+        resumed = repository.get_job_run('local', job_id)
+        assert (resumed.status, resumed.input_digest, resumed.attempt) == ('queued', job.input_digest, job.attempt)
+        current = checks.get_check('local', 'task', check_id)
+        assert current['evidence']['_request'] == sealed
+        assert current['evidence']['_phases'] == original_prefix
+        assert runtime.run_once() is True  # This explicitly continued attempt also fails.
+        assert repository.get_job_run('local', job_id).status == 'failed'
+        assert runtime.stop(1)
+        profile.update(revision=3, digest='b'*64)
+        service.budget = replace(service.budget, max_timeout_seconds=14.)
+        runtime = build_metadata_runtime(tmp_path, service, worker)
+        successor = service.continue_failed_phase(runtime.scheduler, 'local', job_id, first_successor, actor)
+        assert successor != first_successor
+        for _ in QUALITY_PHASES[1:]:
+            assert runtime.run_once() is True
+        final_job, _, final, original = service.read('local', job_id)
+        assert final_job.status == 'succeeded'
+        assert final_job.input_digest == job.input_digest
+        assert original == sealed
+        assert final['evidence']['_phases']['metadata'] == original_prefix['metadata']
+        measurements = service.read_measurements('local', job_id, actor)
+        assert [item['phase'] for item in measurements] == list(QUALITY_PHASES)
+        assert measurements[0]['execution']['request_id'] != first_successor
+        assert measurements[1]['execution']['request_id'] == successor
+        assert [phase for phase, _ in calls].count('metadata') == 1
+        assert calls == [('metadata', 10.), ('black_frames', 10.), ('black_frames', 12.),
+                         ('black_frames', 14.), ('truncation', 14.), ('clipping', 14.), ('finalize', 14.)]
+        assert service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor) == first_successor
+        with repository._connect() as conn:
+            assert dict(conn.execute('SELECT * FROM device_work_requests WHERE id=?', (failed['id'],)).fetchone()) == failed
+            assert conn.execute("SELECT count(*) FROM job_runs WHERE kind=?", (QUALITY_KIND,)).fetchone()[0] == 1
+            events = conn.execute("SELECT id,payload_json FROM task_events WHERE job_id=? AND event_type='quality_check_terminal'", (job_id,)).fetchall()
+            assert len(events) == 3
+            assert len({row['id'] for row in events}) == 3
+            assert [json.loads(row['payload_json'])['status'] for row in events].count('failed') == 2
+    finally:
+        assert runtime.stop(1)

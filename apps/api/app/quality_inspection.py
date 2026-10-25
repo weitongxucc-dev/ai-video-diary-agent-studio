@@ -70,7 +70,10 @@ class QualityCheckRepository:
                 if phase not in phases:
                     break
                 data = phases[phase]
-                request = quality_phase_request(evidence["_request"], {"_phases": prefix})
+                historical = {"_phases": prefix}
+                if "_phase_attempt" in data:
+                    historical["_phase_attempt"] = data["_phase_attempt"]
+                request = quality_phase_request(evidence["_request"], historical)
                 prefix[phase] = data
                 measurement = data.get("_measurement")
                 if not isinstance(measurement, dict) or measurement.get("phase") != phase:
@@ -89,6 +92,8 @@ class QualityCheckRepository:
                     (execution.get("request_id"),)).fetchone()
                 event_id = (f"event_{job_id}_quality_terminal" if phase == "finalize"
                             else f"event_{job_id}_quality_{phase}")
+                if phase == "finalize" and "_phase_attempt" in data:
+                    event_id += "_" + data["_phase_attempt"]["digest"]
                 if (measurement.get("complete") is True and execution.get("process_released") is True
                         and not measurement["workload"]["unavailable"]
                         and execution.get("unit_key") == quality_unit_key(request)
@@ -97,6 +102,27 @@ class QualityCheckRepository:
                             execution.get("generation"), "done", event_id)):
                     result.append(measurement)
             return result
+
+    def reopen_phase(self, workspace_id, task_id, check_id, *, expected_updated_at, attempt, connection):
+        """The scheduler's released-failure transaction owns this finite pointer.
+
+        Previous attempts and failures live in immutable TaskEvents and device
+        requests; never grow a history array in the worker's input package.
+        """
+        if not connection.in_transaction:
+            raise ValueError("质检阶段接续必须与设备请求同事务")
+        record = self.get_check(workspace_id, task_id, check_id, connection=connection)
+        if (record["check_state"], record["updated_at"]) != ("failed", expected_updated_at):
+            raise ValueError("原失败检查已经变化")
+        evidence = {**record["evidence"], "_phase_attempt": attempt}
+        evidence.pop("_worker_result", None)
+        encoded = json.dumps(evidence, ensure_ascii=False, allow_nan=False)
+        now = datetime.now(timezone.utc).isoformat()
+        for table in ("creation_task_quality_history", "creation_task_quality_checks"):
+            connection.execute(f"UPDATE {table} SET check_state='checking',result_status=NULL,"
+                "error=NULL,checked_at=NULL,evidence=?,updated_at=? WHERE workspace_id=? AND task_id=? "
+                "AND check_id=? AND check_state='failed' AND updated_at=?",
+                (encoded, now, workspace_id, task_id, check_id, expected_updated_at))
 
     def begin(self, workspace_id: str, task_id: str, timeline_version_id: str | None,
               source_ref: str | None, render_ref: str | None, *,

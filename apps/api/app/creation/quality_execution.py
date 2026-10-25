@@ -94,12 +94,17 @@ class QualityCheckOwnerVerifier:
             raise ValueError("该质检已经结束")
         if request["actor"] != actor.identity_payload():
             raise PermissionError("质检原执行身份不匹配")
+        request = quality_phase_request(request, record["evidence"])
         if self.service.budget is None or request["budget"] != self.service.budget.__dict__:
             raise ValueError("质检独立预算尚未就绪或已经变化，请重新检查")
+        if "_phase_attempt" in request:
+            selected = self.service._current_preparation_policy()
+            if request["_phase_attempt"]["policy"] != {"mode": selected["mode"], "profile": selected["profile"]}:
+                raise ValueError("质检接续设备策略修订已经变化")
         self.service.verify_source(request, actor)
         source = request["source"]
         refs = (SourceRef(workspace_id, "artifact", source["artifact_id"], source["render_ref"]),)
-        return job, event, record, quality_phase_request(request, record["evidence"]), actor, refs
+        return job, event, record, request, actor, refs
 
     def verify_submission(self, intent, actor):
         job, event, record, request, original, refs = self._verified(intent.workspace_id, intent.owner_id)

@@ -25,6 +25,11 @@ QUALITY_STREAM_PROTOCOL = "quality_stream_v1"
 QUALITY_PHASE_PROTOCOLS = {QUALITY_PHASE_PROTOCOL, QUALITY_STREAM_PROTOCOL}
 
 
+def quality_attempt_digest(attempt):
+    return hashlib.sha256(json.dumps({key: value for key, value in attempt.items() if key != "digest"},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
 def phase_measurement(request, result, *, commands, elapsed_seconds):
     """Completed phase facts, not a speed promise or an execution allowance.
 
@@ -107,8 +112,21 @@ def quality_phase_request(request: dict, evidence: dict) -> dict:
         separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     phase = QUALITY_PHASES[len(checkpoints)]
     prepared = {**request, "phase": phase, "checkpoints": checkpoints, "checkpoint_digest": digest}
+    attempt = evidence.get("_phase_attempt", request.get("_phase_attempt"))
+    if attempt is not None:
+        start = attempt.get("starting_phase")
+        if start not in QUALITY_PHASES or attempt.get("digest") != quality_attempt_digest(attempt):
+            raise ValueError("质检接续封存摘要无效")
+        index = QUALITY_PHASES.index(start)
+        original_prefix = {key: checkpoints[key] for key in QUALITY_PHASES[:index] if key in checkpoints}
+        original_digest = hashlib.sha256(json.dumps(original_prefix, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if len(checkpoints) < index or original_digest != attempt["checkpoint_digest"]:
+            raise ValueError("质检接续的已完成前缀发生变化")
+        QualityBudget(**attempt["budget"])
+        prepared.update(budget=attempt["budget"], _phase_attempt=attempt)
     if request.get("protocol") == QUALITY_STREAM_PROTOCOL:
-        prepared["resources"] = quality_stream_resources(request, phase, checkpoints)
+        prepared["resources"] = quality_stream_resources(prepared, phase, checkpoints)
     return prepared
 
 
@@ -147,7 +165,9 @@ def quality_request_byte_limit(request: dict) -> int:
 
 def quality_unit_key(request: dict) -> str:
     base = f"quality:{request['check_id']}"
-    return f"{base}:{request['phase']}" if "phase" in request else base
+    unit = f"{base}:{request['phase']}" if "phase" in request else base
+    attempt = request.get("_phase_attempt")
+    return f"{unit}:attempt:{attempt['digest']}" if attempt is not None else unit
 
 
 @dataclass(frozen=True)
