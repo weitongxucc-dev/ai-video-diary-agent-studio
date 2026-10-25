@@ -139,6 +139,54 @@ export type CreationTaskScriptSectionWindow = {
     next_after_ordinal: number | null;
     truncated: boolean;
 };
+export type CreationTaskScriptWindowStartInput = {
+    request_id: string;
+    title: string;
+    sections: CreationTaskScriptSection[];
+    assistant_turn_id?: string;
+};
+export type CreationTaskScriptSectionsPatchInput = {
+    request_id: string;
+    expected_updated_at: string;
+    sections: CreationTaskScriptSection[];
+    insert_after_section_id?: string | null;
+    assistant_turn_id?: string;
+};
+export type CreationTaskScriptWindowSaved = {
+    task_id: string;
+    script_id: string;
+    request_id: string;
+    status: "saved";
+    updated_at: string;
+    total_count: number;
+    affected_section_ids: string[];
+};
+export type CreationTaskScriptConfirmSavedInput = {
+    request_id: string;
+    expected_updated_at: string;
+};
+export type CreationTaskScriptConfirmed = {
+    task_id: string;
+    script_id: string;
+    request_id: string;
+    status: "confirmed";
+    updated_at: string;
+    total_count: number;
+};
+export type CreationTaskScriptWindowUnsettled = {
+    task_id: string;
+    script_id?: string;
+    request_id: string;
+    operation: "start" | "patch" | "confirm";
+    status: "unknown" | "failed";
+    submission_effect: "unknown";
+    message: string;
+    submitted_input_available: boolean;
+    submitted_input?: CreationTaskScriptWindowStartInput | CreationTaskScriptSectionsPatchInput | CreationTaskScriptConfirmSavedInput;
+    error_detail?: unknown;
+};
+export type CreationTaskScriptWindowResult = CreationTaskScriptWindowSaved | CreationTaskScriptConfirmed | CreationTaskScriptWindowUnsettled;
+export type CreationTaskScriptRequestLocator = { operation: "start" } | { operation: "patch" | "confirm"; script_id: string };
 export type CreationTaskScriptsResponse = {
     task: CreationTask;
     scripts: CreationTaskScript[];

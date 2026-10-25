@@ -3,7 +3,7 @@ import type { TaskMediaJob } from '../types/task-edits';
 import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse } from '../types/creation-tasks';
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
-import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptSectionWindow, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
+import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptSectionWindow, CreationTaskScriptWindowStartInput, CreationTaskScriptSectionsPatchInput, CreationTaskScriptWindowSaved, CreationTaskScriptWindowUnsettled, CreationTaskScriptConfirmSavedInput, CreationTaskScriptConfirmed, CreationTaskScriptWindowResult, CreationTaskScriptRequestLocator, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
 import type { CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
 import type { CreationTaskAssistantTurnResponse, CreationTaskAssistantHistory, AssistantStreamEvent } from '../types/assistant';
 import type { CreationTaskTimelineVersionDetail, CreationTaskTimelineVersionList } from '../types/timeline-history';
@@ -76,6 +76,21 @@ export function getCreationTaskScriptSections(taskId: string, scriptId: string, 
     if (input.after_ordinal !== undefined) query.set("after_ordinal", String(input.after_ordinal));
     if (input.expected_updated_at !== undefined) query.set("expected_updated_at", input.expected_updated_at);
     return creationPlanRequest<CreationTaskScriptSectionWindow>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/sections${query.size ? `?${query}` : ""}`);
+}
+export function startCreationTaskScriptWindow(taskId: string, input: CreationTaskScriptWindowStartInput): Promise<CreationTaskScriptWindowSaved | CreationTaskScriptWindowUnsettled> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/windows`, { method: "POST", body: JSON.stringify(input) });
+}
+export function patchCreationTaskScriptSections(taskId: string, scriptId: string, input: CreationTaskScriptSectionsPatchInput): Promise<CreationTaskScriptWindowSaved | CreationTaskScriptWindowUnsettled> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/sections`, { method: "PATCH", body: JSON.stringify(input) });
+}
+export function confirmSavedCreationTaskScript(taskId: string, scriptId: string, input: CreationTaskScriptConfirmSavedInput): Promise<CreationTaskScriptConfirmed | CreationTaskScriptWindowUnsettled> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/confirm-saved`, { method: "POST", body: JSON.stringify(input) });
+}
+export function getCreationTaskScriptWindowRequest(taskId: string, requestId: string, locator: CreationTaskScriptRequestLocator, options: { include_input?: boolean } = {}): Promise<CreationTaskScriptWindowResult> {
+    const query = new URLSearchParams({ operation: locator.operation });
+    if (options.include_input === true) query.set("include_input", "true");
+    if (locator.operation !== "start") query.set("script_id", locator.script_id);
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/script-window-requests/${encodeURIComponent(requestId)}?${query}`);
 }
 export function generateCreationTaskScript(taskId: string): Promise<CreationTaskScriptsResponse> {
     return creationPlanRequest<CreationTaskScriptsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`, { method: "POST", body: JSON.stringify({}) });

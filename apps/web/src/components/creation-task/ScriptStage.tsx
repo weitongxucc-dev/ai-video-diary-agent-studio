@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan, getCreationTaskScriptSections } from "@/lib/api";
 import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
+import { ScriptWindowEditor } from "./ScriptWindowEditor";
 export function ConfirmedScriptView({ script }: {
     script: CreationTaskScript;
 }) {
@@ -177,12 +178,12 @@ type ScriptEditorProps = {
     busy: boolean;
     repairing: boolean;
     onConfirm: (script: LoadedScript) => void;
+    onWindowSaved?: () => Promise<void>;
 };
 export function ScriptEditor(props: ScriptEditorProps) {
-    if (!props.script.draft_complete) return <>
-        <p role="status">当前为部分稿，已存 {props.script.sections_total_count} 段不代表目标已完整。当前仅可查看，尚不能通过整稿入口保存或确认。</p>
-        <ConfirmedScriptView script={props.script}/>
-    </>;
+    if (props.script.selection_status === "draft" && (!props.script.draft_complete || props.script.sections_total_count > 20)) {
+        return <ScriptWindowEditor key={`${props.taskId}:${props.script.id}`} taskId={props.taskId} script={props.script} onSaved={async () => { await props.onWindowSaved?.(); }}/>;
+    }
     if (props.script.sections_loaded) return <CompleteScriptEditor {...props} script={props.script}/>;
     return <ScriptEditorLoader key={`${props.taskId}:${props.script.id}:${props.script.updated_at}`} {...props}/>;
 }

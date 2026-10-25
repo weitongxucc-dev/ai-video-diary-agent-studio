@@ -9,6 +9,7 @@ import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
+import { ScriptWindowStart } from "./creation-task/ScriptWindowEditor";
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
@@ -284,6 +285,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return () => { active = false; };
   }, [task.id]);
   const latestScript = workspace.scripts[0] ?? null;
+  const [manualScriptOpen, setManualScriptOpen] = useWorkspaceViewState("manual-script-open", false);
+  const windowScript = latestScript?.selection_status === "draft" && (!latestScript.draft_complete || latestScript.sections_total_count > 20);
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
   const zhSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid");
   const enSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid");
@@ -1476,11 +1479,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           }); }} /> : null}
         {activeView === "topic" && task.stage !== "topic" ? <ConfirmedTopicView topic={workspace.selected_topic} evidence={workspace.topic_evidence} /> : null}
 
-        {activeView === "script" && task.stage === "script" && !latestScript ? <>
+        {activeView === "script" && task.stage === "script" && !latestScript ? manualScriptOpen ? <ScriptWindowStart taskId={task.id} onSaved={async () => { await refresh(true); setManualScriptOpen(false); }}/> : <>
           <PlanReplyDraftAction busy={busy !== null} task={task} onComplete={async () => { await refresh(true); setNotice("已保存对话回复为待确认文案草稿；请补充当前资料引用和画面建议。"); }} />
           <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
+          <Button variant="outline" disabled={busy !== null} onClick={() => setManualScriptOpen(true)}>手动编写文案</Button>
         </> : null}
-        {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={`${task.id}:${latestScript.id}:${latestScript.updated_at}`} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
+        {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}

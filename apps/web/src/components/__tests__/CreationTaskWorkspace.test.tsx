@@ -5081,8 +5081,8 @@ it('shows complete black-frame totals separately from samples and keeps delivery
 it.each([false,true])('does not equate all stored sections with a complete draft when sections_loaded=%s',async(loaded)=>{
   const stored=sectionReaderScript();
   const partial:import('@/lib/types').CreationTaskScript=loaded
-    ? {...stored,draft_complete:false}
-    : {...stored,draft_complete:false,sections_loaded:false,sections:null};
+    ? {...stored,selection_status:'draft',draft_complete:false}
+    : {...stored,selection_status:'draft',draft_complete:false,sections_loaded:false,sections:null};
   const complete={...partial,draft_complete:true,updated_at:'2026-10-24T00:08:00Z'};
   vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
     const version=new URL(url,'http://local').searchParams.get('expected_updated_at')??partial.updated_at;
@@ -5095,10 +5095,46 @@ it.each([false,true])('does not equate all stored sections with a complete draft
   expect(screen.getByText(/当前为部分稿，已存 1 段不代表目标已完整/)).toBeInTheDocument();
   expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
   expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
-  expect(screen.queryByLabelText('第 1 段正文')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('第 1 段正文')).toBeEnabled();
   expect(confirm).not.toHaveBeenCalled();
   view.rerender(<ScriptEditor taskId={complete.task_id} script={complete} busy={false} repairing={false} onConfirm={confirm}/>);
   await screen.findByLabelText('第 1 段正文');
   expect(screen.queryByText(/当前为部分稿/)).not.toBeInTheDocument();
   expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled();
+});
+
+it('opens manual first-window writing from the existing script workspace and continues the same partial draft',async()=>{
+  const task={...baseTask,stage:'script' as const,stage_status:'waiting_for_user' as const,status:'waiting_for_user' as const,confirmed_script_id:null};
+  const initial=workspace(task);
+  mocks.getWorkspace.mockResolvedValue(initial);
+  const script:import('@/lib/types').CreationTaskScript={...sectionReaderScript(),id:'manual-script',task_id:task.id,
+    selection_status:'draft',draft_complete:false,sections_loaded:false,sections:null,sections_total_count:1,updated_at:'2026-10-24T00:09:00Z'};
+  const section={id:'manual-section',title:'手动首段',content:'手动首段正文',visual_prompt:'手动画面',evidence_reference_ids:[]};
+  const fetch=vi.fn(async(url:string,init?:RequestInit)=>{
+    if(init?.method==='POST' && url.endsWith('/scripts/windows')) {
+      const body=JSON.parse(init.body as string);
+      Object.assign(section,body.sections[0]);
+      expect(body.title).toBe('手动文案');
+      expect(body).not.toHaveProperty('edit_mode');
+      return new Response(JSON.stringify({task_id:task.id,script_id:script.id,request_id:body.request_id,status:'saved',
+        updated_at:script.updated_at,total_count:1,affected_section_ids:[section.id]}));
+    }
+    if(url.includes(`/scripts/${script.id}/sections`)) return new Response(JSON.stringify({task_id:task.id,script_id:script.id,
+      updated_at:script.updated_at,title:'手动文案',language:'zh-CN',selection_status:'draft',total_count:1,
+      items:[{ordinal:1,section,digest:'digest'}],next_after_ordinal:null,truncated:false}));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal('fetch',fetch);
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  fireEvent.click(await screen.findByRole('button',{name:'手动编写文案'}));
+  fireEvent.change(await screen.findByLabelText('新文案标题'),{target:{value:'手动文案'}});
+  fireEvent.change(screen.getByLabelText('第 1 段标题'),{target:{value:'手动首段'}});
+  fireEvent.change(screen.getByLabelText('第 1 段正文'),{target:{value:'手动首段正文'}});
+  fireEvent.change(screen.getByLabelText('第 1 段画面建议'),{target:{value:'手动画面'}});
+  mocks.getWorkspace.mockResolvedValue({...initial,scripts:[script]});
+  fireEvent.click(screen.getByRole('button',{name:'保存首窗'}));
+  await screen.findByRole('region',{name:'分窗编辑文案'});
+  expect(await screen.findByLabelText('第 1 段正文')).toHaveValue('手动首段正文');
+  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+  expect(mocks.confirmScript).not.toHaveBeenCalled();
 });
