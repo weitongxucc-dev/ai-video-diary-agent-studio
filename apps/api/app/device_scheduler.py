@@ -302,6 +302,7 @@ class DeviceScheduler:
         activity_source_reliable: bool = False,
         session_ttl: timedelta = timedelta(seconds=30),
         admission_recorder: ResourceAdmissionWrite | None = None,
+        dispatch_owner: tuple[str, str] | None = None,
     ) -> None:
         self.database_path = Path(database_path).expanduser().resolve()
         raw_lock = Path(device_lock_path).expanduser()
@@ -313,6 +314,10 @@ class DeviceScheduler:
         self.owners, self.resources, self.processes = owners, resources, processes
         self.clock, self.activity_source_reliable, self.session_ttl = clock, activity_source_reliable, session_ttl
         self.admission_recorder = admission_recorder
+        if dispatch_owner is not None and (len(dispatch_owner) != 2 or
+                any(not isinstance(value, str) or not value for value in dispatch_owner)):
+            raise ValueError("调度范围须明确执行对象类型和身份")
+        self.dispatch_owner = tuple(dispatch_owner) if dispatch_owner is not None else None
         self._held_fd: int | None = None
         self._last_issued_grant: Grant | None = None
 
@@ -1038,7 +1043,12 @@ class DeviceScheduler:
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 permit = self._reconcile_local(conn, data, _stamp(now))
-                rows = conn.execute("SELECT * FROM device_work_requests WHERE state IN ('waiting', 'blocked') ORDER BY first_ready_at_utc, id").fetchall()
+                # Preparation shares the machine permit, but must not reclassify
+                # unrelated business requests as owner_unknown or admit old work.
+                scope_sql = " AND owner_type=? AND owner_id=?" if self.dispatch_owner else ""
+                rows = conn.execute("SELECT * FROM device_work_requests WHERE state IN ('waiting', 'blocked')"
+                                    + scope_sql + " ORDER BY first_ready_at_utc, id",
+                                    self.dispatch_owner or ()).fetchall()
                 candidates = []
                 for row in rows:
                     request = self._request(row)
@@ -1508,6 +1518,98 @@ class DeviceScheduler:
             conn.execute("UPDATE device_permit SET state='free', request_id=NULL, token_hash=NULL, holder_json=NULL, children_json='[]', granted_at_utc=NULL, heartbeat_at_utc=NULL WHERE id=1")
             conn.commit()
         self._finish_host_release(data)
+
+    def continue_failed_unit(
+        self, failed_request_id: str, replacement_intent: SubmissionIntent, actor: object, *,
+        expected_failed_generation: int, expected_free_generation: int,
+        owner_database_path: str | Path,
+        owner_write: Callable[[sqlite3.Connection, WorkRequest, str], VerifiedWork],
+        write_guard: Callable[[sqlite3.Connection], None] | None = None,
+    ) -> WorkRequest:
+        """Create an owner-verified attempt without rewriting its failed predecessor.
+
+        The owner callback owns business/source checks and its recovery facts;
+        the scheduler fences the released permit and preserves execution identity.
+        Both writes use the same transaction, as with completed-unit continuation.
+        """
+        if Path(owner_database_path).expanduser().resolve() != self.database_path:
+            raise ValueError("失败阶段接续必须使用同一 Production SQLite 库")
+        observed = self._get(failed_request_id)
+        if not self.owners.can_manage(observed, actor):
+            raise PermissionError("不能接续其他成员的失败单元")
+        if observed.state != 'failed' or observed.last_grant_generation != expected_failed_generation:
+            raise RecoveryBlocked("原失败单元或许可代次已经变化")
+        identity = (observed.workspace_id, observed.owner_type, observed.owner_id, observed.input_digest)
+        proposed = (replacement_intent.workspace_id, replacement_intent.owner_type,
+                    replacement_intent.owner_id, replacement_intent.input_digest)
+        if proposed != identity or not replacement_intent.unit_key or replacement_intent.unit_key == observed.unit_key:
+            raise PermissionError("接续必须保持原执行对象与输入，并使用新的单元身份")
+        # A replay is a read of the previously committed successor, even if that
+        # successor has since run. It must not reopen the business owner again.
+        with self._connect() as reader:
+            existing = reader.execute(
+                """SELECT r.* FROM device_work_requests r JOIN device_request_events e
+                ON e.request_id=? AND e.event_type='retried' AND e.reason='continued_as:' || r.id
+                WHERE r.workspace_id=? AND r.owner_type=? AND r.owner_id=? AND r.input_digest=? AND r.unit_key=?""",
+                (failed_request_id, *proposed, replacement_intent.unit_key),
+            ).fetchone()
+        if existing is not None:
+            result = self._request(existing)
+            if result.policy != replacement_intent.policy or result.member_id != observed.member_id:
+                raise PermissionError("原接续请求的策略或成员不匹配")
+            return result
+        if self._held_fd is not None:
+            raise RecoveryBlocked("当前协调者仍持有设备许可")
+        fd, existed = self._acquire_file()
+        if fd is None:
+            raise RecoveryBlocked("设备仍被占用或释放状态未知")
+        try:
+            data = self._recover_ledger(self._read_ledger(existed))
+            self._check_database_switch(data)
+            now = _stamp(self._now())
+            new_id = uuid.uuid4().hex
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                permit = self._reconcile_local(conn, data, now)
+                row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (failed_request_id,)).fetchone()
+                if row is None:
+                    raise KeyError(failed_request_id)
+                original = self._request(row)
+                if (original != observed or original.state != 'failed'
+                        or original.last_grant_generation != expected_failed_generation):
+                    raise RecoveryBlocked("原失败单元或许可代次已经变化")
+                if (permit['state'], permit['generation']) != ('free', expected_free_generation):
+                    raise RecoveryBlocked("设备空闲许可代次已经变化")
+                active = conn.execute("""SELECT 1 FROM device_work_requests
+                    WHERE workspace_id=? AND owner_type=? AND owner_id=?
+                    AND state IN ('waiting','blocked','granted','yield_requested') LIMIT 1""", identity[:3]).fetchone()
+                if active is not None:
+                    raise RecoveryBlocked("原执行对象仍有在途单元")
+                if write_guard is not None:
+                    write_guard(conn)
+                trusted = owner_write(conn, original, new_id)
+                if ((trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest) != identity
+                        or trusted.unit_key != replacement_intent.unit_key
+                        or trusted.member_id != original.member_id or trusted.work_class != original.work_class
+                        or trusted.source_refs != original.source_refs):
+                    raise PermissionError("接续单元的可信来源、执行对象或成员已变化")
+                self._assert_material_stage_key(trusted)
+                conn.execute("""INSERT INTO device_work_requests
+                    (id,workspace_id,member_id,owner_type,owner_id,input_digest,unit_key,source_refs_json,
+                     work_class,policy,not_before_utc,window_json,first_ready_at_utc,state,resources_json,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'waiting',?,?,?)""",
+                    (new_id, *identity[:1], trusted.member_id, *identity[1:], trusted.unit_key,
+                     json.dumps([vars(ref) for ref in trusted.source_refs], sort_keys=True), trusted.work_class,
+                     replacement_intent.policy.mode,
+                     _stamp(replacement_intent.policy.not_before_utc) if replacement_intent.policy.not_before_utc else None,
+                     json.dumps(vars(replacement_intent.policy.window) if replacement_intent.policy.window else None),
+                     row['first_ready_at_utc'], json.dumps(trusted.resources, sort_keys=True), now, now))
+                self._record_event(conn, row, 'retried', 'continued_as:' + new_id, trusted.member_id, now)
+                created = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (new_id,)).fetchone()
+                conn.commit()
+            return self._request(created)
+        finally:
+            self._unlock(fd)
 
     def retry_existing(self, request_id: str, actor: object, *, reason: RetryReason, write_guard=None) -> dict[str, object]:
         """Explicitly reopen a terminal request after trusted business validation."""

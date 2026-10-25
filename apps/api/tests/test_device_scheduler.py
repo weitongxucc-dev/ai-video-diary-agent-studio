@@ -181,6 +181,37 @@ def _complete(scheduler, grant):
                                    checkpoint_write=lambda conn, current: current.unit_key)
 
 
+def test_preparation_dispatch_scope_preserves_other_requests_and_shared_permit(tmp_path):
+    ordinary = _scheduler(tmp_path)
+    old = ordinary.submit(_intent("old-work"), "member-a")
+    other = ordinary.submit(_intent("other-plan", owner_type="device_preparation"), "member-a")
+    current = ordinary.submit(_intent("current-plan", owner_type="device_preparation"), "member-a")
+    def untouched():
+        with ordinary._connect() as conn:
+            return [tuple(row) for row in conn.execute(
+                "SELECT * FROM device_work_requests WHERE id IN (?,?) ORDER BY id", (old.id, other.id))]
+    before = untouched()
+    class PreparationOnly(Owners):
+        def check_current(self, request, conn):
+            assert (request.owner_type, request.owner_id) == ("device_preparation", "current-plan")
+            return super().check_current(request, conn)
+    preparation = DeviceScheduler(ordinary.database_path, ordinary.lock_path,
+        owners=PreparationOnly(), resources=Resources(), processes=Processes(), clock=ordinary.clock,
+        dispatch_owner=("device_preparation", "current-plan"))
+    grant = preparation.pick_and_grant()
+    assert grant is not None and grant.request_id == current.id
+    try:
+        assert untouched() == before
+        assert ordinary.pick_and_grant() is None  # Scope does not bypass the machine lock.
+    finally:
+        _complete(preparation, grant)
+    assert preparation.pick_and_grant() is None
+    assert untouched() == before
+    resumed = ordinary.pick_and_grant()
+    assert resumed is not None and resumed.request_id in {old.id, other.id}
+    _complete(ordinary, resumed)
+
+
 @pytest.mark.parametrize("operation", ["cancel", "policy"])
 def test_slow_management_identity_keeps_sqlite_writable(tmp_path, operation):
     entered, proceed = Event(), Event()
