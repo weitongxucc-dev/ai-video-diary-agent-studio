@@ -829,7 +829,7 @@ def test_quality_measurement_requires_commit_and_keeps_successful_prefix_on_fail
     finally:
         assert runtime.stop(1)
 
-def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_prefix(tmp_path):
+def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_prefix(tmp_path, monkeypatch):
     """Real repository/scheduler/owner transaction, declared worker, no media."""
     from app.quality_worker_runtime import phase_measurement
     repository = ProductionRepository(tmp_path / 'studio.sqlite', tmp_path / 'library')
@@ -872,6 +872,7 @@ def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_pref
         original_prefix = record['evidence']['_phases']
         with repository._connect() as conn:
             failed = dict(conn.execute("SELECT * FROM device_work_requests WHERE owner_id=? AND state='failed'", (job_id,)).fetchone())
+        assert service.continued_phase_receipt('local', job_id, failed['id'], actor) is None
         with pytest.raises(ValueError, match='当前设备策略来源'):
             service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor)
         profile = dict(profile_id='declared-profile', revision=None, digest='a'*64, source_kind='device_profile')
@@ -922,5 +923,93 @@ def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_pref
             assert len(events) == 3
             assert len({row['id'] for row in events}) == 3
             assert [json.loads(row['payload_json'])['status'] for row in events].count('failed') == 2
+            before_replay = list(conn.iterdump())
+        def forbidden(*args, **kwargs):
+            raise AssertionError('receipt replay must not consult current policy or media')
+        service.budget = None
+        service.current_policy = forbidden
+        monkeypatch.setattr(service, 'verify_source', forbidden)
+        receipt = service.continued_phase_receipt('local', job_id, failed['id'], actor)
+        assert receipt == {'check_id': check_id, 'job_id': job_id, 'request_id': first_successor}
+        assert service.continue_failed_phase(None, 'local', job_id, failed['id'], actor) == first_successor
+        with pytest.raises(PermissionError):
+            service.continued_phase_receipt('local', job_id, failed['id'], CreationExecutionActor('local', 'other'))
+        with repository._connect() as conn:
+            assert list(conn.iterdump()) == before_replay
+            refs = conn.execute('SELECT source_refs_json FROM device_work_requests WHERE id=?', (first_successor,)).fetchone()[0]
+            conn.execute("UPDATE device_work_requests SET source_refs_json='[]' WHERE id=?", (first_successor,))
+        with pytest.raises(PermissionError, match='固定来源'):
+            service.continued_phase_receipt('local', job_id, failed['id'], actor)
+        with repository._connect() as conn:
+            conn.execute('UPDATE device_work_requests SET source_refs_json=? WHERE id=?', (refs, first_successor))
+            conn.execute('UPDATE device_work_requests SET last_grant_generation=last_grant_generation+1 WHERE id=?', (failed['id'],))
+        with pytest.raises(ValueError, match='原失败尝试回执'):
+            service.continued_phase_receipt('local', job_id, failed['id'], actor)
+    finally:
+        assert runtime.stop(1)
+
+
+def test_quality_continuation_projection_is_read_only_and_declares_conditions(tmp_path, monkeypatch):
+    from app import quality_worker_runtime, quality_worker
+    repository = ProductionRepository(tmp_path / 'studio.sqlite', tmp_path / 'library')
+    plan = CreationPlan(id='plan', workspace_id='local', goal='读取', name='读取', target_count=1,
+        language='zh-CN', aspect_ratio='16:9', duration_target_seconds=2, knowledge_references=[],
+        source_references=[], selected_voice=None, pronunciation_references=[], approved_asset_count=0,
+        approved_clip_count=0, material_rule_summary='', model_snapshot=[], confirmation_points=[],
+        blockers=[], preflight_fingerprint='isolated')
+    task = CreationTask(id='task', workspace_id='local', plan_id='plan', name='读取',
+        scenario='knowledge_explanation', stage='review')
+    repository.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
+    actor = CreationExecutionActor('local', 'owner')
+    store = ArtifactStore(tmp_path / 'artifacts')
+    checks = QualityCheckRepository(repository.database_path)
+    outputs = OutputObservationUseCase(repository, store, TaskAudio(repository, store, tmp_path), tmp_path, None)
+    service = QualityInspectionUseCase(repository, checks, outputs, budget=fixture_budget(),
+        verify_identity=lambda current: 'ready' if current == actor else 'unauthorized', temporary_root=tmp_path / 'worker')
+    seed_source(repository, store)
+    def worker(context, request, root):
+        if request['phase'] == 'black_frames':
+            raise RuntimeError('declared failure')
+        return metadata_result(request)
+    runtime = build_metadata_runtime(tmp_path, service, worker)
+    try:
+        assert service.continuation_projection('local', 'task', actor, runtime_available=True) is None
+        check_id = service.start(runtime, actor, 'local', 'task', force=True)
+        assert runtime.run_once() is True
+        assert runtime.run_once() is True
+        with repository._connect() as conn:
+            before = list(conn.iterdump())
+        def no_hash(*args, **kwargs):
+            raise AssertionError('polling must not hash media')
+        monkeypatch.setattr(quality_worker_runtime, 'hash_file', no_hash)
+        monkeypatch.setattr(quality_worker, 'hash_file', no_hash)
+        # No scheduler/recovery port is even accepted by this read method.
+        assert service.continuation_projection('local', 'task', None)['reason_code'] == 'actor_unavailable'
+        assert service.continuation_projection('local', 'task', actor)['reason_code'] == 'runtime_unavailable'
+        def read(current=actor):
+            return service.continuation_projection('local', 'task', current, runtime_available=True)
+        assert read(CreationExecutionActor('local', 'other'))['reason_code'] == 'original_actor_required'
+        assert read()['reason_code'] == 'policy_unavailable'
+        profile = dict(profile_id='declared-profile', revision=1, digest='a'*64, source_kind='device_profile')
+        service.current_policy = lambda: {'budget': service.budget, 'profile': profile}
+        ready = read()
+        assert ready == dict(job_id=f'job_quality_{check_id}', failed_request_id=ready['failed_request_id'],
+            phase='black_frames', completed_phases=['metadata'], can_request=True,
+            reason_code=None, release_check='on_submit')
+        with repository._connect() as conn:
+            assert list(conn.iterdump()) == before
+        service.budget = replace(service.budget, ffmpeg_sha256='4'*64)
+        assert read()['reason_code'] == 'algorithm_changed'
+        service.budget = fixture_budget()
+        with repository._connect() as conn:
+            conn.execute("UPDATE device_work_requests SET state='waiting' WHERE id=?", (ready['failed_request_id'],))
+        assert read()['reason_code'] == 'request_in_flight'
+        with repository._connect() as conn:
+            conn.execute("UPDATE device_work_requests SET state='failed' WHERE id=?", (ready['failed_request_id'],))
+        sealed = checks.get_check('local', 'task', check_id)['evidence']['_request']
+        # Identity/stat observes replacement; it does not open or rehash the film.
+        source_path = Path(sealed['source']['path'])
+        source_path.write_bytes(b'changed declared source')
+        assert read()['reason_code'] == 'source_changed'
     finally:
         assert runtime.stop(1)

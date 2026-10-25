@@ -23,7 +23,7 @@ from app.quality_inspection import final_quality_check_payload
 from app.quality_checks import fit_quality_result
 from app.quality_worker_runtime import (QualityBudget, file_identity, source_receipt,
     QUALITY_PHASE_PROTOCOLS, QUALITY_STREAM_PROTOCOL, quality_phase_request, quality_unit_key, quality_stream_resources, quality_request_byte_limit,
-    validate_phase_measurement, quality_attempt_digest)
+    validate_phase_measurement, quality_attempt_digest, QUALITY_PHASES)
 
 
 QUALITY_KIND = "quality_check"
@@ -58,6 +58,66 @@ class QualityInspectionUseCase:
             raise ValueError("质检策略修订尚未绑定当前运行设备档")
         return {"budget": asdict(budget), "profile": dict(profile), "mode": "bounded_preparation"}
 
+    def _read_failed_phase_link(self, workspace_id, job_id, failed_request_id, actor):
+        job, original, record, sealed = self.read(workspace_id, job_id)
+        if not self.same_actor(workspace_id, original, actor):
+            raise PermissionError("不能接续其他成员的质检")
+        self.require_actor(workspace_id, job.task_id, actor)
+        with closing(self._connect()) as reader:
+            failed = reader.execute("SELECT * FROM device_work_requests WHERE id=? AND workspace_id=? "
+                "AND owner_type=? AND owner_id=? AND input_digest=?",
+                (failed_request_id, workspace_id, QUALITY_KIND, job_id, job.input_digest)).fetchone()
+            if failed is None or failed["state"] != "failed" or failed["last_grant_generation"] is None:
+                raise RecoveryBlocked("原阶段没有明确失败且已授予的执行回执")
+            source = sealed["source"]
+            refs = [vars(SourceRef(workspace_id, "artifact", source["artifact_id"], source["render_ref"]))]
+            if failed["member_id"] != actor.member_id or json.loads(failed["source_refs_json"]) != refs:
+                raise PermissionError("原失败请求的成员或固定来源不匹配")
+            successor = reader.execute("SELECT r.* FROM device_work_requests r JOIN device_request_events e "
+                "ON e.request_id=? AND e.event_type='retried' AND e.reason='continued_as:' || r.id "
+                "WHERE r.workspace_id=? AND r.owner_type=? AND r.owner_id=? AND r.input_digest=?",
+                (failed_request_id, workspace_id, QUALITY_KIND, job_id, job.input_digest)).fetchone()
+        receipt = None
+        if successor is not None:
+            if (successor["member_id"] != failed["member_id"]
+                    or successor["work_class"] != failed["work_class"]
+                    or json.loads(successor["source_refs_json"]) != refs):
+                raise PermissionError("质检后继请求的成员或固定来源不匹配")
+            digest = successor["unit_key"].rsplit(":", 1)[-1]
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("质检后继缺少封存尝试身份")
+            event = self.production.get_task_event(workspace_id, f"event_{job_id}_quality_attempt_{digest}")
+            payload = event.payload
+            attempt = payload.get("attempt", {})
+            if (event.task_id != job.task_id or event.job_id != job_id
+                    or event.event_type != "quality_check_phase_attempt_created"
+                    or payload.get("check_id") != record["check_id"] or payload.get("new_request_id") != successor["id"]
+                    or attempt.get("previous_request_id") != failed_request_id
+                    or attempt.get("previous_generation") != failed["last_grant_generation"]
+                    or attempt.get("digest") != digest):
+                raise ValueError("质检后继未绑定原失败尝试回执")
+            phase = attempt.get("starting_phase")
+            if phase not in QUALITY_PHASES:
+                raise ValueError("质检后继阶段无效")
+            prefix = record["evidence"].get("_phases", {})
+            request = quality_phase_request(sealed, {"_phase_attempt": attempt,
+                "_phases": {key: prefix[key] for key in QUALITY_PHASES[:QUALITY_PHASES.index(phase)] if key in prefix}})
+            base = f"quality:{record['check_id']}:{phase}"
+            if (failed["unit_key"] != base and not failed["unit_key"].startswith(base + ":attempt:")
+                    or quality_unit_key(request) != successor["unit_key"]
+                    or request["resources"] != json.loads(successor["resources_json"])):
+                raise ValueError("质检后继的阶段或资源封存与原回执不一致")
+            receipt = {"check_id": record["check_id"], "job_id": job_id, "request_id": successor["id"]}
+        return job, original, record, sealed, failed, receipt
+
+    def continued_phase_receipt(self, workspace_id, job_id, failed_request_id, actor):
+        """Read an already committed successor without runtime/profile/media IO.
+
+        Authority and immutable request/source lineage still apply. The caller
+        decides whether a terminal Job permits its no-runtime replay shortcut.
+        """
+        return self._read_failed_phase_link(workspace_id, job_id, failed_request_id, actor)[-1]
+
     def continue_failed_phase(self, scheduler, workspace_id, job_id, failed_request_id, actor):
         """Explicit finite preparation under the original check/Job and prefix.
 
@@ -65,25 +125,14 @@ class QualityInspectionUseCase:
         This does not learn a speed, change the original request, or retry unknown
         work. The scheduler owns released-failure fencing and the shared commit.
         """
-        job, original, record, sealed = self.read(workspace_id, job_id)
-        if not self.same_actor(workspace_id, original, actor):
-            raise PermissionError("不能接续其他成员的质检")
-        self.require_actor(workspace_id, job.task_id, actor)
+        job, original, record, sealed, failed, receipt = self._read_failed_phase_link(
+            workspace_id, job_id, failed_request_id, actor)
+        if receipt is not None:
+            return receipt["request_id"]
         with closing(self._connect()) as reader:
             task_access = reader.execute("SELECT json_extract(payload,'$.owner_user_id'),"
                 "json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?",
                 (workspace_id, job.task_id)).fetchone()
-            failed = reader.execute("SELECT * FROM device_work_requests WHERE id=? AND workspace_id=? "
-                "AND owner_type=? AND owner_id=? AND input_digest=?",
-                (failed_request_id, workspace_id, QUALITY_KIND, job_id, job.input_digest)).fetchone()
-            if failed is None or failed["state"] != "failed" or failed["last_grant_generation"] is None:
-                raise RecoveryBlocked("原阶段没有明确失败且已授予的执行回执")
-            successor = reader.execute("SELECT r.id FROM device_work_requests r JOIN device_request_events e "
-                "ON e.request_id=? AND e.event_type='retried' AND e.reason='continued_as:' || r.id "
-                "WHERE r.workspace_id=? AND r.owner_type=? AND r.owner_id=? AND r.input_digest=?",
-                (failed_request_id, workspace_id, QUALITY_KIND, job_id, job.input_digest)).fetchone()
-            if successor is not None:
-                return successor["id"]  # A replay reads the committed successor, even after it finished.
         if job.status != "failed" or record["check_state"] != "failed" or sealed.get("protocol") != QUALITY_STREAM_PROTOCOL:
             raise ValueError("仅可接续原流式检查的明确失败阶段")
         request = quality_phase_request(sealed, record["evidence"])
@@ -191,6 +240,68 @@ class QualityInspectionUseCase:
         return final_quality_check_payload(self.checks.get(workspace_id, task_id), plan,
             timeline_version_id=task.current_timeline_version_id,
             current_render_ref=source["render_ref"] if source is not None else None, current_source=source)
+
+    def continuation_projection(self, workspace_id, task_id, actor, *, runtime_available=False):
+        """Declared eligibility only; never reconcile, admit, or hash media here.
+
+        The HTTP caller must first enforce task visibility. It sets runtime_available
+        only when using the actual runtime's registered quality service. Submission
+        revalidates authority/source/policy and proves process/permit release.
+        """
+        record = self.checks.get(workspace_id, task_id)
+        if record is None or record["check_state"] != "failed" or "_request" not in record["evidence"]:
+            return None
+        job_id = f"job_quality_{record['check_id']}"
+        try:
+            job, original, current, sealed = self.read(workspace_id, job_id)
+            request = quality_phase_request(sealed, current["evidence"])
+        except (KeyError, TypeError, ValueError):
+            return None  # No trustworthy executable identity to offer.
+        if job.task_id != task_id or "phase" not in request:
+            return None
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT id,state,last_grant_generation,resources_json FROM device_work_requests "
+                "WHERE workspace_id=? AND owner_type=? AND owner_id=? AND input_digest=? AND unit_key=?",
+                (workspace_id, QUALITY_KIND, job_id, job.input_digest, quality_unit_key(request))).fetchone()
+            active = conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type=? "
+                "AND owner_id=? AND state IN ('waiting','blocked','granted','yield_requested') LIMIT 1",
+                (workspace_id, QUALITY_KIND, job_id)).fetchone()
+        result = {"job_id": job_id, "failed_request_id": row["id"] if row is not None else None,
+            "phase": request["phase"], "completed_phases": list(QUALITY_PHASES[:len(request["checkpoints"])]),
+            "can_request": False, "reason_code": None, "release_check": "on_submit"}
+        reason = None
+        if actor is None:
+            reason = "actor_unavailable"
+        elif not self.same_actor(workspace_id, original, actor):
+            reason = "original_actor_required"
+        elif not runtime_available:
+            reason = "runtime_unavailable"
+        elif active is not None:
+            reason = "request_in_flight"
+        elif (job.status != "failed" or row is None or row["state"] != "failed"
+                or row["last_grant_generation"] is None
+                or sealed.get("protocol") != QUALITY_STREAM_PROTOCOL
+                or json.loads(row["resources_json"]) != request["resources"]):
+            reason = "failed_request_unavailable"
+        else:
+            try:
+                # Existing verification reads registered facts and file identity
+                # (stat); full SHA belongs to actual metadata/finalize workers.
+                self.verify_source(request, actor)
+            except PermissionError:
+                reason = "original_actor_required"
+            except (KeyError, OSError, ValueError):
+                reason = "source_changed"
+            if reason is None:
+                try:
+                    selected = self._current_preparation_policy()
+                    if any(selected["budget"][key] != request["budget"][key]
+                           for key in ("worker_sha256", "ffmpeg_sha256", "ffprobe_sha256")):
+                        reason = "algorithm_changed"
+                except (KeyError, OSError, TypeError, ValueError, RuntimeError):
+                    reason = "policy_unavailable"
+        result.update(can_request=reason is None, reason_code=reason)
+        return result
 
     def read(self, workspace_id, job_id, *, connection=None):
         job = self.production.get_job_run(workspace_id, job_id)
