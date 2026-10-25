@@ -176,6 +176,14 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     const material = pathname.match(/^\/api\/production\/materials\/([^/]+)$/);
     if (material && !search) return result('read_task_material', {asset_id: decodeURIComponent(material[1])});
   }
+  if (pathname === '/api/device/resource-preparations' && method === 'POST' && !search
+      && payload && typeof payload === 'object' && !Array.isArray(payload))
+    return result('prepare_device_resources',{payload});
+  const preparation=pathname.match(/^\/api\/device\/resource-preparations\/([^/]+)(\/finalize)?$/);
+  if (preparation && !search) {
+    if (method==='GET' && !preparation[2]) return result('read_device_preparation',{request_id:decodeURIComponent(preparation[1])});
+    if (method==='POST' && preparation[2]) return result('finalize_device_preparation',{request_id:decodeURIComponent(preparation[1])});
+  }
   const task = pathname.match(/^\/api\/creation-tasks\/([^/]+)(.*)$/);
   if (!task) return null;
   const args = {task_id: decodeURIComponent(task[1])};

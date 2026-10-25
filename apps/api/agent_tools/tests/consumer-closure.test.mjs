@@ -240,6 +240,99 @@ console.log('versioned script window host: PASS');`,
   assert.match(stdout,/versioned script window host: PASS/);
 });
 
+test('device preparation correction distinguishes unsubmitted validation from an uncertain conflict', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`
+import assert from 'node:assert/strict';
+const {createBusinessRequest}=await import(process.argv[1]);
+const {registerExecutionTools}=await import(process.argv[2]);
+const one='11111111-1111-4111-8111-111111111111',two='22222222-2222-4222-8222-222222222222';
+for(const failure of [{status_code:422,reason:'invalid',submission_effect:'rejected'},
+ {status_code:409,reason:'not submitted',submission_effect:'not_submitted'},
+ {status_code:409,reason:'conflict',submission_effect:'rejected'}]){
+ const tools=new Map(),calls=[];
+ const request=createBusinessRequest({taskId:'task',selectedTaskVersion:null,verifyTaskVersion(){},
+  readCredentials(){throw Error('credentials forbidden')},getSignal:()=>undefined,fetchRequest(){throw Error('HTTP forbidden')},
+  businessCall:async(operation,args)=>{calls.push({operation,args});return calls.length===1?{ok:false,failure}:
+   {ok:true,value:{id:'work',state:'waiting',plan_id:'plan'}}}});
+ registerExecutionTools({registerTool:tool=>tools.set(tool.name,tool)},{request,taskId:'task',
+  readActionSource:()=>({turnId:'turn',inputId:'input'}),typedRequestId:()=>calls.length===0?one:two});
+ const tool=tools.get('prepare_device_resources');
+ const shape={width_px:16,height_px:16,frame_rate:1,duration_seconds:1,clip_count:1,audio_input_count:1,sample_rate:8000,channels:1};
+ await assert.rejects(()=>tool.execute('odd',{shape:{...shape,width_px:17}}));
+ assert.equal(calls.length,0);
+ const first=await tool.execute('first',{shape});assert.equal(first.isError,true);
+ const correction=()=>tool.execute('correct',{shape:{...shape,width_px:32}});
+ if(failure.status_code===422 || failure.submission_effect==='not_submitted'){
+  const result=await correction();assert.equal(result.details.receipt.id,'work');
+  assert.equal(calls.length,2);assert.equal(calls[0].args.payload.request_id,one);assert.equal(calls[1].args.payload.request_id,two);
+ }else{await assert.rejects(correction);assert.equal(calls.length,1);}
+}
+console.log('device preparation correction: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','execution-tools.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/device preparation correction: PASS/);
+});
+
+test('device preparation tools use the original key after an unknown result and never invent run or normal work', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`
+import assert from 'node:assert/strict';
+const {createBusinessRequest,RequestNotSubmitted}=await import(process.argv[1]);
+const {registerExecutionTools}=await import(process.argv[2]);
+const {createToolCallScope}=await import(process.argv[3]);
+const tools=new Map(),calls=[];let first=true;
+const original='11111111-1111-4111-8111-111111111111',changed='22222222-2222-4222-8222-222222222222';
+const source={turnId:'turn:original',inputId:'input:original',inputTurnId:'turn:original'};
+const request=createBusinessRequest({taskId:'task:original',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw new Error('credentials forbidden')},getSignal:()=>undefined,
+ fetchRequest(){throw new Error('HTTP forbidden')},businessCall:async(operation,args)=>{
+  calls.push({operation,args});assert.equal('actor' in args,false);assert.equal('workspace_id' in args,false);
+  if(operation==='prepare_device_resources'){
+   if(first){first=false;throw new Error('lost response')}
+   return {ok:true,value:{id:args.payload.request_id===changed?'work:next':'work:original',plan_id:'plan:original',state:'waiting',wait_reason:null}};
+  }
+  if(operation==='read_device_preparation')return {ok:true,value:{id:args.request_id,plan_id:'plan:original',state:'done',wait_reason:null}};
+  if(operation==='finalize_device_preparation')return {ok:true,value:{id:args.request_id,state:'done',profile_published:true,profile_id:'profile',revision:'v1',normal_work_started:false}};
+  throw Error('unsupported operation');
+ }});
+const scoped=createToolCallScope(()=>source).bind({registerTool:tool=>tools.set(tool.name,tool)});
+registerExecutionTools(scoped,{request,taskId:'task:original',readActionSource:()=>source,
+ typedRequestId:(_turn,call)=>call==='first'?original:changed});
+const shape={width_px:16,height_px:16,frame_rate:1,duration_seconds:1,clip_count:1,audio_input_count:1,sample_rate:8000,channels:1};
+const initial=await tools.get('prepare_device_resources').execute('first',{shape});
+assert.equal(initial.isError,true);assert.equal(initial.details.preparation_key,original);
+await assert.rejects(()=>tools.get('prepare_device_resources').execute('changed',{shape,request_id:changed}));
+await assert.rejects(()=>tools.get('prepare_device_resources').execute('changed-shape',{shape:{...shape,width_px:32}}));
+assert.equal(calls.length,1);
+const queued=await tools.get('prepare_device_resources').execute('second',{shape:Object.fromEntries(Object.entries(shape).reverse())});
+assert.equal(queued.details.receipt.id,'work:original');assert.equal(queued.details.input_id,'input:original');
+assert.equal(calls[0].args.payload.request_id,original);assert.equal(calls[1].args.payload.request_id,original);
+await assert.rejects(()=>tools.get('prepare_device_resources').execute('duplicate-known',{shape,request_id:changed}));
+assert.equal(calls.length,2);
+await tools.get('prepare_device_resources').execute('again',{shape});
+assert.equal(calls[2].operation,'read_device_preparation');
+await tools.get('read_device_preparation').execute('read',{request_id:'work:original'});
+await assert.rejects(()=>tools.get('prepare_device_resources').execute('done-not-released',{shape,request_id:changed}));
+assert.equal(calls.length,4);
+const finalized=await tools.get('finalize_device_preparation').execute('final',{request_id:'work:original'});
+assert.equal(finalized.details.receipt.normal_work_started,false);assert.equal(finalized.details.receipt.profile_published,true);
+assert.deepEqual(calls.map(c=>c.operation),['prepare_device_resources','prepare_device_resources','read_device_preparation','read_device_preparation','finalize_device_preparation']);
+await assert.rejects(()=>request('/api/device/resource-preparations/plan/run',{method:'POST',body:'{}'}),RequestNotSubmitted);
+assert.equal(calls.length,5);
+const next=await tools.get('prepare_device_resources').execute('new-after-finalize',{shape,request_id:changed});
+assert.equal(next.details.receipt.id,'work:next');assert.equal(calls.at(-1).args.payload.request_id,changed);
+await assert.rejects(()=>tools.get('prepare_device_resources').execute('active-next-key',{shape,request_id:original}));
+assert.equal(calls.length,6);
+console.log('device preparation host: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','execution-tools.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','registration.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/device preparation host: PASS/);
+});
+
 test('execution capability tool reads the bound task through the host without execution or admission', async t => {
   const tree = await resourceTree(t);
   const {stdout} = await execute(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `

@@ -23,7 +23,7 @@ ASSISTANT_BUSINESS_TOOLS = {
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
 }
 
-TASK_READ_PREVIEW_TOOLS = ("read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -109,6 +109,9 @@ _PI_TOOL_LABELS = {
     "cancel_creation_execution": "取消连续制作",
     "read_creation_execution": "读取原制作作业",
     "read_execution_capabilities": "读取执行单元能力与预算来源",
+    "prepare_device_resources": "提交有界设备能力准备",
+    "read_device_preparation": "查询原设备准备请求",
+    "finalize_device_preparation": "核验并发布原设备准备结果",
     "read_segment_visual_decision": "读取原段落画面候选",
     "read_selected_reference": "读取选中引用",
     "read_selected_profile": "读取所引用档案",

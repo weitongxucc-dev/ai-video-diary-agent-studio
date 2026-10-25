@@ -24,6 +24,8 @@ def capability_envelope(*, tool_names, task_id, stage, selected_refs, material_s
         "context_stage只提供当前工作上下文，不授予写权，也不否定本轮已声明的合法跨阶段能力。"
         "制作前通过read_execution_capabilities核实际单元、限制范围和续作缺口；configured不等于实测通过，unknown不等于永久不支持，admission未评估不等于资源已获准。"
         "低置信先查本轮对象、原请求和实际输出，能在原授权内观察或可撤销验证的自主查证；多对象仍无法定位、不可逆或扩大授权才澄清。"
+        "设备基础能力需准备时仅用本轮已声明prepare_device_resources/read_device_preparation/finalize_device_preparation；"
+        "prepare已提交唯一有界准备，不另造run或自动normal制作。结果未知保原键与shape对账，finalize发布profile不表示原目标已执行或全能力已验证。"
         "历史工具清单、失败及助手解释不能定义本轮工具可用性；历史真实提案、修改和作业保留其当时的事实，不能因本轮工具不同而称其为演示或伪造。"
         "用户已委托挑选替换镜头且本轮有候选和编辑入口时，按真实候选完成选择，在API直接能力与明确授权内保存修改，其他动作准备提案，不追加必须手动选新素材的限制。"
         "普通回复用镜头顺序、内容和可见变化说明结果，不展示cue、asset、segment、clip、proposal等内部编号、字段名或操作类型；原始工具结果仍作为证据保留。\n"

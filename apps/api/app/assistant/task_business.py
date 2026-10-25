@@ -63,7 +63,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -81,6 +81,7 @@ class TaskBusiness:
         self.media_jobs_list=media_jobs_list
         self.execution_capabilities=execution_capabilities
         self.read_script_sections=read_script_sections
+        self.device_preparation=device_preparation
 
     def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -489,6 +490,32 @@ class TaskBusiness:
         if operation=='read_task_workspace': return self.workspace_facts(ws,task)
         if operation=='read_creator_memory': return sealed['memory']
         if operation=='read_assistant_script_context': return self.script_context(ws,task_id,actor.user_id or actor.member_id)
+        if operation in {'prepare_device_resources','read_device_preparation','finalize_device_preparation'}:
+            from pydantic import ValidationError
+            from app.schemas import DevicePreparationRequest
+            from app.device_resource_profile import DeviceProfileUnavailable
+            from app.device_preparation_application import DevicePreparationConflict
+            from app.device_scheduler import RecoveryBlocked
+            if self.device_preparation is None:
+                raise TaskBusinessRejected('设备准备业务用例尚未装配',status_code=503)
+            try:
+                if operation=='prepare_device_resources':
+                    payload=DevicePreparationRequest.model_validate(args['payload'])
+                    result=self.device_preparation('prepare',shape=payload.shape.model_dump(),request_id=str(payload.request_id),actor=actor)
+                elif operation=='read_device_preparation':
+                    result=self.device_preparation('status',request_id=args['request_id'],actor=actor)
+                else:
+                    result=self.device_preparation('finalize',request_id=args['request_id'],actor=actor)
+            except ValidationError as exc:
+                raise HTTPException(status_code=422,detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404,detail='设备准备请求不存在') from exc
+            except (DevicePreparationConflict,DeviceProfileUnavailable,RecoveryBlocked,ValueError) as exc:
+                raise HTTPException(status_code=409,detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503,detail=str(exc)) from exc
+            return {key:result[key] for key in ('id','plan_id','state','wait_reason','profile_published',
+                'profile_id','revision','profile_digest','normal_work_started') if key in result}
         if operation=='read_script_sections':
             from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT, ScriptWindowConflict
             if self.read_script_sections is None:

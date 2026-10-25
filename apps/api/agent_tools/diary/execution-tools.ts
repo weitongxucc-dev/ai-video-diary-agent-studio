@@ -8,6 +8,83 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
   readCurrentTaskFacts: () => Promise<any>; typedRequestId: (turn: string, call: string) => string;
 }) {
   if (taskId) {
+    let preparationAttempt: {inputKey: string; shapeKey: string; requestId: string; workId?: string; released?: boolean} | null = null;
+    const preparationRoot = '/api/device/resource-preparations';
+    const preparationResult = (action: string, receipt: any, preparationKey?: string) => {
+      const details = {kind: 'device_preparation', action, receipt,
+        ...(preparationKey ? {preparation_key: preparationKey} : {})};
+      return {content: [{type: 'text', text: JSON.stringify(details)}], details};
+    };
+    pi.registerTool({name: 'prepare_device_resources', label: '提交有界设备准备',
+      description: '按当前授权目标的实际媒体形状提交基础CPU有界准备。只提交既有准备owner，不运行旧作品或normal制作；不得传路径、env或许可阈值。首次请求键由宿主生成；回应未知只沿原键和原shape对账，不换ID重做。收到id后查询原队列；终态且finalize明确释放后，可因实际需要显式新键再次准备，默认重调仍只查原结果。',
+      parameters: {type: 'object', properties: {
+        request_id: {type: 'string',format: 'uuid',description: '用于已知原键恢复，或原队列终态经finalize释放后明确新一轮准备；未知或active不可换键。不是队列id。'},
+        shape: {type: 'object',properties: {
+          width_px: {type:'integer',minimum:2,multipleOf:2},height_px: {type:'integer',minimum:2,multipleOf:2},
+          frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0},
+          clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1},
+          sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
+          source_bytes: {type:'integer',minimum:1},
+        },required:['width_px','height_px','frame_rate','duration_seconds','clip_count','audio_input_count','sample_rate','channels'],additionalProperties:false},
+      },required:['shape'],additionalProperties:false},
+      execute: async (callId: string,params: {request_id?:string;shape:Record<string,number>}) => {
+        if (!Number.isSafeInteger(params.shape.width_px) || params.shape.width_px<=0 || params.shape.width_px%2
+            || !Number.isSafeInteger(params.shape.height_px) || params.shape.height_px<=0 || params.shape.height_px%2)
+          throw new Error('设备准备需要明确的偶数YUV宽高，未提交请求');
+        const source=readActionSource(),inputKey=source.inputId ?? source.turnId;
+        if (!source.turnId || !inputKey) throw new Error('当前准备缺少原输入身份');
+        const shapeKey=JSON.stringify(Object.entries(params.shape).sort(([a],[b])=>a.localeCompare(b)));
+        if (preparationAttempt?.inputKey===inputKey) {
+          const sameShape=preparationAttempt.shapeKey===shapeKey;
+          const newKey=Boolean(params.request_id && params.request_id!==preparationAttempt.requestId);
+          const same=sameShape && !newKey;
+          if (!same && (!preparationAttempt.released || params.request_id===preparationAttempt.requestId))
+            throw new Error('原准备尚未核验释放或原键输入已变化；unknown/active保原键，终态须finalize实际释放后才能明确新键再准备');
+          if (same && preparationAttempt.workId) {
+            const receipt=await request(`${preparationRoot}/${encodeURIComponent(preparationAttempt.workId)}`);
+            if (receipt.id!==preparationAttempt.workId) throw new Error('原设备准备回执身份不一致');
+            return preparationResult('status',receipt,preparationAttempt.requestId);
+          }
+          if (!same) preparationAttempt={inputKey,shapeKey,requestId:params.request_id ?? typedRequestId(source.turnId,callId)};
+        } else preparationAttempt={inputKey,shapeKey,requestId:params.request_id ?? typedRequestId(source.turnId,callId)};
+        const attempt=preparationAttempt!;
+        let receipt;
+        try {
+          receipt=await request(preparationRoot,{method:'POST',body:JSON.stringify({request_id:attempt.requestId,shape:params.shape})});
+        } catch (error) {
+          const original=error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted ? error.businessFailure : undefined;
+          const notSubmitted=error instanceof RequestNotSubmitted || original?.submission_effect==='not_submitted'
+            || error instanceof BusinessRequestError && error.httpStatus===422;
+          if (notSubmitted && preparationAttempt===attempt) preparationAttempt=null;
+          const details={kind:'device_preparation',action:'prepare',preparation_key:attempt.requestId,
+            failure:{...safeBusinessFailure(original ?? {}),reason:boundedText(error instanceof Error?error.message:String(error),500).text,
+              repair_action:notSubmitted?'已明确未提交，可修正参数后提交；不宣称准备完成。'
+                :'未获队列id时仅沿原preparation_key和原shape重调prepare对账；不可换键或输入。收到id后查询原队列，不重新准备。'}};
+          return {isError:true,content:[{type:'text',text:JSON.stringify(details)}],details};
+        }
+        if (typeof receipt.id!=='string' || typeof receipt.state!=='string') throw new Error('设备准备未返回可核对的队列身份');
+        attempt.workId=receipt.id;
+        return preparationResult('prepare',receipt,attempt.requestId);
+      }});
+    pi.registerTool({name:'read_device_preparation',label:'查询原设备准备',
+      description:'只读已返回的设备队列id状态，不启动runtime、不finalize或准备新请求；原准备键不等于队列id。',
+      parameters:{type:'object',properties:{request_id:{type:'string',minLength:1}},required:['request_id'],additionalProperties:false},
+      execute:async(_id:string,params:{request_id:string})=>{
+        const receipt=await request(`${preparationRoot}/${encodeURIComponent(params.request_id)}`);
+        if(receipt.id!==params.request_id)throw new Error('设备准备回执身份不一致');
+        return preparationResult('status',receipt);
+      }});
+    pi.registerTool({name:'finalize_device_preparation',label:'核验原设备准备结果',
+      description:'对原队列核验完整回执并发布设备档，失败或未完按实际回执处理；成功不启动normal制作、不自动恢复旧作品，也不代表全目标能力已验证。',
+      parameters:{type:'object',properties:{request_id:{type:'string',minLength:1}},required:['request_id'],additionalProperties:false},
+      execute:async(_id:string,params:{request_id:string})=>{
+        const receipt=await request(`${preparationRoot}/${encodeURIComponent(params.request_id)}/finalize`,{method:'POST',body:'{}'});
+        if(receipt.id!==params.request_id || receipt.normal_work_started!==false || typeof receipt.profile_published!=='boolean'
+            || !['done','failed','cancelled'].includes(receipt.state))
+          throw new Error('设备准备发布回执不完整，未宣称已发布或已启动制作');
+        if (preparationAttempt?.workId===params.request_id) preparationAttempt.released=true;
+        return preparationResult('finalize',receipt);
+      }});
     pi.registerTool({name: "read_execution_capabilities", label: "读取执行单元能力",
       description: "只读当前任务可用执行单元的配置、限制单位与范围、验证未知状态和续作缺口。已配置不等于实测通过或整片可完成；不进行资源准入、执行、提额或制作。",
       parameters: {type: "object", properties: {}, additionalProperties: false},
