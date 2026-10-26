@@ -54,6 +54,28 @@ def metadata_payload(state):
         "request_id": str(uuid4()), "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": 1}
 
 
+def test_execution_capability_read_is_authorized_and_does_not_start_runtime(metadata_http_state, monkeypatch):
+    state = metadata_http_state
+    monkeypatch.setattr(main, "device_runtime", None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("capability read must not start or assemble execution")
+
+    monkeypatch.setattr(main, "_creation_runtime", forbidden)
+    monkeypatch.setattr(main, "_build_device_components", forbidden)
+    monkeypatch.setattr(main, "_start_device_runtime", forbidden)
+    response = state.client.get(state.url + "/assistant/execution-capabilities")
+    assert response.status_code == 200, response.text
+    facts = response.json()
+    assert facts["admission"] == "not_evaluated"
+    assert facts["whole_task_support"] == "not_inferred"
+    assert all(not unit["configured"] for unit in facts["capabilities"])
+    assert state.client.get(state.url + "/assistant/execution-capabilities",
+                            headers={"x-test-workspace": "outside"}).status_code == 404
+    assert state.client.get("/api/creation-tasks/missing/assistant/execution-capabilities").status_code == 404
+
+
+
 def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http_state, monkeypatch):
     state = metadata_http_state
     wakes = []
@@ -291,7 +313,9 @@ def test_assistant_typed_source_is_host_bound_and_not_parsed_again(material_edit
     original_post = state.client.post
     runtime = _granted_domain_preview_adapter(state, monkeypatch)
     from test_creation_resource_contract import _render_budget
-    monkeypatch.setattr(main, 'clip_preview_budget_from_env', lambda:_render_budget())
+    selected_budget_for = main._device_operation_budget
+    monkeypatch.setattr(main, '_device_operation_budget',
+        lambda name: _render_budget() if name == 'clip_preview' else selected_budget_for(name))
     media = runtime.registrations['creation_job'].owner.task_media
     media.facts = main._task_media_facts
     def render_input(inputs, path, context):

@@ -55,6 +55,50 @@ def validate_logical_media_reference(
     return f"{scheme}://{parsed.netloc}{parsed.path}"
 
 
+class DevicePreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    frame_rate: int = Field(gt=0)
+    duration_seconds: float = Field(gt=0)
+    clip_count: int = Field(gt=0)
+    audio_input_count: int = Field(gt=0)
+    sample_rate: int = Field(gt=0)
+    channels: int = Field(gt=0)
+    source_bytes: int | None = Field(default=None, gt=0)
+
+
+class NarrationPreparationPronunciationReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+
+
+class NarrationPreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    voice_profile_id: str = Field(min_length=1)
+    voice_version: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    language: Literal["zh", "en", "zh-en"]
+    output_duration_seconds: float = Field(gt=0)
+    pronunciation_references: list[NarrationPreparationPronunciationReference] = Field(default_factory=list)
+    task_id: str | None = Field(default=None, min_length=1)
+
+
+class DevicePreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    kind: Literal["cpu", "narration"] = "cpu"
+    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest
+
+    @model_validator(mode="after")
+    def shape_matches_kind(self):
+        expected = DevicePreparationShapeRequest if self.kind == "cpu" else NarrationPreparationShapeRequest
+        if not isinstance(self.shape, expected):
+            raise ValueError("准备类型与输入形状不一致")
+        return self
+
+
 class SourceRefResponse(BaseModel):
     source_type: str
     title: str

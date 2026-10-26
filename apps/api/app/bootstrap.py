@@ -110,7 +110,7 @@ def prepare_runtime_dependencies(
     catalog = model_catalog_from_settings(settings)
     models = ModelProviders(
         catalog, visual_semantic_provider_from_catalog(catalog),
-        voice_clone_provider_from_catalog(catalog),
+        voice_clone_provider_from_catalog(catalog, temporary_root=settings.effective_temporary_root_path),
         avatar_lipsync_provider_from_settings(settings),
         avatar_lipsync_provider_from_settings(settings, quality="high"),
     )
@@ -174,9 +174,20 @@ def prepare_runtime_dependencies(
     )
 
 
+def device_lock_path(*, settings: Settings, database_path) -> Path:
+    """Desktop API and preparation share one application execution lock."""
+    from app.device_paths import device_lock_path as canonical_lock, require_legacy_locks_released
+    old_paths = [Path(database_path).expanduser().resolve().parent / _DEVICE_LOCK_FILENAME]
+    if settings.device_resource_profile_path:
+        old_paths.append(Path(settings.device_resource_profile_path).expanduser().resolve().parent / _DEVICE_LOCK_FILENAME)
+    require_legacy_locks_released(old_paths)
+    return canonical_lock()
+
+
 def bind_device_runtime(
     *, repository: ProductionRepository, settings: Settings, members: LocalMemberService,
     registrations, budget, material_executor, verify_identity, record_admission,
+    dispatch_owner=None,
 ):
     """Bind one unstarted device and its material service from explicit objects."""
     from app.device_runtime import build_device_runtime
@@ -190,19 +201,21 @@ def bind_device_runtime(
     poll_interval_seconds = 1.0
     resources, processes = build_host_probes(
         database_path=repository.database_path,
-        disk_paths=(Path(repository.database_path).expanduser().resolve().parent,
-                    Path(settings.video_output_path).expanduser()),
+        disk_paths={"database": Path(repository.database_path).expanduser().resolve().parent,
+                    "output": Path(settings.video_output_path).expanduser(),
+                    "temporary": settings.effective_temporary_root_path},
         budget=budget,
         device_poll_interval_seconds=poll_interval_seconds,
     )
     runtime = build_device_runtime(
         database_path=repository.database_path,
-        device_lock_path=Path(repository.database_path).expanduser().resolve().parent / _DEVICE_LOCK_FILENAME,
+        device_lock_path=device_lock_path(settings=settings, database_path=repository.database_path),
         device_access=MemberDeviceAccess(members, identity_verifier=verify_identity),
         registrations=registrations,
         resources=resources,
         processes=processes,
         admission_recorder=record_admission,
+        dispatch_owner=dispatch_owner,
         # 会话活动来自客户端真实心跳；没有心跳记录才算空闲，不猜「没人用」。
         activity_source_reliable=True,
         poll_interval_seconds=poll_interval_seconds,

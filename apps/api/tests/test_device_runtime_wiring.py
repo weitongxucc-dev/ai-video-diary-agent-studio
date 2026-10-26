@@ -7,10 +7,10 @@ import pytest
 from fastapi import HTTPException, Request
 
 from app import main as main_module
-from app.member_permits import HostBudgetUncalibrated
+from app.member_permits import HostBudgetUncalibrated, cpu_render_budget_from_env, creation_stage_budgets_from_env, host_budget_from_env
 from app.production import ProductionRepository
 
-#: 一台机器标定完成后会拿到的真实数值。缺任何一项都应当被拒绝，不是给个默认。
+#: 有限隔离测试档；这些数值不是本机生产标定结果。
 _CALIBRATED_ENV = {
     "DEVICE_HOST_MAX_CPU_PERCENT": "60",
     "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES": "1073741824",
@@ -149,7 +149,7 @@ def test_scheduled_mode_cannot_start_legacy_worker_or_stop_it_during_unwired_rel
     stop_execution = Mock()
     stop_ingestion = Mock()
     monkeypatch.setattr(main_module, "_new_material_ingestion", new_legacy_service)
-    monkeypatch.setattr(main_module, "_stop_execution_worker", stop_execution)
+    monkeypatch.setattr(main_module, "_stop_device_runtime", stop_execution)
     monkeypatch.setattr(main_module, "_stop_material_ingestion", stop_ingestion)
 
     with pytest.raises(RuntimeError, match="尚未接入整机许可运行时"):
@@ -188,7 +188,18 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
     assert preview.owner.repository is repository
     assert type(preview.executor).__name__ == "ProfilePreviewExecutor"
     assert runtime.scheduler.database_path == repository.database_path.resolve()
-    assert runtime.scheduler.lock_path.parent == repository.database_path.resolve().parent
+    from app.device_paths import device_lock_path
+    assert runtime.scheduler.lock_path == device_lock_path()
+    creation = runtime.registrations["creation_job"]
+    runtime_facts = Mock(return_value={"backend_identity": "actual-backend"})
+    monkeypatch.setattr(main_module, "_narration_runtime_facts", runtime_facts)
+    for consumer in (creation.owner, creation.owner.segments):
+        assert consumer.narration_runtime_facts("workspace-one", "task-one") == {
+            "backend_identity": "actual-backend"}
+    assert runtime_facts.call_args_list == [
+        (("workspace-one", "task-one"), {"repository": repository}),
+        (("workspace-one", "task-one"), {"repository": repository}),
+    ]
 
 
 def test_interactive_permit_survives_when_scheduled_material_is_off(
@@ -248,9 +259,9 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         video_inbox_path=str(repository.video_library_path), video_output_path=str(tmp_path / 'explicit-output'))
     for name, value in _CALIBRATED_ENV.items():
         monkeypatch.setenv(name, value)
-    cpu_budget = main_module.cpu_render_budget_from_env()
-    narration_budget, montage_budget = main_module.creation_stage_budgets_from_env()
-    budget = replace(main_module.host_budget_from_env(cpu_render=cpu_budget),
+    cpu_budget = cpu_render_budget_from_env()
+    narration_budget, montage_budget = creation_stage_budgets_from_env()
+    budget = replace(host_budget_from_env(cpu_render=cpu_budget),
         narration=narration_budget, montage=montage_budget)
     identity_access = MemberDeviceAccess(members)
     verify_identity = identity_access.verify_identity
@@ -302,7 +313,8 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         runtime_arguments = observations['runtime_arguments']
         assert probe_arguments['budget'] is budget
         assert probe_arguments['database_path'] == repository.database_path
-        assert probe_arguments['disk_paths'] == (repository.database_path.resolve().parent, Path(settings.video_output_path).expanduser())
+        assert probe_arguments['disk_paths'] == {'database': repository.database_path.resolve().parent,
+            'output': Path(settings.video_output_path).expanduser(), 'temporary': settings.effective_temporary_root_path}
         assert runtime_arguments['registrations'] is registrations
         assert runtime_arguments['resources'] is observations['probes'][0]
         assert runtime.host_observer is runtime_arguments['resources']
@@ -316,7 +328,8 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         assert runtime_arguments['admission_recorder'] is record_admission
         assert runtime_arguments['activity_source_reliable'] is True
         assert runtime.scheduler.database_path == repository.database_path.resolve()
-        assert runtime.scheduler.lock_path == repository.database_path.resolve().parent / 'device-permit.lock'
+        from app.device_paths import device_lock_path
+        assert runtime.scheduler.lock_path == device_lock_path()
         assert not runtime.running
         assert service._thread is None
         assert all(runtime.registrations[name] is value for name, value in registrations.items())

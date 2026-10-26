@@ -348,6 +348,7 @@ def build_device_runtime(
     poll_interval_seconds: float = 1.0,
     admission_recorder: ResourceAdmissionWrite | None = None,
     host_observer: HostResourceProbe | None = None,
+    dispatch_owner: tuple[str, str] | None = None,
 ) -> DeviceRuntime:
     """Build only from explicit trusted adapters; never supply permissive probes."""
     if not database_path or not device_lock_path or device_access is None or resources is None or processes is None:
@@ -375,6 +376,7 @@ def build_device_runtime(
         scheduler = DeviceScheduler(database, lock_path, owners=OwnerRouter(registered, device_access),
                                     resources=resources, processes=processes,
                                     admission_recorder=admission_recorder,
+                                    dispatch_owner=dispatch_owner,
                                     activity_source_reliable=activity_source_reliable)
     except ValueError as exc:
         raise RuntimeUnavailable(str(exc)) from exc

@@ -150,16 +150,38 @@ from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
-    cpu_audio_budget_from_env,
     DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
-    build_host_probes, cpu_render_budget_from_env, creation_job_registration, find_member,
-    host_budget_from_env, permit_actor, resolve_member_token,
-    creation_stage_budgets_from_env, presenter_budgets_from_env,
-    observation_budget_from_env,
-    clip_preview_budget_from_env,
-    quality_budget_from_env,
-    cover_budget_from_env,
+    creation_job_registration, find_member, permit_actor, resolve_member_token,
 )
+from app.device_resource_configuration import resolve_device_resources
+from app.device_resource_profile import DeviceProfileUnavailable
+from app.device_runtime import RuntimeUnavailable
+
+_RESOURCE_BUDGET_UNSET = object()
+
+
+def _device_resource_profile():
+    # A running driver keeps its selected revision; existing grants remain sealed.
+    active = getattr(device_runtime, "resource_profile", None)
+    if active is not None:
+        return active
+    try:
+        return resolve_device_resources(settings, os.environ, model_catalog=model_catalog)
+    except DeviceProfileUnavailable as exc:
+        raise HostBudgetUncalibrated(str(exc)) from exc
+
+
+def _device_host_budget():
+    return _device_resource_profile().budget
+
+
+def _device_operation_budget(name):
+    try:
+        return getattr(_device_host_budget(), name)
+    except HostBudgetUncalibrated:
+        # Missing media configuration must not disable metadata-only reads.
+        return None
+
 from app.visual_understanding import LocalVisualUnderstanding
 from app.creation.cover_use_case import CoverUseCase, CoverUnavailable, CoverUnresolved, COVER_JOB_KIND, COVER_OPERATION
 from app.cover_generation import (
@@ -3615,7 +3637,7 @@ def _submit_audio_ingress(task_id, request, operation, result_kind, *, audio=Non
     task = _creation_task_or_404(workspace_id, task_id)
     if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
         raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
-    if audio is not None and cpu_audio_budget_from_env() is None:
+    if audio is not None and _device_operation_budget("cpu_audio") is None:
         raise HTTPException(status_code=503, detail='CPU 音频处理预算尚未标定，未接收媒体作业')
     values = {'_media_kind': 'upload' if audio is not None else 'audio_mix' if operation == 'audio_listen' else 'waveform', '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'), **(arguments if arguments is not None else {})}
     created_input = None
@@ -3689,11 +3711,11 @@ def _visual_preview_facts(workspace_id, task_id, arguments, actor):
     except PicturePreviewRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     case.require_picture_plan(prepared)
-    budget = case.require_render_budget(cpu_render_budget_from_env())
+    budget = case.require_render_budget(_device_operation_budget("cpu_render"))
     if case.uses_presenter(prepared):
-        _presenter, presenter_cpu = presenter_budgets_from_env()
+        presenter_cpu = _device_operation_budget("presenter_cpu_render")
         budget = case.require_presenter_budget(presenter_cpu)
-    return case.seal_resources(prepared, budget, cpu_audio_budget_from_env(), actor=actor)
+    return case.seal_resources(prepared, budget, _device_operation_budget("cpu_audio"), actor=actor)
 
 
 def _compound_selection_facts(workspace_id, task_id, arguments, actor):
@@ -3701,15 +3723,15 @@ def _compound_selection_facts(workspace_id, task_id, arguments, actor):
     prepared = case.prepare_source(workspace_id, task_id, arguments, actor)
     if prepared[1] is None:
         raise ValueError('当前任务没有可预览的故事板')
-    budget = cpu_render_budget_from_env()
+    budget = _device_operation_budget("cpu_render")
     if budget is None:
         raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
     if any(clip.person_render_id for clip in prepared[1].clips):
-        _presenter, presenter_cpu = presenter_budgets_from_env()
+        presenter_cpu = _device_operation_budget("presenter_cpu_render")
         if presenter_cpu is None:
             raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
         budget = presenter_cpu
-    return case.seal_resources(prepared, budget, cpu_audio_budget_from_env(), actor=actor)
+    return case.seal_resources(prepared, budget, _device_operation_budget("cpu_audio"), actor=actor)
 
 
 
@@ -3735,14 +3757,14 @@ def _exact_preview_facts(workspace_id,task_id,arguments,actor):
     case=_exact_preview_use_case()
     prepared=case.prepare_source(workspace_id,task_id,arguments,actor)
     if prepared[1] is None:raise ValueError('当前任务没有可预览的故事板')
-    budget=cpu_render_budget_from_env()
+    budget=_device_operation_budget("cpu_render")
     if budget is None:raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
     if any(clip.person_render_id for clip in prepared[1].clips):
-        _,person_budget=presenter_budgets_from_env()
+        person_budget=_device_operation_budget("presenter_cpu_render")
         if person_budget is None:raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
         budget=person_budget
     resources=case.picture_resources(prepared,budget)
-    return case.seal_resources(prepared,resources,cpu_audio_budget_from_env(),actor=actor)
+    return case.seal_resources(prepared,resources,_device_operation_budget("cpu_audio"),actor=actor)
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
@@ -3758,9 +3780,9 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
     if operation == 'output_observation':
         return _output_observation_facts(workspace_id, task_id, arguments, actor)
     if AudioEditUseCase.handles(operation, arguments):
-        return _audio_edit_use_case().seal(workspace_id, task_id, operation, arguments, actor, cpu_audio_budget_from_env())
+        return _audio_edit_use_case().seal(workspace_id, task_id, operation, arguments, actor, _device_operation_budget("cpu_audio"))
     if operation in AUDIO_INGRESS_ACTIONS:
-        return _audio_ingress_use_case().seal(workspace_id, task_id, operation, arguments, actor, cpu_audio_budget_from_env())
+        return _audio_ingress_use_case().seal(workspace_id, task_id, operation, arguments, actor, _device_operation_budget("cpu_audio"))
     if '_clip_preview' in arguments:
         command = ClipPreviewCommand(**arguments['_clip_preview'])
         if command.task_id != task_id or actor.workspace_id != workspace_id:
@@ -3880,9 +3902,9 @@ def _registered_observation_output(workspace_id, task_id, target, actor):
 def _output_observation_facts(workspace_id, task_id, arguments, actor):
     case = _output_observation_use_case()
     source = case.prepare_source(workspace_id, task_id, arguments, actor)
-    budget = cpu_render_budget_from_env()
+    budget = _device_operation_budget("cpu_render")
     case.require_render_budget(budget)
-    observation_budget = observation_budget_from_env()
+    observation_budget = _device_operation_budget("observation")
     return case.seal_resources(source, budget, observation_budget)
 
 
@@ -4096,7 +4118,7 @@ def _command_preview_use_case(repository=None):
     metadata=exact.metadata
     return CommandPreviewUseCase(repo,conversation_repo,metadata,exact.subtitles,exact.linked,
         CompoundEditUseCase(repo,metadata,picture_renderer=metadata.picture_renderer),exact,exact.audio_edit,exact.visual,
-        NarrationPreviewUseCase(repo,metadata),PersonPreviewUseCase(repo,metadata,latentsync_provider,avatar_lipsync_provider))
+        NarrationPreviewUseCase(repo,metadata),PersonPreviewUseCase(repo,metadata,latentsync_provider,avatar_lipsync_provider), budgets_for=_device_host_budget)
 
 
 def _person_preview_use_case():
@@ -4134,7 +4156,7 @@ def _clip_preview_use_case(repository=None):
     repo = production_repo if repository is None else repository
     def profile():
         try:
-            return clip_preview_budget_from_env()
+            return _device_operation_budget("clip_preview")
         except HostBudgetUncalibrated as exc:
             raise ClipPreviewUnavailable(str(exc)) from exc
     def presenter_source(task, clip):
@@ -4419,10 +4441,9 @@ def import_creation_task_graphic(task_id: str, request: Request, image: UploadFi
 
 
 def _script_configuration():
-    from app.member_permits import media_script_budget_from_env
     toolchain = read_script_toolchain(Path(settings.model_root_path).expanduser())
     try:
-        budget = media_script_budget_from_env()
+        budget = _device_operation_budget("media_script")
     except (ValueError, HostBudgetUncalibrated) as exc:
         raise MediaScriptError("媒体脚本专用预算不完整或不可核验") from exc
     if budget is None:
@@ -8628,20 +8649,30 @@ def _narration_stage_use_case(repository=None,*,narration_budget=None):
     return NarrationStageUseCase(repository,narration_generator,_picture_preview_components(repository)[1],narration_budget)
 
 
+def _narration_runtime_facts(workspace_id, task_id, *, repository=None):
+    from app.device_resource_configuration import narration_execution_facts
+    repo = production_repo if repository is None else repository
+    return narration_execution_facts(settings=settings, model_catalog=model_catalog,
+        generator=narration_generator, database_path=repo.database_path,
+        workspace_id=workspace_id, task_id=task_id)
+
+
+
 def _segment_production_use_case(repository=None):
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     repo = production_repo if repository is None else repository
     return SegmentProductionUseCase(repo,narration_stage=_narration_stage_use_case(repo),
         renderer=montage_renderer,artifact_store=artifact_store,
-        output_root=settings.effective_temporary_root_path,source_repository=source_repository)
+        output_root=settings.effective_temporary_root_path,source_repository=source_repository,
+        narration_runtime_facts=lambda workspace_id,task_id: _narration_runtime_facts(
+            workspace_id,task_id,repository=repo))
 
 
-def _native_task_operations_case(repository=None,*,budget=None,authorizations=None):
+def _native_task_operations_case(repository=None,*,budget=_RESOURCE_BUDGET_UNSET,authorizations=None):
     from app.creation.native_task_operations import NativeTaskOperations
-    from app.member_permits import native_command_budget_from_env
     repo = production_repo if repository is None else repository
     return NativeTaskOperations(repo,artifact_store,repo.database_path.parent/'native-task-workspaces',
-        budget=native_command_budget_from_env() if budget is None else budget,
+        budget=_device_operation_budget("native_command") if budget is _RESOURCE_BUDGET_UNSET else budget,
         authorizations=authorizations if authorizations is not None else _task_authorizations_for_goal(),
         python_path=settings.model_runtime_python_path)
 
@@ -8874,11 +8905,11 @@ def resume_creation_task_budget(task_id: str, request: Request, payload: dict):
         raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
-def _cover_use_case(repository=None, *, budget=None):
+def _cover_use_case(repository=None, *, budget=_RESOURCE_BUDGET_UNSET):
     repo = production_repo if repository is None else repository
     return CoverUseCase(repo, artifact_store, _picture_preview_components(repo)[1],
         verify_identity=_verify_creation_identity, output_root=settings.video_output_path,
-        budget=cover_budget_from_env() if budget is None else budget,
+        budget=_device_operation_budget("cover") if budget is _RESOURCE_BUDGET_UNSET else budget,
         on_settled=_wake_assistant_continuations)
 
 
@@ -9638,6 +9669,25 @@ def get_creation_task_edit_capabilities(task_id: str, request: Request):
     return _task_edit_capability_facts(task)
 
 
+@app.get("/api/creation-tasks/{task_id}/assistant/execution-capabilities")
+def get_creation_task_execution_capabilities(task_id: str, request: Request):
+    task, _member_id = _exact_edit_access(task_id, request)
+    return _task_execution_capability_facts(task)
+
+
+def _task_execution_capability_facts(task):
+    from app.creation.execution_capabilities import execution_capability_facts
+
+    # Reading installed facts must not assemble/start the runtime or sample the host.
+    runtime = device_runtime
+    observer = runtime.host_observer if runtime is not None else None
+    return execution_capability_facts(
+        budget=observer.budget if observer is not None else None,
+        registrations=runtime.registrations if runtime is not None else {},
+    )
+
+
+
 def _task_edit_capability_facts(task):
     payload = production_repo.get_creation_task_montage_plan(task.workspace_id, task.id) if task.montage_plan_id else None
     clips = payload.get("clips", []) if payload else []
@@ -10146,12 +10196,13 @@ def _quality_check_source(workspace_id: str, task_id: str):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _quality_inspection_use_case(repository=None, *, task_authorizations=None):
-    budget, error = None, None
-    try:
-        budget = quality_budget_from_env()
-    except HostBudgetUncalibrated as exc:
-        error = str(exc)
+def _quality_inspection_use_case(repository=None, *, task_authorizations=None, budget=_RESOURCE_BUDGET_UNSET):
+    error = None
+    if budget is _RESOURCE_BUDGET_UNSET:
+        try:
+            budget = _device_host_budget().quality
+        except HostBudgetUncalibrated as exc:
+            budget, error = None, str(exc)
     repo = production_repo if repository is None else repository
     if task_authorizations is None and device_runtime is not None:
         task_authorizations = device_runtime.task_authorizations
@@ -11730,6 +11781,8 @@ async def is_setup():
 
 
 def _assert_runtime_reload_allowed() -> None:
+    if device_runtime is not None and "device_preparation" in device_runtime.registrations:
+        raise HTTPException(409, "请先收束当前设备准备请求，再重载运行配置。")
     if material_execution_mode == "scheduled" or creation_execution_mode == "scheduled":
         raise HTTPException(status_code=503, detail="整机调度的安全重载尚未接通，现有驱动保持原状态。")
 
@@ -13372,6 +13425,12 @@ def _recover_creation_executions() -> None:
 
 
 def _creation_runtime():
+    with _runtime_reload_lock:
+        return _creation_runtime_locked()
+
+
+
+def _creation_runtime_locked():
     """交互式制作许可的这一个整机运行时，缺什么就明确说缺什么。
 
     ``creation_execution_mode == "scheduled"`` 只管定时触发，不影响这里：
@@ -13737,6 +13796,65 @@ def _creation_stage_valid_with_grant(workspace_id: str, task_id: str, grant: Cpu
 
 
 
+def _device_preparation_service(kind="cpu"):
+    from app.device_resource_configuration import current_device_identity
+    from app.device_resource_preparation import DeviceResourcePreparation
+    if settings.device_resource_mode != "normal" or not settings.device_resource_profile_path:
+        raise DeviceProfileUnavailable("请使用已绑定设备路径的正常资源模式准备能力。")
+    arguments = dict(
+        profile_path=settings.device_resource_profile_path,
+        device=current_device_identity(os.environ), settings=settings,
+        write_paths={"database": Path(production_repo.database_path).resolve().parent,
+                     "output": Path(settings.video_output_path).expanduser(),
+                     "temporary": settings.effective_temporary_root_path},
+        verify_identity=_verify_creation_identity)
+    if kind == "cpu":
+        return DeviceResourcePreparation(**arguments)
+    if kind == "narration":
+        from app.narration_resource_preparation import NarrationResourcePreparation
+        return NarrationResourcePreparation(repository=production_repo, model_catalog=model_catalog,
+                                             provider=voice_clone_provider, **arguments)
+    raise ValueError("未知设备准备类型")
+
+
+def _publish_device_runtime(runtime):
+    global device_runtime
+    device_runtime = runtime
+
+
+def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
+    from app.device_preparation_application import DevicePreparationApplication
+    from app.device_resource_preparation import OWNER_TYPE, CpuPreparationShape, request_kind
+    from app.narration_resource_preparation import NarrationPreparationShape
+    if request_id is not None:
+        kind = request_kind(database_path=production_repo.database_path, request_id=request_id, actor=actor)
+    def bind(service, budget, scope):
+        runtime, _ = bind_device_runtime(
+            repository=production_repo, settings=settings, members=local_members_service,
+            registrations={OWNER_TYPE: service.registration()}, budget=budget,
+            material_executor=None, verify_identity=_verify_creation_identity,
+            record_admission=None, dispatch_owner=scope)
+        return runtime
+    return DevicePreparationApplication(
+        service=_device_preparation_service(kind), database_path=production_repo.database_path,
+        lifecycle_lock=_runtime_reload_lock, current_runtime=lambda: device_runtime,
+        replace_runtime=_publish_device_runtime, stop_runtime=_stop_device_runtime, bind_runtime=bind,
+        shape_factory=CpuPreparationShape if kind == "cpu" else NarrationPreparationShape)
+
+
+def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind="cpu"):
+    application = (_device_preparation_application(kind=kind) if action == "prepare"
+                   else _device_preparation_application(request_id=request_id, actor=actor))
+    return application.dispatch(action, actor=actor, request_id=request_id, shape=shape)
+
+
+
+from app.device_preparation_routes import build_device_preparation_router
+app.include_router(build_device_preparation_router(
+    authorized_actor=lambda request: _require_permit_actor(request, current_workspace_id(request)),
+    application=_device_preparation_application))
+
+
 def _build_device_components(*, repository: ProductionRepository):
     """装出这台机器唯一的整机运行时：一把锁、一张队列、一个驱动线程。
 
@@ -13749,26 +13867,16 @@ def _build_device_components(*, repository: ProductionRepository):
     from app.material_ingestion import (
         MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
     )
-    from app.member_permits import memory_policy_from_env, material_visual_query_budget_from_env
-
-    cpu_render_budget = (cpu_render_budget_from_env() if any(
-        value.strip() for name, value in os.environ.items() if name.startswith("DEVICE_CPU_RENDER_")) else None)
-    budget = host_budget_from_env(cpu_render=cpu_render_budget,
-        memory_policy=memory_policy_from_env(), material_visual_query=material_visual_query_budget_from_env())
-    narration_budget, montage_budget = creation_stage_budgets_from_env()
-    presenter_budget, presenter_cpu_render_budget = presenter_budgets_from_env()
-    budget = replace(budget, narration=narration_budget, montage=montage_budget,
-                     presenter=presenter_budget, presenter_cpu_render=presenter_cpu_render_budget)
-    audio_budget = cpu_audio_budget_from_env()
-    from app.member_permits import media_script_budget_from_env,native_command_budget_from_env
-    budget = replace(budget, cpu_audio=audio_budget, clip_preview=clip_preview_budget_from_env(), media_script=media_script_budget_from_env(),native_command=native_command_budget_from_env(),
-                     observation=observation_budget_from_env())
+    profile = _device_resource_profile()
+    budget = profile.budget
+    cpu_render_budget, audio_budget = budget.cpu_render, budget.cpu_audio
+    narration_budget, montage_budget = budget.narration, budget.montage
+    presenter_budget, presenter_cpu_render_budget = budget.presenter, budget.presenter_cpu_render
     from app.creation.task_authorization import TaskAuthorizationUseCase
     task_authorizations = TaskAuthorizationUseCase(repository, lambda identity: _verify_creation_identity(
         CreationExecutionActor.from_event(identity["workspace_id"], identity)))
-    quality = _quality_inspection_use_case(repository, task_authorizations=task_authorizations)
-    cover = _cover_use_case(repository)
-    budget = replace(budget, quality=quality.budget, cover=cover.budget)
+    quality = _quality_inspection_use_case(repository, task_authorizations=task_authorizations, budget=budget.quality)
+    cover = _cover_use_case(repository, budget=budget.cover)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
         audio_ingress=_audio_ingress_use_case(repository),
@@ -13795,6 +13903,8 @@ def _build_device_components(*, repository: ProductionRepository):
             person_stage=_person_stage_use_case(repository),
             montage_stage=_montage_stage_use_case(repository),
             narration_stage=_narration_stage_use_case(repository,narration_budget=narration_budget),
+            narration_runtime_facts=lambda workspace_id,task_id: _narration_runtime_facts(
+                workspace_id,task_id,repository=repository),
             graphic_source_facts=lambda workspace_id, task_id, reference, *, actor: graphic_source_facts(
                 repository, artifact_store, workspace_id, task_id, reference, actor=actor),
             audio_mix_facts=lambda workspace_id, task_id, montage, *, actor: _task_audio().mix_facts(
@@ -13848,6 +13958,7 @@ def _build_device_components(*, repository: ProductionRepository):
         registrations=registrations, budget=budget, material_executor=material_executor,
         verify_identity=_verify_creation_identity, record_admission=creation_owner.record_admission,
     )
+    runtime.resource_profile = profile
     runtime.task_authorizations = task_authorizations
     registrations["creation_job"].executor.on_render_completed = lambda workspace_id, task_id, job_id: quality.start_for_render(
         runtime, workspace_id, task_id, job_id)
@@ -13889,6 +14000,12 @@ def _stop_material_ingestion() -> None:
 
 
 def _start_device_runtime(*, start: bool = True) -> bool:
+    with _runtime_reload_lock:
+        return _start_device_runtime_locked(start=start)
+
+
+
+def _start_device_runtime_locked(*, start: bool = True) -> bool:
     """启动这一个整机驱动线程；预算没标定时明确说明，不静默降级。
 
     启动失败不影响其它路由——整机许可是可选能力，交互式制作相关路由会自己
@@ -13924,6 +14041,12 @@ def _start_device_runtime(*, start: bool = True) -> bool:
 
 
 def _stop_device_runtime() -> None:
+    with _runtime_reload_lock:
+        _stop_device_runtime_locked()
+
+
+
+def _stop_device_runtime_locked() -> None:
     global device_runtime
     runtime = device_runtime
     if runtime is not None:
@@ -14033,7 +14156,8 @@ def _task_business():
         observe_output=_submit_goal_observation,request_result=_goal_request_metadata,media_result=_goal_media_metadata,
         record_adoption=_goal_service().record_script_adoption,segments=_segment_production_use_case(),native_case=_native_task_operations_case(),
         timeline_restores=_timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
-        media_jobs_list=_list_goal_media_jobs,
+        media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
+        device_preparation=_dispatch_device_preparation,
         read_script_sections=lambda task, script_id, **values:
             production_repo.read_creation_task_script_sections(task.workspace_id, task.id, script_id, **values))
 
