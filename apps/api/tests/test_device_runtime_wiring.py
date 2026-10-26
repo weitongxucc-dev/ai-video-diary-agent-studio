@@ -172,6 +172,17 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
     for name, value in _CALIBRATED_ENV.items():
         monkeypatch.setenv(name, value)
 
+    from dataclasses import replace
+    from app.audio_delivery_policy import AudioEncodeBudget, FinalMuxBudget
+    from app.packet_copy_policy import PacketCopyBudget
+    profile = main_module._device_resource_profile()
+    packet_budget = PacketCopyBudget('a'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
+    encode_budget = AudioEncodeBudget('b'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
+    mux_budget = FinalMuxBudget('c'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
+    profile = replace(profile, budget=replace(profile.budget, packet_copy=packet_budget,
+        audio_encode=encode_budget, final_mux=mux_budget))
+    monkeypatch.setattr(main_module, "_device_resource_profile", lambda: profile)
+
     runtime, service = main_module._build_device_components(repository=repository)
 
     # 只装好、不启动：驱动线程由生命周期统一启停，装配阶段不得自己起。
@@ -191,6 +202,15 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
     from app.device_paths import device_lock_path
     assert runtime.scheduler.lock_path == device_lock_path()
     creation = runtime.registrations["creation_job"]
+    assert creation.owner.audio_assembly is creation.executor.audio_assembly
+    assert creation.executor.audio_assembly.repository is repository
+    delivery = creation.owner.audio_delivery
+    assert delivery is creation.executor.audio_delivery
+    assert delivery.audio is creation.owner.audio_assembly
+    assert delivery.picture is creation.owner.packet_copy_assembly is creation.executor.packet_copy_assembly
+    assert delivery.repository is repository
+    assert delivery.audio_budget is encode_budget and delivery.mux_budget is mux_budget
+    assert delivery.reserve_bytes == profile.budget.min_free_disk_bytes
     runtime_facts = Mock(return_value={"backend_identity": "actual-backend"})
     monkeypatch.setattr(main_module, "_narration_runtime_facts", runtime_facts)
     for consumer in (creation.owner, creation.owner.segments):

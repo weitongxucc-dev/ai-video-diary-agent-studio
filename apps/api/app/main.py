@@ -4137,8 +4137,8 @@ def _picture_preview_renderer():
     return _picture_preview_components()[2]
 
 
-def _task_audio() -> TaskAudio:
-    return _picture_preview_components()[0]
+def _task_audio(repository=None) -> TaskAudio:
+    return _picture_preview_components(repository)[0]
 
 
 def _clip_preview_use_case(repository=None):
@@ -14038,6 +14038,12 @@ def _build_device_components(*, repository: ProductionRepository):
     packet_copy = (PacketCopyAssembly(repository, artifact_store, settings.effective_temporary_root_path,
                                      budget=budget.packet_copy, reserve_bytes=budget.min_free_disk_bytes)
                    if budget.packet_copy is not None else None)
+    from app.creation.audio_delivery_assembly import AudioDeliveryAssembly
+    task_audio = _task_audio(repository)
+    audio_delivery = (AudioDeliveryAssembly(repository, artifact_store, settings.effective_temporary_root_path,
+        audio=task_audio, packet_copy_assembly=packet_copy, audio_budget=budget.audio_encode,
+        mux_budget=budget.final_mux, reserve_bytes=budget.min_free_disk_bytes)
+        if packet_copy is not None and budget.audio_encode is not None and budget.final_mux is not None else None)
     from app.creation.task_authorization import TaskAuthorizationUseCase
     task_authorizations = TaskAuthorizationUseCase(repository, lambda identity: _verify_creation_identity(
         CreationExecutionActor.from_event(identity["workspace_id"], identity)))
@@ -14063,7 +14069,9 @@ def _build_device_components(*, repository: ProductionRepository):
         "creation_job": creation_job_registration(
             repository,
             task_media=task_media,
+            audio_assembly=task_audio,
             packet_copy_assembly=packet_copy,
+            audio_delivery=audio_delivery,
             source_verifier=lambda source,actor,connection=None:validate_edit_origin(conversation_repo,source,actor,connection=connection),
             cover=cover,
             task_authorizations=task_authorizations,

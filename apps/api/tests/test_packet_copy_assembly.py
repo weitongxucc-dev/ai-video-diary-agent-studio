@@ -18,7 +18,7 @@ from app.production import ProductionRepository, MaterialAsset, MaterialSegment
 from test_creation_execution import _narration_units_case
 
 
-def _packet_case(tmp_path, monkeypatch, *, before_prepare=None):
+def _packet_case(tmp_path, monkeypatch, *, before_prepare=None, montage_adjust=None):
     case = _narration_units_case(tmp_path, local_policy=True, duration_seconds=2)
     import app.creation_execution as execution_module
     from app.creation_execution import submit_creation_stage
@@ -56,6 +56,8 @@ def _packet_case(tmp_path, monkeypatch, *, before_prepare=None):
         script_id=case.script_id, script_title='synthetic packet tree', status='ready',
         cues=[NarrationCue('cue', 'section_1', '原文', 1)], clips=[cut], duration_seconds=1,
         low_confidence_clip_count=0, created_at=now, updated_at=now, aspect_ratio='16:9')
+    if montage_adjust is not None:
+        montage_adjust(case, montage)
     case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     budget = PacketCopyBudget('a'*64, 1024**3, 1024**3, 32, 1, .1, 16384, 32768, 65536, 30)
     store = ArtifactStore(tmp_path / 'artifacts')
