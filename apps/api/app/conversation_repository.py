@@ -998,6 +998,32 @@ class ConversationRepository:
                 cls._write_goal(conn, root, {**root["goal"], "status": "invalidated", "waiting_reason": reason,
                                            "unfinished_steps": []})
 
+    def record_script_window_request(self, turn_id: str, workspace_id: str, member_id: str,
+                                     task_id: str, window: dict) -> bool:
+        """Save a verified request locator before model completion, without adoption."""
+        if window.get('task_id') != task_id or window.get('kind') != 'script_window_request':
+            raise ValueError('文案窗口回执不属于原任务')
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            try:
+                origin = self._task_turn_source(conn, turn_id, workspace_id, member_id, task_id)
+            except ValueError:
+                return False  # A late tool result cannot reopen or rebind its turn.
+            if any(window.get(key) != origin.get(key) for key in ('input_id', 'input_turn_id')):
+                return False
+            row = conn.execute('SELECT events_json,result_json FROM assistant_conversation_turns WHERE id=?',
+                               (turn_id,)).fetchone()
+            events = json.loads(row['events_json'])
+            event = {'type': 'script_window_request_recorded', 'request': window}
+            if event not in events:
+                events.append(event)
+            result = json.loads(row['result_json'] or '{}')
+            result['response'] = {**result.get('response', {}), 'script_window_request': window}
+            conn.execute('UPDATE assistant_conversation_turns SET events_json=?,result_json=?,updated_at=? '
+                         "WHERE id=? AND status='running'",
+                         (json.dumps(events, ensure_ascii=False), json.dumps(result, ensure_ascii=False), _now(), turn_id))
+        return True
+
     def record_task_execution(self, turn_id: str, workspace_id: str, member_id: str,
                               task_id: str, execution_status: dict, *, current_source: bool = True, input_id: str | None = None) -> bool:
         """Preserve a host-verified execution receipt before the model can finish."""
@@ -1788,6 +1814,11 @@ class ConversationRepository:
     @staticmethod
     def _preserve_execution_result(previous: dict, incoming: dict, *, input_id: str | None = None) -> dict:
         result = dict(incoming)
+        window = previous.get('response', {}).get('script_window_request')
+        if window and window.get('input_id') == input_id:
+            response = result.get('response', {})
+            if not response.get('script_window_request'):
+                result['response'] = {**response, 'script_window_request': window}
         if previous.get("goal_continuation"):
             result["goal_continuation"] = previous["goal_continuation"]
         proofs = [item for item in previous.get("goal_business_actions", []) if item.get("kind") in {"execution_status", "script_adoption"}]

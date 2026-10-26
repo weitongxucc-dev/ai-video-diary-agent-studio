@@ -358,6 +358,7 @@ from app.schemas import (
     CreationTaskEditPreviewRequest,
     CreationTaskAssistantTurnRequest,
     CreationTaskAssistantTurnResponse,
+    AssistantScriptWindowRequestResponse,
     CreationTaskAssistantHistoryResponse,
     AssistantStreamEvent,
     MaterialAssistantTurnRequest,
@@ -3402,6 +3403,7 @@ def _creation_task_topic_response(
 def _creation_task_scripts_response(
     workspace_id: str,
     task: CreationTask,
+    *, include_body: bool = True,
 ) -> CreationTaskScriptsResponse:
     latest_run = production_repo.latest_script_generation_run(workspace_id, task.id)
     if latest_run is not None and latest_run.run_kind != "generation":
@@ -3410,7 +3412,9 @@ def _creation_task_scripts_response(
     return CreationTaskScriptsResponse.model_validate(
         {
             "task": project_task_summary(production_repo, task).summary,
-            "scripts": [asdict(script) for script in production_repo.list_creation_task_scripts(workspace_id, task.id)],
+            "scripts": ([asdict(script) for script in production_repo.list_creation_task_scripts(workspace_id, task.id)]
+                        if include_body else production_repo.active_creation_task_script_headers(workspace_id, task.id)),
+            "scripts_scope": "history" if include_body else "active",
             "latest_run": latest_run.__dict__ if latest_run is not None else None,
             "route_preflight": route_snapshot,
         }
@@ -5045,10 +5049,8 @@ def _creation_task_workspace_response(
                 }
                 for reference in topic_evidence
             ],
-            "scripts": [
-                asdict(script)
-                for script in production_repo.list_creation_task_scripts(workspace_id, task.id)
-            ],
+            "scripts": production_repo.active_creation_task_script_headers(workspace_id, task.id),
+            "scripts_scope": "active",
             "available_voices": _creation_task_voice_options(workspace_id, task, plan),
             "narration": (
                 _creation_task_narration_response(task, artifact).model_dump()
@@ -6921,8 +6923,11 @@ def _script_topic_origin(workspace_id: str, plan: CreationPlan, topic: CreationT
 def _assistant_script_inputs(workspace_id: str, task_id: str):
     task = _creation_task_or_404(workspace_id, task_id)
     if task.confirmed_script_id and task.can_revise_script:
-        confirmed = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        if confirmed.locked_body_digest:
+        confirmed = next((item for item in production_repo.active_creation_task_script_headers(workspace_id, task_id)
+                          if item['id'] == task.confirmed_script_id), None)
+        if confirmed is None:
+            raise HTTPException(status_code=409, detail="当前确认文案不存在，请重新读取任务")
+        if confirmed.get('locked_body_digest'):
             raise HTTPException(status_code=409, detail="当前定稿正文已锁定，不能自动改写；请明确采用新的定稿。")
     elif task.stage != "script" or task.confirmed_script_id:
         raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
@@ -6950,12 +6955,12 @@ def get_assistant_script_context(task_id: str, request: Request) -> dict[str, ob
 def _assistant_script_context_facts(workspace_id,task_id,reader_id):
     task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
     script_goal = _creation_task_script_goal(plan, task, reader_id)
-    scripts = production_repo.list_creation_task_scripts(workspace_id, task.id)
-    draft = scripts[0] if scripts and scripts[0].selection_status == "draft" else None
+    scripts = production_repo.active_creation_task_script_headers(workspace_id, task.id)
+    draft = scripts[0] if scripts and scripts[0]['selection_status'] == "draft" else None
     if task.can_revise_script and task.confirmed_script_id:
-        draft = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+        draft = next((item for item in scripts if item['id'] == task.confirmed_script_id), None)
     retained_draft = None
-    if draft and not production_repo.script_knowledge_inputs_current(workspace_id, task.id, draft.id):
+    if draft and not production_repo.script_knowledge_inputs_current(workspace_id, task.id, draft['id']):
         retained_draft, draft = draft, None
     reply_event = next((event for event in production_repo.list_task_events(workspace_id, task.id)
                         if event.event_type == "assistant_reply_plan_confirmed"
@@ -6986,13 +6991,14 @@ def _assistant_script_context_facts(workspace_id,task_id,reader_id):
                   "outline": topic.outline},
         "sources": [{"reference_id": source.reference_id, "title": source.title,
                      "text": source.text} for source in sources],
-        "draft": ({"id": draft.id, "title": draft.title,
-                   "updated_at": draft.updated_at,
-                   "sections": [asdict(section) for section in draft.sections]}
+        "draft": ({"id": draft['id'], "title": draft['title'],
+                   "updated_at": draft['updated_at'], "sections": None,
+                   "draft_complete": draft.get('draft_complete', True),
+                   "sections_loaded": False, "sections_total_count": draft['sections_total_count']}
                   if draft is not None else None),
         "reply_origin": reply_origin,
-        "retained_draft": ({"id": retained_draft.id, "title": retained_draft.title,
-            "updated_at": retained_draft.updated_at, "reason": "资料已追加，旧稿保留；新一轮文案将使用新引用。"} if retained_draft else None),
+        "retained_draft": ({"id": retained_draft['id'], "title": retained_draft['title'],
+            "updated_at": retained_draft['updated_at'], "reason": "资料已追加，旧稿保留；新一轮文案将使用新引用。"} if retained_draft else None),
     }
 
 
@@ -7734,6 +7740,23 @@ def _assistant_related_media_job(task_id, request, turn_id, conversation_id, rep
     return TaskMediaJobResponse.model_validate(get_task_media_job(task_id, original.id, request))
 
 
+def _record_script_window_tool_event(event, *, workspace_id, member_id, task_id, turn_id):
+    if event.get('type') != 'tool_end' or not isinstance(event.get('script_window_request'), dict):
+        return False
+    window = event['script_window_request']
+    if event.get('invocation_input_id') != (window.get('input_id') or turn_id):
+        return False
+    from app.assistant.script_window_persistence import record_script_window_receipt
+    case = _script_draft_use_case(workspace_id, validate_inputs=lambda ws, plan, refs:
+        _validate_script_input_sources(ws, plan, refs, member_id))
+    return record_script_window_receipt(
+        conversations=conversation_repo, turn_id=turn_id, workspace_id=workspace_id,
+        member_id=member_id, task_id=task_id, value=window,
+        read_original=lambda request_id, operation, script_id: case.window_request_result(
+            workspace_id, task_id, request_id, member_id=member_id,
+            operation=operation, script_id=script_id))
+
+
 def _creation_task_assistant_turn(
     task_id: str,
     request: Request,
@@ -7797,6 +7820,11 @@ def _creation_task_assistant_turn(
         turn_id, str(payload.conversation_id), workspace_id, member_id)
     trusted_refs = frozen_context.get("selected_object_refs", trusted_refs)
     material_selection = (frozen_context.get("target_snapshot") or {}).get("material_selection")
+    def record_event(event):
+        _record_script_window_tool_event(event, workspace_id=workspace_id,
+            member_id=member_id, task_id=task_id, turn_id=turn_id)
+        if on_event is not None:
+            on_event(event)
     try:
         native_actor = _request_permit_actor(request,workspace_id)
         native_binding = {'workspace_id':workspace_id,'member_id':member_id,'task_id':task_id,
@@ -7815,7 +7843,7 @@ def _creation_task_assistant_turn(
             playhead_ms=payload.playhead_ms,
             authorization=request.headers.get("authorization"),
             cookie=request.headers.get("cookie"),
-            on_event=on_event,
+            on_event=record_event,
             turn_id=turn_id,
             native_handler=native_handler,source_binding=native_binding,
             selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
@@ -7834,6 +7862,7 @@ def _creation_task_assistant_turn(
             turn_id=turn_id,
             turn_status="stopped",
             draft_version=payload.expected_draft_version + 1,
+            script_window_request=((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'),
         )
         conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "task_turn", "response": response.model_dump(mode="json")})
         return response
@@ -7928,12 +7957,25 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     execution_status = None
     topic_candidates = None
     storyboard_regeneration = None
+    script_window_request = None
     timeline_action = None
     media_job, edit_request, script_tool, segment_revision, timeline_restore = None, None, None, None, None
     if isinstance(preview, dict) and preview.get("kind") in {"execution_action", "execution_result"} and preview.get("applied_edit") is not None:
         edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview["applied_edit"])
         timeline_action = "apply"
-    if isinstance(preview, dict) and preview.get('kind') == 'segment_revision':
+    if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
+        from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
+        origin = conversation_repo.task_turn_source(str(turn_id), workspace_id,
+            _assistant_member_id(request, workspace_id), task_id)
+        if preview.get('input_id') != origin.get('input_id'):
+            raise HTTPException(status_code=502, detail="文案原请求不属于当前输入")
+        resolved = resolve_script_window_request(preview, task_id=task_id,
+            read_original=lambda request_id, operation, script_id: _read_creation_script_window_request(
+                request, task_id, request_id, operation, script_id))
+        script_window_request = AssistantScriptWindowRequestResponse.model_validate(resolved)
+        reply = script_window_message(resolved)
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get('kind') == 'segment_revision':
         from app.assistant.result_projection import resolve_segment_revision, segment_revision_message
         actor = _require_permit_actor(request, workspace_id)
         origin=conversation_repo.task_turn_source(str(turn_id),workspace_id,
@@ -8065,6 +8107,7 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         if readiness_message:
             reply+=' '+readiness_message
     response = CreationTaskAssistantTurnResponse(
+        script_window_request=script_window_request,
         storyboard_regeneration=storyboard_regeneration,
         segment_revision=segment_revision,
         timeline_restore=timeline_restore,
@@ -8117,7 +8160,65 @@ def get_creation_task_scripts(
     return _creation_task_scripts_response(
         workspace_id,
         _readable_creation_task(request, task_id),
+        include_body=False,
     )
+
+
+from app.creation.script_routes import build_script_sections_router
+
+
+def _patch_creation_script_sections(request, task_id, script_id, payload):
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
+              if payload.assistant_turn_id is not None else None)
+    case = _script_draft_use_case(task.workspace_id,
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs))
+    return case.patch(task.workspace_id, task_id, script_id, payload, member_id=member_id,
+        instruction_origin=origin,
+        reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
+            task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+
+
+def _start_creation_script_window(request, task_id, payload):
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
+              if payload.assistant_turn_id is not None else None)
+    case = _script_draft_use_case(task.workspace_id,
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs))
+    return case.start_window(task.workspace_id, task_id, payload, member_id=member_id,
+        instruction_origin=origin,
+        reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
+            task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+
+
+def _confirm_saved_creation_script(request, task_id, script_id, payload):
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
+              if payload.assistant_turn_id is not None else None)
+    case = _script_draft_use_case(task.workspace_id,
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs))
+    return case.confirm_saved(task.workspace_id, task_id, script_id, payload, member_id=member_id,
+        instruction_origin=origin,
+        reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
+            task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+
+
+def _read_creation_script_window_request(request, task_id, request_id, operation, script_id, *, include_input=False):
+    task, member_id = _exact_edit_access(task_id, request)
+    return _script_draft_use_case(task.workspace_id,
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs)
+    ).window_request_result(task.workspace_id, task_id, request_id, member_id=member_id,
+                            operation=operation, script_id=script_id, include_input=include_input)
+
+
+app.include_router(build_script_sections_router(
+    readable_task=_readable_creation_task,
+    read_sections=lambda *args, **kwargs: production_repo.read_creation_task_script_sections(*args, **kwargs),
+    patch_sections=_patch_creation_script_sections,
+    start_window=_start_creation_script_window,
+    confirm_saved=_confirm_saved_creation_script,
+    read_request=_read_creation_script_window_request,
+))
 
 
 @app.post(
@@ -8185,7 +8286,9 @@ def confirm_creation_task_script(
         _require_current_script_inputs(request, workspace_id, plan, generation_run.input_references)
     try:
         task,adopted_script=_script_draft_use_case(workspace_id,validate_inputs=lambda ws,plan,refs:_require_current_script_inputs(request,ws,plan,refs)).confirm(
-            workspace_id,task_id,script_id,payload,member_id=_content_reader(request,workspace_id)[0],origin=instruction_origin)
+            workspace_id,task_id,script_id,payload,member_id=_content_reader(request,workspace_id)[0],origin=instruction_origin,
+            reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
+                task_id,request,str(payload.assistant_turn_id),draft_only=False))
     except ScriptDraftRejected as exc:
         raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
     except (KeyError,ValueError) as exc:
@@ -13919,7 +14022,8 @@ def _bind_goal_business_scope(request,goal):
 def _task_business():
     return TaskBusiness(production_repo,conversation_repo,_task_authorizations_for_goal(),runtime=_creation_runtime,
         execution=_creation_execution_control(),workspace_facts=_creation_task_workspace_response,
-        script_context=_assistant_script_context_facts,script_facts=_creation_task_scripts_response,
+        script_context=_assistant_script_context_facts,
+        script_facts=lambda ws, task: _creation_task_scripts_response(ws, task, include_body=False),
         script_case=lambda actor:_script_draft_use_case(actor.workspace_id,validate_inputs=lambda ws,plan,refs:
             _validate_script_input_sources(ws,plan,refs,actor.user_id or actor.member_id)),
         generate_topics=lambda ws,task,guard:_script_draft_use_case(ws,validate_inputs=lambda *args:None).generate_topics(ws,task,write_guard=guard),
@@ -13929,7 +14033,9 @@ def _task_business():
         observe_output=_submit_goal_observation,request_result=_goal_request_metadata,media_result=_goal_media_metadata,
         record_adoption=_goal_service().record_script_adoption,segments=_segment_production_use_case(),native_case=_native_task_operations_case(),
         timeline_restores=_timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
-        media_jobs_list=_list_goal_media_jobs)
+        media_jobs_list=_list_goal_media_jobs,
+        read_script_sections=lambda task, script_id, **values:
+            production_repo.read_creation_task_script_sections(task.workspace_id, task.id, script_id, **values))
 
 
 def _submit_goal_observation(task,actor,values,origin,guard):
@@ -14140,7 +14246,10 @@ def _goal_output_checkpoint(goal, event, facts, task, version, actor, business):
 
 
 def _finish_goal_business_turn(business,claim,reply,preview):
-    return business.finish(claim,_assistant_text_without_credentials(reply,claim['goal']['workspace_id']))
+    message = _assistant_text_without_credentials(reply,claim['goal']['workspace_id'])
+    if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
+        return business.finish(claim, message, script_window_request=preview)
+    return business.finish(claim, message)
 
 
 def _run_goal_turn(claim, fresh):
@@ -14174,6 +14283,8 @@ def _run_goal_turn(claim, fresh):
         return
     sanitizer = _AssistantStreamTextSanitizer(workspace_id)
     def on_event(event):
+        _record_script_window_tool_event(event, workspace_id=workspace_id,
+            member_id=goal['member_id'], task_id=task_id, turn_id=turn_id)
         if event.get('type') == 'context_compaction':
             diagnostic = _safe_compaction_event(event)
             if diagnostic is not None:

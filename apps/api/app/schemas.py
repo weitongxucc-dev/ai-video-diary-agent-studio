@@ -14,6 +14,7 @@ from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
 from app.source_types import ContentUseState
+from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
 
 from app.models import (
     EpisodeIntakeMode,
@@ -1162,7 +1163,7 @@ class CreationTaskScriptSectionRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     content: str = Field(min_length=1, max_length=4000)
     visual_prompt: str = Field(min_length=1, max_length=1000)
-    evidence_reference_ids: list[str] = Field(min_length=1, max_length=12)
+    evidence_reference_ids: list[str] = Field(max_length=12)
 
 
 class CreationTaskScriptConfirmRequest(BaseModel):
@@ -1174,6 +1175,7 @@ class CreationTaskScriptConfirmRequest(BaseModel):
     expected_updated_at: datetime
     adoption_kind: Literal["manual", "delegated_system"] = "manual"
     assistant_turn_id: UUID | None = None
+    edit_mode: Literal["replace_all"] | None = None
 
 
 class CreationTaskScriptDraftSectionRequest(BaseModel):
@@ -1192,6 +1194,34 @@ class CreationTaskScriptDraftRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     sections: list[CreationTaskScriptDraftSectionRequest] = Field(min_length=1, max_length=20)
     expected_updated_at: datetime | None = None
+    assistant_turn_id: UUID | None = None
+    edit_mode: Literal["replace_all"] | None = None
+
+
+class CreationTaskScriptWindowStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    title: str = Field(min_length=1, max_length=160)
+    sections: list[CreationTaskScriptDraftSectionRequest] = Field(
+        min_length=1, max_length=SCRIPT_SECTION_WINDOW_LIMIT)
+    assistant_turn_id: UUID | None = None
+
+
+class CreationTaskScriptSectionsPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_updated_at: datetime
+    sections: list[CreationTaskScriptDraftSectionRequest] = Field(
+        min_length=1, max_length=SCRIPT_SECTION_WINDOW_LIMIT)
+    insert_after_section_id: str | None = Field(default=None, min_length=1, max_length=120)
+    assistant_turn_id: UUID | None = None
+
+
+class CreationTaskScriptConfirmSavedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_updated_at: datetime
+    adoption_kind: Literal["manual", "delegated_system"] = "manual"
     assistant_turn_id: UUID | None = None
 
 
@@ -1229,13 +1259,16 @@ class CreationTaskScriptGenerationRunResponse(BaseModel):
 
 
 class CreationTaskScriptResponse(BaseModel):
+    draft_complete: bool = True
     id: str
     task_id: str
     run_id: str
     topic_id: str
     title: str
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
-    sections: list[CreationTaskScriptSectionResponse]
+    sections: list[CreationTaskScriptSectionResponse] | None
+    sections_loaded: bool = True
+    sections_total_count: int | None = Field(default=None, ge=0)
     selection_status: Literal["draft", "confirmed"]
     created_at: datetime
     updated_at: datetime
@@ -1245,10 +1278,25 @@ class CreationTaskScriptResponse(BaseModel):
     adoption: dict[str, object] | None = None
     locked_body_digest: str | None = None
 
+    @model_validator(mode="after")
+    def complete_body_or_explicit_header(self):
+        if self.sections is None:
+            if self.sections_loaded or self.sections_total_count is None:
+                raise ValueError("未加载正文必须明确标记并提供真实总段数")
+        else:
+            if not self.sections_loaded:
+                raise ValueError("部分正文只能通过文案窗口返回，不能冒充完整稿件")
+            if self.sections_total_count is None:
+                self.sections_total_count = len(self.sections)
+            elif self.sections_total_count != len(self.sections):
+                raise ValueError("完整正文段数与声明总数不符")
+        return self
+
 
 class CreationTaskScriptsResponse(BaseModel):
     task: CreationTaskResponse
     scripts: list[CreationTaskScriptResponse]
+    scripts_scope: Literal["active", "history"] = "history"
     latest_run: CreationTaskScriptGenerationRunResponse | None
     route_preflight: TopicRouteSnapshotResponse
 
@@ -2495,7 +2543,25 @@ class AssistantTimelineRestoreResponse(BaseModel):
     failure: dict[str, object] | None = None
 
 
+class AssistantScriptWindowRequestResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["script_window_request"] = "script_window_request"
+    operation: Literal["start", "patch", "confirm"]
+    task_id: str
+    request_id: UUID
+    script_id: str | None = None
+    status: Literal["saved", "confirmed", "unknown", "failed", "rejected", "not_submitted"]
+    updated_at: datetime | None = None
+    total_count: int | None = Field(default=None, ge=0)
+    affected_section_ids: list[str] | None = None
+    submission_effect: Literal["not_submitted", "rejected", "unknown"] | None = None
+    failure: dict[str, object] | None = None
+    input_id: str | None = None
+    input_turn_id: str | None = None
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    script_window_request: AssistantScriptWindowRequestResponse | None = None
     timeline_restore: AssistantTimelineRestoreResponse | None = None
     segment_revision: AssistantSegmentRevisionResponse | None = None
     storyboard_regeneration: AssistantStoryboardRegenerationReceipt | AssistantStoryboardRegenerationFailure | None = None
@@ -2932,6 +2998,7 @@ class CreationTaskWorkspaceResponse(BaseModel):
     selected_topic: CreationTaskTopicCandidateResponse | None
     topic_evidence: list[TopicEvidenceReferenceResponse]
     scripts: list[CreationTaskScriptResponse]
+    scripts_scope: Literal["active"] = "active"
     available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
     portrait_available: bool = False
