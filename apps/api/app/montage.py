@@ -1442,7 +1442,7 @@ def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, 
     return _write_frame_subtitle_input(spans, images, output_dir, size=size, frame_count=frame_count)
 
 
-def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count, crop_to_content=True):
+def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count, crop_to_content=True, check=None):
     """Rasterize the existing subtitle layers on an explicit integer frame clock."""
     if (len(spans) != len(images) or type(frame_count) is not int or frame_count <= 0
             or any(type(first) is not int or type(last) is not int or not 0 <= first <= last <= frame_count
@@ -1450,6 +1450,8 @@ def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count,
         raise ValueError('字幕图层帧区间与输入数量不符合画面窗口')
     bounds = None
     for path in images:
+        if check is not None:
+            check()
         with Image.open(path) as layer:
             # Alpha content is always retained. A zero-opacity colored panel
             # also stores RGB with A=0; retain those bytes for exact RGBA recovery.
@@ -1468,6 +1470,8 @@ def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count,
             min(size[1], (bounds[3] + 1) // 2 * 2))
     cropped_size = (crop[2] - crop[0], crop[3] - crop[1])
     for path in dict.fromkeys(images):
+        if check is not None:
+            check()
         with Image.open(path) as layer:
             cropped = layer.crop(crop)
         cropped.save(path)
@@ -1477,6 +1481,8 @@ def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count,
     frames: dict[tuple[int, ...], Path] = {(): transparent}
     lines = ["ffconcat version 1.0"]
     for start, end in zip(boundaries, boundaries[1:]):
+        if check is not None:
+            check()
         active = tuple(index for index, (first, last) in enumerate(spans) if first <= start < last)
         if active not in frames:
             if len(active) == 1:
@@ -1504,6 +1510,8 @@ def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count,
     lines.extend([f"file {transparent.name}", "option framerate 30"])
     manifest = output_dir / "subtitles.ffconcat"
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if check is not None:
+        check()
     return manifest, (crop[0], crop[1])
 
 
@@ -1967,12 +1975,18 @@ def _picture_window_layers(window, output, context, layers, filters, size):
     directory = output.parent / f'.{output.stem}-layers'
     directory.mkdir(exist_ok=False)
     arguments = []
+    def check_layers():
+        context.check()
+        request = context.scheduler._get(context.grant.request_id)
+        cap = request.resources.get('picture_temporary_limit_bytes')
+        if cap is not None and sum(path.stat().st_size for path in directory.iterdir() if path.is_file()) > cap:
+            raise ValueError('画面窗口PNG与字幕manifest超过原临时卷许可分配')
     graph = [f'[0:v]{filters}[windowbase]']
     label = '[windowbase]'
     captions, caption_paths = [], []
     input_index = 1
     for index, layer in enumerate(layers):
-        context.check()
+        check_layers()
         if not 0 <= layer.first_frame < layer.last_frame <= window.frame_count:
             raise ValueError('烧录图层不属于当前完整画面帧窗口')
         path = directory / f'layer-{index}.png'
@@ -1992,12 +2006,13 @@ def _picture_window_layers(window, output, context, layers, filters, size):
             raise ValueError('画面窗口图层类型无效')
     if captions:
         manifest, position = _write_frame_subtitle_input(captions, caption_paths, directory,
-            size=size, frame_count=window.frame_count, crop_to_content=False)
+            size=size, frame_count=window.frame_count, crop_to_content=False, check=check_layers)
         arguments.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file', '-i', str(manifest)])
         graph.append(f'[{input_index}:v]setpts=PTS-STARTPTS,format=rgba[subtitleclock]')
         graph.append(f'{label}[subtitleclock]overlay={position[0]}:{position[1]}:'
             'shortest=0:eof_action=pass:repeatlast=0[windowcaptioned]')
         label = '[windowcaptioned]'
+    check_layers()
     return arguments + ['-filter_complex', ';'.join(graph), '-map', label]
 
 
