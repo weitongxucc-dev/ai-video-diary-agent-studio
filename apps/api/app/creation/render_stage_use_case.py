@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from app.creation.duration_requirement import DurationRequirement, DurationConflict
+from app.creation.picture_fragment_layers import PICTURE_LAYER_CONTRACT
 from app.canvas import canvas_size
 from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TaskEvent, TimelineVersion, TransformRun
 from app.creation.editing.metadata_use_case import InvalidMontage
@@ -44,6 +45,7 @@ def render_input_payload(
     for transient_key in ("status", "message", "output_path", "subtitle_path", "updated_at"):
         payload.pop(transient_key, None)
     payload["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    payload["picture_layer_contract"] = PICTURE_LAYER_CONTRACT
     if bind_timeline_version:
         payload["timeline_version_id"] = timeline_version_id
     payload["subtitles_visible"] = subtitles_visible

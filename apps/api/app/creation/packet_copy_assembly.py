@@ -71,6 +71,9 @@ class PacketCopyAssembly:
             if (resources.get('kind') != 'creation_render' or resources.get('picture_recipe_digest') != recipe
                     or resources.get('picture_fragment') != {key: facts[key] for key in ('first_frame', 'packet_count', 'contract')}):
                 raise ValueError('画面父产物与原许可片段时钟不一致')
+            if (resources.get('picture_fragment_recipe') is not None
+                    and transform.parameters.get('picture_fragment_recipe') != resources['picture_fragment_recipe']):
+                raise ValueError('画面父产物未封存原许可的实际烧录图层与合同')
         elif (resources.get('kind') != 'creation_packet_copy'
                 or resources.get('unit_id') != transform.parameters.get('packet_copy_unit_id')
                 or resources.get('unit_id') != transform.input_digest

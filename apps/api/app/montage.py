@@ -1436,7 +1436,18 @@ def _subtitle_frame_boundary(seconds: float) -> int:
 
 def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, *,
                                 size: tuple[int, int], duration_seconds: float) -> tuple[Path, tuple[int, int]]:
-    """One bounded-cadence PNG stream with the same frame visibility/layer order."""
+    frame_count = round(duration_seconds * 30)
+    spans = [(min(frame_count, _subtitle_frame_boundary(cue.start_seconds)),
+              min(frame_count, _subtitle_frame_boundary(cue.end_seconds))) for cue in schedule]
+    return _write_frame_subtitle_input(spans, images, output_dir, size=size, frame_count=frame_count)
+
+
+def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count, crop_to_content=True):
+    """Rasterize the existing subtitle layers on an explicit integer frame clock."""
+    if (len(spans) != len(images) or type(frame_count) is not int or frame_count <= 0
+            or any(type(first) is not int or type(last) is not int or not 0 <= first <= last <= frame_count
+                   for first, last in spans)):
+        raise ValueError('字幕图层帧区间与输入数量不符合画面窗口')
     bounds = None
     for path in images:
         with Image.open(path) as layer:
@@ -1448,7 +1459,7 @@ def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, 
                 min(bounds[0], visible[0]), min(bounds[1], visible[1]),
                 max(bounds[2], visible[2]), max(bounds[3], visible[3]),
             )
-    if bounds is None:
+    if bounds is None or not crop_to_content:
         bounds = (0, 0, *size)
     # Every frame shares this box. Even offsets preserve the original positions
     # when overlay negotiates yuv420 chroma coordinates; never shrink alpha edges.
@@ -1460,11 +1471,6 @@ def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, 
         with Image.open(path) as layer:
             cropped = layer.crop(crop)
         cropped.save(path)
-    # Match clip_video_filters' absolute picture endpoint, rather than rounding
-    # the six-decimal cue enable expression into an extra terminal frame.
-    frame_count = round(duration_seconds * 30)
-    spans = [(min(frame_count, _subtitle_frame_boundary(cue.start_seconds)),
-              min(frame_count, _subtitle_frame_boundary(cue.end_seconds))) for cue in schedule]
     boundaries = sorted({0, frame_count, *(frame for span in spans for frame in span)})
     transparent = output_dir / "subtitle-transparent.png"
     Image.new("RGBA", cropped_size, (0, 0, 0, 0)).save(transparent)
@@ -1952,13 +1958,54 @@ def _picture_window_input(window, source: Path, context):
     return (['ffmpeg', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
         '-filter_threads', str(context.threads), '-filter_complex_threads', str(context.threads),
         '-ss', f'{clip.source_start_seconds:.10f}', '-t', f'{clip.source_end_seconds-clip.source_start_seconds:.10f}',
-        '-threads', str(context.threads), '-i', str(source), '-vf', filters, '-an'], (width, height))
+        '-threads', str(context.threads), '-i', str(source)], (width, height), filters)
 
 
-def render_granted_picture_window(window, source: Path, output: Path, context):
+def _picture_window_layers(window, output, context, layers, filters, size):
+    if not layers:
+        return ['-vf', filters]
+    directory = output.parent / f'.{output.stem}-layers'
+    directory.mkdir(exist_ok=False)
+    arguments = []
+    graph = [f'[0:v]{filters}[windowbase]']
+    label = '[windowbase]'
+    captions, caption_paths = [], []
+    input_index = 1
+    for index, layer in enumerate(layers):
+        context.check()
+        if not 0 <= layer.first_frame < layer.last_frame <= window.frame_count:
+            raise ValueError('烧录图层不属于当前完整画面帧窗口')
+        path = directory / f'layer-{index}.png'
+        if layer.kind == 'subtitle':
+            _write_subtitle_image(layer.value, path, size=size)
+            captions.append((layer.first_frame, layer.last_frame))
+            caption_paths.append(path)
+        elif layer.kind == 'graphic':
+            write_graphic_overlay(layer.value, path, size)
+            arguments.extend(['-loop', '1', '-framerate', '30', '-i', str(path)])
+            following = f'[graphic{input_index}]'
+            graph.append(f"{label}[{input_index}:v]overlay=0:0:shortest=1:"
+                f"enable='gte(n,{layer.first_frame})*lt(n,{layer.last_frame})'{following}")
+            label = following
+            input_index += 1
+        else:
+            raise ValueError('画面窗口图层类型无效')
+    if captions:
+        manifest, position = _write_frame_subtitle_input(captions, caption_paths, directory,
+            size=size, frame_count=window.frame_count, crop_to_content=False)
+        arguments.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file', '-i', str(manifest)])
+        graph.append(f'[{input_index}:v]setpts=PTS-STARTPTS,format=rgba[subtitleclock]')
+        graph.append(f'{label}[subtitleclock]overlay={position[0]}:{position[1]}:'
+            'shortest=0:eof_action=pass:repeatlast=0[windowcaptioned]')
+        label = '[windowcaptioned]'
+    return arguments + ['-filter_complex', ';'.join(graph), '-map', label]
+
+
+def render_granted_picture_window(window, source: Path, output: Path, context, *, frame_layers=()):
     """Select a lossless diagnostic window on the original clip's filter clock."""
-    command, (width, height) = _picture_window_input(window, source, context)
-    command += ['-c:v', 'ffv1', '-level', '3', '-coder', '0', '-context', '0', '-g', '1',
+    command, (width, height), filters = _picture_window_input(window, source, context)
+    command += _picture_window_layers(window, output, context, frame_layers, filters, (width, height))
+    command += ['-an', '-c:v', 'ffv1', '-level', '3', '-coder', '0', '-context', '0', '-g', '1',
         '-slices', '4', '-slicecrc', '1', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
         '-threads:v', str(context.threads), '-fs', str(context.max_output_bytes), '-f', 'nut', str(output)]
     _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
@@ -1973,10 +2020,17 @@ PICTURE_FRAGMENT_CONTRACT = 'h264-crf20-b0-fmp4/v1'
 _PICTURE_FRAGMENT_FLAGS = '+empty_moov+frag_keyframe+default_base_moof+negative_cts_offsets+skip_trailer+skip_sidx'
 
 
-def render_granted_picture_fragment(window, source: Path, output: Path, context):
+def render_granted_picture_fragment(window, source: Path, output: Path, context, *, frame_layers=()):
     """Encode each selected frame once; fragments use a fixed 90 kHz packet clock."""
-    command, size = _picture_window_input(window, source, context)
-    command += ['-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+    if frame_layers:
+        from app.creation.picture_fragment_layers import picture_fragment_recipe
+        context.check()
+        request = context.scheduler._get(context.grant.request_id)
+        if request.resources.get('picture_fragment_recipe') != picture_fragment_recipe(window, frame_layers):
+            raise PermissionError('烧录窗口的实际图层内容或栅格合同不属于原许可配方')
+    command, size, filters = _picture_window_input(window, source, context)
+    command += _picture_window_layers(window, output, context, frame_layers, filters, size)
+    command += ['-an', '-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
         '-bf', '0', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
         '-threads:v', str(context.threads), '-video_track_timescale', '90000',
         '-movflags', _PICTURE_FRAGMENT_FLAGS, '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
