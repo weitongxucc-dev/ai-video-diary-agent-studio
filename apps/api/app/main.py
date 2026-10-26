@@ -166,7 +166,8 @@ def _device_resource_profile():
     if active is not None:
         return active
     try:
-        return resolve_device_resources(settings, os.environ, model_catalog=model_catalog)
+        return resolve_device_resources(settings, os.environ, model_catalog=model_catalog,
+                                        select_packet_copy_preparation=True)
     except DeviceProfileUnavailable as exc:
         raise HostBudgetUncalibrated(str(exc)) from exc
 
@@ -13872,6 +13873,10 @@ def _build_device_components(*, repository: ProductionRepository):
     cpu_render_budget, audio_budget = budget.cpu_render, budget.cpu_audio
     narration_budget, montage_budget = budget.narration, budget.montage
     presenter_budget, presenter_cpu_render_budget = budget.presenter, budget.presenter_cpu_render
+    from app.creation.packet_copy_assembly import PacketCopyAssembly
+    packet_copy = (PacketCopyAssembly(repository, artifact_store, settings.effective_temporary_root_path,
+                                     budget=budget.packet_copy, reserve_bytes=budget.min_free_disk_bytes)
+                   if budget.packet_copy is not None else None)
     from app.creation.task_authorization import TaskAuthorizationUseCase
     task_authorizations = TaskAuthorizationUseCase(repository, lambda identity: _verify_creation_identity(
         CreationExecutionActor.from_event(identity["workspace_id"], identity)))
@@ -13897,6 +13902,7 @@ def _build_device_components(*, repository: ProductionRepository):
         "creation_job": creation_job_registration(
             repository,
             task_media=task_media,
+            packet_copy_assembly=packet_copy,
             source_verifier=lambda source,actor,connection=None:validate_edit_origin(conversation_repo,source,actor,connection=connection),
             cover=cover,
             task_authorizations=task_authorizations,
