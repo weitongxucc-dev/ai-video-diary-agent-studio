@@ -4,7 +4,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
 from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected, TaskInvocation
-from app.assistant.projection import _safe_business_failure
+from app.assistant.business_failure import _safe_business_failure
 from app.assistant_goal_continuation import GoalProjectionRejected
 from app.creation.script_draft_use_case import ScriptDraftRejected
 from app.creation.execution_control import ExecutionControlRejected

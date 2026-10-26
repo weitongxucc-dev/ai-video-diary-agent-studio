@@ -23,6 +23,9 @@ ASSISTANT_BUSINESS_TOOLS = {
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
 }
 
+SCRIPT_WINDOW_TOOL_OPERATIONS = {'start_script_window':'start','patch_script_sections':'patch',
+    'confirm_saved_script':'confirm','read_script_window_request':None}
+
 TASK_READ_PREVIEW_TOOLS = ("start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",

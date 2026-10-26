@@ -342,7 +342,7 @@ class TaskBusiness:
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
         if script_window_request is not None:
-            from app.assistant.result_projection import resolve_script_window_request, script_window_message
+            from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
             if script_window_request.get('input_id')!=goal.get('source_input_id'):
                 raise TaskBusinessRejected('文案窗口回执不属于当前输入',kind='conflict')
             window=resolve_script_window_request(script_window_request,task_id=task_id,
