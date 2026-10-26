@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.canvas import canvas_size
 from app.creation_execution import (
     CpuRenderLimits, CreationExecution, CreationExecutionActor, CreationJobOwnerVerifier,
@@ -2352,11 +2353,12 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
         'topic_facts','edit_capabilities','script_capabilities','tool_capabilities','material_facts','observation_facts',
         'observe_output','request_result','media_result','record_adoption')}
     business=TaskBusiness(repo,conversations,authorizations,runtime=revoke_before_owner_write,execution=control,**ports)
+    host=TaskBusinessAdapter(business)
     binding={'workspace_id':'local','member_id':member,'task_id':task_id,'conversation_id':chat['id'],
         'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),'input_id':goal.get('source_input_id'),
         'input_turn_id':goal.get('source_input_turn_id'),'task_version':{'timeline_version_id':None,'timeline_sequence':0}}
     def call(op,args):
-        return business(op,args,call_id='transport-only',tool_call_id='tool-only',source_binding=binding,
+        return host(op,args,call_id='transport-only',tool_call_id='tool-only',source_binding=binding,
             cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert call('read_creator_memory',{})=={'ok':True,'value':{'revision':3,'banned_words':['私有偏好快照']}}
     wrong=call('start_creation_execution',{'task_id':task_id,'assistant_turn_id':str(uuid4()),'payload':{}})
@@ -2429,13 +2431,13 @@ def _seed_background_business(tmp_path):
     binding={'workspace_id':'local','member_id':member,'task_id':task_id,'conversation_id':chat['id'],
         'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),'input_id':goal.get('source_input_id'),
         'input_turn_id':goal.get('source_input_turn_id'),'task_version':{'timeline_version_id':None,'timeline_sequence':0}}
-    return business,binding,claim,script_id,digest
+    return business,TaskBusinessAdapter(business),binding,claim,script_id,digest
 
 
 def test_public_background_turn_forwards_trusted_preflight_binding(tmp_path,monkeypatch):
     from app import assistant_pi as pi
     from app.assistant import turn as turn_module
-    business,binding,claim,_,_=_seed_background_business(tmp_path)
+    business,host,binding,claim,_,_=_seed_background_business(tmp_path)
     bridge=tmp_path/'host.mjs';bridge.touch()
     monkeypatch.setattr(pi,'pi_runtime_checks',lambda:[])
     monkeypatch.setattr(pi,'_pi_executable',lambda:'declared-pi')
@@ -2448,12 +2450,12 @@ def test_public_background_turn_forwards_trusted_preflight_binding(tmp_path,monk
     business.workspace_facts=lambda ws,task:{'task_id':task.id,'selected_refs':[]}
     observed=[]
     def process(cmd,*,message,**kwargs):
-        assert kwargs['business_handler'] is business and kwargs['source_binding']==binding
+        assert kwargs['business_handler'] is host and kwargs['source_binding']==binding
         value=json.loads(message)
         if 'factMode' not in value:
             raise pi.AssistantStopped('stop before any model')
         kind=value['factMode'];observed.append(kind)
-        result=business('read_creator_memory' if kind=='memory' else 'read_task_workspace',{},
+        result=host('read_creator_memory' if kind=='memory' else 'read_task_workspace',{},
             call_id='declared-preflight',tool_call_id=None,source_binding=binding,
             cancel_event=__import__('threading').Event(),deadline_monotonic=time.monotonic()+10)
         assert result['ok']
@@ -2463,14 +2465,14 @@ def test_public_background_turn_forwards_trusted_preflight_binding(tmp_path,monk
     with pytest.raises(pi.AssistantStopped,match='stop before any model'):
         pi.run_task_turn(main_module.Settings(),workspace_id='local',task_id=binding['task_id'],
             conversation_id=binding['conversation_id'],message='继续完成',stage='narration',selected_refs=[],playhead_ms=None,
-            caller_user_id=binding['member_id'],turn_id=claim['turn_id'],business_handler=business,source_binding=binding)
+            caller_user_id=binding['member_id'],turn_id=claim['turn_id'],business_handler=host,source_binding=binding)
     assert observed==['memory','task']
 
 
 def test_background_input_consumption_inherits_scope_and_fences_old_calls(tmp_path,monkeypatch):
     from threading import Event
     from uuid import uuid4
-    business,binding,claim,_,_=_seed_background_business(tmp_path)
+    business,host,binding,claim,_,_=_seed_background_business(tmp_path)
     conversations=business.conversations;delivery=business.input_delivery(binding)
     def enqueue(context,message='增加结尾要求'):
         chat=conversations.get(binding['conversation_id'],'local',binding['member_id'])
@@ -2487,7 +2489,7 @@ def test_background_input_consumption_inherits_scope_and_fences_old_calls(tmp_pa
     assert current['input_id']==first['input_id'] and current['goal_revision']!=binding['goal_revision']
     assert conversations.list_inputs(binding['conversation_id'],'local',binding['member_id'])[0]['status']=='consumed'
     def read(source):
-        return business('read_creator_memory',{},call_id='read',tool_call_id='tool',source_binding=source,
+        return host('read_creator_memory',{},call_id='read',tool_call_id='tool',source_binding=source,
             cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert not read(binding)['ok']
     assert read(current)=={'ok':True,'value':{'revision':3}}
@@ -2568,7 +2570,7 @@ def test_observation_reconciles_original_before_version_and_marks_unknown(tmp_pa
 
 def test_execution_projection_failure_reports_original_committed_job(tmp_path,monkeypatch):
     from threading import Event
-    business,binding,claim,script_id,digest=_seed_background_business(tmp_path)
+    business,host,binding,claim,script_id,digest=_seed_background_business(tmp_path)
     control=business.execution
     def start(ws,task_id,script_id,digest,actor,runtime,**kwargs):
         # Declare the control result through the actual atomic job/source owner;
@@ -2582,7 +2584,7 @@ def test_execution_projection_failure_reports_original_committed_job(tmp_path,mo
     monkeypatch.setattr(control,'start',start)
     def failed_projection(*args,**kwargs): raise ValueError('projection unavailable')
     monkeypatch.setattr(business.conversations,'record_task_execution',failed_projection)
-    result=business('start_creation_execution',{'payload':{'script_id':script_id,'input_digest':digest,'requirements_confirmed':True}},
+    result=host('start_creation_execution',{'payload':{'script_id':script_id,'input_digest':digest,'requirements_confirmed':True}},
         call_id='start',tool_call_id='tool',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert result['ok'] is False and result['failure'].get('submission_effect')=='unknown',result
     jobs=business.production.list_job_runs('local',binding['task_id'])
@@ -2594,7 +2596,7 @@ def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_p
     import sys
     from uuid import uuid4
     from app import assistant_pi as pi
-    business,binding,claim,_,_=_seed_background_business(tmp_path)
+    business,host,binding,claim,_,_=_seed_background_business(tmp_path)
     repo=business.conversations
     chat=repo.get(binding['conversation_id'],'local',binding['member_id'])
     chat=repo.save_draft(chat['id'],'local',binding['member_id'],'补充结尾',chat['draft_version'])
@@ -2609,7 +2611,7 @@ def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_p
         return result
     def callback(operation,arguments,**kwargs):
         observed.append((kwargs['tool_call_id'],kwargs['source_binding']['input_id']))
-        return business(operation,arguments,**kwargs)
+        return host(operation,arguments,**kwargs)
     script='''import json,sys
 json.loads(sys.stdin.readline())
 def send(value): print(json.dumps(value),flush=True)
@@ -2640,7 +2642,7 @@ def test_adopted_input_and_original_job_survive_turn_interruption(tmp_path,inter
     from uuid import uuid4
     from app.conversation_repository import ConversationRepository
     from app.creation.contracts import JobRun
-    business,binding,claim,_,digest=_seed_background_business(tmp_path)
+    business,host,binding,claim,_,digest=_seed_background_business(tmp_path)
     business.execution.render_stage=SimpleNamespace(valid=lambda *args,**kwargs:False)
     conversations=business.conversations;production=business.production
     chat=conversations.get(binding['conversation_id'],'local',binding['member_id'])
@@ -2671,7 +2673,7 @@ def test_adopted_input_and_original_job_survive_turn_interruption(tmp_path,inter
     assert restarted.get_task_goal(claim['turn_id'])['status'] in {'running','waiting_result'}
     business.conversations=restarted
     def call(source_binding):
-        return business('read_creation_execution',{'job_id':job.id},call_id='reconcile-original',tool_call_id='read',
+        return host('read_creation_execution',{'job_id':job.id},call_id='reconcile-original',tool_call_id='read',
             source_binding=source_binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert not call(binding)['ok']  # The prior tool still owns the old input/revision.
     actual=business.read_execution(restarted.get_task_goal(claim['turn_id']),CreationExecutionActor('local',binding['member_id']),job_id=job.id)
@@ -2699,7 +2701,7 @@ def test_original_observation_409_stays_rejected_for_http_and_host(tmp_path,monk
     from uuid import uuid4
     from app.creation.output_observation_use_case import OutputObservationUseCase,OutputObservationRejected
     from app.schemas import CreationTaskObservationRequest
-    business,binding,_,_,_=_seed_background_business(tmp_path)
+    business,host,binding,_,_,_=_seed_background_business(tmp_path)
     repo=business.production;task=repo.get_creation_task('local',binding['task_id'])
     actor=CreationExecutionActor('local',binding['member_id'])
     case=OutputObservationUseCase(repo,None,SimpleNamespace(repository=repo),tmp_path,None)
@@ -2719,7 +2721,7 @@ def test_original_observation_409_stays_rejected_for_http_and_host(tmp_path,monk
     with pytest.raises(main_module.HTTPException) as http:
         main_module.observe_creation_task_output(task.id,None,payload)
     assert http.value.status_code==409 and http.value.detail==rejection
-    response=business('observe_task_output',{'payload':payload.model_dump(mode='json',exclude_unset=True)},
+    response=host('observe_task_output',{'payload':payload.model_dump(mode='json',exclude_unset=True)},
         call_id='old-refusal',tool_call_id='observe',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert response['ok'] is False and response['failure']['status_code']==409
     assert response['failure']['error']==rejection['error'] and response['failure']['submission_effect']=='rejected'

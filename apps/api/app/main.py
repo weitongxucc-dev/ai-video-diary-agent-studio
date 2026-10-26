@@ -1,6 +1,8 @@
 from __future__ import annotations
 from app.schemas import SegmentVisualDecisionAdoptRequest
-from app.assistant.task_business import TaskBusiness, TaskBusinessRejected
+from app.assistant.task_business import TaskBusiness
+from app.assistant.task_business_errors import TaskBusinessRejected
+from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.script_draft_use_case import ScriptDraftUseCase, ScriptDraftRejected
 from app.creation.execution_control import CreationExecutionControl, DesktopShutdownUseCase, ExecutionControlRejected
 from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejected
@@ -14084,7 +14086,7 @@ def _bind_goal_business_scope(request,goal):
         root=conversation_repo._goal_root(conn,goal['original_turn_id'])
         if (root is None or not conversation_repo._goal_revision_matches(root,goal)
                 or not conversation_repo._goal_origin_current(conn,root)):
-            raise TaskBusinessRejected('原目标在签发期间已变化',status_code=409)
+            raise TaskBusinessRejected('原目标在签发期间已变化',kind='conflict')
     authorizations.bind_business_context(task,actor,goal,memory=memory,references=references,write_guard=current)
 
 
@@ -14370,12 +14372,13 @@ def _run_goal_turn(claim, fresh):
             "input_id":goal.get("source_input_id"),"input_turn_id":goal.get("source_input_turn_id"),"task_version":fresh["task_version"]}
         from app.creation.native_task_operations import NativeOperationHandler
         native_actor,_native_task,_native_scope = business.original(goal)
-        native_handler = NativeOperationHandler(business.native_case,native_actor,None,_creation_runtime,delegate=business.native_call)
+        host = TaskBusinessAdapter(business)
+        native_handler = NativeOperationHandler(business.native_case,native_actor,None,_creation_runtime,delegate=host.native_call)
         reply, preview = run_task_turn(_workspace_settings_for(workspace_id), workspace_id=workspace_id,
             caller_user_id=goal["member_id"],
             task_id=task_id, conversation_id=goal["conversation_id"], message=message, stage=stage,
             selected_refs=refs, playhead_ms=context.get("playhead_ms"), on_event=on_event, turn_id=turn_id,
-            business_handler=business,native_handler=native_handler,source_binding=binding,input_handler=business.input_delivery(binding),
+            business_handler=host,native_handler=native_handler,source_binding=binding,input_handler=business.input_delivery(binding),
             profile_reference=fresh["facts"].get("profile_reference"), knowledge_reference=fresh["facts"].get("knowledge_reference"),
             task_version=fresh["task_version"], material_selection=material_selection,
             selected_references=[],
