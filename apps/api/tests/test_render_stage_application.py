@@ -112,8 +112,8 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     render = replace(render, running_cpu_policy=_render_budget().running_cpu_policy)
     from test_creation_audio_mix import audio_budget as calibrated_audio_budget
     audio_budget = replace(calibrated_audio_budget(), max_output_duration_seconds=15)
-    monkeypatch.setattr(main, 'cpu_audio_budget_from_env', lambda: audio_budget)
     host_budget=HostBudget(91,gib,16*gib,gib,10**9,128*1024**2,presenter=budget,presenter_cpu_render=render,cpu_render=render,montage=montage_budget,cpu_audio=audio_budget)
+    monkeypatch.setattr(main, '_device_host_budget', lambda: host_budget)
     swap=psutil.swap_memory();disk=psutil.disk_io_counters();devices=psutil.disk_io_counters(perdisk=True)
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))

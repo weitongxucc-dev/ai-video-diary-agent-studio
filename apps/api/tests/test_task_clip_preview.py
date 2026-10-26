@@ -121,7 +121,9 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
     try:
         count = len(repo.list_job_runs('local', 'task'))
-        monkeypatch.setattr(main, 'clip_preview_budget_from_env', lambda:None)
+        selected_budget_for = main._device_operation_budget
+        monkeypatch.setattr(main, '_device_operation_budget',
+            lambda name: None if name == 'clip_preview' else selected_budget_for(name))
         payload = {'base_version_id':'timeline', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}
         refused = client.post('/api/creation-tasks/task/visual/preview', json=payload)
         assert refused.status_code == 503 and '尚未标定' in refused.text
@@ -311,9 +313,9 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     budget=CpuRenderBudget(max_duration_seconds=20.401,max_pixel_seconds=1920*1920*20.401,max_width_px=1920,max_height_px=1920,
         max_input_bytes=10000000,max_clip_count=64,max_overlay_count=16,max_output_bytes=2000000,max_threads=1,max_timeout_seconds=30,
         additional_memory_bytes=1,additional_disk_bytes=1,max_process_threads=16)  # Synthetic test profile.
-    monkeypatch.setattr(main,'clip_preview_budget_from_env',lambda:budget)
-    # _task_media_facts imports the calibration reader at its boundary.
-    monkeypatch.setattr('app.member_permits.cpu_render_budget_from_env',lambda:budget)
+    selected_budget_for = main._device_operation_budget
+    monkeypatch.setattr(main, '_device_operation_budget',
+        lambda name: budget if name in {'clip_preview', 'cpu_render'} else selected_budget_for(name))
     monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'output'))
     monkeypatch.setattr(main,'settings',replace(main.settings,temporary_root_path=str(tmp_path/'temp'),video_output_path=str(tmp_path/'output')))

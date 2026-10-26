@@ -1876,3 +1876,52 @@ def test_script_reserves_peak_at_start_and_keeps_system_floor_while_running(tmp_
     assert running.checks['available_memory_bytes']['minimum']==100
     monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=99))
     assert probe._sample(_script_resources(),running_io=True).verdict is False
+
+
+def test_quality_stream_declares_whole_artifact_without_bulk_byte_caps(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from app.quality_worker_runtime import quality_stream_resources
+    from test_quality_resource_owner import fixture_budget
+    quality = fixture_budget()
+    probe = HostResourceProbe(tmp_path / 'quality.sqlite', disk_paths=(tmp_path,),
+        budget=HostBudget(100, 100, None, 200, None, 32, quality=quality),
+        memory_monitor=IsolatedMemoryMonitor())
+    monkeypatch.setattr(psutil, 'disk_io_counters', lambda **kw: None)
+    monkeypatch.setattr(psutil, 'cpu_percent', lambda **kw: 0)
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=2**30))
+    resources = quality_stream_resources({'budget': asdict(quality),
+        'source': {'render_ref': 'a' * 64, 'size_bytes': 33554433}}, 'metadata', {})
+    decision = probe._sample(resources)
+    assert decision.verdict is True, decision.reason
+    assert decision.checks['source_stream']['source_bytes'] == 33554433
+    assert decision.checks['source_stream']['resident_allocation'] is False
+    # The original bulk protocol still has its finite whole-buffer limits.
+    bulk = {**resources, 'max_pcm_bytes': quality.max_pcm_bytes, 'max_frame_json_bytes': quality.max_frame_json_bytes}
+    bulk.pop('read_mode')
+    assert probe._sample(bulk).reason == 'declared_resources_exceed_budget'
+    # Streaming does not relax finite report output or the sealed preparation deadline.
+    assert probe._sample({**resources, 'max_output_bytes': quality.max_report_bytes + 1}).verdict is False
+    assert probe._sample({**resources, 'timeout_seconds': quality.max_timeout_seconds + 1}).verdict is None
+    assert probe._sample({**resources, 'source_bytes': 33554432}).reason == 'quality_stream_contract_invalid'
+    # The protocol package is a temporary file; reports are stdout, not a
+    # published output copy. A different output volume cannot cover tmp shortage.
+    from app import device_resource_volumes as volumes
+    from app.quality_worker_runtime import quality_request_byte_limit, QUALITY_STREAM_PROTOCOL
+    roles = {role: tmp_path / role for role in ('database', 'output', 'temporary')}
+    ids = {path: index for index, path in enumerate(roles.values())}
+    monkeypatch.setattr(volumes, 'existing_volume', lambda path: (ids[path], path))
+    package = quality_request_byte_limit({'protocol': QUALITY_STREAM_PROTOCOL, 'budget': asdict(quality)})
+    required = probe.budget.min_free_disk_bytes + quality.additional_disk_bytes + package
+    free = {str(path): probe.budget.min_free_disk_bytes for path in roles.values()}
+    free[str(roles['temporary'])] = required - 1
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=free[path]))
+    by_volume = HostResourceProbe(tmp_path / 'quality-volumes.sqlite', disk_paths=roles,
+        budget=probe.budget, memory_monitor=IsolatedMemoryMonitor())
+    insufficient = by_volume._sample(resources)
+    assert insufficient.verdict is False
+    assert insufficient.checks['quality_budget']['sealed_request_bytes'] == package
+    for role, path in roles.items():
+        assert insufficient.checks[f'disk_free_bytes:{path}']['minimum'] == (
+            required if role == 'temporary' else probe.budget.min_free_disk_bytes)
+    free[str(roles['temporary'])] = required
+    assert by_volume._sample(resources).verdict is True

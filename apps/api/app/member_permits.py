@@ -183,8 +183,11 @@ def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
     environment = os.environ if env is None else env
     budgets = []
     for budget_type, prefix in ((NarrationBudget, "DEVICE_NARRATION_"), (MontageBudget, "DEVICE_MONTAGE_")):
-        numeric_fields = [item for item in fields(budget_type) if item.name not in {"running_cpu_policy", "input_scope"}]
+        numeric_fields = [item for item in fields(budget_type) if item.name not in {"running_cpu_policy", "input_scope",
+            "preparation_backend_identity", "preparation_shape_digest", "preparation_receipt_sha256"}]
         cpu_policy = environment.get("DEVICE_NARRATION_RUNNING_CPU_POLICY_JSON", "").strip() if budget_type is NarrationBudget else ""
+        if budget_type is NarrationBudget and environment.get("DEVICE_NARRATION_INPUT_SCOPE", "legacy_stage") not in {"legacy_stage", "single_call_experiment_v1"}:
+            raise HostBudgetUncalibrated("显式实验环境不能声明preparation/prepared准备回执，仅允许legacy_stage/single_call_experiment_v1")
         if not cpu_policy and not any(environment.get(prefix + item.name.upper(), "").strip() for item in numeric_fields):
             budgets.append(None)
             continue
@@ -399,7 +402,7 @@ def clip_preview_budget_from_env(environ: Mapping[str, str] | None = None) -> Cp
 def build_host_probes(
     *,
     database_path: str | Path,
-    disk_paths: tuple[str | Path, ...],
+    disk_paths: tuple[str | Path, ...] | Mapping[str, str | Path],
     budget: HostBudget,
     device_poll_interval_seconds: float | None = None,
 ) -> tuple[HostResourceProbe, HostProcessProbe]:

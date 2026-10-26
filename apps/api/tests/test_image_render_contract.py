@@ -9,7 +9,6 @@ from PIL import Image
 import pytest
 
 import app.main as main
-import app.member_permits as permits
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CreationExecutionActor, cpu_render_facts
 from app.graphic_overlays import ArrowOverlay, ImageOverlay, TextOverlay
@@ -187,7 +186,9 @@ def test_exact_image_preview_declares_union_and_candidate_peak(script_state, mon
     draft = state.client.post(state.base_url + '/edits/exact', json={
         'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add', 'graphic_overlay': base_overlay})
     assert draft.status_code == 200, draft.text
-    monkeypatch.setattr(permits, 'cpu_render_budget_from_env', lambda: _render_budget())
+    selected_budget_for = main._device_operation_budget
+    monkeypatch.setattr(main, '_device_operation_budget',
+        lambda name: _render_budget() if name == 'cpu_render' else selected_budget_for(name))
     payload = {'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add',
         'graphic_overlay': ImageOverlay(id='candidate-image', name='candidate.png', source_ref=second_ref, start_seconds=0, end_seconds=1).model_dump()}
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)

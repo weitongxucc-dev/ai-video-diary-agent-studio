@@ -782,10 +782,10 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     monkeypatch.setattr(main_module, "_verify_creation_identity", verify)
     monkeypatch.setattr(main_module, "trusted_device_credential", lambda: SimpleNamespace(device_id=device))
     runtime = SimpleNamespace(scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)},
-        last_error=None, wake=lambda: None)
+        last_error=None, running=True, wake=lambda: None)
     monkeypatch.setattr(main_module, "device_runtime", runtime)
-    monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(submit=lambda *_args:
-        pytest.fail("product cannot use diagnostic execute/thread fallback")))
+    monkeypatch.setattr(execution, "execute", lambda *_args:
+        pytest.fail("product cannot use diagnostic execute/thread fallback"))
     calls = []
     render_calls = []
 
@@ -5225,3 +5225,23 @@ def test_legacy_tts_sealed_parent_declaration_keeps_actual_remaining_context(tmp
     assert len(case.generated) == 2
     assert case.scheduler._get(original.id).resources == original.resources
     case.scheduler.close()
+
+
+def test_experiment_narration_env_cannot_forge_prepared_receipts():
+    from dataclasses import fields
+    from app.member_permits import creation_stage_budgets_from_env, HostBudgetUncalibrated
+    budget = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
+        input_scope='single_call_experiment_v1')
+    metadata = {'running_cpu_policy', 'input_scope', 'preparation_backend_identity',
+        'preparation_shape_digest', 'preparation_receipt_sha256'}
+    env = {'DEVICE_NARRATION_' + item.name.upper(): str(getattr(budget, item.name))
+        for item in fields(budget) if item.name not in metadata}
+    env.update(DEVICE_NARRATION_INPUT_SCOPE='single_call_experiment_v1',
+        DEVICE_NARRATION_PREPARATION_BACKEND_IDENTITY='a'*64,
+        DEVICE_NARRATION_PREPARATION_SHAPE_DIGEST='b'*64,
+        DEVICE_NARRATION_PREPARATION_RECEIPT_SHA256='c'*64)
+    actual, _ = creation_stage_budgets_from_env(env)
+    assert actual.input_scope == 'single_call_experiment_v1'
+    assert actual.preparation_backend_identity is actual.preparation_shape_digest is actual.preparation_receipt_sha256 is None
+    with pytest.raises(HostBudgetUncalibrated, match='准备回执'):
+        creation_stage_budgets_from_env({**env, 'DEVICE_NARRATION_INPUT_SCOPE': 'prepared'})

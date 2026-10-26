@@ -263,7 +263,8 @@ def test_long_fade_preview_seals_scoped_audio_and_whole_source_linkage(tmp_path,
         monkeypatch.setattr(main, 'settings', replace(main.settings,video_inbox_path=str(repo.video_library_path),
             video_output_path=str(tmp_path/'artifacts'),temporary_root_path=str(tmp_path/'temp')))
         configure_synthetic_media_budgets(monkeypatch, main)
-        monkeypatch.setattr('app.creation.editing.command_preview_use_case.cpu_audio_budget_from_env',audio_budget)
+        selected_budget = main._device_host_budget()
+        monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, cpu_audio=audio_budget()))
         payload = repo.get_creation_task_montage_plan('local', task_id)
         original = payload['clips'][0]
         payload['clips'] = [
@@ -330,7 +331,8 @@ def test_compound_music_and_subtitle_previews_seal_before_and_after_audio(tmp_pa
         monkeypatch.setattr(main, 'settings', replace(main.settings,video_inbox_path=str(repo.video_library_path),
             video_output_path=str(tmp_path/'artifacts'),temporary_root_path=str(tmp_path/'temp')))
         configure_synthetic_media_budgets(monkeypatch, main)
-        monkeypatch.setattr('app.creation.editing.command_preview_use_case.cpu_audio_budget_from_env',audio_budget)
+        selected_budget = main._device_host_budget()
+        monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, cpu_audio=audio_budget()))
         task = repo.get_creation_task('local', task_id)
         command = '音乐小一点，同时字幕字号改成64'
         args = {'payload':{'raw_command':command, 'context_stage':'montage', 'selected_object_refs':[],
@@ -371,9 +373,9 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
             video_output_path=str(tmp_path/'artifacts'),temporary_root_path=str(tmp_path/'temp')))
         monkeypatch.setattr(main, '_verify_creation_identity', owner.verify_identity)
         configure_synthetic_media_budgets(monkeypatch, main)
-        monkeypatch.setattr('app.creation.editing.command_preview_use_case.cpu_audio_budget_from_env',audio_budget)
-        monkeypatch.setattr(main, 'cpu_audio_budget_from_env', audio_budget)
-        monkeypatch.setattr('app.member_permits.cpu_render_budget_from_env', lambda:scheduler.resources.budget.cpu_render)
+        selected_budget = main._device_host_budget()
+        monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget,
+            cpu_audio=audio_budget(), cpu_render=scheduler.resources.budget.cpu_render))
         args = {'payload':{'raw_command':'剪掉当前镜头停顿', 'context_stage':'montage',
                           'selected_object_refs':['clip:clip_1'], 'playhead_ms':None}, '_media_kind':'picture_preview'}
         media = TaskMediaJobs(repo, facts=main._task_media_facts,
