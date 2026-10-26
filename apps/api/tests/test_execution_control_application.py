@@ -21,6 +21,118 @@ from app.production import CreationPlanVoiceReference
 from app.task_audio import TASK_MEDIA_KIND
 from _media_preview_test_fixtures import register_synthetic_profiles
 from test_creation_execution import _seed
+import pytest
+
+
+def _bounded_preview_case(tmp_path):
+    from dataclasses import replace
+    from app.production import CreationTaskScriptSection
+    from app.creation_execution import CreationExecution
+    from app.creation.execution_control import CreationExecutionControl
+    repo, task_id, script_id, _ = _seed(tmp_path)
+    script = replace(repo.get_creation_task_script('workspace_a', script_id), sections=[
+        CreationTaskScriptSection(f'part-{index}', f'段{index}', f'正文{index}🙂', '', []) for index in range(1, 46)])
+    with repo._connect() as conn:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('BEGIN')
+        payload = repo._script_payload(conn, script)
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (payload, script_id))
+    def no_media(*args, **kwargs):
+        raise AssertionError('this representative must not dispatch media')
+    execution = CreationExecution(repo, run_montage_plan=no_media, run_render=no_media, render_is_valid=no_media)
+    control = CreationExecutionControl(repo, execution, None, no_media)
+    return repo, task_id, script_id, execution, control
+
+
+def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_path, monkeypatch):
+    from app.creation_execution import revision_digest
+    repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
+    old_script = repo.get_creation_task_script('workspace_a', script_id)
+    old_plan = repo.get_creation_plan('workspace_a', 'plan_workspace_a')
+    expected = revision_digest(old_script, old_plan)
+    original = repo.script_records.iter_execution_script_sections
+    def concurrent_tail_change(connection, workspace_id, selected_script_id):
+        for index, section in enumerate(original(connection, workspace_id, selected_script_id)):
+            if index == 0:
+                with repo._connect() as writer:
+                    row = writer.execute('SELECT section_json FROM creation_task_script_sections WHERE section_id=?', ('part-45',)).fetchone()
+                    changed = json.loads(row['section_json'])
+                    changed['content'] = '并发修改末段'
+                    writer.execute('UPDATE creation_task_script_sections SET section_json=? WHERE section_id=?', (json.dumps(changed), 'part-45'))
+                    row = writer.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script_id,)).fetchone()
+                    meta = json.loads(row['payload'])
+                    meta['updated_at'] = '2026-10-27T01:02:03+00:00'
+                    writer.execute('UPDATE creation_task_scripts SET payload=?,updated_at=? WHERE id=?', (json.dumps(meta), meta['updated_at'], script_id))
+            yield section
+    def no_full_getter(*args, **kwargs):
+        raise AssertionError('preview must not hydrate the complete script or use another plan connection')
+    with monkeypatch.context() as patch:
+        patch.setattr(repo.script_records, 'iter_execution_script_sections', concurrent_tail_change)
+        patch.setattr(repo, 'get_creation_task_script', no_full_getter)
+        patch.setattr(repo, 'get_creation_plan', no_full_getter)
+        patch.setattr(execution, 'validate_input', no_full_getter)
+        preview = control.preview('workspace_a', task_id)
+    assert preview['input_digest'] == expected
+    assert preview['script_updated_at'] == old_script.updated_at.isoformat()
+    assert preview['script_sections_total_count'] == 45 and preview['script_sections_loaded'] is False
+    assert 'script_sections' not in preview
+    latest = control.preview('workspace_a', task_id)
+    assert latest['input_digest'] != expected
+    assert latest['input_digest'] == revision_digest(repo.get_creation_task_script('workspace_a', script_id), old_plan)
+    assert latest['script_updated_at'] == '2026-10-27T01:02:03+00:00'
+    with pytest.raises(ValueError, match='文案或制作要求已变化'):
+        execution.validate_input('workspace_a', repo.get_creation_task('workspace_a', task_id), script_id, expected)
+
+
+def test_bounded_execution_preview_replays_the_original_job_and_keeps_full_validation(tmp_path):
+    from app.creation_execution import revision_digest
+    repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
+    task = repo.get_creation_task('workspace_a', task_id)
+    old_digest = revision_digest(repo.get_creation_task_script('workspace_a', script_id), repo.get_creation_plan('workspace_a', task.plan_id))
+    original = execution.start('workspace_a', task_id, script_id, old_digest)
+    original_event = repo.get_task_event('workspace_a', f'event_{original.id}_start')
+    preview = control.preview('workspace_a', task_id)
+    replay = execution.start('workspace_a', task_id, preview['script_id'], preview['input_digest'])
+    assert replay.id == original.id and replay.input_digest == old_digest
+    assert repo.get_task_event('workspace_a', f'event_{original.id}_start') == original_event
+    assert len(execution.jobs('workspace_a', task_id)) == 1
+    script, plan = execution.validate_input('workspace_a', task, script_id, old_digest)
+    assert len(script.sections) == 45 and script.sections[-1].id == 'part-45'
+    assert plan.id == task.plan_id
+    with repo._connect() as conn:
+        conn.execute('BEGIN')
+        assert repo.read_creation_execution_snapshot('workspace_a', task_id, connection=conn).input_digest == old_digest
+        assert conn.in_transaction  # caller owns its transaction
+    with repo._connect() as conn:
+        with pytest.raises(ValueError, match='已开启的事务'):
+            repo.read_creation_execution_snapshot('workspace_a', task_id, connection=conn)
+    with repo._connect() as conn:
+        row = conn.execute('SELECT payload FROM creation_plans WHERE id=?', (task.plan_id,)).fetchone()
+        payload = json.loads(row['payload'])
+        payload['duration_target_seconds'] += 1
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(payload), task.plan_id))
+    with pytest.raises(ValueError, match='文案或制作要求已变化'):
+        execution.validate_input('workspace_a', task, script_id, old_digest)
+
+
+@pytest.mark.parametrize('table,field,value', [
+    ('creation_tasks', 'confirmed_script_id', None),
+    ('creation_task_scripts', 'task_id', 'another-task'),
+    ('creation_task_scripts', 'selection_status', 'draft'),
+    ('creation_plans', 'creation_task_id', 'another-task'),
+    ('creation_plans', 'status', 'draft'),
+])
+def test_bounded_execution_preview_preserves_metadata_relationship_guards(tmp_path, table, field, value):
+    from app.creation.execution_control import ExecutionControlRejected
+    repo, task_id, script_id, _, control = _bounded_preview_case(tmp_path)
+    with repo._connect() as conn:
+        row = conn.execute(f'SELECT payload FROM {table}').fetchone()
+        payload = json.loads(row['payload'])
+        payload[field] = value
+        conn.execute(f'UPDATE {table} SET payload=?', (json.dumps(payload),))
+    with pytest.raises(ExecutionControlRejected) as error:
+        control.preview('workspace_a', task_id)
+    assert error.value.status_code == 409
 
 
 def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tmp_path, monkeypatch):

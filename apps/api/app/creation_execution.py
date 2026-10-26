@@ -3333,8 +3333,8 @@ class CreationExecution:
         if script.task_id != task.id or script.selection_status != "confirmed":
             raise ValueError("当前文案不是已确认的任务文案")
         plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
-        if plan.creation_task_id != task.id or plan.status != "confirmed":
-            raise ValueError("当前制作要求尚未确认")
+        from app.creation.execution_input import validate_execution_relationships
+        validate_execution_relationships(task, script, plan)
         if revision_digest(script, plan) != digest:
             raise ValueError("文案或制作要求已变化，请重新检查并确认")
         return script, plan

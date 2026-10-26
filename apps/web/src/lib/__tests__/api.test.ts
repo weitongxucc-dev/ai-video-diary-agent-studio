@@ -74,7 +74,7 @@ describe("creation execution API", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { startCreationExecution } = await import("../api");
     await startCreationExecution("task 1", {
-      task_id: "task 1", script_id: "script-1", script_title: "文案", script_sections: [],
+      task_id: "task 1", script_id: "script-1", script_title: "文案", script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 0, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "a".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,

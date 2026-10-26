@@ -916,6 +916,47 @@ class ScriptRecordStore:
                 json.loads(str(row["payload"])), connection=conn
             )
 
+    def read_execution_script_metadata(self, connection, workspace_id, script_id):
+        """Decode the original header defaults without reading any body rows."""
+        from app.creation.execution_input import ExecutionScriptHeader
+        if not connection.in_transaction:
+            raise ValueError("执行输入读取必须属于同一快照事务")
+        row = connection.execute(
+            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
+            (workspace_id, script_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(script_id)
+        fields = json.loads(row["payload"])
+        if fields.pop("_sections_storage", None) != "rows" or "sections" in fields:
+            raise ValueError("文案正文存储版本无效，请先完成正式行化迁移")
+        # Use the canonical dataclass solely to decode defaults and reject unknown
+        # metadata. This temporary value never leaves the codec as a full script.
+        decoded = CreationTaskScript(**_with_datetime(fields, "created_at", "updated_at", "confirmed_at"), sections=[])
+        fields = asdict(decoded)
+        del fields["sections"]
+        count = connection.execute(
+            "SELECT COUNT(*) FROM creation_task_script_sections WHERE workspace_id=? AND script_id=?",
+            (workspace_id, script_id),
+        ).fetchone()[0]
+        header = ExecutionScriptHeader(decoded.id, decoded.task_id, decoded.title,
+            decoded.selection_status, decoded.updated_at, count)
+        return header, fields
+
+    def iter_execution_script_sections(self, connection, workspace_id, script_id):
+        """Yield canonical sections in the caller's existing snapshot, one at a time."""
+        if not connection.in_transaction:
+            raise ValueError("执行正文遍历必须属于同一快照事务")
+        cursor = connection.execute(
+            "SELECT section_json FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? ORDER BY ordinal",
+            (workspace_id, script_id),
+        )
+        try:
+            for row in cursor:
+                yield CreationTaskScriptSection(**json.loads(row["section_json"]))
+        finally:
+            cursor.close()
+
     def active_creation_task_script_headers(self, workspace_id, task_id):
         with self._connect() as conn:
             conn.execute("BEGIN")

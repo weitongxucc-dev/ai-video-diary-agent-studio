@@ -9,6 +9,8 @@ import { CreationPlanApiError, getCreationTaskScriptGenerationRequest, stopAssis
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
 import { ScriptEditor, ConfirmedScriptView } from "../creation-task/ScriptStage";
+import * as creationTaskApi from "@/lib/api/creation-tasks";
+const previewReadRestores: (() => void)[] = [];
 vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
   getCreationTaskNarrationVoiceSelection: (...args: unknown[]) => mocks.getVoiceSelection(...args),
@@ -446,7 +448,7 @@ describe("persisted final video quality checks", () => {
 function queuePreview(): CreationExecutionPreview {
   return {
     task_id: "task-1", script_id: "script-1", script_title: "真实文案",
-    script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
+    script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
     plan_id: "plan-1", input_digest: "a".repeat(64),
     narration_source: null,
     requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -623,6 +625,7 @@ function workspaceWithCover() {
 }
 
 afterEach(() => {
+  previewReadRestores.splice(0).forEach(restore => restore());
   vi.unstubAllGlobals();
   mocks.realMediaJobReads = false;
   mocks.withReferenceProvider = false;
@@ -1147,7 +1150,7 @@ describe("CreationTaskWorkspace", () => {
     const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
     const preview = {
       task_id: "task-1", script_id: "script-1", script_title: "真实文案",
-      script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
+      script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "a".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -1167,13 +1170,45 @@ describe("CreationTaskWorkspace", () => {
       video_ready: false, cover_status: "pending", cover_message: null }).mockResolvedValue(queuedExecution);
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     await productionPanel();
-    await waitFor(() => expect(screen.getByText(/这段就是实际要读的内容/)).toBeInTheDocument());
+    await openProductionScript(screen.getByRole("region", { name: "连续制作" }));
+    expect(screen.getByText(/这段就是实际要读的内容/)).toBeInTheDocument();
     expect(screen.getByText(/露脸目标 20%/)).toBeInTheDocument();
     expect(mocks.startExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" }));
     await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith("task-1", preview));
     expect(await screen.findByLabelText("制作安排状态")).toHaveTextContent("设备资源正在处理其他工作。");
     expect(mocks.generateNarration).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a stale bounded preview through the workspace and starts with the newly read digest", async () => {
+    const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
+    const oldPreview = queuePreview();
+    const freshPreview = { ...oldPreview, input_digest: "b".repeat(64), script_updated_at: "2026-10-26T00:00:01Z" };
+    mocks.previewExecution.mockResolvedValue(oldPreview);
+    mocks.getExecution.mockResolvedValue(queueStatus(null));
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.startExecution.mockResolvedValue(queueStatus("queued"));
+    const read = vi.spyOn(creationTaskApi, "getCreationTaskScriptSections")
+      .mockRejectedValueOnce(new mocks.MockCreationPlanApiError(409, null, "文案版本冲突"))
+      .mockResolvedValue({ task_id: "task-1", script_id: "script-1", updated_at: freshPreview.script_updated_at,
+        title: "真实文案", language: "zh-CN", selection_status: "confirmed", total_count: 1,
+        next_after_ordinal: null, truncated: false, items: [{ ordinal: 1, digest: "d", section: {
+          id: "section-1", title: "更新段落", content: "刷新后的实际正文", visual_prompt: "画面", evidence_reference_ids: [] } }] });
+    previewReadRestores.push(() => read.mockRestore());
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    const panel = await productionPanel();
+    fireEvent.click(within(panel).getByText(/这次使用的文案/));
+    await screen.findByText(/文案版本已变化，旧页已清除/);
+    expect(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeDisabled();
+    mocks.previewExecution.mockResolvedValue(freshPreview);
+    fireEvent.click(screen.getByRole("button", { name: "重新核对文案和制作要求" }));
+    await waitFor(() => expect(screen.queryByText(/制作前览已过期/)).not.toBeInTheDocument());
+    fireEvent.click(within(panel).getByText(/这次使用的文案/));
+    await screen.findByText(/刷新后的实际正文/);
+    expect(read).toHaveBeenLastCalledWith("task-1", "script-1", { after_ordinal: 0, expected_updated_at: freshPreview.script_updated_at });
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" }));
+    await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith("task-1", freshPreview));
   });
 
   it("keeps the editor player and draft mounted while reviewing production details without starting", async () => {
@@ -1196,6 +1231,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.change(await readyInput("局部修改要求"), { target: { value: "未发送的剪辑草稿" } });
     fireEvent.click(entry);
     const panel = await productionPanel();
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).toHaveTextContent("画幅 9:16 · 目标时长 30 秒 · 露脸目标 20%");
     expect(within(panel).getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
@@ -1230,6 +1266,7 @@ describe("CreationTaskWorkspace", () => {
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     await productionPanel();
     const panel = await productionPanel();
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(within(panel).getByRole("region", { name:"这次制作要求" })).toHaveTextContent("目标时长");
     expect(panel).toHaveTextContent("露脸目标 20%");
@@ -1276,6 +1313,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByRole("region", { name: "制作状态" })).toHaveTextContent("人物口型");
     fireEvent.click(screen.getByRole("button", { name: /查看制作详情|核对制作要求/ }));
     const panel = await productionPanel();
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).toHaveTextContent("输出磁盘写入失败");
     expect(panel).toHaveTextContent("检查输出目录的可用空间后继续制作。");
@@ -1364,7 +1402,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.previewExecution.mockResolvedValue({
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
-      script_sections: [{ title: "正文", content: "实际内容" }],
+      script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "b".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -1868,7 +1906,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValueOnce(initial).mockResolvedValue(selected);
     const preview = {
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
-      script_sections: [{ title: "正文", content: "实际内容" }],
+      script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "c".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -3862,6 +3900,7 @@ describe("CreationTaskWorkspace", () => {
 
     let panel = screen.getByRole("region", { name: "连续制作" });
     expect(panel).toHaveTextContent("重新输出当前时间线");
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).not.toHaveTextContent("当前暂不支持已编辑时间线重新输出");
     expect(mocks.resumeExecution).not.toHaveBeenCalled();
@@ -4384,6 +4423,19 @@ it("opens production preparation when the reviewed output no longer matches the 
   });
 
 });
+
+async function openProductionScript(panel: HTMLElement) {
+  const read = vi.spyOn(creationTaskApi, "getCreationTaskScriptSections").mockResolvedValue({
+    task_id: "task-1", script_id: "script-1", updated_at: "2026-10-26T00:00:00Z", title: "真实文案",
+    language: "zh-CN", selection_status: "confirmed", total_count: 1, next_after_ordinal: null, truncated: false,
+    items: [{ ordinal: 1, digest: "section-digest", section: { id: "section-1", title: "开场",
+      content: "这段就是实际要读的内容", visual_prompt: "画面", evidence_reference_ids: [] } }],
+  });
+  previewReadRestores.push(() => read.mockRestore());
+  fireEvent.click(within(panel).getByText(/这次使用的文案/));
+  await within(panel).findByText(/这段就是实际要读的内容/);
+  expect(read).toHaveBeenCalledWith("task-1", "script-1", { after_ordinal: 0, expected_updated_at: "2026-10-26T00:00:00Z" });
+}
 
 async function productionPanel() {
   const target = await waitFor(() => { const panel=screen.queryByRole("region",{name:"连续制作"}); if(panel) return panel; const entry=screen.queryByRole("button",{name:/查看制作详情|核对制作要求/}); expect(entry).not.toBeNull(); return entry!; });

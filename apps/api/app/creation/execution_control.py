@@ -118,14 +118,13 @@ class CreationExecutionControl:
         self.segments = segments
 
     def preview(self, workspace_id: str, task_id: str) -> dict[str, object]:
-        task = self.task_or_missing(workspace_id, task_id)
-        if not task.confirmed_script_id:
-            raise ExecutionControlRejected(status_code=409, detail="请先确认实际文案")
-        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        plan = self.plan_for_task_or_missing(workspace_id, task)
-        digest = revision_digest(script, plan)
+        from app.creation.execution_input import validate_execution_relationships
         try:
-            self.execution.validate_input(workspace_id, task, script.id, digest)
+            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id)
+            task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
+            validate_execution_relationships(task, script, plan)
+        except KeyError as exc:
+            raise ExecutionControlRejected(status_code=404, detail="创作任务或确认对象不存在") from exc
         except ValueError as exc:
             raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
         narration_artifact = (
@@ -158,7 +157,9 @@ class CreationExecutionControl:
             "task_id": task.id,
             "script_id": script.id,
             "script_title": script.title,
-            "script_sections": [{"title": section.title, "content": section.content} for section in script.sections],
+            "script_updated_at": script.updated_at.isoformat(),
+            "script_sections_total_count": script.sections_total_count,
+            "script_sections_loaded": False,
             "plan_id": plan.id,
             "narration_source": ({
                 "source_kind": narration_artifact.source_kind,
@@ -175,7 +176,7 @@ class CreationExecutionControl:
                 "continuation_blocker": continuation_blocker,
                 "template_settings": plan.template_settings,
             },
-            "input_digest": digest,
+            "input_digest": snapshot.input_digest,
         }
 
     def status_summary(self, workspace_id: str, task_id: str, *, actor=None, job_id=None) -> dict[str, object]:

@@ -1,8 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CreationExecutionPreview, CreationExecutionStatus } from "@/lib/types";
 import { CreationExecutionPanel } from "../creation-task/CreationExecutionPanel";
+afterEach(() => vi.unstubAllGlobals());
 
 const waitingReason = "故事板仍有镜头等待确认；确认后点击继续制作。";
 type JobStatus = NonNullable<CreationExecutionStatus["job"]>["status"];
@@ -64,7 +65,7 @@ describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
     const onOpenMontage = vi.fn();
     const waiting = execution("queued", "waiting_for_user");
     const preview: CreationExecutionPreview = {
-      task_id: "task-1", script_id: "script-1", script_title: "已确认文案", script_sections: [],
+      task_id: "task-1", script_id: "script-1", script_title: "已确认文案", script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 0, script_sections_loaded: false,
       plan_id: "plan-1", narration_source: { source_kind: "generated", source_artifact_ref: "voice-1", duration_seconds: 25.2 },
       requirements: { aspect_ratio: "16:9", duration_target_seconds: 30, presenter_share_target: 0,
         lipsync_quality: "fast", selected_voice: "voice-1", can_continue: true,
@@ -261,4 +262,65 @@ it("shows a real planning conflict and preserved audio without candidate selecti
   await userEvent.click(screen.getByRole("button", {name:"回查原决定"}));
   expect(read).toHaveBeenLastCalledWith(recovered);
   expect(adopt).not.toHaveBeenCalled();
+});
+
+it("bounded execution preview reads 45 sections by version and refreshes the parent after a stale page", async () => {
+  const user = userEvent.setup();
+  let changed = false;
+  const requests: URL[] = [];
+  const version = "2026-10-26T00:00:00Z", nextVersion = "2026-10-26T00:00:01Z";
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    const request = new URL(url, "http://local");
+    requests.push(request);
+    expect(request.pathname).toBe("/api/creation-tasks/task-1/scripts/script-1/sections");
+    const expected = request.searchParams.get("expected_updated_at");
+    expect(expected).toBe(changed ? (requests.length === 4 ? version : nextVersion) : version);
+    if (changed && expected === version) return new Response(JSON.stringify({ detail: "文案版本冲突" }), { status: 409 });
+    const after = Number(request.searchParams.get("after_ordinal"));
+    const end = Math.min(after + 20, 45);
+    const items = Array.from({ length: end - after }, (_, index) => {
+      const ordinal = after + index + 1;
+      return { ordinal, digest: `d${ordinal}`, section: { id: `s${ordinal}`, title: `标题${ordinal}`,
+        content: `正式正文${ordinal}`, visual_prompt: "画面", evidence_reference_ids: [] } };
+    });
+    return new Response(JSON.stringify({ task_id: "task-1", script_id: "script-1", title: "45段已确认稿",
+      updated_at: changed ? nextVersion : version, language: "zh-CN", selection_status: "confirmed",
+      total_count: 45, items, next_after_ordinal: end < 45 ? end : null, truncated: end < 45 }));
+  }));
+  const onStart = vi.fn(), onRefreshPreview = vi.fn();
+  const preview: CreationExecutionPreview = {
+    task_id: "task-1", script_id: "script-1", script_title: "45段已确认稿", script_updated_at: version,
+    script_sections_total_count: 45, script_sections_loaded: false, plan_id: "plan-1", narration_source: null,
+    input_digest: "old-digest", requirements: { aspect_ratio: "16:9", duration_target_seconds: 300,
+      presenter_share_target: 0, lipsync_quality: "fast", selected_voice: "voice", can_continue: true,
+      continuation_blocker: null, template_settings: {} },
+  };
+  const props = { taskStage: "narration" as const, taskReason: null, voice: null, availableVoices: [],
+    preview, execution: null, busy: false, onStart, onResume: vi.fn(), onCancel: vi.fn(), onOpenMontage: vi.fn(), onRefreshPreview };
+  const view = render(<CreationExecutionPanel {...props}/>);
+  expect(requests).toHaveLength(0);
+  expect(screen.getByText("共 45 段")).toBeVisible();
+  expect(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
+  await user.click(screen.getByText(/这次使用的文案：45段已确认稿/));
+  await screen.findByText("第 20 段 · 标题20：正式正文20");
+  await user.click(screen.getByRole("button", { name: "下一页已确认文案" }));
+  await screen.findByText("第 40 段 · 标题40：正式正文40");
+  expect(screen.queryByText("第 20 段 · 标题20：正式正文20")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "下一页已确认文案" }));
+  await screen.findByText("第 45 段 · 标题45：正式正文45");
+  expect(screen.queryByText("第 40 段 · 标题40：正式正文40")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "下一页已确认文案" })).toBeDisabled();
+  changed = true;
+  await user.click(screen.getByRole("button", { name: "上一页已确认文案" }));
+  await screen.findByText(/文案版本已变化，旧页已清除/);
+  expect(screen.queryByText("第 45 段 · 标题45：正式正文45")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "重新核对文案和制作要求" }));
+  expect(onRefreshPreview).toHaveBeenCalledOnce();
+  expect(onStart).not.toHaveBeenCalled();
+  view.rerender(<CreationExecutionPanel {...props} preview={{ ...preview, input_digest: "new-digest", script_updated_at: nextVersion }}/>);
+  await user.click(screen.getByText(/这次使用的文案：45段已确认稿/));
+  await screen.findByText("第 1 段 · 标题1：正式正文1");
+  await waitFor(() => expect(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled());
+  expect(requests.map(request => request.searchParams.get("after_ordinal"))).toEqual(["0", "20", "40", "20", "0"]);
 });

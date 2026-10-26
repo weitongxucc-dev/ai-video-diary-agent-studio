@@ -4542,19 +4542,37 @@ class ProductionRepository:
 
     def get_creation_plan(self, workspace_id: str, plan_id: str) -> CreationPlan:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT payload, visibility FROM creation_plans
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (workspace_id, plan_id),
-            ).fetchone()
+            return self._read_creation_plan(conn, workspace_id, plan_id)
+
+    def _read_creation_plan(self, connection, workspace_id, plan_id):
+        row = connection.execute(
+            """SELECT payload, visibility FROM creation_plans
+            WHERE workspace_id = ? AND id = ?""",
+            (workspace_id, plan_id),
+        ).fetchone()
         if row is None:
             raise KeyError(plan_id)
         data = json.loads(str(row["payload"]))
         if "visibility" in row.keys():
             data["visibility"] = str(row["visibility"])
         return self._creation_plan_from_payload(data)
+
+    def read_creation_execution_snapshot(self, workspace_id, task_id, *, connection=None):
+        """Finish metadata, ordered body digest and count in one read transaction."""
+        from app.creation.execution_input import ExecutionInputSnapshot, execution_input_digest
+        with (nullcontext(connection) if connection is not None else closing(self._connect())) as conn:
+            if connection is None:
+                conn.execute("BEGIN")
+            elif not conn.in_transaction:
+                raise ValueError("执行输入读取必须复用已开启的事务")
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            if not task.confirmed_script_id:
+                raise ValueError("请先确认实际文案")
+            plan = self._read_creation_plan(conn, workspace_id, task.plan_id)
+            header, fields = self.script_records.read_execution_script_metadata(conn, workspace_id, task.confirmed_script_id)
+            digest = execution_input_digest(fields, plan,
+                self.script_records.iter_execution_script_sections(conn, workspace_id, header.id))
+            return ExecutionInputSnapshot(task, plan, header, digest)
 
     @staticmethod
     def _knowledge_adoption_event_id(workspace_id: str, member_id: str, request_id: str) -> str:

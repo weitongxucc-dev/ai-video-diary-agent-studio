@@ -510,10 +510,9 @@ export type CreationExecutionPreview = {
     task_id: string;
     script_id: string;
     script_title: string;
-    script_sections: {
-        title: string;
-        content: string;
-    }[];
+    script_updated_at: string;
+    script_sections_total_count: number;
+    script_sections_loaded: false;
     plan_id: string;
     narration_source: {
         source_kind: "generated" | "recorded";
