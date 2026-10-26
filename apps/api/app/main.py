@@ -8922,7 +8922,10 @@ def creation_task_segment_video(task_id: str, section_id: str, version: str, req
         raise HTTPException(status_code=404,detail='此段落版本的视频不可读取') from exc
 
 
-@app.get('/api/creation-tasks/{task_id}/budget')
+from app.schemas import TaskBudgetReadResponse
+
+
+@app.get('/api/creation-tasks/{task_id}/budget', response_model=TaskBudgetReadResponse)
 def creation_task_budget(task_id: str, request: Request):
     from app.creation.task_budget_use_case import TaskBudgetUseCase
     ws = current_workspace_id(request)
@@ -8930,6 +8933,10 @@ def creation_task_budget(task_id: str, request: Request):
         return TaskBudgetUseCase(production_repo).read(ws,task_id,_require_permit_actor(request,ws))
     except PermissionError as exc:
         raise HTTPException(status_code=403,detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404,detail='任务预算不存在') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
 @app.post('/api/creation-tasks/{task_id}/budget/resume')

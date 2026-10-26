@@ -5997,6 +5997,14 @@ class ProductionRepository:
         return ExecutionBudgetScopes(self).bind(connection, workspace_id, job_id, actor,
             scope_id=scope_id, expected_revision=expected_revision)
 
+    def execution_budget_scopes_for_task(self, workspace_id, task_id, actor, *, connection=None):
+        from app.creation.execution_budget_scope import ExecutionBudgetScopes
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+            self._require_creation_task(conn, workspace_id, task_id)
+            return ExecutionBudgetScopes(self).for_task(conn, workspace_id, task_id, actor)
+
     def execution_budget_scope_usage(self, workspace_id, scope_id):
         from app.creation.execution_budget_scope import ExecutionBudgetScopes
         with self._connect() as conn:

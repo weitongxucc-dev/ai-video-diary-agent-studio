@@ -1430,6 +1430,51 @@ class NarrationRevisionRequest(BaseModel):
     adoption_mode: Literal["apply", "candidate"]
 
 
+class TaskBudgetQuantities(BaseModel):
+    execution_seconds: float | None = Field(ge=0)
+    generated_bytes: int | None = Field(ge=0)
+
+
+class TaskBudgetScopeUsage(BaseModel):
+    execution_seconds: float = Field(ge=0)
+    generated_bytes: int = Field(ge=0)
+    reserved_seconds: float = Field(ge=0)
+    reserved_bytes: int = Field(ge=0)
+    unknown_unit_count: int = Field(ge=0)
+    unit_count: int = Field(ge=0)
+
+
+class TaskBudgetScopeAuthorization(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    scope_id: str
+    revision: int = Field(ge=0)
+    limits: TaskBudgetQuantities
+    policy_kind: Literal["local_goal", "explicit_total"]
+    revoked: bool
+    target_task_ids: list[str]
+    source_ref: str
+
+
+class TaskBudgetScopeRead(BaseModel):
+    authorization: TaskBudgetScopeAuthorization
+    usage: TaskBudgetScopeUsage
+    remaining: TaskBudgetQuantities
+    status: Literal["available", "revoked", "usage_unknown", "exhausted"]
+    coverage: Literal["tts_pcm_only"]
+
+
+class TaskBudgetReadResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    task_id: str
+    status: str
+    resources: dict[str, object]
+    actual_cost: dict[str, object]
+    estimates: dict[str, object]
+    in_flight: list[dict[str, object]]
+    scopes: list[TaskBudgetScopeRead]
+    authorization_coverage: Literal["tts_pcm_only", "scope_unbound"]
+
+
 class TaskBudgetResumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

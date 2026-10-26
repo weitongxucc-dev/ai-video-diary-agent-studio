@@ -76,6 +76,57 @@ def test_execution_capability_read_is_authorized_and_does_not_start_runtime(meta
 
 
 
+def test_task_budget_http_preserves_scope_meaning_and_owner_boundary(metadata_http_state, monkeypatch):
+    from app.creation.contracts import JobRun
+    from app.creation_execution import CreationExecutionActor
+    state = metadata_http_state
+    # This fixture uses "ws" as its isolated local workspace; retain real roster/token verification.
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'ws')
+    actor = CreationExecutionActor('ws', state.member.member_id)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('budget reads must not start execution')
+
+    monkeypatch.setattr(main, '_creation_runtime', forbidden)
+    monkeypatch.setattr(main, '_start_device_runtime', forbidden)
+    url = state.url + '/budget'
+    empty = state.client.get(url)
+    assert empty.status_code == 200, empty.text
+    assert empty.json()['scopes'] == []
+    assert empty.json()['authorization_coverage'] == 'scope_unbound'
+    assert empty.json()['status'] == 'authorization_scope_unbound'
+    job = state.repo.create_job_run(JobRun(id='job-http-budget-scope', workspace_id='ws',
+        task_id=state.task.id, kind='creation_task_execution', idempotency_key='http-budget-scope',
+        input_digest='1' * 64))
+    command = dict(scope_id='http-goal', expected_revision=-1, request_id='original-http-test',
+        source_ref='isolated-test:original', target_task_ids=[state.task.id],
+        limits={'execution_seconds': None, 'generated_bytes': None}, policy_kind='local_goal',
+        authorization_guard=lambda connection: None)
+    state.repo.authorize_execution_budget_scope('ws', state.task.id, actor, **command)
+    state.repo.bind_execution_budget_scope('ws', job.id, actor, scope_id='http-goal', expected_revision=0)
+    response = state.client.get(url)
+    assert response.status_code == 200, response.text
+    facts = response.json()
+    assert facts['authorization_coverage'] == 'tts_pcm_only'
+    assert facts['scopes'][0]['remaining'] == {'execution_seconds': None, 'generated_bytes': None}
+    assert facts['scopes'][0]['usage']['reserved_bytes'] == 0
+    assert facts['actual_cost']['amount'] is None
+    state.repo.authorize_execution_budget_scope('ws', state.task.id, actor,
+        **{**command, 'request_id': 'revoke-http-test', 'expected_revision': 0, 'revoked': True})
+    revoked = state.client.get(url)
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()['scopes'][0]['status'] == 'revoked'
+    assert state.client.get(url, headers={'x-test-workspace': 'outside'}).status_code == 403
+    assert state.client.get('/api/creation-tasks/missing/budget').status_code == 404
+    from dataclasses import asdict
+    other_owner = state.repo.get_creation_task('ws', state.task.id)
+    other_owner.owner_user_id = 'different-owner'
+    with state.repo._connect() as connection:
+        connection.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+                           (json.dumps(asdict(other_owner), default=str), 'ws', state.task.id))
+    assert state.client.get(url).status_code == 403
+
+
 def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http_state, monkeypatch):
     state = metadata_http_state
     wakes = []
