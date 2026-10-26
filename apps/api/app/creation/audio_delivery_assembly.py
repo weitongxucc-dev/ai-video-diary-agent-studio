@@ -170,7 +170,7 @@ class AudioDeliveryAssembly:
             return None
         transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
         facts = transform.parameters
-        if (record.kind != phase or transform.transform_type != phase or transform.engine != 'ffmpeg-audio-delivery/v1'
+        if (record.kind != ('rendered_video' if phase == 'final_mux' else phase) or transform.transform_type != phase or transform.engine != 'ffmpeg-audio-delivery/v1'
                 or record.producer_job_id != job.id or record.task_id != job.task_id or transform.job_id != job.id
                 or transform.task_id != job.task_id or transform.status != 'succeeded'
                 or transform.input_digest != identity or transform.output_refs != [record.logical_ref]
@@ -350,7 +350,8 @@ class AudioDeliveryAssembly:
             publication_started = True
             published = self.store.publish_file(logical, output, temporary_path=files['published'], check=context.check)
             identity = self._unit(manifest, phase)
-            record = ArtifactRecord(f'artifact_{phase}_{identity}', job.workspace_id, job.task_id, phase, logical,
+            record = ArtifactRecord(f'artifact_{phase}_{identity}', job.workspace_id, job.task_id,
+                'rendered_video' if phase == 'final_mux' else phase, logical,
                 published.sha256, published.size_bytes, job.id, [parent['logical_ref'] for parent in parents])
             transform = TransformRun(id=f'transform_{record.id}', workspace_id=job.workspace_id, task_id=job.task_id,
                 job_id=job.id, transform_type=phase, input_digest=identity, input_refs=record.input_refs,
@@ -393,3 +394,9 @@ class AudioDeliveryAssembly:
     def completed(self, job, *, actor, connection=None):
         manifest = self.manifest(job, actor=actor, connection=connection)
         return self._artifact(job, manifest, 'final_mux', connection=connection) if manifest is not None else None
+
+
+    def adopt(self, connection, job, *, actor, grant, record, picture_fragments):
+        from app.creation.final_delivery_adoption import adopt_delivery
+        return adopt_delivery(self, connection, job, actor=actor, grant=grant, record=record,
+            picture_fragments=picture_fragments)

@@ -19,7 +19,7 @@ from app.task_audio import TaskAudio
 from test_creation_execution import _narration_units_case
 
 
-def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tmp_path, monkeypatch):
+def _leaf_case(tmp_path, monkeypatch):
     case = _narration_units_case(tmp_path, local_policy=True, duration_seconds=2)
     import app.creation_execution as execution_module
     original_next = execution_module.next_creation_intent
@@ -70,6 +70,13 @@ def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tm
         budget=PacketCopyBudget('a'*64, 1024**3, 1024**3, 32, 1, .1, 65536, 262144, 65536, 30), reserve_bytes=1024)
     service = PictureFragmentAssembly(case.repo, store, tmp_path/'work', metadata=metadata, picture_renderer=renderer,
         render_budget=budget, packet_copy_assembly=packet)
+    metadata.picture_renderer = renderer
+    return case, service, packet, store, metadata, renderer, budget, montage
+
+
+def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tmp_path, monkeypatch):
+    case, service, packet, store, metadata, renderer, budget, montage = _leaf_case(tmp_path, monkeypatch)
+    source = Path(case.repo.get_asset('local', 'source').path)
     job = case.repo.get_job_run('local', case.job.id)
     manifest = service.prepare(job, actor=case.actor, write_guard=lambda conn: None)
     assert len(manifest['units']) == 2

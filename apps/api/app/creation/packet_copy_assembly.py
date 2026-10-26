@@ -99,9 +99,9 @@ class PacketCopyAssembly:
             raise ValueError('画面父产物帧区间无效')
         return record, path, facts
 
-    def prepare(self, job, artifact_ids, *, actor, write_guard):
-        recipe = self.recipe(job)
-        parents = [self._parent(job, identity, recipe) for identity in artifact_ids]
+    def prepare(self, job, artifact_ids, *, actor, write_guard, connection=None):
+        recipe = self.recipe(job, connection=connection)
+        parents = [self._parent(job, identity, recipe, connection=connection) for identity in artifact_ids]
         expected, level = 0, []
         for record, _path, facts in parents:
             if facts['first_frame'] != expected:
@@ -111,7 +111,7 @@ class PacketCopyAssembly:
         if not level:
             raise ValueError('画面归约缺少原父产物')
         from fractions import Fraction
-        plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id)
+        plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=connection)
         if expected != round(Fraction(str(plan['duration_seconds'])) * 30):
             raise ValueError('画面父产物未覆盖完整目标帧时钟')
         instance = {'version': 1, 'workspace_id': job.workspace_id, 'task_id': job.task_id,
@@ -136,8 +136,9 @@ class PacketCopyAssembly:
         payload = {**instance, 'units': units, 'master_artifact_id': level[0]['artifact_id']}
         payload['manifest_digest'] = _digest(payload)
         from app.creation_execution import CreationExecutionActor
-        with self.repository._connect() as conn:
-            conn.execute('BEGIN IMMEDIATE')
+        with self.repository._connect() if connection is None else nullcontext(connection) as conn:
+            if connection is None:
+                conn.execute('BEGIN IMMEDIATE')
             write_guard(conn)
             event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
             if CreationExecutionActor.from_event(job.workspace_id, event.payload) != actor or self.recipe(job, connection=conn) != recipe:

@@ -1,6 +1,6 @@
 """Finite, durable H264 picture windows with the original approved burn-in layers."""
 from contextlib import nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from fractions import Fraction
 import hashlib
 import json
@@ -16,7 +16,7 @@ from app.graphic_overlays import validate_overlays
 from app.graphic_sources import graphic_source_facts
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, render_granted_picture_fragment
-from app.subtitle_schedule import TimedCaption, narration_schedule, subtitle_schedule
+from app.subtitle_schedule import TimedCaption, narration_schedule, subtitle_schedule, schedule_srt
 from app.task_audio import media_digest
 
 
@@ -54,6 +54,9 @@ class PictureFragmentAssembly:
         self.renderer.validate_material_use(job.workspace_id, montage)
         files, _graphics = self.renderer.qualified_picture_sources(job.workspace_id, task, montage, [montage], actor)
         tracks = self.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage)
+        current_version = self.repository.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        explicit_subtitles = current_version is not None and 'subtitle_track_ids' in current_version.snapshot
+        tracks = tracks if tracks or explicit_subtitles else None
         captions = (subtitle_schedule(tracks, montage.duration_seconds) if tracks is not None
             else narration_schedule(montage.cues, montage.duration_seconds))
         graphics = [item.model_dump() for item in validate_overlays(montage.graphic_overlays, montage.duration_seconds)]
@@ -68,12 +71,14 @@ class PictureFragmentAssembly:
         for clip in montage.clips:
             path = self.repository.resolve_workspace_media_reference(job.workspace_id, clip.source_path, require_registered=True)
             sources[clip.source_path] = {'path': str(path), 'file_identity': _identity(path)}
-        return task, montage, captions, graphics, sources, image_facts, files
+        sidecar = (subtitle_schedule([replace(track, style={**track.style, 'enabled': True}) for track in tracks],
+            montage.duration_seconds) if tracks is not None else captions)
+        return task, montage, captions, graphics, sources, image_facts, files, schedule_srt(sidecar)
 
     def prepare(self, job, *, actor, write_guard, connection=None):
         if self.budget is None:
             raise ValueError('画面窗口缺少本机CPU编码预算')
-        task, montage, captions, graphics, sources, images, files = self._inputs(job, actor, connection=connection)
+        task, montage, captions, graphics, sources, images, files, subtitle_text = self._inputs(job, actor, connection=connection)
         width, height = canvas_size(montage.aspect_ratio)
         max_seconds = min(self.budget.max_duration_seconds, self.budget.max_pixel_seconds/(width*height))
         max_frames = int(Fraction(str(max_seconds))*30)
@@ -102,7 +107,17 @@ class PictureFragmentAssembly:
                 'source': source, 'decode_seconds': decode_seconds, 'input_bytes': input_bytes,
                 'overlay_count': overlay_count, 'graphics': graphics_count, 'captions': caption_count}
             units.append(unit)
-        payload = {'version': 'picture-fragment-assembly/v1', 'job_id': job.id, 'input_digest': job.input_digest,
+        if not units:
+            raise ValueError('画面窗口没有完整输出单元')
+        sidecar_bytes = len(subtitle_text.encode('utf-8'))
+        if sidecar_bytes >= self.budget.max_output_bytes:
+            raise ValueError('原字幕sidecar单元超过本次总发布分配，不能抬高作品或单元上限')
+        last = units[-1]
+        last['subtitle_sha256'] = hashlib.sha256(subtitle_text.encode('utf-8')).hexdigest()
+        last['subtitle_bytes'] = sidecar_bytes
+        last['id'] = media_digest([last['id'], last['subtitle_sha256'], 'subtitle-sidecar/v1'])
+        last['artifact_id'] = f'artifact_picture_fragment_{last["id"]}'
+        payload = {'version': 'picture-fragment-assembly/v2', 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
             'task_id': task.id, 'head': task.current_timeline_version_id, 'subtitles': [asdict(cue) for cue in captions],
             'picture_recipe': self.packet.recipe(job, connection=connection), 'sources': sources, 'images': images,
             'qualified_files': files, 'units': units}
@@ -138,12 +153,13 @@ class PictureFragmentAssembly:
         except KeyError:
             return None
         payload = event.payload
-        task, _montage, captions, _graphics, sources, images, files = self._inputs(job, actor, connection=connection)
+        task, _montage, captions, _graphics, sources, images, files, subtitle_text = self._inputs(job, actor, connection=connection)
         if (payload['digest'] != media_digest({key: value for key, value in payload.items() if key != 'digest'})
                 or payload['job_id'] != job.id or payload['task_id'] != job.task_id or payload['input_digest'] != job.input_digest
                 or payload['head'] != task.current_timeline_version_id or payload['sources'] != sources
                 or payload['images'] != images or payload['qualified_files'] != json.loads(json.dumps(files))
                 or payload['subtitles'] != [asdict(cue) for cue in captions]
+                or payload.get('subtitle_text', subtitle_text) != subtitle_text
                 or payload['picture_recipe'] != self.packet.recipe(job, connection=connection)):
             raise ValueError('原画面窗口身份、授权来源或实际字幕已变化')
         return payload
@@ -174,6 +190,10 @@ class PictureFragmentAssembly:
                 'picture_fragment_manifest_digest': manifest['digest'],
                 'picture_temporary_limit_bytes': self.budget.additional_disk_bytes,
                 'picture_generated_bytes_limit': 2*self.budget.max_output_bytes+self.budget.additional_disk_bytes}
+            if 'subtitle_bytes' in unit:
+                resources['subtitle_sidecar_bytes'] = unit['subtitle_bytes']
+                resources['subtitle_sidecar_sha256'] = unit['subtitle_sha256']
+                resources['picture_video_output_bytes'] = self.budget.max_output_bytes - unit['subtitle_bytes']
             return f'render:picture-fragment:v1:{unit["id"]}', resources
         return None
 
@@ -197,7 +217,10 @@ class PictureFragmentAssembly:
         directory.mkdir(parents=True)
         publication_file.parent.mkdir(parents=True, exist_ok=True)
         output = directory/'picture.mp4'
-        started, published = False, None
+        started, published, published_subtitles = False, None, None
+        subtitle_publication_started = False
+        subtitle_logical = logical.removesuffix('.mp4')+'.srt'
+        subtitle_temporary = self.store._target(subtitle_logical).with_name(Path(subtitle_logical).name+'.copying')
         try:
             source = Path(unit['source']['path'])
             context.check()
@@ -224,7 +247,21 @@ class PictureFragmentAssembly:
             if manifest['images']:
                 montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id))
                 self.renderer.graphic_source_paths(job.workspace_id, job.task_id, montage.graphic_overlays, context)
-            render_granted_picture_fragment(window, source, output, context, frame_layers=layers)
+            video_context = replace(context, max_output_bytes=request.resources.get('picture_video_output_bytes', context.max_output_bytes))
+            render_granted_picture_fragment(window, source, output, video_context, frame_layers=layers)
+            if unit.get('subtitle_bytes', 0) > 0:
+                subtitle_path = directory/'subtitles.srt'
+                text = manifest['subtitle_text'].encode('utf-8')
+                if len(text) != unit['subtitle_bytes'] or hashlib.sha256(text).hexdigest() != unit['subtitle_sha256']:
+                    raise ValueError('原字幕sidecar大小或SHA与许可不一致')
+                context.check()
+                with subtitle_path.open('xb') as subtitle_file:
+                    subtitle_file.write(text)
+                if output.stat().st_size + len(text) > context.max_output_bytes:
+                    raise ValueError('画面与字幕真实总输出超出本单元许可')
+                subtitle_publication_started = True
+                published_subtitles = self.store.publish_file(subtitle_logical, subtitle_path,
+                    temporary_path=subtitle_temporary, check=context.check)
             context.check()
             if _identity(source) != unit['source']['file_identity']:
                 raise ValueError('画面来源在编码期间已变化')
@@ -246,12 +283,29 @@ class PictureFragmentAssembly:
                 self.manifest(job, actor=actor, connection=conn)
                 self.repository.create_artifact_record(record, connection=conn)
                 self.repository.create_transform_run(transform, connection=conn)
+                if published_subtitles is not None:
+                    subtitle_id = f'artifact_subtitles_{unit["id"]}'
+                    subtitle_record = ArtifactRecord(subtitle_id, job.workspace_id, job.task_id, 'subtitle_track',
+                        subtitle_logical, published_subtitles.sha256, published_subtitles.size_bytes, job.id,
+                        [f'montage-plan://{job.task_id}/{self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn)["id"]}'])
+                    self.repository.create_artifact_record(subtitle_record, connection=conn)
+                    self.repository.create_transform_run(TransformRun(id=f'transform_{subtitle_id}',
+                        workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
+                        transform_type='subtitle_render', input_digest=unit['id'], input_refs=subtitle_record.input_refs,
+                        output_refs=[subtitle_logical], engine='subtitle-sidecar/v1', parameters={
+                            'manifest_digest': manifest['digest'], 'producer_request_id': context.grant.request_id,
+                            'producer_generation': context.grant.generation, 'file_identity': _identity(self.store.resolve_file(subtitle_logical))},
+                        status='succeeded', started_at=utc_now(), finished_at=utc_now()), connection=conn)
+                    for index, reference in enumerate(subtitle_record.input_refs):
+                        self.repository.create_dependency_edge(DependencyEdge(f'edge_{subtitle_id}_{index}',
+                            job.workspace_id, job.task_id, reference, subtitle_logical, f'transform_{subtitle_id}'), connection=conn)
                 for index, reference in enumerate(record.input_refs):
                     self.repository.create_dependency_edge(DependencyEdge(f'edge_{record.id}_{index}', job.workspace_id,
                         job.task_id, reference, logical, transform.id), connection=conn)
             return record
         finally:
-            total, known = 0, not (started and published is None and not publication_file.exists())
+            total, known = 0, (not (started and published is None and not publication_file.exists())
+                and not (subtitle_publication_started and published_subtitles is None and not subtitle_temporary.exists()))
             try:
                 def unreadable(error):
                     raise error
@@ -265,6 +319,10 @@ class PictureFragmentAssembly:
                     total += published.size_bytes
                 elif publication_file.exists():
                     total += _identity(publication_file)['size_bytes']
+                if published_subtitles is not None:
+                    total += published_subtitles.size_bytes
+                elif subtitle_temporary.exists():
+                    total += _identity(subtitle_temporary)['size_bytes']
             except (OSError, ValueError):
                 known = False
             with self.repository._connect() as conn:
@@ -282,3 +340,23 @@ class PictureFragmentAssembly:
         if manifest is None or self.next_unit(job, actor=actor, connection=connection) is not None:
             return None
         return [unit['artifact_id'] for unit in manifest['units']]
+
+
+    def subtitle_artifact(self, job, *, actor, connection=None):
+        manifest = self.manifest(job, actor=actor, connection=connection)
+        if manifest is None or 'subtitle_bytes' not in manifest['units'][-1]:
+            raise ValueError('原画面检查点没有真实字幕sidecar，不能冒用文本输出')
+        unit = manifest['units'][-1]
+        if unit['subtitle_bytes'] == 0:
+            return None
+        self.packet._parent(job, unit['artifact_id'], manifest['picture_recipe'], connection=connection)
+        record = self.repository.get_artifact_record(job.workspace_id, f'artifact_subtitles_{unit["id"]}')
+        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        if (record.producer_job_id != job.id or record.task_id != job.task_id or record.kind != 'subtitle_track'
+                or record.sha256 != unit['subtitle_sha256'] or record.size_bytes != unit['subtitle_bytes']
+                or transform.input_digest != unit['id'] or transform.status != 'succeeded'
+                or transform.job_id != job.id or transform.output_refs != [record.logical_ref]
+                or transform.parameters['manifest_digest'] != manifest['digest']
+                or _identity(self.store.resolve_file(record.logical_ref)) != transform.parameters['file_identity']):
+            raise ValueError('原字幕sidecar缺少成功来源、完整时钟或真实文件检查点')
+        return record

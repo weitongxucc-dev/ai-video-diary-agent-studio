@@ -14039,7 +14039,12 @@ def _build_device_components(*, repository: ProductionRepository):
                                      budget=budget.packet_copy, reserve_bytes=budget.min_free_disk_bytes)
                    if budget.packet_copy is not None else None)
     from app.creation.audio_delivery_assembly import AudioDeliveryAssembly
-    task_audio = _task_audio(repository)
+    from app.creation.picture_fragment_assembly import PictureFragmentAssembly
+    task_audio, metadata, picture_renderer = _picture_preview_components(repository)
+    picture_fragments = (PictureFragmentAssembly(repository, artifact_store, settings.effective_temporary_root_path,
+        metadata=metadata, picture_renderer=picture_renderer, render_budget=cpu_render_budget,
+        packet_copy_assembly=packet_copy)
+        if packet_copy is not None and cpu_render_budget is not None else None)
     audio_delivery = (AudioDeliveryAssembly(repository, artifact_store, settings.effective_temporary_root_path,
         audio=task_audio, packet_copy_assembly=packet_copy, audio_budget=budget.audio_encode,
         mux_budget=budget.final_mux, reserve_bytes=budget.min_free_disk_bytes)
@@ -14072,6 +14077,7 @@ def _build_device_components(*, repository: ProductionRepository):
             audio_assembly=task_audio,
             packet_copy_assembly=packet_copy,
             audio_delivery=audio_delivery,
+            picture_fragments=picture_fragments,
             source_verifier=lambda source,actor,connection=None:validate_edit_origin(conversation_repo,source,actor,connection=connection),
             cover=cover,
             task_authorizations=task_authorizations,

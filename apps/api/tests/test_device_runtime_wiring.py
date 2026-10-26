@@ -211,6 +211,13 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
     assert delivery.repository is repository
     assert delivery.audio_budget is encode_budget and delivery.mux_budget is mux_budget
     assert delivery.reserve_bytes == profile.budget.min_free_disk_bytes
+    fragments = creation.owner.picture_fragments
+    assert fragments is creation.executor.picture_fragments
+    assert fragments.repository is repository
+    assert fragments.packet is delivery.picture
+    assert fragments.budget is profile.budget.cpu_render
+    assert fragments.metadata.audio_service is delivery.audio
+    assert fragments.metadata.picture_renderer is fragments.renderer
     runtime_facts = Mock(return_value={"backend_identity": "actual-backend"})
     monkeypatch.setattr(main_module, "_narration_runtime_facts", runtime_facts)
     for consumer in (creation.owner, creation.owner.segments):

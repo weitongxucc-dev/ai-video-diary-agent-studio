@@ -118,15 +118,23 @@ class TaskAudio:
 
     def _assembly_plan_id(self, job, montage):
         from app.creation.assembly_manifest import AUDIO_ASSEMBLY_VERSION
-        graph = montage.audio_timeline
+        from app.creation.editing.metadata_use_case import effective_audio_timeline
+        graph = montage.audio_timeline or (effective_audio_timeline(montage) if montage.narration_audio_path else None)
         digest = media_digest([AUDIO_MIX_CONTRACT_VERSION, AUDIO_ASSEMBLY_VERSION, job.id, graph.model_dump() if graph else None,
             montage.duration_seconds, montage.narration_linkage_created_audio_timeline])
         return f'event_{job.id}_audio_assembly_{digest}'
 
-    def render_assembly(self, job, montage, *, actor, budget, prepare=False, connection=None):
+    def render_assembly(self, job, montage, *, actor, budget, prepare=False, connection=None, force_master=False):
         from app.creation.assembly_manifest import AudioAssemblyManifest, plan_audio_assembly
         if montage.audio_timeline is None:
-            return None
+            if not force_master:
+                try:
+                    self.repository.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=connection)
+                except KeyError:
+                    return None
+            from dataclasses import replace
+            from app.creation.editing.metadata_use_case import effective_audio_timeline
+            montage = replace(montage, audio_timeline=effective_audio_timeline(montage))
         if budget is None:
             raise ValueError('音频组装缺少已标定CPU音频预算')
         audible = [(track, clip) for track in montage.audio_timeline.tracks if not track.muted
@@ -135,7 +143,7 @@ class TaskAudio:
         try:
             event = self.repository.get_task_event(job.workspace_id, event_id, connection=connection)
         except KeyError:
-            if len(audible) <= budget.max_input_count:
+            if len(audible) <= budget.max_input_count and not force_master:
                 return None
             if not prepare:
                 raise ValueError('原音频组装清单尚未准备，未启动成片')
@@ -226,10 +234,10 @@ class TaskAudio:
                 "AND e.event_type='task_execution_unit_settled' "
                 "AND json_extract(e.payload_json,'$.usage_id')=r.id||':'||r.last_grant_generation "
                 "WHERE r.workspace_id=? AND r.owner_type='creation_job' AND r.owner_id=? AND r.input_digest=? "
-                "AND r.state='done' AND json_extract(r.resources_json,'$.assembly_unit_id')=? "
+                "AND (r.state='done' OR (r.state='granted' AND ?)) AND json_extract(r.resources_json,'$.assembly_unit_id')=? "
                 "AND json_extract(r.resources_json,'$.assembly_manifest_digest')=? "
                 "ORDER BY r.updated_at DESC,r.id DESC LIMIT 1",
-                (job.workspace_id, job.id, job.input_digest, unit.id, manifest.digest)).fetchone()
+                (job.workspace_id, job.id, job.input_digest, int(connection is not None and conn.in_transaction), unit.id, manifest.digest)).fetchone()
             if producer is None:
                 raise ValueError('唯一音频master没有原请求与原generation的完成消耗回执')
         self.validate_source_access(job.workspace_id, job.task_id, record.logical_ref, actor)

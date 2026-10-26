@@ -639,6 +639,10 @@ class RenderStageUseCase:
                 return False
             if version.task_id != task_id or ref not in version.snapshot.get("output_refs", []):
                 return False
+            if 'audio_delivery' in version.snapshot:
+                from app.creation.final_delivery_adoption import valid_delivery
+                return valid_delivery(self.repository, self.metadata.artifact_store, task, version, plan,
+                    metadata=self.metadata, render_context=render_context if verify_media else None)
             transform_id = version.snapshot.get("transform_run_id")
             if not isinstance(transform_id, str):
                 return False
@@ -761,8 +765,11 @@ class RenderStageUseCase:
     def valid_with_grant(self, workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
         valid = self.valid(workspace_id, task_id, render_context=grant)
         if valid:
-            plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
-            self.graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)
+            task = self.repository.get_creation_task(workspace_id, task_id)
+            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            if 'audio_delivery' not in version.snapshot:
+                plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
+                self.graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)
         return valid
 
     def record_usage(self, workspace_id: str, plan) -> None:
