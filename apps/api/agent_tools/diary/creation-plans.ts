@@ -7,7 +7,7 @@ const profileReference = {type: ["object", "null"], properties: {
 const deliveryProperties = {
   language: {type: "string", enum: ["zh-CN", "en-US", "zh-CN/en-US"]},
   aspect_ratio: {type: "string", enum: ["9:16", "16:9", "1:1"]},
-  duration_target_seconds: {type: "integer", minimum: 15, maximum: 600},
+  duration_target_seconds: {type: "integer", minimum: 1},
   presenter_share_target: {type: "integer", enum: [0, 20, 40, 60, 80, 100]},
   lipsync_quality: {type: "string", enum: ["high", "fast"]},
   selected_voice: profileReference, selected_person: profileReference,

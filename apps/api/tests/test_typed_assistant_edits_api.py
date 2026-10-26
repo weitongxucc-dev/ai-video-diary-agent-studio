@@ -75,6 +75,67 @@ def test_execution_capability_read_is_authorized_and_does_not_start_runtime(meta
     assert state.client.get("/api/creation-tasks/missing/assistant/execution-capabilities").status_code == 404
 
 
+def test_script_section_http_reads_complete_versioned_windows_without_full_hydration(metadata_http_state, monkeypatch):
+    from app.creation.script_windows import write_script_sections
+    state = metadata_http_state
+    version = '2026-10-24T00:00:00+00:00'
+    script_id = 'script-window-http'
+    sections = [{'id': f'section-{i}', 'title': str(i), 'content': f'content {i}',
+                 'visual_prompt': 'visual', 'evidence_reference_ids': []} for i in range(1, 46)]
+    header = {'id': script_id, 'workspace_id': state.task.workspace_id, 'task_id': state.task.id,
+              'run_id': '', 'topic_id': '', 'title': 'Window read', 'language': 'en-US',
+              'selection_status': 'draft', 'created_at': version, 'updated_at': version,
+              'confirmed_at': None, '_sections_storage': 'rows'}
+    with state.repo._connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        connection.execute('INSERT INTO creation_task_scripts '
+            '(id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
+            (script_id, state.task.workspace_id, state.task.id, '', json.dumps(header), version))
+        write_script_sections(connection, state.task.workspace_id, script_id, sections)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('section reads must not hydrate the full script or start execution')
+
+    monkeypatch.setattr(state.repo, 'get_creation_task_script', forbidden)
+    monkeypatch.setattr(state.repo, 'list_creation_task_scripts', forbidden)
+    monkeypatch.setattr(main, '_start_device_runtime', forbidden)
+    for read_url in (state.url, state.url + '/scripts'):
+        initial = state.client.get(read_url)
+        assert initial.status_code == 200, initial.text
+        assert initial.json()['scripts_scope'] == 'active'
+        summary = initial.json()['scripts'][0]
+        assert summary['sections'] is None and summary['sections_loaded'] is False
+        assert summary['sections_total_count'] == 45
+    from types import SimpleNamespace
+    plan = state.repo.get_creation_plan(state.task.workspace_id, state.task.plan_id)
+    monkeypatch.setattr(main, '_assistant_script_inputs', lambda *_:
+        (state.task, plan, SimpleNamespace(title='Topic', angle='', audience='', outline=[]), [], []))
+    context = main._assistant_script_context_facts(state.task.workspace_id, state.task.id, state.member.member_id)
+    assert context['draft']['sections'] is None and context['draft']['sections_loaded'] is False
+    assert context['draft']['sections_total_count'] == 45
+    url = state.url + f'/scripts/{script_id}/sections'
+    received, cursor = [], 0
+    while cursor is not None:
+        response = state.client.get(url, params={'after_ordinal': cursor, 'expected_updated_at': version})
+        assert response.status_code == 200, response.text
+        page = response.json()
+        assert page['total_count'] == 45 and page['updated_at'] == version
+        received.extend(item['section'] for item in page['items'])
+        cursor = page['next_after_ordinal']
+    assert received == sections
+    assert state.client.get(url, params={'after_ordinal': 20}).status_code == 422
+    assert state.client.get(url, params={'limit': 21}).status_code == 422
+    assert state.client.get(url, params={'expected_updated_at': 'invalid'}).status_code == 422
+    with state.repo._connect() as connection:
+        connection.execute('UPDATE creation_task_scripts SET updated_at=? WHERE id=?',
+                           ('2026-10-24T00:00:01+00:00', script_id))
+    assert state.client.get(url, params={'after_ordinal': 20, 'expected_updated_at': version}).status_code == 409
+    assert state.client.get(url, headers={'x-test-workspace': 'outside'}).status_code == 404
+    assert state.client.get(state.url + '/scripts/missing/sections').status_code == 404
+    with state.repo._connect() as connection:
+        connection.execute('UPDATE creation_task_scripts SET task_id=? WHERE id=?', ('other-task', script_id))
+    assert state.client.get(url).status_code == 404
+
 
 def test_task_budget_http_preserves_scope_meaning_and_owner_boundary(metadata_http_state, monkeypatch):
     from app.creation.contracts import JobRun
@@ -125,6 +186,24 @@ def test_task_budget_http_preserves_scope_meaning_and_owner_boundary(metadata_ht
         connection.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
                            (json.dumps(asdict(other_owner), default=str), 'ws', state.task.id))
     assert state.client.get(url).status_code == 403
+
+
+def test_script_response_distinguishes_unloaded_body_from_empty_or_partial_script():
+    from pydantic import ValidationError
+    from app.schemas import CreationTaskScriptResponse
+    metadata = dict(id='script', task_id='task', run_id='', topic_id='', title='Draft', language='en-US',
+        selection_status='draft', created_at='2026-10-24T00:00:00Z',
+        updated_at='2026-10-24T00:00:00Z', confirmed_at=None)
+    header = CreationTaskScriptResponse.model_validate({**metadata, 'sections': None,
+        'sections_loaded': False, 'sections_total_count': 25})
+    assert header.sections is None and header.sections_total_count == 25
+    empty = CreationTaskScriptResponse.model_validate({**metadata, 'sections': []})
+    assert empty.sections_loaded and empty.sections_total_count == 0
+    for fields in ({'sections': None}, {'sections': None, 'sections_loaded': False},
+                   {'sections': [], 'sections_loaded': False, 'sections_total_count': 25},
+                   {'sections': [], 'sections_total_count': 25}):
+        with pytest.raises(ValidationError):
+            CreationTaskScriptResponse.model_validate({**metadata, **fields})
 
 
 def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http_state, monkeypatch):

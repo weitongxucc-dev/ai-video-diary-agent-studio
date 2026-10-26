@@ -11,6 +11,22 @@ from app.subtitle_schedule import narration_schedule
 from test_task_montage_duration_policy import task_inputs  # noqa: F401
 
 
+def test_goal_duration_is_independent_of_execution_window():
+    from pydantic import ValidationError
+    from app.schemas import (CreationPlanDefaultsRequest, CreationRequestDeliveryRequirements,
+                             ScriptLibraryReuseRequest)
+
+    requests = [(CreationPlanDefaultsRequest, {"goal": "A long editing project"}),
+                (CreationRequestDeliveryRequirements, {}),
+                (ScriptLibraryReuseRequest, {"name": "Reuse", "requirements_confirmed": True})]
+    for schema, fields in requests:
+        for seconds in (1, 1800):
+            assert schema(**fields, duration_target_seconds=seconds).duration_target_seconds == seconds
+        for invalid in (0, -1, True, 1.5):
+            with pytest.raises(ValidationError):
+                schema(**fields, duration_target_seconds=invalid)
+
+
 @pytest.mark.parametrize('duration,result', [(30, 'met'), (Fraction(901, 30), 'met'),
     (Fraction(899, 30), 'met'), (17.12, 'mismatch'), (29.92, 'mismatch'), (30.04, 'mismatch'), (None, 'unknown')])
 def test_exact_delivery_uses_video_frame_clock(duration, result):

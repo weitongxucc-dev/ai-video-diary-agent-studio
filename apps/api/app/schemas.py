@@ -900,7 +900,7 @@ class CreationPlanDefaultsRequest(BaseModel):
     target_count: int = Field(default=1, ge=1, le=50)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
-    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    duration_target_seconds: int = Field(default=60, ge=1, strict=True)
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
@@ -2827,7 +2827,7 @@ class CreationPlanPreviewResponse(BaseModel):
     target_count: int = Field(ge=1)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     aspect_ratio: Literal["9:16", "16:9", "1:1"]
-    duration_target_seconds: int = Field(ge=15)
+    duration_target_seconds: int = Field(ge=1)
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
@@ -2884,7 +2884,7 @@ class CreationRequestDeliveryRequirements(BaseModel):
 
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
-    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    duration_target_seconds: int = Field(default=60, ge=1, strict=True)
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
     lipsync_quality: Literal["high", "fast"] = "high"
     selected_voice: PlanProfileReference | None = None
