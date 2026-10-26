@@ -1982,8 +1982,8 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("button", {name:"查询声音采用结果"})).not.toBeInTheDocument();
   });
 
-  it("sends only the task id to the native save boundary", async () => {
-    const task = { ...baseTask, stage: "review" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 90, output_ready: true };
+  it("binds the displayed timeline version to the native save boundary", async () => {
+    const task = { ...baseTask, stage: "review" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 90, output_ready: true, current_timeline_version_id: "timeline-version-save" };
     const initial = workspace(task, {
       id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "成片",
       status: "rendered", cues: [], clips: [], duration_seconds: 12,
@@ -2005,7 +2005,7 @@ describe("CreationTaskWorkspace", () => {
     expect(getWorkspaceViewControl("检查与输出：待上一步")).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
-    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1", "timeline-version-save"));
     expect(saveRenderedVideo).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("已保存：成片.mp4")).toHaveAttribute("role", "status");
     fireEvent.click(screen.getByRole("button", { name: "调整成片" }));

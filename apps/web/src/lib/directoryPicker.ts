@@ -30,7 +30,7 @@ declare global {
       openFile?: () => Promise<string | null>;
       openWavFile?: () => Promise<string | null>;
       importMaterials?: (identity: MaterialImportIdentity) => Promise<MaterialImportResult>;
-      saveRenderedVideo?: (taskId: string) => Promise<{
+      saveRenderedVideo?: (taskId: string, expectedVersionId: string) => Promise<{
         saved: boolean;
         canceled?: boolean;
         fileName?: string;

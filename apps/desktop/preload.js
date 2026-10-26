@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // intake binding, so the renderer cannot name a write target.
   importMaterials: (identity) => ipcRenderer.invoke('import-materials', identity),
   openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
-  saveRenderedVideo: (taskId) => ipcRenderer.invoke('save-rendered-video', taskId),
+  saveRenderedVideo: (taskId, expectedVersionId) => ipcRenderer.invoke('save-rendered-video', taskId, expectedVersionId),
   saveCoverImage: (taskId, coverId) => ipcRenderer.invoke('save-cover-image', taskId, coverId),
   saveSubtitleFile: (selection) => ipcRenderer.invoke('save-subtitle-file', selection),
 

@@ -4,18 +4,25 @@ const { pipeline } = require('stream/promises');
 
 const SUBTITLE_RESPONSE_TIMEOUT_MS = 30000;
 
-async function downloadCreationTaskOutput(context, taskId, temporaryPath, coverId = null) {
+async function downloadCreationTaskOutput(context, taskId, temporaryPath, coverId = null, expectedVersionId) {
   const requestPath = coverId
     ? `/api/creation-tasks/${encodeURIComponent(taskId)}/covers/${encodeURIComponent(coverId)}/image`
-    : `/api/creation-tasks/${encodeURIComponent(taskId)}/output`;
+    : `/api/creation-tasks/${encodeURIComponent(taskId)}/output?${new URLSearchParams({ expected_version_id: expectedVersionId })}`;
   const mediaType = coverId ? 'image/png' : 'video/mp4';
   const label = coverId ? 'PNG 封面' : 'MP4';
   const response = await context.fetchPath(requestPath, { accept: mediaType });
   const contentType = String(response.headers.get('content-type') || '').split(';')[0].trim();
   if (response.status !== 200 || contentType !== mediaType) {
+    let reason = '';
+    if (response.status === 409 && contentType === 'application/json') {
+      try {
+        const detail = (await response.json()).detail;
+        if (typeof detail === 'string') reason = detail;
+      } catch {}
+    }
     // Discard the rejected body without replacing the status/MIME error.
     if (response.body) await response.body.cancel().catch(() => undefined);
-    throw new Error(`本地服务没有返回可保存的 ${label}（HTTP ${response.status || 0}）。`);
+    throw new Error(reason || `本地服务没有返回可保存的 ${label}（HTTP ${response.status || 0}）。`);
   }
   if (!response.body) throw new Error('本地服务返回了空的成片文件。');
   const output = fs.createWriteStream(temporaryPath, { flags: 'wx' });

@@ -655,7 +655,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (currentTaskId.current === task.id) { setError(result.error); setNotice(result.notice); }
     } finally { if (currentTaskId.current === task.id) setBusy(null); }
   }
-  function saveVideo() { return saveOutput(() => saveTaskVideo(task.id)); }
+  function saveVideo() { return saveOutput(() => saveTaskVideo(task.id, task.current_timeline_version_id)); }
   function saveCover() { const coverId = workspace.cover_asset?.id; if (coverId) return saveOutput(() => saveTaskCover(task.id, coverId)); }
   function saveSubtitle(mode: "zh" | "en" | "zh-en") { return saveOutput(() => saveTaskSubtitles(task.id, mode, task.current_timeline_version_id, workspace.subtitle_tracks, activeSubtitleTrack)); }
 

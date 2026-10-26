@@ -4,14 +4,16 @@ export type SaveFeedback = {
     error: ReturnType<typeof errorDetails> | null;
     notice: string | null;
 };
-export async function saveTaskVideo(taskId: string): Promise<SaveFeedback> {
+export async function saveTaskVideo(taskId: string, expectedVersionId: string | null): Promise<SaveFeedback> {
     let error: SaveFeedback["error"] = null;
     let notice: string | null = null;
     const saver = window.electronAPI?.saveRenderedVideo;
     try {
+        if (!expectedVersionId)
+            throw new Error("当前成片缺少时间线版本，请刷新任务并等待当前版本制作完成后再保存。");
         if (!saver)
             throw new Error("请在桌面客户端中使用原生保存功能。浏览器预览不会接收文件路径。");
-        const result = await saver(taskId);
+        const result = await saver(taskId, expectedVersionId);
         if (result.error)
             throw new Error(result.error);
         if (result.saved)
