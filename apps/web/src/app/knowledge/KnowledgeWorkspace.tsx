@@ -6,8 +6,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWorkspaceSearchParams as useSearchParams } from "@/components/workbench/context";
 import { ApiRequestError, getKnowledgeReferenceVersion, getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry, getKnowledgeGrants, grantKnowledgeToWorkspace, revokeKnowledgeGrant } from "@/lib/api";
-import type { ScriptLibraryEntry, ScriptLibrarySource, KnowledgeGrantState } from "@/lib/types";
+import type { ScriptLibrarySource, KnowledgeGrantState } from "@/lib/types";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { getScriptLibraryEntry, getScriptLibrarySections } from "@/lib/api/script-library";
+import type { ScriptLibraryEntryHeader, ScriptLibraryCursor, ScriptLibrarySectionWindow } from "@/lib/types/script-library";
 import { AppShell } from "@/components/AppShell";
 import { CardSelect, HomeCardDialog } from "@/components/HomeCardDialog";
 import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
@@ -418,13 +420,21 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
 
 export function ScriptLibraryPanel() {
   const router = useRouter();
-  const [entries, setEntries] = useState<ScriptLibraryEntry[]>([]);
+  const [entries, setEntries] = useState<ScriptLibraryEntryHeader[]>([]);
   const [scriptsView, setScriptsView] = useState<DisplayMode>("grid");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
-  const [selected, setSelected] = useState<ScriptLibraryEntry | null>(null);
-  const deepLink = useRef<{ entryId: string; sourceTaskId: string | null } | null>(null);
-  const selectedKey = selected ? JSON.stringify([selected.id, selected.version]) : null;
+  const [selected, setSelected] = useState<ScriptLibraryEntryHeader | null>(null);
+  const [listCursors, setListCursors] = useState<(ScriptLibraryCursor | null)[]>([null]);
+  const listCursor = listCursors[listCursors.length - 1];
+  const [nextCursor, setNextCursor] = useState<ScriptLibraryCursor | null>(null);
+  const [deepLinkRetry, setDeepLinkRetry] = useState(0);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const selectionEpoch = useRef(0);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const successfulFilter = useRef<{ query: string; category: string } | null>(null);
+  const selectedKey = selected ? JSON.stringify([selected.id, selected.version, selected.updated_at]) : null;
   const [sourceResult, setSourceResult] = useState<{ key: string; sources: ScriptLibrarySource[] } | null>(null);
   const [sourceFailure, setSourceFailure] = useState<{ key: string; message: string } | null>(null);
   const [name, setName] = useState("");
@@ -444,9 +454,21 @@ export function ScriptLibraryPanel() {
   const previousSelectedKey = useRef<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const entryId = params.get("entry_id");
-    if (entryId) deepLink.current = { entryId, sourceTaskId: params.get("source_task_id") };
-  }, []);
+    const entryId = params.get("entry_id"), sourceTaskId = params.get("source_task_id");
+    if (!entryId) return;
+    let active = true;
+    const epoch = selectionEpoch.current;
+    setDeepLinkError(null);
+    void getScriptLibraryEntry(entryId).then(entry => {
+      if (!active || epoch !== selectionEpoch.current) return;
+      if (entry.id !== entryId || sourceTaskId && entry.source_task_id !== sourceTaskId) {
+        setDeepLinkError("文案版本与来源任务不匹配；没有打开其他版本。"); return;
+      }
+      setSelected(entry);
+      setName(`${entry.name} · 新任务`);
+    }).catch(cause => { if (active && epoch === selectionEpoch.current) setDeepLinkError(cause instanceof Error ? cause.message : "链接中的文案版本未能读回。"); });
+    return () => { active = false; };
+  }, [deepLinkRetry]);
   useEffect(() => {
     if (previousSelectedKey.current !== selectedKey) {
       previousSelectedKey.current = selectedKey;
@@ -456,34 +478,27 @@ export function ScriptLibraryPanel() {
   useEffect(() => {
     let active = true;
     setLoading(true); setListError(null);
-    listScriptLibraryEntries(query, category).then(result => {
+    const observedSelection = selectedRef.current;
+    const read = listCursor ? listScriptLibraryEntries(query, category, listCursor) : listScriptLibraryEntries(query, category);
+    read.then(result => {
       if (active) {
+        const previous = successfulFilter.current;
+        const changedFilter = previous !== null && (previous.query !== query || previous.category !== category);
+        successfulFilter.current = { query, category };
         setEntries(result.items);
+        setNextCursor(result.next);
         setLoadedFilter({ query, category });
-        const requestedDeepLink = deepLink.current;
-        if (requestedDeepLink) {
-          const entry = result.items.find(item => item.id === requestedDeepLink.entryId);
-          if (entry && (!requestedDeepLink.sourceTaskId || entry.source_task_id === requestedDeepLink.sourceTaskId)) {
-            setSelected(entry);
-            deepLink.current = null;
-          } else if (!entry) {
-            setSelected(null);
-            setListError("链接中的文案版本当前不可用；你仍可从列表查找其他版本。");
-            deepLink.current = null;
-          } else {
-            setSelected(null);
-            setListError("文案版本与来源任务不匹配；没有打开其他版本。");
-            deepLink.current = null;
-          }
-        } else {
-          setSelected(current => current ? result.items.find(entry => entry.id === current.id) ?? null : null);
-        }
+        setSelected(current => {
+          if (!current) return null;
+          if (observedSelection?.id !== current.id || observedSelection.version !== current.version || observedSelection.updated_at !== current.updated_at) return current;
+          return result.items.find(entry => entry.id === current.id) ?? (changedFilter ? null : current);
+        });
       }
     }).catch(cause => {
       if (active) setListError(cause instanceof Error ? cause.message : "文案库读取失败");
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [query, category, listRetry]);
+  }, [query, category, listRetry, listCursor]);
   useEffect(() => {
     if (!selectedId || !selectedKey) return;
     let active = true;
@@ -492,12 +507,23 @@ export function ScriptLibraryPanel() {
       .catch(cause => { if (active) setSourceFailure({ key, message: cause instanceof Error ? cause.message : "来源核对失败" }); });
     return () => { active = false; };
   }, [selectedId, selectedKey, sourceRetry]);
-  function select(entry: ScriptLibraryEntry) {
-    const sameSelection = selected?.id === entry.id && selected.version === entry.version;
+  function select(entry: ScriptLibraryEntryHeader) {
+    selectionEpoch.current += 1;
+    setDeepLinkError(null);
+    const sameSelection = selected?.id === entry.id && selected.version === entry.version && selected.updated_at === entry.updated_at;
     setSelected(entry);
     if (!sameSelection) {
       setConfirmedKey(null); setName(`${entry.name} · 新任务`); setError(null);
     }
+  }
+  async function reloadSelected() {
+    const original = selectedRef.current;
+    if (!original) return;
+    const epoch = selectionEpoch.current;
+    const entry = await getScriptLibraryEntry(original.id);
+    if (epoch !== selectionEpoch.current || selectedRef.current?.id !== original.id || selectedRef.current.updated_at !== original.updated_at || selectedRef.current.version !== original.version) return;
+    if (entry.id !== original.id || entry.source_task_id !== original.source_task_id) throw new Error("文案回执与原版本归属不符，原选择保留。");
+    setSelected(entry);
   }
   async function reuse() {
     if (!selected || !durationValid) return;
@@ -518,9 +544,10 @@ export function ScriptLibraryPanel() {
   return <section className={styles.card} aria-label="文案库">
     <div className={styles.cardHeading}><div><h2>文案库</h2><small>已确认文案的命名快照与历史版本；复用需要新确认。</small></div><DisplayModeToggle label="文案列表" value={scriptsView} onChange={setScriptsView} /></div>
     <div className={styles.searchBar}>
-      <label data-input-group><Search size={16} /><input aria-label="搜索文案" placeholder="搜索名称或正文" value={query} onChange={event => setQuery(event.target.value)} /></label>
-      <label>分类<input aria-label="筛选文案分类" placeholder="输入分类，留空查看全部" value={category} onChange={event => setCategory(event.target.value)} /></label>
+      <label data-input-group><Search size={16} /><input aria-label="搜索文案" placeholder="搜索名称或正文" value={query} onChange={event => { selectionEpoch.current += 1; setListCursors([null]); setQuery(event.target.value); }} /></label>
+      <label>分类<input aria-label="筛选文案分类" placeholder="输入分类，留空查看全部" value={category} onChange={event => { selectionEpoch.current += 1; setListCursors([null]); setCategory(event.target.value); }} /></label>
     </div>
+    {deepLinkError ? <div role="alert"><p>{deepLinkError}</p><button type="button" onClick={() => setDeepLinkRetry(value => value + 1)}>重试读取链接文案</button></div> : null}
     {listError ? <div className={styles.error} role="alert"><div><strong>{listError}</strong>{entries.length ? <p>保留上次成功的结果：{loadedFilter ? `搜索“${loadedFilter.query || "全部"}”，分类“${loadedFilter.category || "全部"}”` : "尚无成功读取的筛选"}。</p> : null}<button onClick={() => setListRetry(value => value + 1)} type="button">重试读取文案</button></div></div> : null}
     {loading ? <p role="status">{loadedFilter && entries.length ? "正在读取；保留上次成功的结果…" : "正在读取文案…"}</p> : null}
     {loading && (loadedFilter?.query !== query || loadedFilter?.category !== category) ? null : listError && entries.length ? <div className={`${styles.grid} ${styles.scriptList}${scriptsView === "list" ? ` ${styles.list}` : ""}`}>{entries.map(entry =>
@@ -528,11 +555,13 @@ export function ScriptLibraryPanel() {
     )}</div> : entries.length ? <div className={`${styles.grid} ${styles.scriptList}${scriptsView === "list" ? ` ${styles.list}` : ""}`}>{entries.map(entry =>
       <button className={styles.cover} key={entry.id} onClick={() => void select(entry)} type="button"><strong>{entry.name}</strong><small>{entry.category || "未分类"} · 版本 {entry.version}</small><span>{entry.title}</span></button>
     )}</div> : loading ? null : listError ? null : <p>没有匹配的可用文案。可从任务的已确认文案页保存；来源不可读或版本已变化的条目不会用于复用。</p>}
+    <p>当前列表页 {entries.length} 条{nextCursor ? "；还有更多可用文案。" : "。"}</p>
+    <div><button type="button" disabled={loading || listCursors.length === 1} onClick={() => setListCursors(current => current.slice(0, -1))}>上一页文案条目</button><button type="button" disabled={loading || Boolean(listError) || !nextCursor || loadedFilter?.query !== query || loadedFilter.category !== category} onClick={() => setListCursors(current => [...current, nextCursor])}>下一页文案条目</button></div>
     {selected ? <section className={styles.detailSection} aria-label="文案复用详情">
       <h3>{selected.name} · 版本 {selected.version}</h3>
       <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原任务</Link>
       <p>{selected.source_run_id ? "来源于已确认的文案记录。" : "复用或人工文案，没有模型生成记录。"}</p>
-      {selected.sections.map(section => <article key={section.id}><strong>{section.title}</strong><p>{section.content}</p>{section.reference_ids.length ? <details><summary>技术诊断信息</summary><small>引用记录：{section.reference_ids.join("、")}</small></details> : null}</article>)}
+      <ScriptLibrarySections key={selectedKey} entry={selected} onReload={reloadSelected}/>
       <details><summary>技术诊断信息</summary><p>原稿记录：{selected.source_script_id || "无"} · 运行记录：{selected.source_run_id || "无"}</p></details>
       <h4>事实出处（实时核对）</h4>
       {sourceError ? <div role="alert"><p>{sourceError}</p><button onClick={() => { setSourceFailure(null); setSourceRetry(value => value + 1); }} type="button">重试核对来源</button></div> : !sourcesChecked ? <p role="status">正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${selected.version}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
@@ -544,5 +573,42 @@ export function ScriptLibraryPanel() {
       <p>仅复制文案到独立新draft，不复制旧确认、配音或成片，不调用模型。</p>
       <button disabled={busy || !confirmed || !readable || !name.trim() || !durationValid} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
     </section> : null}
+  </section>;
+}
+
+function ScriptLibrarySections({ entry, onReload }: { entry: ScriptLibraryEntryHeader; onReload: () => Promise<void> }) {
+  const [cursors, setCursors] = useState([0]);
+  const [attempt, setAttempt] = useState(0);
+  const [page, setPage] = useState<ScriptLibrarySectionWindow | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reloading, setReloading] = useState(false);
+  const active = useRef(true);
+  const after = cursors[cursors.length - 1];
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  useEffect(() => {
+    let current = true;
+    setLoading(true); setError(null); setPage(null);
+    void getScriptLibrarySections(entry.id, { after_ordinal: after, expected_updated_at: entry.updated_at }).then(value => {
+      if (!current) return;
+      if (value.entry_id !== entry.id || value.version !== entry.version || value.updated_at !== entry.updated_at) throw new Error("正文窗口与所选文案版本不符，请重新读取版本。");
+      setPage(value);
+    }).catch(cause => { if (current) setError(cause instanceof Error ? cause.message : "文案正文窗口未能读回。"); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [entry.id, entry.version, entry.updated_at, after, attempt]);
+  async function reload() {
+    setReloading(true);
+    try { await onReload(); if (active.current) { setCursors([0]); setAttempt(value => value + 1); } }
+    catch (cause) { if (active.current) setError(cause instanceof Error ? cause.message : "文案版本未能重新读回。"); }
+    finally { if (active.current) setReloading(false); }
+  }
+  return <section aria-label="库稿正文窗口">
+    {loading ? <p role="status">正在读取文案正文窗口…</p> : null}
+    {error ? <div role="alert"><p>{error}</p><button type="button" disabled={reloading} onClick={() => void reload()}>重新读取文案版本</button></div> : null}
+    {page ? <><p>正文共 {page.total_count} 段{page.items.length ? ` · 本页第 ${page.items[0].ordinal}–${page.items[page.items.length - 1].ordinal} 段` : ""}</p>
+      {page.items.map(({ ordinal, section }) => <article key={section.id}><span>第 {ordinal} 段</span><strong>{section.title}</strong><p>{section.content}</p>{section.reference_ids.length ? <details><summary>技术诊断信息</summary><small>引用记录：{section.reference_ids.join("、")}</small></details> : null}</article>)}
+      {page.total_count > page.items.length ? <div><button type="button" disabled={cursors.length === 1} onClick={() => setCursors(current => current.slice(0, -1))}>上一页文案正文</button><button type="button" disabled={page.next_after_ordinal === null} onClick={() => setCursors(current => [...current, page.next_after_ordinal!])}>下一页文案正文</button></div> : null}
+    </> : null}
   </section>;
 }

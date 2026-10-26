@@ -1,4 +1,4 @@
-import type { ScriptLibraryEntry, ScriptLibrarySource } from '../types/script-library';
+import type { ScriptLibraryEntry, ScriptLibrarySource, ScriptLibraryEntryHeader, ScriptLibraryHeaderPage, ScriptLibraryCursor, ScriptLibrarySectionWindow } from '../types/script-library';
 import type { CreationTaskScript } from '../types/creation-tasks';
 import { creationPlanRequest } from './creation-transport';
 export function saveScriptLibraryEntry(input: {
@@ -10,12 +10,21 @@ export function saveScriptLibraryEntry(input: {
         method: "POST", body: JSON.stringify(input),
     });
 }
-export function listScriptLibraryEntries(query = "", category = "") {
+export function listScriptLibraryEntries(query = "", category = "", cursor?: ScriptLibraryCursor): Promise<ScriptLibraryHeaderPage> {
     const params = new URLSearchParams({ q: query, category });
-    return creationPlanRequest<{
-        items: ScriptLibraryEntry[];
-        total_count: number;
-    }>(`/api/production/script-library?${params}`);
+    if (cursor) {
+        params.set("after_created_at", cursor.after_created_at);
+        params.set("after_entry_id", cursor.after_entry_id);
+    }
+    return creationPlanRequest(`/api/production/script-library?${params}`);
+}
+export function getScriptLibraryEntry(entryId: string): Promise<ScriptLibraryEntryHeader> {
+    return creationPlanRequest(`/api/production/script-library/${encodeURIComponent(entryId)}`);
+}
+export function getScriptLibrarySections(entryId: string, input: { after_ordinal?: number; expected_updated_at: string }): Promise<ScriptLibrarySectionWindow> {
+    const params = new URLSearchParams({ expected_updated_at: input.expected_updated_at });
+    if (input.after_ordinal !== undefined) params.set("after_ordinal", String(input.after_ordinal));
+    return creationPlanRequest(`/api/production/script-library/${encodeURIComponent(entryId)}/sections?${params}`);
 }
 export function getScriptLibrarySources(entryId: string) {
     return creationPlanRequest<ScriptLibrarySource[]>(`/api/production/script-library/${encodeURIComponent(entryId)}/sources`);

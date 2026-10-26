@@ -21,6 +21,22 @@ export type ScriptLibraryEntry = {
     created_at: string;
     updated_at: string;
 };
+export type ScriptLibraryEntryHeader = Omit<ScriptLibraryEntry, "sections"> & {
+    sections: null;
+    sections_loaded: false;
+    sections_total_count: number;
+};
+export type ScriptLibraryCursor = { after_created_at: string; after_entry_id: string };
+export type ScriptLibraryHeaderPage = { items: ScriptLibraryEntryHeader[]; next: ScriptLibraryCursor | null; total_count: number | null };
+export type ScriptLibrarySectionWindow = {
+    entry_id: string;
+    version: number;
+    updated_at: string;
+    total_count: number;
+    items: { ordinal: number; section: ScriptLibrarySection; digest: string }[];
+    next_after_ordinal: number | null;
+    has_more: boolean;
+};
 export type ScriptLibrarySource = {
     reference_id: string;
     status: "readable" | "missing" | "version_changed";
