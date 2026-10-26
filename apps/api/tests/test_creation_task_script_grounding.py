@@ -2140,12 +2140,14 @@ def test_confirmation_reviews_the_entire_changed_candidate_identity(api_state, m
 
 @pytest.mark.parametrize('change', ['unchanged', 'supported', 'unsupported', 'source_revoked'])
 def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic(api_state, monkeypatch, change):
+    from uuid import uuid4
     state = api_state
-    for path, endpoint in (
-            ('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm', main.confirm_creation_task_script),
-            ('/api/production/script-library', main.save_script_library),
-            ('/api/production/script-library/{entry_id}/reuse', main.reuse_script_library)):
-        state.client.app.add_api_route(path, endpoint, methods=['POST'])
+    from app.creation.script_library_routes import build_script_library_router
+    state.client.app.include_router(build_script_library_router(
+        list_headers=main._list_script_library_headers,read_header=main._read_script_library_header,
+        read_sections=main._read_script_library_sections,save_entry=main.save_script_library,
+        reuse_entry=main.reuse_script_library,read_request=main._read_library_request))
+    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',main.confirm_creation_task_script,methods=['POST'])
     original_calls = []
     set_api_provider(monkeypatch, draft(), reviewed(draft()), original_calls)
     generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
@@ -2155,14 +2157,14 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
         'title': original.title, 'sections': [vars(section) for section in original.sections],
         'expected_updated_at': original.updated_at.isoformat()})
     assert confirmed.status_code == 200, confirmed.text
-    saved = state.client.post('/api/production/script-library', json={'source_script_id': original.id, 'name': '真实来源的库稿'})
+    saved = state.client.post('/api/production/script-library', json={'request_id':str(uuid4()),'expected_source_updated_at':state.repository.script_records.read_creation_task_script_header('local',original.id)['updated_at'],'source_script_id': original.id, 'name': '真实来源的库稿'})
     assert saved.status_code == 200, saved.text
-    entry_id = saved.json()['id']
+    entry_id = saved.json()['entry_id']
     reused = state.client.post(f'/api/production/script-library/{entry_id}/reuse', json={
-        'name': '复用后直接微调', 'duration_target_seconds': 60, 'requirements_confirmed': True})
+        'request_id':str(uuid4()),'expected_entry_updated_at':saved.json()['entry']['updated_at'],'name': '复用后直接微调', 'duration_target_seconds': 60, 'requirements_confirmed': True})
     assert reused.status_code == 200, reused.text
     new_task_id = reused.json()['task_id']
-    script = state.repository.get_creation_task_script('local', reused.json()['script']['id'])
+    script = state.repository.get_creation_task_script('local', reused.json()['script_id'])
     task = state.repository.get_creation_task('local', new_task_id)
     assert task.selected_topic_id is None and script.run_id == '' and script.topic_id == ''
     body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
@@ -2687,3 +2689,123 @@ def test_script_owner_task_port_failure_rolls_back_same_transaction(api_state, m
     with state.repository._connect() as conn:
         for table in ('creation_task_scripts','script_generation_runs','creation_task_script_sections'):
             assert conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]==0
+
+
+def test_library_rows_reuse_patch_and_confirm_without_hydrating_library_or_script(api_state,monkeypatch):
+    from dataclasses import replace
+    from uuid import UUID,uuid4
+    from pydantic import BaseModel
+    from app.schemas import CreationTaskScriptConfirmSavedRequest,CreationTaskScriptSectionsPatchRequest
+    class Reuse(BaseModel):
+        request_id: UUID
+        expected_entry_updated_at: str
+        name: str
+        aspect_ratio: str
+        duration_target_seconds: int
+        requirements_confirmed: bool
+    state=api_state;calls=[]
+    def reviewer(request):
+        data=json.loads(json.loads(request.content)['messages'][1]['content']);calls.append(data)
+        return _review_tool_response({'sections':[{'index':p['index'],'supports':[{'candidate_quote_id':p['content'][0]['quote_id'],
+            'source_quote_id':p['allowed_source_quote_ids']['evidence_1'][0]}]} for p in data['script']['sections']]})
+    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(reviewer))
+    monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    source=saved_row_draft(state)
+    case.confirm_saved('local','task',source.id,CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=source.updated_at),member_id=state.owner.member_id)
+    store=state.repository.script_records
+    header=store.save_script_library_entry_header('local',source_script_id=source.id,name='长库稿',category='fixture')
+    assert header['sections'] is None and header['sections_total_count']==25
+    case.read_library_header=store.read_script_library_entry_header
+    plan=replace(state.repository.get_creation_plan('local','plan'),id='library-plan',name='新的复用',creation_task_id=None)
+    payload=Reuse(request_id=uuid4(),expected_entry_updated_at=header['updated_at'],name=plan.name,aspect_ratio=plan.aspect_ratio,
+        duration_target_seconds=plan.duration_target_seconds,requirements_confirmed=True)
+    with monkeypatch.context() as bounded:
+        bounded.setattr(store,'get_script_library_entry',lambda *a,**k:pytest.fail('library full hydration forbidden'))
+        bounded.setattr(store,'get_creation_task_script',lambda *a,**k:pytest.fail('script full hydration forbidden'))
+        bounded.setattr(store,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('full parser forbidden'))
+        saved=case.reuse_library_entry('local',header['id'],payload,member_id=state.owner.member_id,plan=plan)
+        assert case.reuse_library_entry('local',header['id'],payload,member_id=state.owner.member_id,plan=replace(plan,id='different-ephemeral-plan'))==saved
+        assert case.library_reuse_request_result('local',payload.request_id,member_id=state.owner.member_id)==saved
+        page=store.read_creation_task_script_sections('local',saved['task_id'],saved['script_id'],limit=1)
+        part=page['items'][0]['section'];part['visual_prompt']=''
+        changed=case.patch('local',saved['task_id'],saved['script_id'],CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],sections=[part]),member_id=state.owner.member_id)
+        result=case.confirm_saved('local',saved['task_id'],saved['script_id'],CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=changed['updated_at']),member_id=state.owner.member_id)
+        assert result['status']=='confirmed'
+    assert all(not call['script'].get('topic_id') for call in calls)
+    with state.repository._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM script_generation_runs WHERE task_id=?',(saved['task_id'],)).fetchone()[0]==0
+        assert conn.execute('SELECT count(*) FROM creation_task_script_sections WHERE script_id=?',(saved['script_id'],)).fetchone()[0]==25
+
+
+def test_library_save_original_request_is_atomic_and_does_not_create_a_second_version(api_state,monkeypatch):
+    import sqlite3
+    from uuid import UUID,uuid4
+    from pydantic import BaseModel
+    from app.schemas import CreationTaskScriptConfirmSavedRequest
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+    class Save(BaseModel):
+        request_id: UUID
+        expected_source_updated_at: str
+        source_script_id: str
+        name: str
+        category: str=''
+    state=api_state;calls=[]
+    def reviewer(request):
+        data=json.loads(json.loads(request.content)['messages'][1]['content']);calls.append(data)
+        return _review_tool_response({'sections':[{'index':p['index'],'supports':[{'candidate_quote_id':p['content'][0]['quote_id'],
+            'source_quote_id':p['allowed_source_quote_ids']['evidence_1'][0]}]} for p in data['script']['sections']]})
+    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(reviewer))
+    monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    source=saved_row_draft(state)
+    confirmed=case.confirm_saved('local','task',source.id,CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=source.updated_at),member_id=state.owner.member_id)
+    store=state.repository.script_records
+    case.read_script_header=store.read_creation_task_script_header
+    case.read_library_header=store.read_script_library_entry_header
+    request=Save(request_id=uuid4(),expected_source_updated_at=confirmed['updated_at'],source_script_id=source.id,name='完整库稿')
+    result=case.save_library_entry('local',request,member_id=state.owner.member_id)
+    assert result['entry']['sections'] is None and result['entry']['sections_total_count']==25 and result['version']==1
+    assert case.save_library_entry('local',request,member_id=state.owner.member_id)==result
+    assert case.library_save_request_result('local',request.request_id,member_id=state.owner.member_id)==result
+    with pytest.raises(ScriptDraftRejected):
+        case.save_library_entry('local',request.model_copy(update={'name':'换输入'}),member_id=state.owner.member_id)
+    with pytest.raises(KeyError): case.library_save_request_result('local',request.request_id,member_id='another-member')
+    with state.repository._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM script_library_entries').fetchone()[0]==1
+        conn.execute("CREATE TRIGGER fail_library_receipt BEFORE INSERT ON task_events WHEN NEW.event_type='script_library_saved' BEGIN SELECT RAISE(ABORT,'synthetic receipt failure'); END")
+    with pytest.raises(ValueError) as failure:
+        case.save_library_entry('local',request.model_copy(update={'request_id':uuid4()}),member_id=state.owner.member_id)
+    assert isinstance(failure.value.__cause__,sqlite3.IntegrityError)
+    with state.repository._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM script_library_entries').fetchone()[0]==1
+        assert conn.execute('SELECT count(*) FROM script_library_sections').fetchone()[0]==25
+
+
+@pytest.mark.parametrize('factual',[False,True])
+def test_owned_candidate_without_sources_still_gets_independent_fact_and_goal_review(factual):
+    from app.topics import CreationTaskGeneratedScript,CreationTaskGeneratedScriptSection,CreationTaskScriptReviewWindow
+    document=CreationTaskGeneratedScript(title='聊聊下一步',language=inputs().language,sections=(CreationTaskGeneratedScriptSection(
+        title='开场',content='全国销量第一。' if factual else '接下来想聊什么？',visual_prompt='',evidence_reference_ids=()),))
+    calls=[]
+    def review(request):
+        data=json.loads(json.loads(request.content)['messages'][1]['content']);calls.append(data)
+        p=data['script']['sections'][0]
+        if factual:
+            report={'index':1,'issues':[{'kind':'unsupported_fact','candidate_quote_id':p['content'][0]['quote_id'],
+                'reference_ids':[],'missing_or_conflicting':'没有已授权资料支持这个销量排行。'}]}
+        else:
+            ids=[x['quote_id'] for x in data['script']['title']]+[x['quote_id'] for field in ('title','content','visual_prompt') for x in p[field]]
+            report={'index':1,'no_factual_assertions':{'reason':'完整核查了当前片段，仅为提问，不含对外事实断言。','candidate_quote_ids':ids}}
+        return _review_tool_response({'sections':[report]})
+    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
+    args=replace(inputs(),sources=(),topic_origin='provided',topic_title='纯提问',goal='只写一个纯提问开场，不开始制作。',
+        review_window=CreationTaskScriptReviewWindow('script','new',('first',),1))
+    if factual:
+        with pytest.raises(CreationTaskScriptGenerationError) as err: checker.check_draft(args,document)
+        assert err.value.code=='script_fact_unsupported'
+    else:
+        checker.check_draft(args,document)
+    assert len(calls)==1 and calls[0]['sources']==[]
+    with pytest.raises(CreationTaskScriptGenerationError) as err: checker.generate(args)
+    assert err.value.code=='input_invalid' and len(calls)==1

@@ -210,3 +210,136 @@ class ScriptAdoptionFacts:
 def script_confirmation_digest(expected_updated_at, adoption_kind):
     revision = expected_updated_at.isoformat() if isinstance(expected_updated_at,datetime) else expected_updated_at.strip()
     return hashlib.sha256(json.dumps([revision,adoption_kind]).encode()).hexdigest()
+
+
+SCRIPT_LIBRARY_SECTION_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS script_library_sections (
+        workspace_id TEXT NOT NULL, entry_id TEXT NOT NULL, section_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal>0), section_json TEXT NOT NULL, digest TEXT NOT NULL,
+        PRIMARY KEY(workspace_id,entry_id,section_id), UNIQUE(workspace_id,entry_id,ordinal))""",
+    "CREATE INDEX IF NOT EXISTS idx_library_browse ON script_library_entries(workspace_id,created_at DESC,id DESC)",
+    """CREATE TRIGGER IF NOT EXISTS library_header_rows_insert BEFORE INSERT ON script_library_entries
+        WHEN json_type(NEW.payload,'$.sections') IS NOT NULL OR json_extract(NEW.payload,'$._sections_storage') IS NOT 'rows'
+        BEGIN SELECT RAISE(ABORT,'library body must use canonical rows'); END""",
+    """CREATE TRIGGER IF NOT EXISTS library_header_rows_update BEFORE UPDATE OF payload ON script_library_entries
+        WHEN json_type(NEW.payload,'$.sections') IS NOT NULL OR json_extract(NEW.payload,'$._sections_storage') IS NOT 'rows'
+        BEGIN SELECT RAISE(ABORT,'library body must use canonical rows'); END""",
+    "CREATE INDEX IF NOT EXISTS idx_library_section_window ON script_library_sections(workspace_id,entry_id,ordinal)",
+)
+
+
+def write_library_sections(connection, workspace_id, entry_id, sections):
+    if not connection.in_transaction:
+        raise ValueError("文案库正文写入必须属于原事务")
+    connection.execute(
+        "DELETE FROM script_library_sections WHERE workspace_id=? AND entry_id=?",
+        (workspace_id, entry_id),
+    )
+    for ordinal, part in enumerate(sections, 1):
+        connection.execute(
+            "INSERT INTO script_library_sections VALUES (?,?,?,?,?,?)",
+            (
+                workspace_id,
+                entry_id,
+                part["id"],
+                ordinal,
+                _section_json(part),
+                section_digest(part),
+            ),
+        )
+
+
+def migrate_library_sections(connection):
+    for statement in SCRIPT_LIBRARY_SECTION_SCHEMA:
+        connection.execute(statement)
+    while True:
+        row = connection.execute(
+            "SELECT workspace_id,id FROM script_library_entries WHERE COALESCE(json_extract(payload,'$._sections_storage'),'')!='rows' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return
+        parts = connection.execute(
+            "SELECT j.value FROM script_library_entries e,json_each(e.payload,'$.sections') j WHERE e.workspace_id=? AND e.id=? ORDER BY CAST(j.key AS INTEGER)",
+            (row[0], row[1]),
+        )
+        write_library_sections(
+            connection, row[0], row[1], (json.loads(p[0]) for p in parts)
+        )
+        connection.execute(
+            "UPDATE script_library_entries SET payload=json_set(json_remove(payload,'$.sections'),'$._sections_storage','rows') WHERE workspace_id=? AND id=?",
+            (row[0], row[1]),
+        )
+
+
+def library_header(connection, workspace_id, entry_id):
+    row = connection.execute(
+        "SELECT payload FROM script_library_entries WHERE workspace_id=? AND id=?",
+        (workspace_id, entry_id),
+    ).fetchone()
+    if row is None:
+        raise KeyError(entry_id)
+    data = json.loads(row["payload"])
+    if data.pop("_sections_storage", None) != "rows" or "sections" in data:
+        raise ScriptWindowConflict("文案库尚未完成正式正文行迁移")
+    count = connection.execute(
+        "SELECT count(*) FROM script_library_sections WHERE workspace_id=? AND entry_id=?",
+        (workspace_id, entry_id),
+    ).fetchone()[0]
+    return {
+        **data,
+        "sections": None,
+        "sections_loaded": False,
+        "sections_total_count": count,
+    }
+
+
+def read_library_sections(
+    connection,
+    workspace_id,
+    entry_id,
+    *,
+    expected_updated_at=None,
+    after_ordinal=0,
+    limit=SCRIPT_SECTION_WINDOW_LIMIT,
+):
+    if not connection.in_transaction:
+        raise ValueError("文案库窗口读取必须属于同一快照")
+    if (
+        type(limit) is not int
+        or not 1 <= limit <= SCRIPT_SECTION_WINDOW_LIMIT
+        or type(after_ordinal) is not int
+        or after_ordinal < 0
+    ):
+        raise ValueError("请使用合法的文案库正文窗口")
+    if after_ordinal and expected_updated_at is None:
+        raise ValueError("文案库续页必须绑定首读版本")
+    header = library_header(connection, workspace_id, entry_id)
+    if expected_updated_at is not None and script_revision(
+        expected_updated_at
+    ) != script_revision(header["updated_at"]):
+        raise ScriptWindowConflict("文案库版本已变化，未拼接不同版本")
+    if after_ordinal > header["sections_total_count"]:
+        raise ValueError("文案库窗口超过正文范围")
+    rows = connection.execute(
+        "SELECT ordinal,section_json,digest FROM script_library_sections WHERE workspace_id=? AND entry_id=? AND ordinal>? ORDER BY ordinal LIMIT ?",
+        (workspace_id, entry_id, after_ordinal, limit),
+    ).fetchall()
+    items = [
+        {
+            "ordinal": r["ordinal"],
+            "section": json.loads(r["section_json"]),
+            "digest": r["digest"],
+        }
+        for r in rows
+    ]
+    end = items[-1]["ordinal"] if items else after_ordinal
+    more = end < header["sections_total_count"]
+    return {
+        "entry_id": entry_id,
+        "version": header["version"],
+        "updated_at": header["updated_at"],
+        "total_count": header["sections_total_count"],
+        "items": items,
+        "next_after_ordinal": end if more else None,
+        "has_more": more,
+    }

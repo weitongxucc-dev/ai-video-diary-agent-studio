@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 22
+PRODUCTION_SCHEMA_VERSION = 23
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -830,6 +830,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
     """),
     (22, ""),  # Transactional section-row migration is applied below.
+    (23, ""),
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
@@ -948,6 +949,16 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
     conn.commit()
     for version, sql in _MIGRATIONS:
         if version in applied:
+            continue
+        if version == 23:
+            from app.creation.script_windows import migrate_library_sections
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("""CREATE TABLE IF NOT EXISTS script_library_entries (
+                    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, source_task_id TEXT NOT NULL,
+                    name TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)""")
+                migrate_library_sections(conn)
+                conn.execute("INSERT INTO production_schema_migrations(version) VALUES (23)")
             continue
         if version == 22:
             from app.creation.script_windows import migrate_script_sections

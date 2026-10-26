@@ -119,12 +119,20 @@ class ScriptRecordStore:
         self, conn: sqlite3.Connection, task: CreationTask, script_id: str
     ) -> bool:
         row = conn.execute(
-            "SELECT r.payload FROM creation_task_scripts s LEFT JOIN script_generation_runs r ON r.id=s.run_id "
+            "SELECT r.payload,json_extract(s.payload,'$.reused_from_entry_id') AS library_id FROM creation_task_scripts s LEFT JOIN script_generation_runs r ON r.id=s.run_id "
             "AND r.workspace_id=s.workspace_id AND r.task_id=s.task_id WHERE s.workspace_id=? AND s.task_id=? AND s.id=?",
             (task.workspace_id, task.id, script_id),
         ).fetchone()
         if row is None:
             raise KeyError(script_id)
+        if row["library_id"]:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM script_library_entries WHERE workspace_id=? AND id=? AND json_extract(payload,'$._sections_storage')='rows'",
+                    (task.workspace_id, row["library_id"]),
+                ).fetchone()
+                is not None
+            )
         references = (
             json.loads(row["payload"])["input_references"] if row["payload"] else []
         )
@@ -976,13 +984,39 @@ class ScriptRecordStore:
             or task.stage_status != "waiting_for_user"
             or task.confirmed_script_id is not None
             or metadata["selection_status"] != "draft"
-            or metadata["topic_id"] != task.selected_topic_id
+            or (
+                not metadata.get("reused_from_entry_id")
+                and metadata["topic_id"] != task.selected_topic_id
+            )
         ):
             raise ValueError("当前创作任务不允许修改这份待确认文案")
-        if metadata.get("source_reply_reference") is None and any(
-            not section.visual_prompt.strip() for section in sections
+        if (
+            metadata.get("source_reply_reference") is None
+            and not metadata.get("reused_from_entry_id")
+            and any(not section.visual_prompt.strip() for section in sections)
         ):
             raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
+        if metadata.get("reused_from_entry_id"):
+            if (
+                task.scenario != "script_library_reuse"
+                or metadata["run_id"]
+                or metadata["topic_id"]
+            ):
+                raise ValueError("库稿来源身份与原任务不符")
+            row = conn.execute(
+                "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
+                (workspace_id, task.plan_id),
+            ).fetchone()
+            plan = self._creation_plan_from_payload(json.loads(row["payload"]))
+            allowed = {
+                f"knowledge:{r.id}:{r.version}" for r in plan.knowledge_references
+            } | {f"source:{r.id}" for r in plan.source_references}
+            if any(
+                not set(part.evidence_reference_ids).issubset(allowed)
+                for part in sections
+            ):
+                raise ValueError("库稿引用了当前任务以外的来源")
+            return metadata
         run_row = conn.execute(
             "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
             "AND json_extract(payload, '$.status')='succeeded' "
@@ -1497,7 +1531,10 @@ class ScriptRecordStore:
                 "SELECT json_extract(section_json,'$.content') AS content,json_extract(section_json,'$.visual_prompt') AS visual FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? ORDER BY ordinal",
                 (workspace_id, script_id),
             ):
-                if not row["content"].strip() or not row["visual"].strip():
+                if not row["content"].strip() or (
+                    not metadata.get("reused_from_entry_id")
+                    and not row["visual"].strip()
+                ):
                     raise ValueError("完整正文或画面建议缺失")
                 digest.update(row["content"].encode())
             now = utc_now()
@@ -1788,125 +1825,479 @@ class ScriptRecordStore:
             )
             return result
 
-    def save_script_library_entry(
+    def save_script_library_entry_header(
         self,
-        workspace_id: str,
+        workspace_id,
         *,
-        source_script_id: str,
-        name: str,
-        category: str,
-    ) -> ScriptLibraryEntry:
+        source_script_id,
+        name,
+        category,
+        request_id=None,
+        member_id=None,
+        request_digest=None,
+        expected_source_updated_at=None,
+        write_guard=None,
+    ):
+        from app.creation.script_windows import write_library_sections, library_header
+
         if not name.strip():
             raise ValueError("请为保存的文案命名")
-        script = self.get_creation_task_script(workspace_id, source_script_id)
-        if script.selection_status != "confirmed":
-            raise ValueError("只能保存已确认的文案")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._require_creation_task(conn, workspace_id, script.task_id)
-            previous = conn.execute(
-                "SELECT payload FROM script_library_entries WHERE workspace_id=? AND source_task_id=? AND name=? "
-                "ORDER BY created_at DESC, id DESC LIMIT 1",
-                (workspace_id, script.task_id, name.strip()),
+            if request_id is not None:
+                if (
+                    not member_id
+                    or request_digest is None
+                    or expected_source_updated_at is None
+                ):
+                    raise ValueError("保存请求必须绑定真实成员、原输入和源版本")
+                old = self.library_save_request_result(
+                    workspace_id, request_id, member_id, connection=conn
+                )
+                if old:
+                    if old["request_digest"] != request_digest:
+                        raise ScriptWindowConflict("原保存请求不能更换输入")
+                    return old["result"]
+            if write_guard is not None:
+                write_guard(conn)
+            row = conn.execute(
+                "SELECT task_id,payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
+                (workspace_id, source_script_id),
             ).fetchone()
-            prior = (
-                self._script_library_entry_from_payload(json.loads(previous["payload"]))
-                if previous
-                else None
-            )
+            if row is None:
+                raise KeyError(source_script_id)
+            meta = json.loads(row["payload"])
+            if expected_source_updated_at is not None and _revision_value(
+                meta["updated_at"]
+            ) != _revision_value(expected_source_updated_at):
+                raise ScriptWindowConflict("源正文版本已变化，没有保存过期副本")
+            if (
+                meta.get("_sections_storage") != "rows"
+                or meta["selection_status"] != "confirmed"
+            ):
+                raise ValueError("只能保存已确认的行化文案")
+            self._require_creation_task(conn, workspace_id, row["task_id"])
+            previous = conn.execute(
+                "SELECT id,json_extract(payload,'$.version') AS version FROM script_library_entries WHERE workspace_id=? AND source_task_id=? AND name=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                (workspace_id, row["task_id"], name.strip()),
+            ).fetchone()
             entry = ScriptLibraryEntry(
                 id=f"script_library_{uuid4().hex[:12]}",
                 workspace_id=workspace_id,
                 name=name.strip(),
                 category=category.strip(),
-                source_script_id=script.id,
-                source_task_id=script.task_id,
-                source_run_id=script.run_id,
-                source_topic_id=script.topic_id,
-                version=prior.version + 1 if prior else 1,
-                supersedes_entry_id=prior.id if prior else None,
-                title=script.title,
-                language=script.language,
-                sections=[
-                    ScriptLibrarySection(
-                        id=section.id,
-                        title=section.title,
-                        content=section.content,
-                        visual_prompt=section.visual_prompt,
-                        reference_ids=list(section.evidence_reference_ids),
-                    )
-                    for section in script.sections
-                ],
+                source_script_id=source_script_id,
+                source_task_id=row["task_id"],
+                source_run_id=meta["run_id"],
+                source_topic_id=meta["topic_id"],
+                version=previous["version"] + 1 if previous else 1,
+                supersedes_entry_id=previous["id"] if previous else None,
+                title=meta["title"],
+                language=meta["language"],
+                sections=[],
             )
+            data = asdict(entry)
+            data.pop("sections")
+            data["_sections_storage"] = "rows"
             conn.execute(
-                "INSERT INTO script_library_entries (id, workspace_id, source_task_id, name, payload, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO script_library_entries VALUES (?,?,?,?,?,?)",
                 (
                     entry.id,
                     workspace_id,
-                    script.task_id,
+                    entry.source_task_id,
                     entry.name,
-                    _json_payload(entry),
+                    _json_object(data),
                     entry.created_at.isoformat(),
                 ),
             )
-        return entry
+            rows = conn.execute(
+                "SELECT section_json FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? ORDER BY ordinal",
+                (workspace_id, source_script_id),
+            )
 
-    @staticmethod
-    def _script_library_entry_from_payload(
-        data: dict[str, object],
-    ) -> ScriptLibraryEntry:
-        sections = data.pop("sections", [])
-        return ScriptLibraryEntry(
-            **_with_datetime(data, "created_at", "updated_at"),
-            sections=[ScriptLibrarySection(**section) for section in sections],
+            def parts():
+                for row in rows:
+                    part = json.loads(row["section_json"])
+                    yield {
+                        "id": part["id"],
+                        "title": part["title"],
+                        "content": part["content"],
+                        "visual_prompt": part["visual_prompt"],
+                        "reference_ids": part["evidence_reference_ids"],
+                    }
+
+            write_library_sections(conn, workspace_id, entry.id, parts())
+            header = library_header(conn, workspace_id, entry.id)
+            if request_id is None:
+                return header
+            result = {
+                "request_id": request_id,
+                "status": "saved",
+                "entry_id": entry.id,
+                "version": entry.version,
+                "updated_at": header["updated_at"],
+                "source_task_id": entry.source_task_id,
+                "source_script_id": source_script_id,
+                "source_updated_at": meta["updated_at"],
+                "entry": header,
+            }
+            key = (
+                "library_save_"
+                + hashlib.sha256(
+                    json.dumps([workspace_id, request_id, member_id]).encode()
+                ).hexdigest()
+            )
+            self.append_task_event(
+                TaskEvent(
+                    key,
+                    workspace_id,
+                    entry.source_task_id,
+                    None,
+                    "script_library_saved",
+                    {"request_digest": request_digest, "result": result},
+                ),
+                connection=conn,
+            )
+            return result
+
+    def save_script_library_entry(
+        self, workspace_id, *, source_script_id, name, category
+    ):
+        header = self.save_script_library_entry_header(
+            workspace_id,
+            source_script_id=source_script_id,
+            name=name,
+            category=category,
         )
+        return self.get_script_library_entry(workspace_id, header["id"])
 
-    def get_script_library_entry(
-        self, workspace_id: str, entry_id: str
-    ) -> ScriptLibraryEntry:
+    def _script_library_entry_from_payload(self, data, *, connection=None):
+        if data.pop("_sections_storage", None) != "rows" or "sections" in data:
+            raise ValueError("文案库必须先完成正式正文行迁移")
+        with (
+            nullcontext(connection)
+            if connection is not None
+            else self._connect() as conn
+        ):
+            rows = conn.execute(
+                "SELECT section_json FROM script_library_sections WHERE workspace_id=? AND entry_id=? ORDER BY ordinal",
+                (data["workspace_id"], data["id"]),
+            )
+            return ScriptLibraryEntry(
+                **_with_datetime(data, "created_at", "updated_at"),
+                sections=[
+                    ScriptLibrarySection(**json.loads(row["section_json"]))
+                    for row in rows
+                ],
+            )
+
+    def get_script_library_entry(self, workspace_id, entry_id):
         with self._connect() as conn:
+            conn.execute("BEGIN")
             row = conn.execute(
                 "SELECT payload FROM script_library_entries WHERE workspace_id=? AND id=?",
                 (workspace_id, entry_id),
             ).fetchone()
-        if row is None:
-            raise KeyError(entry_id)
-        return self._script_library_entry_from_payload(json.loads(row["payload"]))
+            if row is None:
+                raise KeyError(entry_id)
+            return self._script_library_entry_from_payload(
+                json.loads(row["payload"]), connection=conn
+            )
 
-    def list_script_library_entries(
-        self,
-        workspace_id: str,
-        *,
-        query: str = "",
-        category: str = "",
-    ) -> list[ScriptLibraryEntry]:
+    def read_script_library_entry_header(
+        self, workspace_id, entry_id, *, connection=None
+    ):
+        from app.creation.script_windows import library_header
+
+        with (
+            nullcontext(connection)
+            if connection is not None
+            else self._connect() as conn
+        ):
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+            return library_header(conn, workspace_id, entry_id)
+
+    def read_script_library_sections(self, workspace_id, entry_id, **window):
+        from app.creation.script_windows import read_library_sections
+
         with self._connect() as conn:
+            conn.execute("BEGIN")
+            return read_library_sections(conn, workspace_id, entry_id, **window)
+
+    def script_library_reference_ids(self, workspace_id, entry_id):
+        from app.creation.script_windows import library_header
+
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            library_header(conn, workspace_id, entry_id)
             rows = conn.execute(
-                "SELECT payload FROM script_library_entries WHERE workspace_id=? ORDER BY created_at DESC, id DESC",
+                "SELECT DISTINCT r.value FROM script_library_sections p,json_each(p.section_json,'$.reference_ids') r WHERE p.workspace_id=? AND p.entry_id=? ORDER BY r.value",
+                (workspace_id, entry_id),
+            )
+            for row in rows:
+                yield row[0]
+
+    def list_script_library_entries(self, workspace_id, *, query="", category=""):
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            rows = conn.execute(
+                "SELECT payload FROM script_library_entries WHERE workspace_id=? ORDER BY created_at DESC,id DESC",
                 (workspace_id,),
             ).fetchall()
-        entries = [
-            self._script_library_entry_from_payload(json.loads(row["payload"]))
-            for row in rows
-        ]
+            entries = [
+                self._script_library_entry_from_payload(
+                    json.loads(row["payload"]), connection=conn
+                )
+                for row in rows
+            ]
         keyword = query.strip().casefold()
         return [
-            entry
-            for entry in entries
-            if (not category or entry.category == category)
+            e
+            for e in entries
+            if (not category or e.category == category)
             and (
                 not keyword
                 or keyword
                 in " ".join(
-                    [
-                        entry.name,
-                        entry.title,
-                        *(section.content for section in entry.sections),
-                    ]
+                    [e.name, e.title, *(p.content for p in e.sections)]
                 ).casefold()
             )
         ]
+
+    def list_script_library_entry_headers(
+        self,
+        workspace_id,
+        *,
+        query="",
+        category="",
+        after_created_at=None,
+        after_entry_id=None,
+        limit=SCRIPT_SECTION_WINDOW_LIMIT,
+    ):
+        from app.creation.script_windows import library_header
+
+        if type(limit) is not int or not 1 <= limit <= SCRIPT_SECTION_WINDOW_LIMIT:
+            raise ValueError("请使用合法库列表窗口")
+        if (after_created_at is None) != (after_entry_id is None):
+            raise ValueError("库列表续页需要完整排序游标")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            conn.create_function(
+                "library_casefold",
+                1,
+                lambda value: value.casefold(),
+                deterministic=True,
+            )
+            clauses = ["e.workspace_id=?"]
+            args = [workspace_id]
+            if category:
+                clauses.append("json_extract(e.payload,'$.category')=?")
+                args.append(category)
+            if query.strip():
+                clauses.append(
+                    "(instr(library_casefold(e.name||' '||json_extract(e.payload,'$.title')),?)>0 OR EXISTS(SELECT 1 FROM script_library_sections p WHERE p.workspace_id=e.workspace_id AND p.entry_id=e.id AND instr(library_casefold(json_extract(p.section_json,'$.content')),?)>0))"
+                )
+                args.extend([query.strip().casefold()] * 2)
+            if after_created_at is not None:
+                clauses.append("(e.created_at,e.id)<(?,?)")
+                args.extend([after_created_at, after_entry_id])
+            rows = conn.execute(
+                "SELECT e.id,e.created_at FROM script_library_entries e WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY e.created_at DESC,e.id DESC LIMIT ?",
+                (*args, limit + 1),
+            ).fetchall()
+            page = rows[:limit]
+            more = len(rows) > limit
+            cursor = (
+                {
+                    "after_created_at": page[-1]["created_at"],
+                    "after_entry_id": page[-1]["id"],
+                }
+                if more
+                else None
+            )
+            return {
+                "items": [
+                    library_header(conn, workspace_id, row["id"]) for row in page
+                ],
+                "next": cursor,
+            }
+
+    def read_creation_task_script_header(self, workspace_id, script_id):
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
+                (workspace_id, script_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(script_id)
+            meta = json.loads(row["payload"])
+            if meta.pop("_sections_storage", None) != "rows" or "sections" in meta:
+                raise ScriptWindowConflict("源文案未采用唯一正文行存储")
+            count = conn.execute(
+                "SELECT count(*) FROM creation_task_script_sections WHERE workspace_id=? AND script_id=?",
+                (workspace_id, script_id),
+            ).fetchone()[0]
+            return {
+                **meta,
+                "sections": None,
+                "sections_loaded": False,
+                "sections_total_count": count,
+            }
+
+    def library_save_request_result(
+        self, workspace_id, request_id, member_id, *, connection=None
+    ):
+        key = (
+            "library_save_"
+            + hashlib.sha256(
+                json.dumps([workspace_id, request_id, member_id]).encode()
+            ).hexdigest()
+        )
+        with (
+            nullcontext(connection)
+            if connection is not None
+            else self._connect() as conn
+        ):
+            row = conn.execute(
+                "SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                (workspace_id, key),
+            ).fetchone()
+            return json.loads(row["payload_json"]) if row else None
+
+    def library_reuse_request_result(
+        self, workspace_id, request_id, member_id, *, connection=None
+    ):
+        key = (
+            "library_reuse_"
+            + hashlib.sha256(
+                json.dumps([workspace_id, request_id, member_id]).encode()
+            ).hexdigest()
+        )
+        with (
+            nullcontext(connection)
+            if connection is not None
+            else self._connect() as conn
+        ):
+            row = conn.execute(
+                "SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                (workspace_id, key),
+            ).fetchone()
+            return json.loads(row["payload_json"]) if row else None
+
+    def reuse_library_rows(
+        self,
+        workspace_id,
+        entry_id,
+        *,
+        plan,
+        expected_updated_at,
+        request_id,
+        member_id,
+        request_digest,
+        write_guard,
+    ):
+        from app.creation.script_windows import library_header, section_digest
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old = self.library_reuse_request_result(
+                workspace_id, request_id, member_id, connection=conn
+            )
+            if old:
+                if old["request_digest"] != request_digest:
+                    raise ScriptWindowConflict("原复用请求不能更换输入")
+                return old["result"]
+            write_guard(conn)
+            header = library_header(conn, workspace_id, entry_id)
+            if _revision_value(header["updated_at"]) != _revision_value(
+                expected_updated_at
+            ):
+                raise ScriptWindowConflict("文案库版本已变化")
+            if plan.workspace_id != workspace_id or plan.language != header["language"]:
+                raise ValueError("复用要求与真实库来源不符")
+            task = self._create_library_task(conn, workspace_id, plan, utc_now())
+            script = CreationTaskScript(
+                id="script_" + uuid4().hex[:12],
+                workspace_id=workspace_id,
+                task_id=task.id,
+                run_id="",
+                topic_id="",
+                title=header["title"],
+                language=header["language"],
+                sections=[],
+                reused_from_entry_id=entry_id,
+            )
+            rows = conn.execute(
+                "SELECT ordinal,section_json FROM script_library_sections WHERE workspace_id=? AND entry_id=? ORDER BY ordinal",
+                (workspace_id, entry_id),
+            )
+            for row in rows:
+                part = json.loads(row["section_json"])
+                section = {
+                    "id": "section_" + uuid4().hex[:12],
+                    "title": part["title"],
+                    "content": part["content"],
+                    "visual_prompt": part["visual_prompt"],
+                    "evidence_reference_ids": part["reference_ids"],
+                }
+                conn.execute(
+                    "INSERT INTO creation_task_script_sections VALUES (?,?,?,?,?,?)",
+                    (
+                        workspace_id,
+                        script.id,
+                        section["id"],
+                        row["ordinal"],
+                        json.dumps(
+                            section,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        section_digest(section),
+                    ),
+                )
+            conn.execute(
+                "INSERT INTO creation_task_scripts VALUES (?,?,?,?,?,?)",
+                (
+                    script.id,
+                    workspace_id,
+                    task.id,
+                    "",
+                    self._script_payload(conn, script, write_sections=False),
+                    script.updated_at.isoformat(),
+                ),
+            )
+            result = {
+                "request_id": request_id,
+                "entry_id": entry_id,
+                "entry_version": header["version"],
+                "task_id": task.id,
+                "script_id": script.id,
+                "updated_at": script.updated_at.isoformat(),
+                "status": "saved",
+            }
+            event_id = (
+                "library_reuse_"
+                + hashlib.sha256(
+                    json.dumps([workspace_id, request_id, member_id]).encode()
+                ).hexdigest()
+            )
+            self.append_task_event(
+                TaskEvent(
+                    event_id,
+                    workspace_id,
+                    task.id,
+                    None,
+                    "script_library_reused",
+                    {"request_digest": request_digest, "result": result},
+                ),
+                connection=conn,
+            )
+            return result
 
     def reuse_script_library_entry(
         self,
@@ -2123,7 +2514,11 @@ class ScriptRecordStore:
                 not title.strip()
                 or not sections
                 or any(
-                    not part.content.strip() or not part.visual_prompt.strip()
+                    not part.content.strip()
+                    or (
+                        not script.reused_from_entry_id
+                        and not part.visual_prompt.strip()
+                    )
                     for part in sections
                 )
             ):

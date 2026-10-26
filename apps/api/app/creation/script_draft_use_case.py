@@ -24,6 +24,8 @@ class ScriptDraftUseCase:
                  check_draft, record_service, route_snapshot, record_adoption):
         self.repository=repository
         self.scripts=repository.script_records
+        self.read_library_header=None
+        self.read_script_header=None
         self.read_inputs,self.validate_inputs=read_inputs,validate_inputs
         self.script_goal,self.topic_origin=script_goal,topic_origin
         self.check_draft,self.record_service=check_draft,record_service
@@ -93,9 +95,104 @@ class ScriptDraftUseCase:
         try:
             sources, refs, _ = self.topic_inputs(workspace_id, task, plan, cloud_egress=True)
         except self.preflight_error_type as exc:
-            raise ScriptDraftRejected(status_code=409, detail={
-                "reason": exc.reason, "impact": exc.impact, "repair_action": exc.repair_action}) from exc
+            if exc.reason=='content_sources_missing' and not plan.knowledge_references and not plan.source_references:
+                sources,refs=(),[]
+            else:
+                raise ScriptDraftRejected(status_code=409, detail={
+                    "reason": exc.reason, "impact": exc.impact, "repair_action": exc.repair_action}) from exc
         return task, plan, None, sources, refs, entry
+
+    def _window_inputs(self, workspace_id, task_id, metadata):
+        if not metadata.get('reused_from_entry_id'):
+            return (*self.read_inputs(workspace_id,task_id),None)
+        if self.read_library_header is None:
+            raise ScriptDraftRejected(status_code=409,detail="未装配真实文案库来源授权读取端口")
+        task=self.repository.get_creation_task(workspace_id,task_id)
+        plan=self.repository.get_creation_plan(workspace_id,task.plan_id)
+        entry=self.read_library_header(workspace_id,metadata['reused_from_entry_id'])
+        if entry['language']!=metadata['language'] or plan.language!=entry['language']:
+            raise ScriptDraftRejected(status_code=409,detail="库稿来源语言与当前要求不符")
+        try:
+            sources,refs,_=self.topic_inputs(workspace_id,task,plan,cloud_egress=True)
+        except self.preflight_error_type as exc:
+            if exc.reason=='content_sources_missing' and not plan.knowledge_references and not plan.source_references:
+                sources,refs=(),[]
+            else:
+                raise ScriptDraftRejected(status_code=409,detail={'reason':exc.reason,'impact':exc.impact,'repair_action':exc.repair_action}) from exc
+        return task,plan,None,sources,refs,entry
+
+    @staticmethod
+    def _window_binding(plan,topic,sources,refs,reader,entry):
+        return (asdict(plan),asdict(topic) if topic else None,tuple(sources),refs,reader,entry)
+
+    def save_library_entry(self, workspace_id, payload, *, member_id, write_guard=None):
+        if not isinstance(member_id,str) or not member_id.strip():
+            raise PermissionError("库稿原请求必须绑定当前真实成员")
+        request_id=str(payload.request_id)
+        digest=hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
+        old=self.scripts.library_save_request_result(workspace_id,request_id,member_id)
+        if old is not None:
+            if old['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原保存请求不能更换输入")
+            return self.library_save_request_result(workspace_id,request_id,member_id=member_id)
+        if self.read_script_header is None: raise ScriptDraftRejected(status_code=409,detail="未装配真实源文案许可读取端口")
+        header=self.read_script_header(workspace_id,payload.source_script_id)
+        def guard(conn):
+            if write_guard is not None: write_guard(conn)
+            if header!=self.read_script_header(workspace_id,payload.source_script_id):
+                raise ScriptDraftRejected(status_code=409,detail="保存提交前源文案或许可已变化")
+        return self.scripts.save_script_library_entry_header(workspace_id,source_script_id=payload.source_script_id,
+            name=payload.name,category=payload.category,request_id=request_id,member_id=member_id,request_digest=digest,
+            expected_source_updated_at=payload.expected_source_updated_at,write_guard=guard)
+
+    def library_save_request_result(self, workspace_id, request_id, *, member_id):
+        if not isinstance(member_id,str) or not member_id.strip():
+            raise PermissionError("库稿原请求必须绑定当前真实成员")
+        old=self.scripts.library_save_request_result(workspace_id,str(request_id),member_id)
+        if old is None: raise KeyError(str(request_id))
+        if self.read_library_header is None: raise ScriptDraftRejected(status_code=409,detail="未装配已保存库稿的当前许可读取端口")
+        self.read_library_header(workspace_id,old['result']['entry_id'])
+        return old['result']
+
+    def reuse_library_entry(self, workspace_id, entry_id, payload, *, member_id, plan, write_guard=None):
+        if not isinstance(member_id,str) or not member_id.strip():
+            raise PermissionError("库稿原请求必须绑定当前真实成员")
+        request_id=str(payload.request_id)
+        digest=hashlib.sha256(json.dumps([entry_id,payload.model_dump(mode='json')],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        old=self.scripts.library_reuse_request_result(workspace_id,request_id,member_id)
+        if old is not None:
+            if old['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原复用请求不能更换输入")
+            self._read_reuse_task(workspace_id,old['result']['task_id'],member_id)
+            return old['result']
+        if not payload.requirements_confirmed:
+            raise ScriptDraftRejected(status_code=409,detail="请确认当前新任务要求")
+        if self.read_library_header is None:
+            raise ScriptDraftRejected(status_code=409,detail="未装配真实库稿权限读取端口")
+        header=self.read_library_header(workspace_id,entry_id)
+        if header['sections_total_count']==0: raise ScriptDraftRejected(status_code=409,detail="空库稿不能作为完整复用来源")
+        if (plan.name!=payload.name.strip() or plan.aspect_ratio!=payload.aspect_ratio
+                or plan.duration_target_seconds!=payload.duration_target_seconds):
+            raise ScriptDraftRejected(status_code=409,detail="复用计划与已确认的新要求不一致")
+        plan.owner_user_id=member_id
+        def guard(conn):
+            if write_guard is not None: write_guard(conn)
+            current=self.read_library_header(workspace_id,entry_id)
+            if header!=current: raise ScriptDraftRejected(status_code=409,detail="库稿来源已变化，没有创建新任务")
+        return self.scripts.reuse_library_rows(workspace_id,entry_id,plan=plan,expected_updated_at=payload.expected_entry_updated_at,
+            request_id=request_id,member_id=member_id,request_digest=digest,write_guard=guard)
+
+    def _read_reuse_task(self, workspace_id, task_id, member_id):
+        task=self.repository.get_creation_task(workspace_id,task_id)
+        if task.owner_user_id!=member_id:
+            raise PermissionError("原复用结果不属于当前可读成员")
+        return task
+
+    def library_reuse_request_result(self, workspace_id, request_id, *, member_id):
+        if not isinstance(member_id,str) or not member_id.strip():
+            raise PermissionError("库稿原请求必须绑定当前真实成员")
+        result=self.scripts.library_reuse_request_result(workspace_id,str(request_id),member_id)
+        if result is None: raise KeyError(str(request_id))
+        self._read_reuse_task(workspace_id,result['result']['task_id'],member_id)
+        return result['result']
 
     def _review_candidate(self, workspace_id, task, plan, topic, sources, reader, title, sections, instruction_origin,
                           *, library_entry=None, review_window=None, reuse_review=None):
@@ -108,7 +205,7 @@ class ScriptDraftUseCase:
             goal=self.script_goal(plan, task, reader[0]),
             language=plan.language, presenter_share_target=plan.presenter_share_target,
             duration_target_seconds=plan.duration_target_seconds,
-            topic_title=library_entry.title if library_entry is not None else topic.title,
+            topic_title=(library_entry['title'] if isinstance(library_entry,dict) else library_entry.title) if library_entry is not None else topic.title,
             topic_angle=topic.angle if topic_origin == "generated" else "",
             topic_audience=topic.audience if topic is not None else "",
             topic_outline=tuple(topic.outline) if topic is not None else (),
@@ -126,6 +223,8 @@ class ScriptDraftUseCase:
         values = asdict(script_input)
         values.pop("review_window")
         values['review_protocol'] = SCRIPT_REVIEW_PROTOCOL_VERSION
+        if isinstance(library_entry,dict):
+            values["library_source"] = library_entry
         values["script_title"] = title
         values["requirements_phase"] = "complete" if review_window is not None and review_window.finalizing else "draft"
         binding_digest = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -200,24 +299,20 @@ class ScriptDraftUseCase:
         context = self.scripts.script_section_patch_context(workspace_id,task_id,script_id,sections,
             payload.expected_updated_at, insert_after_section_id=after)
         metadata = context['metadata']
-        # The current patch contract edits a generated draft; library copies keep
-        # their source-aware same-operation confirmation until its window adapter is wired.
-        if metadata.get('reused_from_entry_id'):
-            raise ScriptDraftRejected(status_code=409, detail="复用稿窗口修改需要文案库来源读取接口，请使用当前文案库确认入口；没有修改原稿。")
-        task,plan,topic,sources,refs = self.read_inputs(workspace_id,task_id)
-        reader = self.validate_inputs(workspace_id,plan,refs)
-        binding = (asdict(plan),asdict(topic),tuple(sources),refs,reader)
+        task,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,metadata)
+        reader=self.validate_inputs(workspace_id,plan,refs)
+        binding=self._window_binding(plan,topic,sources,refs,reader,entry)
         window = CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in sections),context['total_count'])
         review_binding = self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],sections,instruction_origin,
-            review_window=window, reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,sections,
+            library_entry=entry,review_window=window, reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,sections,
                 binding_digest=key,layout_digest=context['layout_digest']))
-        _,new_plan,new_topic,new_sources,new_refs = self.read_inputs(workspace_id,task_id)
-        new_reader = self.validate_inputs(workspace_id,new_plan,new_refs)
-        if binding != (asdict(new_plan),asdict(new_topic),tuple(new_sources),new_refs,new_reader):
-            raise ScriptDraftRejected(status_code=409, detail="方案、资料或读取身份已变化，窗口未保存，请重新读取。")
+        _,np,nt,ns,nr,ne=self._window_inputs(workspace_id,task_id,metadata)
+        new_reader=self.validate_inputs(workspace_id,np,nr)
+        if binding!=self._window_binding(np,nt,ns,nr,new_reader,ne):
+            raise ScriptDraftRejected(status_code=409,detail="来源或读取身份已变化，窗口未保存")
         if instruction_origin is not None and (reread_origin is None or instruction_origin != reread_origin(True)):
             raise ScriptDraftRejected(status_code=409, detail="本轮要求已变化，窗口未保存。")
-        commit_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=True)
+        commit_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=True,source_metadata=metadata)
         return self.scripts.patch_assistant_script_sections(workspace_id,task_id,script_id,sections=sections,
             expected_updated_at=payload.expected_updated_at,request_id=request_id,member_id=member_id,
             insert_after_section_id=after,write_guard=commit_guard,review_binding=review_binding)
@@ -259,22 +354,13 @@ class ScriptDraftUseCase:
             return prior['result']
         context=self.scripts.saved_script_review_context(workspace_id,task_id,script_id,payload.expected_updated_at)
         metadata=context['metadata']
-        if metadata.get('reused_from_entry_id'):
-            raise ScriptDraftRejected(status_code=409,detail="复用稿完整确认需要文案库来源窗口，请沿现有来源确认入口，不伪造选题。")
-        task,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
+        task,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,metadata)
         reader=self.validate_inputs(workspace_id,plan,refs)
         required=plan.template_settings.get('script_section_count')
         if context['total_count']==0 or (required is not None and context['total_count']!=required):
             raise ScriptDraftRejected(status_code=409,detail="真实全稿段数尚未满足采用要求，请补齐草稿后继续。")
-        binding=(asdict(plan),asdict(topic),tuple(sources),refs,reader)
-        def current_guard(conn):
-            if write_guard is not None: write_guard(conn)
-            _,new_plan,new_topic,new_sources,new_refs=self.read_inputs(workspace_id,task_id)
-            new_reader=self.validate_inputs(workspace_id,new_plan,new_refs)
-            if binding!=(asdict(new_plan),asdict(new_topic),tuple(new_sources),new_refs,new_reader):
-                raise ScriptDraftRejected(status_code=409,detail="来源、要求或读取身份已变化，不能采用旧核查结果。")
-            if instruction_origin is not None and (reread_origin is None or instruction_origin!=reread_origin(False)):
-                raise ScriptDraftRejected(status_code=409,detail="原制作授权已变化，不能采用。")
+        binding=self._window_binding(plan,topic,sources,refs,reader,entry)
+        current_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=False,source_metadata=metadata)
         cursor,review_binding=0,None
         while cursor is not None:
             page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
@@ -282,7 +368,7 @@ class ScriptDraftUseCase:
             parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
             window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
             review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,
-                review_window=window,reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,parts,
+                library_entry=entry,review_window=window,reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,parts,
                     binding_digest=key,layout_digest=context['layout_digest']))
             self.scripts.record_saved_script_section_review(workspace_id,task_id,script_id,parts,payload.expected_updated_at,
                 binding_digest=review_binding,layout_digest=context['layout_digest'],write_guard=current_guard)
@@ -318,13 +404,19 @@ class ScriptDraftUseCase:
                 'member_id':member_id,'request_digest':request_digest,'review_window':window})
         return self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)['result']
 
-    def _source_commit_guard(self, workspace_id, task_id, snapshot, write_guard, instruction_origin, reread_origin, *, draft_only):
+    def _source_commit_guard(self, workspace_id, task_id, snapshot, write_guard, instruction_origin, reread_origin, *, draft_only, source_metadata=None):
         def guard(conn):
             if write_guard is not None: write_guard(conn)
-            _,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
-            reader=self.validate_inputs(workspace_id,plan,refs)
-            if snapshot!=(asdict(plan),asdict(topic),tuple(sources),refs,reader):
-                raise ScriptDraftRejected(status_code=409,detail="提交时资料、要求或读取身份已变化，核查结果未写入。")
+            if source_metadata is None:
+                _,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
+                reader=self.validate_inputs(workspace_id,plan,refs)
+                current=(asdict(plan),asdict(topic),tuple(sources),refs,reader)
+            else:
+                _,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,source_metadata)
+                reader=self.validate_inputs(workspace_id,plan,refs)
+                current=self._window_binding(plan,topic,sources,refs,reader,entry)
+            if snapshot!=current:
+                raise ScriptDraftRejected(status_code=409,detail="提交时资料、要求或读取身份已变化，核查结果未写入")
             if instruction_origin is not None and (reread_origin is None or instruction_origin!=reread_origin(draft_only)):
                 raise ScriptDraftRejected(status_code=409,detail="提交时原输入已变化，核查结果未写入。")
         return guard

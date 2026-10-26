@@ -8960,7 +8960,7 @@ class ProductionRepository:
     def _create_script_library_task(self, conn, workspace_id, plan, now):
         if not conn.in_transaction: raise ValueError("文案库复用必须属于原事务")
         task=CreationTask(id=f"task_{uuid4().hex[:12]}",workspace_id=workspace_id,plan_id=plan.id,
-            name=plan.name,scenario="script_library_reuse",stage="script",stage_status="waiting_for_user",
+            name=plan.name,owner_user_id=plan.owner_user_id,scenario="script_library_reuse",stage="script",stage_status="waiting_for_user",
             status="running",progress=20,recovery_point="script")
         plan.creation_task_id=task.id
         plan.confirmed_at=now
@@ -9074,9 +9074,8 @@ class ProductionRepository:
     def save_script_library_entry(self, workspace_id: str, *, source_script_id: str, name: str, category: str) -> ScriptLibraryEntry:
         return self.script_records.save_script_library_entry(workspace_id, source_script_id=source_script_id, name=name, category=category)
 
-    @staticmethod
-    def _script_library_entry_from_payload(data: dict[str, object]):
-        return ScriptRecordStore._script_library_entry_from_payload(data)
+    def _script_library_entry_from_payload(self, data, *, connection=None):
+        return self.script_records._script_library_entry_from_payload(data,connection=connection)
 
     def get_script_library_entry(self, workspace_id: str, entry_id: str) -> ScriptLibraryEntry:
         return self.script_records.get_script_library_entry(workspace_id, entry_id)

@@ -683,7 +683,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 retryable=False,
             )
 
-    def _script_sources(self, input: CreationTaskScriptInput) -> tuple[list[dict[str, str]], dict[str, str]]:
+    def _script_sources(self, input: CreationTaskScriptInput, *, require_sources=True) -> tuple[list[dict[str, str]], dict[str, str]]:
         if input.language not in {"zh-CN", "en-US", "zh-CN/en-US"}:
             raise self._failure(
                 code="language_unavailable",
@@ -711,7 +711,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 repair_action="重新确认包含标题、角度、受众和大纲的选题。",
                 retryable=False,
             )
-        if not input.sources or len(input.sources) > 64:
+        if (require_sources and not input.sources) or len(input.sources) > 64:
             raise self._failure(
                 code="input_invalid",
                 reason="文案输入必须包含有界的授权资料。",
@@ -890,7 +890,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
 
     def check_draft(self, input: CreationTaskScriptInput, script: CreationTaskGeneratedScript) -> None:
         """Check an existing candidate once; never generate a replacement."""
-        sources, aliases = self._script_sources(input)
+        sources, aliases = self._script_sources(input, require_sources=False)
         reverse = {reference: alias for alias, reference in aliases.items()}
         if any(not isinstance(ref, str) or ref not in reverse
                for section in script.sections for ref in section.evidence_reference_ids):
@@ -900,16 +900,16 @@ class OpenAICompatibleCreationTaskScriptGenerator:
              "evidence_reference_ids": [reverse[ref] for ref in section.evidence_reference_ids]}
             for section in script.sections]}}
         if input.review_window is None:
-            self._validated_output(document, aliases, input)
+            self._validated_output(document, aliases, input, allow_empty_visual=True)
         else:
-            self._validated_script(document, aliases, input.language)
+            self._validated_script(document, aliases, input.language, allow_empty_visual=True)
             if len(input.review_window.section_ids) != len(script.sections):
                 raise self._schema_failure("送审窗口段落身份与实际正文不一致。")
         self._check_script(input, script, sources, aliases)
 
     def _validated_output(self, document: object, source_aliases: dict[str, str],
-                          input: CreationTaskScriptInput) -> CreationTaskGeneratedScript:
-        script = self._validated_script(document, source_aliases, input.language)
+                          input: CreationTaskScriptInput, *, allow_empty_visual=False) -> CreationTaskGeneratedScript:
+        script = self._validated_script(document, source_aliases, input.language, allow_empty_visual=allow_empty_visual)
         if input.script_section_count and len(script.sections) != input.script_section_count:
             raise self._schema_failure(
                 f"文字模型返回 {len(script.sections)} 段，模板要求 {input.script_section_count} 段；"
@@ -1494,7 +1494,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             retryable=False, reason_code=reason_code, section_index=section_index)
 
     def _validated_script(
-        self, document: object, allowed_reference_aliases: dict[str, str], requested_language: str
+        self, document: object, allowed_reference_aliases: dict[str, str], requested_language: str, *, allow_empty_visual=False
     ) -> CreationTaskGeneratedScript:
         raw = document.get("script") if isinstance(document, dict) else None
         if not isinstance(raw, dict):
@@ -1524,9 +1524,9 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 CreationTaskGeneratedScriptSection(
                     title=self._text(section.get("title"), "section title", 160),
                     content=self._text(section.get("content"), "section content", 4_000),
-                    visual_prompt=self._text(
-                        section.get("visual_prompt"), "visual prompt", 1_000
-                    ),
+                    visual_prompt=(section["visual_prompt"] if allow_empty_visual and isinstance(section.get("visual_prompt"),str)
+                        and len(section["visual_prompt"])<=1_000 and not section["visual_prompt"].strip()
+                        else self._text(section.get("visual_prompt"), "visual prompt", 1_000)),
                     evidence_reference_ids=tuple(
                         allowed_reference_aliases[item] for item in reference_ids
                     ),
