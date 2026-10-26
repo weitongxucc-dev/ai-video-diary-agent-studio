@@ -1,12 +1,10 @@
-import type { ScriptLibraryEntry, ScriptLibrarySource, ScriptLibraryEntryHeader, ScriptLibraryHeaderPage, ScriptLibraryCursor, ScriptLibrarySectionWindow } from '../types/script-library';
-import type { CreationTaskScript } from '../types/creation-tasks';
-import { creationPlanRequest } from './creation-transport';
-export function saveScriptLibraryEntry(input: {
-    source_script_id: string;
-    name: string;
-    category: string;
-}) {
-    return creationPlanRequest<ScriptLibraryEntry>("/api/production/script-library", {
+import type { ScriptLibrarySource, ScriptLibraryEntryHeader, ScriptLibraryHeaderPage, ScriptLibraryCursor, ScriptLibrarySectionWindow, ScriptLibrarySaveInput, ScriptLibrarySaveReceipt, ScriptLibraryReuseInput, ScriptLibraryReuseReceipt } from '../types/script-library';
+import { creationPlanRequest, CreationPlanApiError } from './creation-transport';
+export function isScriptLibraryWriteRejected(cause: unknown) {
+    return cause instanceof CreationPlanApiError && [401, 403, 404, 409, 422].includes(cause.status);
+}
+export function saveScriptLibraryEntry(input: ScriptLibrarySaveInput): Promise<ScriptLibrarySaveReceipt> {
+    return creationPlanRequest<ScriptLibrarySaveReceipt>("/api/production/script-library", {
         method: "POST", body: JSON.stringify(input),
     });
 }
@@ -29,14 +27,11 @@ export function getScriptLibrarySections(entryId: string, input: { after_ordinal
 export function getScriptLibrarySources(entryId: string) {
     return creationPlanRequest<ScriptLibrarySource[]>(`/api/production/script-library/${encodeURIComponent(entryId)}/sources`);
 }
-export function reuseScriptLibraryEntry(entryId: string, input: {
-    name: string;
-    aspect_ratio: "9:16" | "16:9" | "1:1";
-    duration_target_seconds: number;
-    requirements_confirmed: boolean;
-}) {
-    return creationPlanRequest<{
-        task_id: string;
-        script: CreationTaskScript;
-    }>(`/api/production/script-library/${encodeURIComponent(entryId)}/reuse`, { method: "POST", body: JSON.stringify(input) });
+export function reuseScriptLibraryEntry(entryId: string, input: ScriptLibraryReuseInput): Promise<ScriptLibraryReuseReceipt> {
+    return creationPlanRequest<ScriptLibraryReuseReceipt>(`/api/production/script-library/${encodeURIComponent(entryId)}/reuse`, { method: "POST", body: JSON.stringify(input) });
+}
+export function getScriptLibraryRequest(requestId: string, operation: "save"): Promise<ScriptLibrarySaveReceipt>;
+export function getScriptLibraryRequest(requestId: string, operation: "reuse"): Promise<ScriptLibraryReuseReceipt>;
+export function getScriptLibraryRequest(requestId: string, operation: "save" | "reuse"): Promise<ScriptLibrarySaveReceipt | ScriptLibraryReuseReceipt> {
+    return creationPlanRequest(`/api/production/script-library-requests/${encodeURIComponent(requestId)}?${new URLSearchParams({ operation })}`);
 }

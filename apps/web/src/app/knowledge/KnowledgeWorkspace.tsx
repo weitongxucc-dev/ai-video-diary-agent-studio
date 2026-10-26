@@ -4,12 +4,13 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, ArrowRight, BookOpen, CircleCheck, CircleMinus, FileText, Grid2X2, Link2, List, LoaderCircle, RefreshCw, RotateCcw, Search, Video } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useWorkspaceSearchParams as useSearchParams } from "@/components/workbench/context";
+import { useWorkspaceSearchParams as useSearchParams, useWorkspaceViewState } from "@/components/workbench/context";
 import { ApiRequestError, getKnowledgeReferenceVersion, getScriptLibrarySources, listScriptLibraryEntries, reuseScriptLibraryEntry, getKnowledgeGrants, grantKnowledgeToWorkspace, revokeKnowledgeGrant } from "@/lib/api";
 import type { ScriptLibrarySource, KnowledgeGrantState } from "@/lib/types";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { getScriptLibraryEntry, getScriptLibrarySections } from "@/lib/api/script-library";
-import type { ScriptLibraryEntryHeader, ScriptLibraryCursor, ScriptLibrarySectionWindow } from "@/lib/types/script-library";
+import { getScriptLibraryEntry, getScriptLibrarySections, getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
+import type { ScriptLibraryEntryHeader, ScriptLibraryCursor, ScriptLibrarySectionWindow, ScriptLibraryReuseInput, ScriptLibraryReuseReceipt } from "@/lib/types/script-library";
 import { AppShell } from "@/components/AppShell";
 import { CardSelect, HomeCardDialog } from "@/components/HomeCardDialog";
 import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
@@ -418,6 +419,7 @@ function CitationSource({ source }: { source: ScriptLibrarySource }) {
   </li>;
 }
 
+type LibraryReusePending = { key: string; entry_key: string; entry_id: string; entry_version: number; entry_name: string; input: ScriptLibraryReuseInput };
 export function ScriptLibraryPanel() {
   const router = useRouter();
   const [entries, setEntries] = useState<ScriptLibraryEntryHeader[]>([]);
@@ -442,12 +444,19 @@ export function ScriptLibraryPanel() {
   const [duration, setDuration] = useState("60");
   const durationSeconds = Number(duration);
   const durationValid = Number.isSafeInteger(durationSeconds) && durationSeconds > 0;
-  const [busy, setBusy] = useState(false);
+  const [pendingReuse, setPendingReuse] = useWorkspaceViewState<Record<string, LibraryReusePending>>("library-reuse-inputs", {});
+  const pendingReuseRef = useRef(pendingReuse);
+  pendingReuseRef.current = pendingReuse;
+  const [busyRequests, setBusyRequests] = useState(new Set<string>());
+  const busyRef = useRef(busyRequests);
+  const reuseActive = useRef(true);
+  useEffect(() => { reuseActive.current = true; return () => { reuseActive.current = false; }; }, []);
+  const [reuseReceipts, setReuseReceipts] = useState<Record<string, { original: LibraryReusePending; receipt: ScriptLibraryReuseReceipt }>>({});
   const [loading, setLoading] = useState(true);
   const [listRetry, setListRetry] = useState(0);
   const [sourceRetry, setSourceRetry] = useState(0);
   const [listError, setListError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [reuseError, setReuseError] = useState<{ original: LibraryReusePending; message: string; stale: boolean } | null>(null);
   const [confirmedKey, setConfirmedKey] = useState<string | null>(null);
   const [loadedFilter, setLoadedFilter] = useState<{ query: string; category: string } | null>(null);
   const selectedId = selected?.id ?? null;
@@ -513,7 +522,7 @@ export function ScriptLibraryPanel() {
     const sameSelection = selected?.id === entry.id && selected.version === entry.version && selected.updated_at === entry.updated_at;
     setSelected(entry);
     if (!sameSelection) {
-      setConfirmedKey(null); setName(`${entry.name} · 新任务`); setError(null);
+      setConfirmedKey(null); setName(`${entry.name} · 新任务`); setReuseError(null);
     }
   }
   async function reloadSelected() {
@@ -525,22 +534,65 @@ export function ScriptLibraryPanel() {
     if (entry.id !== original.id || entry.source_task_id !== original.source_task_id) throw new Error("文案回执与原版本归属不符，原选择保留。");
     setSelected(entry);
   }
+  function requestBusy(requestId: string, busy: boolean) {
+    const next = new Set(busyRef.current);
+    if (busy) next.add(requestId); else next.delete(requestId);
+    busyRef.current = next; setBusyRequests(next);
+  }
+  function removePending(original: LibraryReusePending) {
+    if (pendingReuseRef.current[original.key]?.input.request_id !== original.input.request_id) return;
+    const next = { ...pendingReuseRef.current }; delete next[original.key];
+    pendingReuseRef.current = next; setPendingReuse(next);
+  }
+  function settleReuse(original: LibraryReusePending, receipt: ScriptLibraryReuseReceipt) {
+    if (receipt.status !== 'saved' || receipt.request_id !== original.input.request_id || receipt.entry_id !== original.entry_id
+        || receipt.entry_version !== original.entry_version || !receipt.task_id || !receipt.script_id) {
+      throw new Error('原复用回执与请求或库稿版本不符，原 UUID 和当前新任务草稿保留。');
+    }
+    removePending(original);
+    setReuseReceipts(current => ({ ...current, [receipt.request_id]: { original, receipt } }));
+    setReuseError(null);
+    if (currentReuse.current.key === original.key && currentReuse.current.confirmed) router.push(`/tasks/${encodeURIComponent(receipt.task_id)}`);
+  }
   async function reuse() {
-    if (!selected || !durationValid) return;
-    setBusy(true); setError(null);
+    if (!selected || !reuseKey || !confirmed || !readable || !name.trim() || !durationValid || pendingReuseRef.current[reuseKey]) return;
+    const original: LibraryReusePending = { key: reuseKey, entry_id: selected.id, entry_version: selected.version, entry_name: selected.name,
+      entry_key: selectedKey!, input: { request_id: crypto.randomUUID(), expected_entry_updated_at: selected.updated_at,
+        name, aspect_ratio: ratio, duration_target_seconds: durationSeconds, requirements_confirmed: true } };
+    const next = { ...pendingReuseRef.current, [original.key]: original };
+    pendingReuseRef.current = next; setPendingReuse(next);
+    requestBusy(original.input.request_id, true); setReuseError(null);
     try {
-      const result = await reuseScriptLibraryEntry(selected.id, {
-        name, aspect_ratio: ratio, duration_target_seconds: durationSeconds, requirements_confirmed: confirmed,
-      });
-      router.push(`/tasks/${encodeURIComponent(result.task_id)}`);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "文案复用失败"); }
-    finally { setBusy(false); }
+      const receipt = await reuseScriptLibraryEntry(original.entry_id, original.input);
+      if (reuseActive.current) settleReuse(original, receipt);
+    } catch (cause) {
+      if (!reuseActive.current) return;
+      const rejected = isScriptLibraryWriteRejected(cause);
+      if (rejected) removePending(original);
+      setReuseError({ original, message: cause instanceof Error ? cause.message : '原复用结果未能读回，当前草稿保留。', stale: rejected && cause instanceof CreationPlanApiError && cause.status === 409 });
+    } finally { if (reuseActive.current) requestBusy(original.input.request_id, false); }
+  }
+  async function inspectReuse(original: LibraryReusePending) {
+    if (busyRef.current.has(original.input.request_id)) return;
+    requestBusy(original.input.request_id, true); setReuseError(null);
+    try {
+      const receipt = await getScriptLibraryRequest(original.input.request_id, 'reuse');
+      if (reuseActive.current) settleReuse(original, receipt);
+    } catch (cause) { if (reuseActive.current) setReuseError({ original, stale: false,
+      message: cause instanceof CreationPlanApiError && cause.status === 404 ? '尚未查到原复用回执，不代表未提交；原 UUID 和当前新任务草稿继续保留。'
+        : cause instanceof Error ? cause.message : '原复用回执未能读回，没有重新创建任务。' }); }
+    finally { if (reuseActive.current) requestBusy(original.input.request_id, false); }
   }
   const sourcesChecked = Boolean(selectedKey && sourceResult?.key === selectedKey);
   const sources = sourcesChecked ? sourceResult!.sources : [];
   const sourceError = selectedKey && sourceFailure?.key === selectedKey ? sourceFailure.message : null;
   const confirmed = Boolean(selectedKey && confirmedKey === selectedKey);
   const readable = sourcesChecked && sources.every(source => source.status === "readable");
+  const reuseKey = selectedKey && durationValid ? JSON.stringify([selectedKey, name, ratio, durationSeconds]) : null;
+  const currentReuse = useRef({ key: reuseKey, confirmed });
+  currentReuse.current = { key: reuseKey, confirmed };
+  const currentPending = reuseKey ? pendingReuse[reuseKey] : null;
+  const busy = Boolean(currentPending && busyRequests.has(currentPending.input.request_id));
   return <section className={styles.card} aria-label="文案库">
     <div className={styles.cardHeading}><div><h2>文案库</h2><small>已确认文案的命名快照与历史版本；复用需要新确认。</small></div><DisplayModeToggle label="文案列表" value={scriptsView} onChange={setScriptsView} /></div>
     <div className={styles.searchBar}>
@@ -565,14 +617,23 @@ export function ScriptLibraryPanel() {
       <details><summary>技术诊断信息</summary><p>原稿记录：{selected.source_script_id || "无"} · 运行记录：{selected.source_run_id || "无"}</p></details>
       <h4>事实出处（实时核对）</h4>
       {sourceError ? <div role="alert"><p>{sourceError}</p><button onClick={() => { setSourceFailure(null); setSourceRetry(value => value + 1); }} type="button">重试核对来源</button></div> : !sourcesChecked ? <p role="status">正在核对来源…</p> : !sources.length ? <p>本人文案没有外部事实引用。</p> : <ul className={styles.citationList}>{sources.map(source => <CitationSource key={`${selected.id}:${selected.version}:${source.reference_id}:${source.status}:${source.version_or_identity}`} source={source} />)}</ul>}
-      {error ? <p role="alert">{error}</p> : null}
+
       <label className={styles.correctionField}><span>新任务名称</span><input value={name} onChange={event => { setName(event.target.value); setConfirmedKey(null); }} /></label>
       <label className={styles.correctionField}><span>新任务画幅</span><AppSelect value={ratio} onValueChange={newValue => { setRatio(newValue as typeof ratio); setConfirmedKey(null); }}><AppSelectOption value="9:16">9:16</AppSelectOption><AppSelectOption value="16:9">16:9</AppSelectOption><AppSelectOption value="1:1">1:1</AppSelectOption></AppSelect></label>
       <label className={styles.correctionField}><span>目标时长（秒）</span><input type="number" min={1} step={1} value={duration} onChange={event => { setDuration(event.target.value); setConfirmedKey(null); }} /></label>
       <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmedKey(event.target.checked ? selectedKey : null)} />确认以上新任务要求，正文仍需重新确认</label>
       <p>仅复制文案到独立新draft，不复制旧确认、配音或成片，不调用模型。</p>
-      <button disabled={busy || !confirmed || !readable || !name.trim() || !durationValid} onClick={() => void reuse()} type="button">{busy ? "正在创建…" : "创建待确认新稿"}</button>
+      <button disabled={busy || Boolean(currentPending) || !confirmed || !readable || !name.trim() || !durationValid} onClick={() => void reuse()} type="button">{busy ? "正在核对原复用请求…" : currentPending ? "原复用结果待核对" : "创建待确认新稿"}</button>
     </section> : null}
+    {Object.values(pendingReuse).map(original => <div key={original.input.request_id} aria-label="原复用请求">
+      <p role="status">「{original.entry_name}」版本 {original.entry_version} 的原复用请求 {original.input.request_id} 结果尚待核对；不重复创建任务。</p>
+      <p>原新任务要求：{original.input.name} · {original.input.aspect_ratio} · {original.input.duration_target_seconds} 秒。</p>
+      <button type="button" disabled={busyRequests.has(original.input.request_id)} onClick={() => void inspectReuse(original)}>查询原复用结果</button>
+    </div>)}
+    {reuseError ? <div role="alert"><p>原复用请求 {reuseError.original.input.request_id}（「{reuseError.original.entry_name}」版本 {reuseError.original.entry_version}）：{reuseError.message}</p>
+      {reuseError.stale && selectedKey === reuseError.original.entry_key ? <button type="button" onClick={() => { void reloadSelected().then(() => setReuseError(null)).catch(cause => setReuseError(current => current ? { ...current, message: cause instanceof Error ? cause.message : "所选文案版本未能读回。" } : current)); }}>重新读取所选文案版本</button> : null}
+    </div> : null}
+    {Object.values(reuseReceipts).map(({ original, receipt }) => <div key={receipt.request_id} aria-label="原复用成功回执"><p role="status">原请求已从「{original.entry_name}」版本 {receipt.entry_version} 创建独立待确认新稿「{original.input.name}」，尚未采用。</p><Link href={`/tasks/${encodeURIComponent(receipt.task_id)}`}>打开原请求创建的任务</Link></div>)}
   </section>;
 }
 

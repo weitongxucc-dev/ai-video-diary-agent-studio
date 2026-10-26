@@ -1,14 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ScriptLibraryPanel } from "@/app/knowledge/KnowledgeWorkspace";
-import type { ScriptLibraryEntryHeader } from "@/lib/types/script-library";
+import { ScriptLibrarySave } from "@/components/creation-task/ScriptStage";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
+import type { CreationTaskScript } from "@/lib/types/creation-tasks";
+import type { ScriptLibraryEntryHeader, ScriptLibrarySaveInput, ScriptLibrarySaveReceipt, ScriptLibraryReuseInput, ScriptLibraryReuseReceipt } from "@/lib/types/script-library";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), sources: vi.fn(), reuse: vi.fn(), push: vi.fn(), header: vi.fn(), sections: vi.fn() }));
+const mocks = vi.hoisted(() => ({ list: vi.fn(), sources: vi.fn(), reuse: vi.fn(), push: vi.fn(), header: vi.fn(), sections: vi.fn(), save: vi.fn(), request: vi.fn() }));
 vi.mock("@/lib/api", () => ({
   listScriptLibraryEntries: mocks.list, getScriptLibrarySources: mocks.sources,
-  reuseScriptLibraryEntry: mocks.reuse,
+  reuseScriptLibraryEntry: mocks.reuse, saveScriptLibraryEntry: mocks.save,
 }));
-vi.mock("@/lib/api/script-library", async original => ({ ...await original<typeof import("@/lib/api/script-library")>(), getScriptLibraryEntry: mocks.header, getScriptLibrarySections: mocks.sections }));
+vi.mock("@/lib/api/script-library", async original => ({ ...await original<typeof import("@/lib/api/script-library")>(), getScriptLibraryEntry: mocks.header, getScriptLibrarySections: mocks.sections, getScriptLibraryRequest: mocks.request }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/components/AppShell", () => ({ AppShell: () => null }));
 
@@ -28,13 +31,31 @@ function sectionPage(header:ScriptLibraryEntryHeader=entry,after=0) {
   return {entry_id:header.id,version:header.version,updated_at:header.updated_at,total_count:header.sections_total_count,items,next_after_ordinal:next,has_more:next!==null};
 }
 
+function confirmedScript(): CreationTaskScript {
+  return { id: "original-script", task_id: "original-task", run_id: "run", topic_id: "topic", title: "确认来源稿", language: "zh-CN",
+    draft_complete: true, sections_loaded: false, sections: null, sections_total_count: 1,
+    selection_status: "confirmed", created_at: entry.created_at, updated_at: entry.updated_at, confirmed_at: entry.updated_at };
+}
+function saveReceipt(input: ScriptLibrarySaveInput): ScriptLibrarySaveReceipt {
+  return { request_id: input.request_id, status: "saved", entry_id: entry.id, version: 1, updated_at: entry.updated_at,
+    source_task_id: "original-task", source_script_id: input.source_script_id, source_updated_at: input.expected_source_updated_at,
+    entry: { ...entry, name: input.name, category: input.category, source_script_id: input.source_script_id } };
+}
+function reuseReceipt(id: string, input: ScriptLibraryReuseInput, taskId = "new-task"): ScriptLibraryReuseReceipt {
+  return { request_id: input.request_id, status: "saved", entry_id: id,
+    entry_version: input.expected_entry_updated_at === entry.updated_at ? 1 : 2,
+    task_id: taskId, script_id: `${taskId}-script`, updated_at: "2026-10-25T00:02:00Z" };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.list.mockReset().mockResolvedValue({ items: [entry], next: null, total_count: null });
   mocks.header.mockReset().mockResolvedValue(entry);
   mocks.sections.mockReset().mockImplementation(async(id:string,input:{after_ordinal?:number;expected_updated_at:string})=>sectionPage({...entry,id,updated_at:input.expected_updated_at,version:input.expected_updated_at===entry.updated_at?1:2},input.after_ordinal??0));
   mocks.sources.mockResolvedValue([]);
-  mocks.reuse.mockResolvedValue({ task_id: "new-task", script: { selection_status: "draft" } });
+  mocks.reuse.mockReset().mockImplementation(async(id:string,input:ScriptLibraryReuseInput)=>reuseReceipt(id,input));
+  mocks.save.mockReset().mockImplementation(async(input:ScriptLibrarySaveInput)=>saveReceipt(input));
+  mocks.request.mockReset().mockRejectedValue(new CreationPlanApiError(404,null,"原请求尚无可见回执"));
 });
 
 afterEach(() => {
@@ -58,6 +79,7 @@ it("allows an unreferenced owned script only after explicit new requirements con
   fireEvent.click(button);
   await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/tasks/new-task"));
   expect(mocks.reuse).toHaveBeenCalledWith("entry-1", {
+    request_id: expect.any(String), expected_entry_updated_at: entry.updated_at,
     name: "维护介绍 · 新任务", aspect_ratio: "9:16", duration_target_seconds: 60,
     requirements_confirmed: true,
   });
@@ -256,4 +278,163 @@ it('encodes the formal list cursor, exact header and versioned section GET witho
   expect(new URL(sections[0],'http://local').searchParams.get('expected_updated_at')).toBe(entry.updated_at);
   expect(new URL(sections[0],'http://local').searchParams.get('after_ordinal')).toBe('20');
   for(const [,init] of [list,header,sections]) expect(init?.body).toBeUndefined();
+});
+
+it('binds library save to the confirmed source version and recovers only its original request while preserving newer form input',async()=>{
+  const script=confirmedScript();
+  mocks.save.mockRejectedValueOnce(new Error('入库回包丢失'));
+  render(<ScriptLibrarySave script={script}/>);
+  fireEvent.change(screen.getByLabelText('文案名称'),{target:{value:'原入库名'}});
+  fireEvent.change(screen.getByLabelText('文案分类'),{target:{value:'原分类'}});
+  fireEvent.click(screen.getByRole('button',{name:'存入文案库'}));
+  await screen.findByText('入库回包丢失');
+  const input=mocks.save.mock.calls[0][0] as ScriptLibrarySaveInput;
+  expect(input).toMatchObject({expected_source_updated_at:script.updated_at,source_script_id:script.id,name:'原入库名',category:'原分类',request_id:expect.any(String)});
+  fireEvent.change(screen.getByLabelText('文案名称'),{target:{value:'当前未保存的新名称'}});
+  fireEvent.change(screen.getByLabelText('文案分类'),{target:{value:'当前新分类'}});
+  fireEvent.click(screen.getByRole('button',{name:'查询原入库结果'}));
+  await screen.findByText('尚未查到原入库回执，不代表未提交；原 UUID 和当前表单继续保留。');
+  expect(screen.getByRole('button',{name:'入库结果待核对'})).toBeDisabled();
+  mocks.request.mockResolvedValue(saveReceipt(input));
+  fireEvent.click(screen.getByRole('button',{name:'查询原入库结果'}));
+  await screen.findByText(/原请求已保存「原入库名」版本 1/);
+  expect(mocks.request).toHaveBeenCalledWith(input.request_id,'save');
+  expect(mocks.save).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText('文案名称')).toHaveValue('当前未保存的新名称');
+  expect(screen.getByLabelText('文案分类')).toHaveValue('当前新分类');
+  expect(screen.getByRole('link',{name:'查看该条目 · 版本 1'})).toHaveAttribute('href','/knowledge?entry_id=entry-1&source_task_id=original-task');
+});
+
+it('keeps save fields after a known source-version conflict and uses the freshly read confirmed version for a new explicit request',async()=>{
+  const script=confirmedScript(),next={...script,updated_at:'2026-10-25T00:01:00Z'};
+  mocks.save.mockRejectedValueOnce(new CreationPlanApiError(409,null,'原确认稿版本已变化'));
+  const reload=vi.fn(async()=>{view.rerender(<ScriptLibrarySave script={next} onReloadSource={reload}/>);});
+  const view=render(<ScriptLibrarySave script={script} onReloadSource={reload}/>);
+  fireEvent.change(screen.getByLabelText('文案名称'),{target:{value:'保留的入库名称'}});
+  fireEvent.change(screen.getByLabelText('文案分类'),{target:{value:'保留分类'}});
+  fireEvent.click(screen.getByRole('button',{name:'存入文案库'}));
+  await screen.findByText('原确认稿版本已变化');
+  fireEvent.click(screen.getByRole('button',{name:'读取当前来源版本'}));
+  await waitFor(()=>expect(reload).toHaveBeenCalled());
+  expect(screen.getByLabelText('文案名称')).toHaveValue('保留的入库名称');
+  expect(screen.getByLabelText('文案分类')).toHaveValue('保留分类');
+  await waitFor(()=>expect(screen.getByRole('button',{name:'存入文案库'})).toBeEnabled());
+  fireEvent.click(screen.getByRole('button',{name:'存入文案库'}));
+  await screen.findByText(/原请求已保存「保留的入库名称」/);
+  expect(mocks.save.mock.calls[1][0].expected_source_updated_at).toBe(next.updated_at);
+  expect(mocks.save.mock.calls[1][0].request_id).not.toBe(mocks.save.mock.calls[0][0].request_id);
+});
+
+it('rejects a library-save receipt from a different original UUID without releasing the pending input',async()=>{
+  mocks.save.mockRejectedValueOnce(new Error('未知入库结果'));
+  render(<ScriptLibrarySave script={confirmedScript()}/>);
+  fireEvent.click(screen.getByRole('button',{name:'存入文案库'}));
+  await screen.findByText('未知入库结果');
+  const input=mocks.save.mock.calls[0][0] as ScriptLibrarySaveInput;
+  mocks.request.mockResolvedValue({...saveReceipt(input),request_id:'different-original-request'});
+  fireEvent.click(screen.getByRole('button',{name:'查询原入库结果'}));
+  await screen.findByText('原入库回执与来源版本或请求不符，当前表单和原 UUID 保留。');
+  expect(screen.getByRole('button',{name:'入库结果待核对'})).toBeDisabled();
+  expect(screen.queryByText(/原请求已保存/)).not.toBeInTheDocument();
+  expect(mocks.save).toHaveBeenCalledTimes(1);
+});
+
+it('uses the original reuse UUID and entry version on lookup, keeps edited requirements and does not navigate to the older result',async()=>{
+  mocks.reuse.mockRejectedValueOnce(new Error('复用回包未知'));
+  render(<ScriptLibraryPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:/维护介绍/}));
+  await screen.findByText('本人文案没有外部事实引用。');
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button',{name:'创建待确认新稿'}));
+  await screen.findByText(/复用回包未知/);
+  const input=mocks.reuse.mock.calls[0][1] as ScriptLibraryReuseInput;
+  expect(input).toMatchObject({expected_entry_updated_at:entry.updated_at,requirements_confirmed:true});
+  fireEvent.change(screen.getByLabelText('新任务名称'),{target:{value:'用户当前新要求'}});
+  fireEvent.click(screen.getByRole('button',{name:'查询原复用结果'}));
+  await screen.findByText(/尚未查到原复用回执，不代表未提交/);
+  mocks.request.mockResolvedValue(reuseReceipt(entry.id,input,'original-request-task'));
+  fireEvent.click(screen.getByRole('button',{name:'查询原复用结果'}));
+  await screen.findByRole('link',{name:'打开原请求创建的任务'});
+  expect(mocks.request).toHaveBeenCalledWith(input.request_id,'reuse');
+  expect(mocks.push).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('新任务名称')).toHaveValue('用户当前新要求');
+  expect(screen.getByRole('link',{name:'打开原请求创建的任务'})).toHaveAttribute('href','/tasks/original-request-task');
+  expect(mocks.reuse).toHaveBeenCalledTimes(1);
+});
+
+it('does not let an unknown reuse lock a separately selected entry and does not let its late result overwrite the new selection',async()=>{
+  const other={...entry,id:'other-entry',name:'另一份库稿'};
+  mocks.list.mockResolvedValue({items:[entry,other],next:null,total_count:null});
+  const pending=deferred<ScriptLibraryReuseReceipt>();
+  mocks.reuse.mockReturnValueOnce(pending.promise);
+  render(<ScriptLibraryPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:/维护介绍/}));
+  await screen.findByText('本人文案没有外部事实引用。');
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button',{name:'创建待确认新稿'}));
+  await waitFor(()=>expect(mocks.reuse).toHaveBeenCalledTimes(1));
+  const original=mocks.reuse.mock.calls[0][1] as ScriptLibraryReuseInput;
+  fireEvent.click(screen.getByRole('button',{name:/另一份库稿/}));
+  await screen.findByText('本人文案没有外部事实引用。');
+  fireEvent.click(screen.getByRole('checkbox'));
+  expect(screen.getByRole('button',{name:'创建待确认新稿'})).toBeEnabled();
+  await act(async()=>{pending.resolve(reuseReceipt(entry.id,original,'older-task'));});
+  expect(mocks.push).not.toHaveBeenCalled();
+  expect(screen.getByRole('heading',{name:'另一份库稿 · 版本 1'})).toBeInTheDocument();
+  expect(screen.getByLabelText('新任务名称')).toHaveValue('另一份库稿 · 新任务');
+  fireEvent.click(screen.getByRole('button',{name:'创建待确认新稿'}));
+  await waitFor(()=>expect(mocks.push).toHaveBeenCalledWith('/tasks/new-task'));
+  expect(mocks.reuse.mock.calls[1][0]).toBe(other.id);
+  expect(mocks.reuse.mock.calls[1][1].request_id).not.toBe(original.request_id);
+});
+
+it('reloads an actually changed library header after a known reuse conflict without silently accepting its new version',async()=>{
+  const next={...entry,version:2,updated_at:'2026-10-25T00:01:00Z'};
+  mocks.reuse.mockRejectedValueOnce(new CreationPlanApiError(409,null,'原库稿版本已变化'));
+  mocks.header.mockResolvedValue(next);
+  render(<ScriptLibraryPanel/>);
+  fireEvent.click(await screen.findByRole('button',{name:/维护介绍/}));
+  await screen.findByText('本人文案没有外部事实引用。');
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button',{name:'创建待确认新稿'}));
+  await screen.findByText(/原库稿版本已变化/);
+  fireEvent.click(screen.getByRole('button',{name:'重新读取所选文案版本'}));
+  await screen.findByRole('heading',{name:'维护介绍 · 版本 2'});
+  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  await screen.findByText('本人文案没有外部事实引用。');
+  fireEvent.click(screen.getByRole('checkbox'));
+  fireEvent.click(screen.getByRole('button',{name:'创建待确认新稿'}));
+  await waitFor(()=>expect(mocks.push).toHaveBeenCalledWith('/tasks/new-task'));
+  expect(mocks.reuse.mock.calls[1][1].expected_entry_updated_at).toBe(next.updated_at);
+});
+
+it('serializes save and reuse with explicit request versions and reads each original request without posting or reading latest',async()=>{
+  const api=await vi.importActual<typeof import('@/lib/api/script-library')>('@/lib/api/script-library');
+  const fetch=vi.fn(async()=>new Response(JSON.stringify({})));
+  vi.stubGlobal('fetch',fetch);
+  const save:ScriptLibrarySaveInput={request_id:'save/original',expected_source_updated_at:entry.updated_at,source_script_id:'confirmed-script',name:'入库',category:'产品'};
+  const reuse:ScriptLibraryReuseInput={request_id:'reuse/original',expected_entry_updated_at:entry.updated_at,name:'新任务',aspect_ratio:'9:16',duration_target_seconds:120,requirements_confirmed:true};
+  await api.saveScriptLibraryEntry(save);await api.reuseScriptLibraryEntry('entry/old',reuse);
+  await api.getScriptLibraryRequest(save.request_id,'save');await api.getScriptLibraryRequest(reuse.request_id,'reuse');
+  const calls=fetch.mock.calls as unknown as [string,RequestInit?][];
+  expect(JSON.parse(calls[0][1]!.body as string)).toEqual(save);
+  expect(calls[1][0]).toBe('/api/production/script-library/entry%2Fold/reuse');
+  expect(JSON.parse(calls[1][1]!.body as string)).toEqual(reuse);
+  expect(calls[2][0]).toBe('/api/production/script-library-requests/save%2Foriginal?operation=save');
+  expect(calls[3][0]).toBe('/api/production/script-library-requests/reuse%2Foriginal?operation=reuse');
+  expect(calls[2][1]?.body).toBeUndefined();expect(calls[3][1]?.body).toBeUndefined();
+});
+
+it('keeps the original save pending when its source-version token differs below JavaScript millisecond precision',async()=>{
+  const script={...confirmedScript(),updated_at:'2026-10-25T00:00:00.000001Z'};
+  mocks.save.mockRejectedValueOnce(new Error('原入库状态未知'));
+  render(<ScriptLibrarySave script={script}/>);
+  fireEvent.click(screen.getByRole('button',{name:'存入文案库'}));
+  await screen.findByText('原入库状态未知');
+  const input=mocks.save.mock.calls[0][0] as ScriptLibrarySaveInput;
+  mocks.request.mockResolvedValue({...saveReceipt(input),source_updated_at:'2026-10-25T00:00:00.000002Z'});
+  fireEvent.click(screen.getByRole('button',{name:'查询原入库结果'}));
+  await screen.findByText('原入库回执与来源版本或请求不符，当前表单和原 UUID 保留。');
+  expect(screen.getByRole('button',{name:'入库结果待核对'})).toBeDisabled();
+  expect(mocks.save).toHaveBeenCalledTimes(1);
 });

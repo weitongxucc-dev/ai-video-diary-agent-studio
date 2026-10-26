@@ -9,6 +9,8 @@ import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistan
 import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { ScriptWindowEditor } from "./ScriptWindowEditor";
+import { getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
 export function ConfirmedScriptView({ script }: {
     script: CreationTaskScript;
 }) {
@@ -70,46 +72,82 @@ export function ReadonlyScriptsView({ scripts, confirmedScriptId }: {
     <Tabs.Panel value="draft" keepMounted><ConfirmedScriptView script={latest}/></Tabs.Panel>
   </Tabs.Root>;
 }
-export function ScriptLibrarySave({ script }: {
-    script: CreationTaskScript;
-}) {
-    const [name, setName] = useState(script.title);
-    const [category, setCategory] = useState("");
+type LibrarySavePending = { source_task_id: string; input: import('@/lib/types/script-library').ScriptLibrarySaveInput };
+type LibrarySaveProps = { script: CreationTaskScript; onReloadSource?: () => Promise<void> };
+export function ScriptLibrarySave(props: LibrarySaveProps) {
+    return <ScriptLibrarySaveForm key={`${props.script.task_id}:${props.script.id}`} {...props}/>;
+}
+function ScriptLibrarySaveForm({ script, onReloadSource }: LibrarySaveProps) {
+    const [form, setForm] = useWorkspaceViewState<{ name: string; category: string; pending: LibrarySavePending | null }>(`library-save-input:${script.task_id}:${script.id}`, () => ({ name: script.title, category: '', pending: null }));
     const [saving, setSaving] = useState(false);
-    const [feedback, setFeedback] = useState<string | null>(null);
-    const [failed, setFailed] = useState(false);
-    const [savedEntry, setSavedEntry] = useState<{
-        id: string;
-        source_task_id: string;
-        version: number;
-    } | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [sourceStale, setSourceStale] = useState(false);
+    const [saved, setSaved] = useState<import('@/lib/types/script-library').ScriptLibrarySaveReceipt | null>(null);
+    const active = useRef(true);
+    const pendingRef = useRef(form.pending);
+    pendingRef.current = form.pending;
+    useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+    useEffect(() => { setSourceStale(false); setError(null); }, [script.updated_at]);
+    function settle(original: LibrarySavePending, receipt: import('@/lib/types/script-library').ScriptLibrarySaveReceipt) {
+        if (receipt.status !== 'saved' || receipt.request_id !== original.input.request_id
+            || receipt.source_script_id !== original.input.source_script_id || receipt.source_task_id !== original.source_task_id
+            || receipt.source_updated_at !== original.input.expected_source_updated_at
+            || receipt.entry.id !== receipt.entry_id || receipt.entry.version !== receipt.version) {
+            throw new Error('原入库回执与来源版本或请求不符，当前表单和原 UUID 保留。');
+        }
+        setSaved(receipt);
+        pendingRef.current = null;
+        setForm(current => current.pending?.input.request_id === original.input.request_id ? { ...current, pending: null } : current);
+        setError(null);
+    }
     async function save() {
-        setSaving(true);
-        setFeedback(null);
-        setFailed(false);
+        if (pendingRef.current) return;
+        const original: LibrarySavePending = { source_task_id: script.task_id, input: {
+            request_id: crypto.randomUUID(), expected_source_updated_at: script.updated_at,
+            source_script_id: script.id, name: form.name, category: form.category,
+        } };
+        pendingRef.current = original;
+        setForm(current => ({ ...current, pending: original }));
+        setSaving(true); setError(null); setSourceStale(false);
         try {
-            const entry = await saveScriptLibraryEntry({ source_script_id: script.id, name, category });
-            setSavedEntry(entry);
-            setFeedback(`已保存「${entry.name}」版本 ${entry.version}；原文案与成片不变。`);
-        }
-        catch (cause) {
-            setFailed(true);
-            setFeedback(cause instanceof Error ? cause.message : "文案保存失败");
-        }
-        finally {
-            setSaving(false);
-        }
+            const receipt = await saveScriptLibraryEntry(original.input);
+            if (active.current) settle(original, receipt);
+        } catch (cause) {
+            if (!active.current) return;
+            if (isScriptLibraryWriteRejected(cause)) {
+                pendingRef.current = null;
+                setForm(current => ({ ...current, pending: null }));
+                if (cause instanceof CreationPlanApiError && cause.status === 409) setSourceStale(true);
+            }
+            setError(cause instanceof Error ? cause.message : '入库结果未能读回，当前表单仍保留。');
+        } finally { if (active.current) setSaving(false); }
+    }
+    async function inspect() {
+        const original = form.pending;
+        if (!original) return;
+        setSaving(true); setError(null);
+        try {
+            const receipt = await getScriptLibraryRequest(original.input.request_id, 'save');
+            if (active.current) settle(original, receipt);
+        } catch (cause) { if (active.current) setError(cause instanceof CreationPlanApiError && cause.status === 404
+            ? '尚未查到原入库回执，不代表未提交；原 UUID 和当前表单继续保留。'
+            : cause instanceof Error ? cause.message : '原入库回执未能读回，没有重新提交。'); }
+        finally { if (active.current) setSaving(false); }
     }
     return <section className={styles.workSection} aria-label="保存到文案库">
-    <h3>保存为可复用文案</h3>
-    <label className={styles.field}><span>文案名称</span><input value={name} onChange={event => setName(event.target.value)}/></label>
-    <label className={styles.field}><span>文案分类</span><input placeholder="例如产品介绍" value={category} onChange={event => setCategory(event.target.value)}/></label>
-    <button className="modern-primary-button" disabled={saving || !name.trim()} onClick={() => void save()} type="button">{saving ? "正在保存…" : "存入文案库"}</button>
-    <Link href={savedEntry ? `/knowledge?entry_id=${encodeURIComponent(savedEntry.id)}&source_task_id=${encodeURIComponent(savedEntry.source_task_id)}` : "/knowledge"}>{savedEntry ? `查看该条目 · 版本 ${savedEntry.version}` : "查看文案库"}</Link>
-    <p>同一原任务以同名再次保存会追加历史版本；复用的新稿仍需重新确认。</p>
-    {feedback ? <p role={failed ? "alert" : "status"}>{feedback}</p> : null}
-  </section>;
+        <h3>保存为可复用文案</h3>
+        <label className={styles.field}><span>文案名称</span><input value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))}/></label>
+        <label className={styles.field}><span>文案分类</span><input placeholder="例如产品介绍" value={form.category} onChange={event => setForm(current => ({ ...current, category: event.target.value }))}/></label>
+        <button className="modern-primary-button" disabled={saving || form.pending !== null || !form.name.trim()} onClick={() => void save()} type="button">{saving ? '正在核对入库请求…' : form.pending ? '入库结果待核对' : '存入文案库'}</button>
+        {form.pending ? <><p role="status">原入库请求 {form.pending.input.request_id} 的结果尚待核对；来源版本 {form.pending.input.expected_source_updated_at} 与原输入已保留，不重复提交。</p><Button variant="outline" disabled={saving} onClick={() => void inspect()}>查询原入库结果</Button></> : null}
+        {sourceStale && onReloadSource ? <Button variant="outline" disabled={saving} onClick={() => { setSaving(true); void onReloadSource().catch(cause => { if (active.current) setError(cause instanceof Error ? cause.message : '来源版本未能读回。'); }).finally(() => { if (active.current) setSaving(false); }); }}>读取当前来源版本</Button> : null}
+        <Link href={saved ? `/knowledge?entry_id=${encodeURIComponent(saved.entry_id)}&source_task_id=${encodeURIComponent(saved.source_task_id)}` : '/knowledge'}>{saved ? `查看该条目 · 版本 ${saved.version}` : '查看文案库'}</Link>
+        <p>同一原任务以同名再次保存会追加历史版本；复用的新稿仍需重新确认。</p>
+        {saved ? <p role="status">原请求已保存「{saved.entry.name}」版本 {saved.version}；来源版本 {saved.source_updated_at}，原文案与成片不变。</p> : null}
+        {error ? <p role="alert">{error}</p> : null}
+    </section>;
 }
+
 export function PlanReplyDraftAction({ task, busy = false, onComplete }: {
     task: CreationTask;
     busy?: boolean;
