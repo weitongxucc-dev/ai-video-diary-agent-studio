@@ -124,6 +124,20 @@ class ScriptDraftUseCase:
                 raise ScriptDraftRejected(status_code=409,detail={'reason':exc.reason,'impact':exc.impact,'repair_action':exc.repair_action}) from exc
         return task,plan,None,sources,refs,entry
 
+    def read_edit_sources(self, workspace_id, task_id, script_id):
+        """Read current source choices through the saved draft's own input rules."""
+        metadata = self.scripts.read_creation_task_script_header(workspace_id, script_id)
+        if metadata['task_id'] != task_id:
+            raise KeyError(script_id)
+        _, plan, _, sources, refs, _ = self._window_inputs(workspace_id, task_id, metadata)
+        self.validate_inputs(workspace_id, plan, refs)
+        return {
+            'task_id': task_id,
+            'script_id': script_id,
+            'sources': [{'reference_id': source.reference_id, 'title': source.title}
+                        for source in sources],
+        }
+
     @staticmethod
     def _window_binding(plan,topic,sources,refs,reader,entry):
         return (asdict(plan),asdict(topic) if topic else None,tuple(sources),refs,reader,entry)

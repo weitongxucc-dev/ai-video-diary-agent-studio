@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => {
     initializeTimeline: vi.fn(),
     getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
     getAssistantScriptContext: vi.fn().mockResolvedValue({ reply_origin: null, sources: [] }),
+    getScriptEditSources: vi.fn().mockResolvedValue({ sources: [] }),
     getTopics: vi.fn(),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
     getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
@@ -216,6 +217,7 @@ vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof 
   checkCreationTaskQuality: mocks.checkQuality,
   getCreationPlan: mocks.getCreationPlan,
   getAssistantScriptContext: mocks.getAssistantScriptContext,
+  getCreationTaskScriptEditSources: mocks.getScriptEditSources,
   saveAssistantScriptDraft: mocks.saveScriptDraft,
   saveScriptLibraryEntry: mocks.saveLibrary,
   setCreationTaskVisibility: mocks.setCreationTaskVisibility,
@@ -639,6 +641,7 @@ afterEach(() => {
   mocks.previewSelection.mockReset();
   vi.clearAllMocks();
   mocks.getTopics.mockReset();
+  mocks.getScriptEditSources.mockReset().mockResolvedValue({ sources: [] });
   mocks.getQualityCheck.mockReset().mockResolvedValue({ check_state: "none", result_status: null,
     stale: false, timeline_version_id: null, findings: [], unavailable: [] });
   mocks.checkQuality.mockReset();
@@ -943,7 +946,7 @@ describe("CreationTaskWorkspace", () => {
     const initial = workspace(task);
     initial.scripts = [draft];
     const source = { reference_id: "knowledge:current:v3", title: "当前知识资料", text: "仅供当前任务核对。" };
-    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [source] });
+    mocks.getScriptEditSources.mockResolvedValue({ sources: [source] });
     const updated = { ...draft, updated_at: "2026-10-09T00:00:01Z", sections: [{
       ...draft.sections[0], visual_prompt: "展示资料中的实际功能。", evidence_reference_ids: [source.reference_id],
     }] };
@@ -957,6 +960,7 @@ describe("CreationTaskWorkspace", () => {
 
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     expect(await screen.findByText(/当前内容是待确认草稿/)).toBeInTheDocument();
+    await waitFor(() => expect(mocks.getScriptEditSources).toHaveBeenCalledWith(task.id, draft.id));
     expect(screen.getByRole("button", { name: "确认文案" })).toBeDisabled();
     fireEvent.click(await screen.findByRole("checkbox", { name: "当前知识资料" }));
     fireEvent.change(screen.getByRole("textbox", { name: "第 1 段画面建议" }), {
@@ -986,7 +990,7 @@ describe("CreationTaskWorkspace", () => {
         visual_prompt: "淡入标题。", evidence_reference_ids: [] }],
     };
     const initial = { ...workspace(task), scripts: [draft] };
-    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [] });
+    mocks.getScriptEditSources.mockResolvedValue({ sources: [] });
     mocks.getWorkspace.mockResolvedValue(initial);
     if (rejected) mocks.confirmScript.mockRejectedValue(new mocks.MockCreationPlanApiError(
       422, "unsupported_fact", "正文包含尚无依据的事实，请修订。"));
@@ -1040,7 +1044,7 @@ describe("CreationTaskWorkspace", () => {
     };
     const initial = workspace(task);
     initial.scripts = [draft];
-    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [
+    mocks.getScriptEditSources.mockResolvedValue({ sources: [
       { reference_id: "source:one", title: "资料一", text: "第一份资料" },
       { reference_id: "source:two", title: "资料二", text: "第二份资料" },
     ] });

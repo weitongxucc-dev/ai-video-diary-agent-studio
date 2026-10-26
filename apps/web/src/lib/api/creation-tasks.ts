@@ -21,6 +21,11 @@ export function getCreationTaskEditPreview(taskId: string, proposalId: string): 
 export function listCreationTasks(): Promise<CreationTasksResponse> {
     return creationPlanRequest<CreationTasksResponse>("/api/creation-tasks");
 }
+export function getCreationTaskScriptEditSources(taskId: string, scriptId: string): Promise<{
+    task_id: string; script_id: string; sources: { reference_id: string; title: string }[];
+}> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/sources`);
+}
 export function getCreationTaskTopics(taskId: string): Promise<CreationTaskTopicsResponse> {
     return creationPlanRequest<CreationTaskTopicsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/topics`);
 }

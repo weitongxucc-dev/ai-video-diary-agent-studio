@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Check, LoaderCircle } from "lucide-react";
 import { Button } from "../ui/button";
 import { useEffect, useRef, useState } from "react";
-import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan, getCreationTaskScriptSections } from "@/lib/api";
+import { transferAssistantReplyToScript, getAssistantScriptContext, getCreationTaskScriptEditSources, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan, getCreationTaskScriptSections } from "@/lib/api";
 import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { ScriptWindowEditor } from "./ScriptWindowEditor";
@@ -289,19 +289,19 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
     const [draft, setDraft] = useWorkspaceViewState(`script:${script.id}:${script.updated_at}`+".draft", script);
     const [sourceRead, setSourceRead] = useState<
         { status: "loading" } | { status: "failed"; message: string }
-        | { status: "ready"; sources: { reference_id: string; title: string; text: string }[] }
+        | { status: "ready"; sources: { reference_id: string; title: string }[] }
     >({ status: "loading" });
     const [savingDraft, setSavingDraft] = useState(false);
     const [draftError, setDraftError] = useState<string | null>(null);
     useEffect(() => {
         let active = true;
         setSourceRead({ status: "loading" });
-        void getAssistantScriptContext(taskId).then((context) => { if (active)
+        void getCreationTaskScriptEditSources(taskId, script.id).then((context) => { if (active)
             setSourceRead({ status: "ready", sources: context.sources }); })
             .catch((cause) => { if (active)
             setSourceRead({ status: "failed", message: cause instanceof Error ? cause.message : "无法读取当前任务资料。" }); });
         return () => { active = false; };
-    }, [taskId]);
+    }, [taskId, script.id]);
     async function saveDraft() {
         const submittedDraft = draft;
         setSavingDraft(true);

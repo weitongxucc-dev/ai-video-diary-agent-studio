@@ -7887,6 +7887,15 @@ def _read_creation_script_window_request(request, task_id, request_id, operation
                             operation=operation, script_id=script_id, include_input=include_input)
 
 
+def _read_creation_script_edit_sources(request, task_id, script_id):
+    task, _member_id = _exact_edit_access(task_id, request)
+    workspace_id = task.workspace_id
+    return _script_draft_use_case(workspace_id,
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
+        content_reader=lambda ws: _content_reader(request, ws),
+    ).read_edit_sources(workspace_id, task_id, script_id)
+
+
 app.include_router(build_script_sections_router(
     readable_task=_readable_creation_task,
     read_sections=lambda *args, **kwargs: production_repo.read_creation_task_script_sections(*args, **kwargs),
@@ -7894,6 +7903,7 @@ app.include_router(build_script_sections_router(
     start_window=_start_creation_script_window,
     confirm_saved=_confirm_saved_creation_script,
     read_request=_read_creation_script_window_request,
+    read_sources=_read_creation_script_edit_sources,
 ))
 
 

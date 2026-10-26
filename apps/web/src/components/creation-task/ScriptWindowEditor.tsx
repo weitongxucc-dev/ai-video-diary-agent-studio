@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { CreationPlanApiError, getAssistantScriptContext } from "@/lib/api";
-import { getCreationTaskScriptSections, patchCreationTaskScriptSections, startCreationTaskScriptWindow, confirmSavedCreationTaskScript } from "@/lib/api/creation-tasks";
+import { getCreationTaskScriptSections, getCreationTaskScriptEditSources, patchCreationTaskScriptSections, startCreationTaskScriptWindow, confirmSavedCreationTaskScript } from "@/lib/api/creation-tasks";
 import type { CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptSectionWindow, CreationTaskScriptSectionsPatchInput, CreationTaskScriptWindowSaved, CreationTaskScriptConfirmSavedInput, CreationTaskScriptConfirmed } from "@/lib/types/creation-tasks";
 import { useWorkspaceViewState } from "../workbench/context";
 import { Button } from "../ui/button";
@@ -20,16 +20,19 @@ function newSection(): CreationTaskScriptSection {
 function validSections(sections: CreationTaskScriptSection[]) {
     return sections.length > 0 && sections.every(section => section.title.trim() && section.content.trim());
 }
-function useSources(taskId: string) {
+function useSources(taskId: string, scriptId?: string) {
     const [sources, setSources] = useState<Source[]>([]);
     const [error, setError] = useState<string | null>(null);
     useEffect(() => {
         let active = true;
-        void getAssistantScriptContext(taskId).then(value => {
+        setSources([]);
+        setError(null);
+        const read = scriptId ? getCreationTaskScriptEditSources(taskId, scriptId) : getAssistantScriptContext(taskId);
+        void read.then(value => {
             if (active) setSources(value.sources);
         }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "当前资料未能读回。"); });
         return () => { active = false; };
-    }, [taskId]);
+    }, [taskId, scriptId]);
     return { sources, error };
 }
 function SectionFields({ section, ordinal, disabled, sources, onChange }: {
@@ -68,7 +71,7 @@ function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
     const readRevision = useRef(0);
     const active = useRef(true);
     const currentVersion = useRef(version);
-    const { sources, error: sourceError } = useSources(taskId);
+    const { sources, error: sourceError } = useSources(taskId, script.id);
     const after = cursors[cursors.length - 1];
     useEffect(() => { active.current = true; return () => { active.current = false; readRevision.current += 1; }; }, []);
     useEffect(() => {

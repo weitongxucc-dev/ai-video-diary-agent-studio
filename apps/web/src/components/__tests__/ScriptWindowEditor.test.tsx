@@ -61,6 +61,7 @@ function harness(initial: CreationTaskScriptSection[] = []) {
     }
     const fetch = vi.fn(async (url: string, init?: RequestInit) => {
         const request = new URL(url, "http://local");
+        if (request.pathname.endsWith("/sources")) return new Response(JSON.stringify({ task_id: "task", script_id: "script", sources: [] }));
         if (request.pathname.endsWith("/assistant/script-context")) return new Response(JSON.stringify({ sources: [], draft: null, reply_origin: null }));
         if (request.pathname.includes("/script-window-requests/")) {
             queries.push(request);
@@ -487,4 +488,14 @@ it("refresh locator rejects a receipt for a different operation without releasin
     expect(sessionStorage.getItem(key)).toBe(raw);
     expect(onSaved).not.toHaveBeenCalled();
     expect(server.writes).toHaveLength(1);
+});
+
+
+it("reads saved library draft source choices without requiring a topic-generation context", async () => {
+    const server = harness([section()]);
+    render(<ScriptWindowEditor taskId="task" script={{ ...header("script", 1), topic_id: "", reused_from_entry_id: "library-entry" }} onSaved={vi.fn()}/>);
+    await waitFor(() => expect(screen.getByLabelText("第 1 段正文")).toBeEnabled());
+    expect(server.fetch.mock.calls.some(([url]) => new URL(url, "http://local").pathname === "/api/creation-tasks/task/scripts/script/sources")).toBe(true);
+    expect(server.fetch.mock.calls.some(([url]) => url.includes("/assistant/script-context"))).toBe(false);
+    expect(server.writes).toHaveLength(0);
 });

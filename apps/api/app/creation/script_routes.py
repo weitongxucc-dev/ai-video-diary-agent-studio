@@ -27,8 +27,14 @@ def _write_response(action):
 
 
 def build_script_sections_router(*, readable_task, read_sections, patch_sections=None, start_window=None,
-                                confirm_saved=None, read_request=None):
+                                confirm_saved=None, read_request=None, read_sources=None):
     router = APIRouter()
+
+    @router.get('/api/creation-tasks/{task_id}/scripts/{script_id}/sources')
+    def sources(task_id: str, script_id: str, request: Request):
+        if read_sources is None:
+            raise HTTPException(503, '文案资料读取用例尚未装配')
+        return _write_response(lambda: read_sources(request, task_id, script_id))
 
     @router.get('/api/creation-tasks/{task_id}/scripts/{script_id}/sections')
     def sections(task_id: str, script_id: str, request: Request,
