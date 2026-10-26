@@ -33,6 +33,7 @@ from app.quality_worker_runtime import (QualityBudget, QUALITY_PHASES, QUALITY_S
 from app.model_runtime import CHINESE_CLIP_VIT_B16
 from app.visual_semantics import VisualQueryExecutionLimits, visual_feature_version
 from app.host_memory import HostMemoryMonitor, MemoryPolicy
+from app.audio_delivery_policy import (AudioEncodeBudget, FinalMuxBudget, DELIVERY_KINDS, audio_delivery_refusal)
 from app.packet_copy_policy import (PacketCopyBudget, PACKET_COPY_UNIT_PREFIX,
     packet_copy_refusal, packet_copy_remaining_allocations)
 
@@ -537,6 +538,8 @@ class HostBudget:
     material_visual_query: MaterialVisualQueryBudget | None = None
     memory_policy: MemoryPolicy | None = None
     packet_copy: PacketCopyBudget | None = None
+    audio_encode: AudioEncodeBudget | None = None
+    final_mux: FinalMuxBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
@@ -550,6 +553,11 @@ class HostBudget:
             raise ValueError("Disk IO threshold must be nonnegative bytes per second or explicitly observation-only")
         if (self.cpu_render is not None or self.presenter_cpu_render is not None or self.clip_preview is not None) and self.sample_seconds > .25:
             raise ValueError("CPU render needs a bounded process sampling interval")
+        for name, kind in (('audio_encode', AudioEncodeBudget), ('final_mux', FinalMuxBudget)):
+            operation = getattr(self, name)
+            if operation is not None and (type(operation) is not kind
+                    or self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
+                raise ValueError('Audio delivery requires its own process policy and host headroom')
         if self.packet_copy is not None and (not isinstance(self.packet_copy, PacketCopyBudget)
                 or self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
             raise ValueError("Packet copy requires an explicit process policy and host headroom")
@@ -1292,7 +1300,17 @@ class HostResourceProbe:
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
                   else self.budget.cpu_render if kind == "creation_render"
                   else self.budget.clip_preview if kind == "task_clip_preview" else None)
-        if kind == 'creation_packet_copy':
+        if kind in DELIVERY_KINDS:
+            delivery = getattr(self.budget, DELIVERY_KINDS[kind][0])
+            refusal = audio_delivery_refusal(resources, delivery)
+            if refusal is not None:
+                return decision(None if delivery is None or refusal == 'audio_delivery_filesystem_unavailable' else False, refusal)
+            checks['audio_delivery_policy'] = {'limits': asdict(delivery),
+                'throughput_verification': 'unknown', 'source_bytes': resources['source_bytes'],
+                'input_count': resources['input_count'], 'resident_allocation': False}
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_io else delivery.additional_memory_bytes)
+            required_disk = self.budget.min_free_disk_bytes
+        elif kind == 'creation_packet_copy':
             copy = self.budget.packet_copy
             refusal = packet_copy_refusal(resources, copy)
             if refusal is not None:
@@ -1627,7 +1645,7 @@ class HostResourceProbe:
         duration = None
         try:
             observation_only_io = self.budget.max_disk_io_bytes_per_second is None
-            sustained = not observation_only_io and kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy"}
+            sustained = not observation_only_io and kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux"}
             def io_counters():
                 try:
                     return psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
@@ -1706,9 +1724,9 @@ class HostResourceProbe:
             checks["swap_used_bytes"] = {**memory.facts.get("swap_used_bytes", {"value": None}),
                 "diagnostic_only": True, "legacy_configured_limit": self.budget.max_swap_used_bytes}
             disk_passed = True
-            if kind == 'creation_packet_copy':
+            if kind == 'creation_packet_copy' or kind in DELIVERY_KINDS:
                 from app.device_resource_volumes import sample_write_volumes
-                sampling = 'packet_copy_write_volumes'
+                sampling = 'audio_delivery_write_volumes' if kind in DELIVERY_KINDS else 'packet_copy_write_volumes'
                 allocations = packet_copy_remaining_allocations(resources, running=memory_running)
                 checks['write_volumes'] = sample_write_volumes(resources['write_paths'], allocations,
                     reserve_bytes=self.budget.min_free_disk_bytes)
@@ -1759,6 +1777,10 @@ class HostResourceProbe:
         return decision(passed, interval=duration)
 
     def admit(self, request: WorkRequest) -> HostResourceDecision:
+        if (request.resources.get('kind') in DELIVERY_KINDS
+                and (request.owner_type != 'creation_job' or request.unit_key !=
+                     DELIVERY_KINDS[request.resources['kind']][1] + str(request.resources.get('unit_id')))):
+            return HostResourceDecision(False, dict(request.resources), {}, 'audio_delivery_owner_invalid')
         if (request.resources.get('kind') == 'creation_packet_copy'
                 and (request.owner_type != 'creation_job'
                      or request.unit_key != PACKET_COPY_UNIT_PREFIX + str(request.resources.get('unit_id')))):
@@ -1804,6 +1826,10 @@ class HostResourceProbe:
             if (isinstance(resources, dict) and resources.get('input_scope') == 'single_call_preparation_v1'
                     and (grant.owner_type != 'device_preparation' or grant.unit_key != 'narration-prepare:v1')):
                 return None
+            if (isinstance(resources, dict) and resources.get('kind') in DELIVERY_KINDS
+                    and (grant.owner_type != 'creation_job' or grant.unit_key !=
+                         DELIVERY_KINDS[resources['kind']][1] + str(resources.get('unit_id')))):
+                return None
             if (isinstance(resources, dict) and resources.get('kind') == 'creation_packet_copy'
                     and (grant.owner_type != 'creation_job'
                          or grant.unit_key != PACKET_COPY_UNIT_PREFIX + str(resources.get('unit_id')))):
@@ -1814,8 +1840,9 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy"}
-                and (self.budget.packet_copy if resources["kind"] == "creation_packet_copy" else
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux"}
+                and (getattr(self.budget, DELIVERY_KINDS[resources["kind"]][0]) if resources["kind"] in DELIVERY_KINDS else
+                     self.budget.packet_copy if resources["kind"] == "creation_packet_copy" else
                      self.budget.material_visual_query if resources["kind"] == "material_visual_query" else
                      self.budget.cover if resources["kind"] == "cover_generation" else
                      self.budget.quality if resources["kind"] == "quality_check" else
@@ -1849,6 +1876,14 @@ class HostResourceProbe:
             if resources.get("kind") == "creation_render" and self.budget.cpu_render is not None else None)
         if resources.get("kind") == "creation_render" and cpu_policy is None:
             raise RecoveryBlocked("成片CPU调度策略尚未准备")
+        if resources.get('kind') in DELIVERY_KINDS:
+            operation = DELIVERY_KINDS[resources['kind']][0]
+            delivery = getattr(self.budget, operation)
+            if purpose not in {None, operation} or audio_delivery_refusal(resources, delivery) is not None:
+                raise RecoveryBlocked('音频交付许可、原单元或过程策略不一致')
+            return SceneRuntimeLimits(delivery.max_process_rss_bytes, delivery.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
+                delivery.runtime_sample_seconds, self.memory_monitor)
         if resources.get('kind') == 'creation_packet_copy':
             copy = self.budget.packet_copy
             if purpose not in {None, 'packet_copy'} or packet_copy_refusal(resources, copy) is not None:
@@ -1959,7 +1994,7 @@ class HostResourceProbe:
             if grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:"):
                 return None
             return True  # The scheduler independently proves the encoder's registered group exited.
-        if resources.get('kind') == 'creation_packet_copy':
+        if resources.get('kind') == 'creation_packet_copy' or resources.get('kind') in DELIVERY_KINDS:
             return True  # The scheduler separately proves every registered child group exited.
         if resources.get("kind") in {"quality_check", "cover_generation"}:
             return True  # Scheduler separately proves the registered Python/native group exited.

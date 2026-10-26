@@ -59,6 +59,8 @@ def sample_write_volumes(paths: Mapping[str, str | Path], reservations: Mapping[
     checks = {}
     for volume, item in volumes.items():
         usage = psutil.disk_usage(str(item["path"]))
+        if type(usage.free) is not int or usage.free < 0:
+            raise OSError("Write volume available space is unknown")
         for role in item["roles"]:
             checks[role] = {"volume_id": volume, "roles": sorted(item["roles"]),
                 "actual": usage.free, "minimum": item["required"],

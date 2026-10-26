@@ -105,6 +105,14 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
             if name in {"cpu_render", "presenter_cpu_render", "clip_preview"}:
                 from app.creation.render_stage_use_case import CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
                 facts["render_contract"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+        elif name in {"audio_encode", "final_mux"}:
+            from app import audio_delivery_policy
+            for tool in ("ffmpeg", "ffprobe"):
+                path = shutil.which(tool)
+                if path is None:
+                    return None
+                facts[tool] = _hash_file(path)
+            facts["resource_policy"] = _hash_file(audio_delivery_policy.__file__)
         elif name == "packet_copy":
             from app import montage, packet_copy_policy
             for tool in ("ffmpeg", "ffprobe"):
@@ -311,10 +319,42 @@ def with_packet_copy_preparation(profile: ResolvedDeviceProfile, *, backend_iden
         evidence={**profile.evidence, 'packet_copy': provenance})
 
 
+def with_audio_delivery_preparation(profile: ResolvedDeviceProfile, *, operation: str,
+                                    backend_identity: str | None) -> ResolvedDeviceProfile:
+    """Explicit finite first use, preserving absent/invalid explicit profile semantics."""
+    from app.audio_delivery_policy import audio_delivery_preparation_budget, audio_delivery_source_operation
+    if operation not in {'audio_encode', 'final_mux'}:
+        raise ValueError('Unsupported audio delivery operation')
+    if (profile.source_kind != 'device_profile' or getattr(profile.budget, operation) is not None
+            or operation in profile.unavailable):
+        return profile
+    source = audio_delivery_source_operation(operation=operation, host_budget=profile.budget)
+    reason = ('audio_delivery_process_policy_unavailable' if source is None else
+              'audio_delivery_backend_identity_unavailable' if not isinstance(backend_identity, str)
+              or len(backend_identity) != 64 or any(ch not in '0123456789abcdef' for ch in backend_identity) else None)
+    if reason is not None:
+        return replace(profile, unavailable={**profile.unavailable, operation: reason})
+    try:
+        candidate = audio_delivery_preparation_budget(operation=operation, host_budget=profile.budget,
+            backend_identity=backend_identity)
+        budget = replace(profile.budget, **{operation: candidate})
+    except ValueError:
+        return replace(profile, unavailable={**profile.unavailable, operation: 'audio_delivery_preparation_policy_unavailable'})
+    provenance = {'status': 'declared', 'verification_status': 'unknown', 'selection': 'bounded_first_use',
+        'policy_id': candidate.policy_id, 'source_profile_digest': profile.digest,
+        'source_profile_revision': profile.revision, 'source_operation': source,
+        'source_operation_budget_digest': _identity(asdict(getattr(profile.budget, source))),
+        'backend_identity': backend_identity, 'budget_digest': candidate.digest, 'throughput_verification': 'unknown'}
+    digest = _identity({'selection_contract': 'device-profile-audio-delivery-first-use/v1',
+        'source_profile_digest': profile.digest, 'effective_budget': asdict(budget), 'selection': provenance})
+    return replace(profile, budget=budget, digest=digest, evidence={**profile.evidence, operation: provenance})
+
+
 def resolve_device_resources(settings, environment, *, model_catalog=None, device=None,
-                             backend_identities=None, select_packet_copy_preparation: bool = False) -> ResolvedDeviceProfile:
+                             backend_identities=None, select_packet_copy_preparation: bool = False,
+                             select_audio_delivery_preparation: bool = False) -> ResolvedDeviceProfile:
     """The only normal/experimental selection point; environment is explicit input."""
-    if type(select_packet_copy_preparation) is not bool:
+    if type(select_packet_copy_preparation) is not bool or type(select_audio_delivery_preparation) is not bool:
         raise DeviceProfileUnavailable("设备准备策略选择必须显式指定")
     mode = settings.device_resource_mode
     if mode == "experiment":
@@ -333,17 +373,20 @@ def resolve_device_resources(settings, environment, *, model_catalog=None, devic
         lambda name, budget: backend_identity(name, budget, settings=settings, model_catalog=model_catalog))
     try:
         profile = load_device_resource_profile(path, device=device, backend_identities=identities)
-        if (not select_packet_copy_preparation or profile.budget.packet_copy is not None
-                or 'packet_copy' in profile.unavailable):
-            return profile
-        identity = None
-        if profile.budget.cpu_render is not None:
-            try:
-                identity = identities('packet_copy', None) if callable(identities) else identities.get('packet_copy')
-            except (OSError, ValueError, TypeError):
-                # A copy-specific tool observation cannot disable unrelated reads
-                # or expose raw filesystem/backend errors through configuration.
-                identity = None
-        return with_packet_copy_preparation(profile, backend_identity=identity)
+        selected = (('packet_copy',) if select_packet_copy_preparation else ()) + (
+            ('audio_encode', 'final_mux') if select_audio_delivery_preparation else ())
+        for operation in selected:
+            if getattr(profile.budget, operation) is not None or operation in profile.unavailable:
+                continue
+            identity = None
+            if profile.budget.cpu_render is not None or operation != 'packet_copy' and profile.budget.cpu_audio is not None:
+                try:
+                    identity = identities(operation, None) if callable(identities) else identities.get(operation)
+                except (OSError, ValueError, TypeError):
+                    # Unavailable tools affect only this family; never leak raw paths.
+                    identity = None
+            profile = (with_packet_copy_preparation(profile, backend_identity=identity) if operation == 'packet_copy'
+                       else with_audio_delivery_preparation(profile, operation=operation, backend_identity=identity))
+        return profile
     except DeviceProfileUnavailable as exc:
         raise DeviceProfileUnavailable(f"{exc}；请准备或更新该设备档，保留已有任务与产物。") from exc

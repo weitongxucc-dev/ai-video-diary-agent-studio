@@ -19,7 +19,7 @@ from app.host_resource_probes import (
     HostBudget, CpuRenderBudget, CpuAudioBudget, NarrationBudget, MontageBudget,
     PresenterBudget, SceneWindowBudget, MediaScriptBudget, NativeCommandBudget,
     ObservationBudget, QualityBudget, CoverBudget, MaterialVisualQueryBudget,
-    RuntimeCpuPolicy, PacketCopyBudget,
+    RuntimeCpuPolicy, PacketCopyBudget, AudioEncodeBudget, FinalMuxBudget,
 )
 
 
@@ -32,7 +32,7 @@ _BUDGET_TYPES = {
     "native_command": NativeCommandBudget, "observation": ObservationBudget,
     "quality": QualityBudget, "cover": CoverBudget,
     "material_visual_query": MaterialVisualQueryBudget, "clip_preview": CpuRenderBudget,
-    "packet_copy": PacketCopyBudget,
+    "packet_copy": PacketCopyBudget, "audio_encode": AudioEncodeBudget, "final_mux": FinalMuxBudget,
 }
 
 
@@ -224,7 +224,8 @@ def load_device_resource_profile(path: str | Path, *, device: DeviceProfileIdent
                 continue
             current_identity = (backend_identities(name, operation_budget) if callable(backend_identities)
                                 else backend_identities.get(name))
-            if configured_identity != current_identity:
+            if (configured_identity != current_identity
+                    or name in {"audio_encode", "final_mux"} and operation_budget.backend_identity != configured_identity):
                 unavailable[name] = "backend_identity_changed_or_unavailable"
                 continue
             values[name] = operation_budget
