@@ -5538,3 +5538,205 @@ def test_owner_submission_rechecks_after_authorization_and_borrows_transaction(t
     assert case.repo.list_creation_job_request_states('local', case.job.id) == []
     assert case.generated == [] and case.merged == []
     case.scheduler.close()
+
+
+def _ready_pcm_body_case(tmp_path, monkeypatch):
+    """Already paid synthetic audio/SQL facts; no generator or worker executes."""
+    import wave
+    from app.creation.contracts import NarrationSegment, TaskEvent
+    from app.narration import _pronunciation_dictionary, _pronunciation_version
+    case = _narration_units_case(tmp_path, section_count=3, audio_input_count=2, pcm_inprocess=False)
+    repo = case.repo
+    task = repo.get_creation_task('local', case.task_id)
+    script = repo.get_creation_task_script('local', case.script_id)
+    plan = repo.get_creation_plan('local', task.plan_id)
+    inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
+        voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
+    pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
+        workspace_id='local', person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
+    segments = []
+    for section in script.sections:
+        path = tmp_path / (section.id + '.wav')
+        with wave.open(str(path), 'wb') as stream:
+            stream.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+            stream.writeframes(b'\x01\x00' * 24)
+        key = 'ready-' + section.id
+        record = NarrationArtifactRecord(id=key, workspace_id='local', task_id=task.id, script_id=script.id,
+            voice_profile_id=inputs.voice.id, cache_key=key, audio_path=str(path), duration_seconds=.001,
+            sample_rate=24000, model_id='test', language='zh', pronunciation_version=pronunciation)
+        repo.save_narration_artifact(record)
+        segments.append(NarrationSegment(id=case.stage.segment_id(task.id, script.id, section.id),
+            workspace_id='local', task_id=task.id, script_id=script.id, source_section_id=section.id,
+            text=section.content, audio_reference=repo.narration_artifact_reference(key), duration_seconds=.001,
+            sample_rate=24000, model_id='test', voice_profile_id=inputs.voice.id, voice_version=inputs.voice.version,
+            language='zh', pronunciation_version=pronunciation, status='ready'))
+    repo.save_narration_segments('local', task.id, script.id, segments)
+    effective = '采用正文 "quoted"\n\\ café 😺'
+    with repo._connect() as conn:
+        repo.append_task_event(TaskEvent('pcm-adopted-text', 'local', task.id, None, 'segment_publication',
+            {'script_id': script.id, 'text': effective, 'narration_reference': segments[0].audio_reference}), connection=conn)
+        version = TimelineVersion('pcm-effective-version', 'local', task.id, None, 1,
+            {'stage_segments': {'section_1': 'pcm-adopted-text'}}, None)
+        repo.create_timeline_version(version, connection=conn)
+        task.current_timeline_version_id = version.id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+        conn.execute('UPDATE narration_segments SET text=? WHERE id=?', (effective, segments[0].id))
+    case.original_segments = [asdict(row) for row in repo.list_narration_segments('local', task.id, script.id)]
+    case.sources = [str(tmp_path / (section.id + '.wav')) for section in script.sections]
+    def forbid_worker(*args, **kwargs):
+        pytest.fail('PCM body migration must not run a model, worker or media process')
+    monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', forbid_worker)
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbid_worker)
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments'):
+        original = getattr(repo, name)
+        def bounded(*args, _original=original, **kwargs):
+            current = repo.get_creation_task('local', task.id, connection=kwargs.get('connection'))
+            if current.stage == 'narration':
+                pytest.fail('PCM must not hydrate whole script/segment bodies')
+            # Following montage is explicitly outside this migration.
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(repo, name, bounded)
+    return case
+
+
+def _pcm_fixture_receipt(context, resources):
+    """Finite sealed-file fixture, not the PCM worker or source concatenator."""
+    import struct
+    baseline = resources['pcm_assembly']
+    work = Path(baseline['work_path'])
+    work.parent.mkdir(parents=True, exist_ok=True)
+    added = sum(item['pcm_frames'] * 2 for item in resources['pcm_sources'])
+    size = baseline['committed_pcm_bytes'] + added
+    data = b'\x01\x00' * (size // 2)
+    header = struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', size+36, b'WAVE', b'fmt ',
+        16, 1, 1, 24000, 48000, 2, 16, b'data', size)
+    work.write_bytes(header + data)
+    info = work.stat()
+    now = datetime.now(timezone.utc).isoformat()
+    receipt = {'version': 1, 'unit_id': f'{context.grant.request_id}:{context.grant.generation}',
+        'job_id': context.grant.owner_id, 'source_digest': resources['merge_source_digest'],
+        'work_path': str(work), 'previous_pcm_bytes': baseline['committed_pcm_bytes'],
+        'pcm_bytes': size, 'appended_pcm_bytes': added, 'header_bytes_written': baseline['header_bytes_allowance'],
+        'generated_bytes': added+baseline['header_bytes_allowance'], 'file_size': size+44,
+        'source_count': len(resources['pcm_sources']) + int(baseline['committed_pcm_bytes'] > 0),
+        'finalized': resources['merge_final'], 'format': {'channels': 1, 'sample_rate': 24000, 'sample_width': 2},
+        'file_identity': {'device': info.st_dev, 'inode': info.st_ino},
+        'pcm_sha256': hashlib.sha256(data).hexdigest(), 'started_at_utc': now, 'finished_at_utc': now,
+        'elapsed_seconds': 0.0}
+    Path(baseline['receipt_path']).write_text(json.dumps(receipt))
+    if receipt['finalized']:
+        Path(str(work)+'.sealed.json').write_text(json.dumps(receipt))
+    context.narration_output_usage[0] += receipt['generated_bytes']
+    return receipt
+
+
+def test_pcm_body_stream_preserves_original_encoding_and_keys(tmp_path, monkeypatch):
+    from app.creation import narration_pcm
+    case = _ready_pcm_body_case(tmp_path, monkeypatch)
+    preparation = case.owner.prepare_pcm_sources(case.job)
+    with case.repo.creation_execution_read() as conn:
+        snapshot = case.repo.read_creation_execution_snapshot('local', case.task_id, connection=conn)
+        rows = [segment for _, segment in case.repo.iter_creation_narration_sections(
+            snapshot.task, snapshot.script_header, connection=conn)]
+        fields = {'script_id': case.script_id, 'voice': {'text': '中文\n"\\'}, 'source_files': [['a', 4]],
+            'reference_input': {'at': rows[0].created_at}}
+        for ordered in (rows[:1], rows, list(reversed(rows))):
+            legacy = json.dumps({**fields, 'segments': [asdict(row) for row in ordered]}, sort_keys=True, default=str).encode()
+            assert b''.join(narration_pcm.pcm_manifest_chunks(fields, iter(ordered))) == legacy
+        args = (conn, case.job, snapshot.task, snapshot.script_header, snapshot.plan)
+        actual = case.owner.narration_unit_facts(*args, pcm_preparation=preparation)
+        def legacy_digest(fields, segments, *, resources=None):
+            manifest = {**fields, 'segments': [asdict(row) for row in segments]}
+            return hashlib.sha256(json.dumps(manifest if resources is None else [manifest, resources],
+                sort_keys=True, default=str).encode()).hexdigest()
+        with monkeypatch.context() as patch:
+            patch.setattr(narration_pcm, 'pcm_manifest_digest', legacy_digest)
+            assert case.owner.narration_unit_facts(*args, pcm_preparation=preparation) == actual
+        receipt = {'finalized': True, 'source_digest': actual[1]['merge_source_digest'], 'work_path': 'fixture.wav', 'pcm_bytes': 144}
+        # Edit adoption still passes a list, possibly with a replaced row.
+        for ordered in (rows, [replace(rows[0], audio_reference='narration://artifact/replacement'), *rows[1:]]):
+            expected = hashlib.sha256('\n'.join(row.audio_reference.removeprefix('narration://artifact/')
+                for row in ordered).encode()).hexdigest()
+            assert case.stage.pcm_record(snapshot.task, actual[1], receipt, iter(ordered)).cache_key == expected
+            assert case.stage.pcm_record(snapshot.task, actual[1], receipt, ordered).cache_key == expected
+    case.scheduler.close()
+
+
+@pytest.mark.parametrize('outcome', ['normal', 'unknown', 'tail', 'source', 'revoked'])
+def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypatch, outcome):
+    from app.creation_execution import CreationStageGrantContext
+    from app.device_scheduler import RecoveryBlocked
+    case = _ready_pcm_body_case(tmp_path, monkeypatch)
+    monkeypatch.setattr(CreationStageGrantContext, 'run_pcm_assembly', _pcm_fixture_receipt)
+    submitted = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    if outcome == 'normal':
+        original = case.scheduler._get(submitted)
+        case.owner.narration_audio_budget = replace(case.owner.narration_audio_budget, max_input_count=3)
+        with monkeypatch.context() as patch:
+            patch.setattr(case.owner, 'prepare_pcm_sources', lambda *a, **k: pytest.fail('reentry must use sealed sources'))
+            assert submit_creation_stage(case.execution, case.scheduler, case.job, case.actor) == submitted
+        assert case.scheduler._get(submitted).resources == original.resources
+        assert len(case.repo.list_creation_job_request_states('local', case.job.id)) == 1
+    first = case.scheduler.pick_and_grant()
+    assert first is not None
+    sealed = case.scheduler._get(first.request_id).resources
+    case.executor.execute(first, case.scheduler)
+    checkpoint = case.repo.creation_narration_merge_checkpoint('local', case.job.id)
+    assert checkpoint['section_ids'] == ['section_1', 'section_2']
+    assert checkpoint['source_digest'] == sealed['merge_source_digest']
+    assert case.repo.get_creation_task('local', case.task_id).narration_cache_key is None
+    final = case.scheduler.pick_and_grant()
+    assert final is not None
+    original_complete = case.repo.complete_creation_task_narration
+    if outcome == 'revoked':
+        # A legitimate downstream confirmation gate may produce no next unit;
+        # narration adoption cannot rely on the next owner's authorization.
+        monkeypatch.setattr('app.creation_execution.montage_waiting_for_confirmation',
+            lambda repo, task: task.stage == 'montage')
+    if outcome == 'unknown':
+        def rollback(*args, **kwargs):
+            original_complete(*args, **kwargs)
+            raise RuntimeError('sealed fixture: lose final owner commit')
+        monkeypatch.setattr(case.repo, 'complete_creation_task_narration', rollback)
+    elif outcome in {'tail', 'source', 'revoked'}:
+        # Mutate after outside observation inside the actual owner transaction.
+        original_released = case.scheduler._released_for_commit
+        injected = []
+        def changed(conn, grant):
+            result = original_released(conn, grant)
+            if not injected and grant.request_id == final.request_id:
+                injected.append(True)
+                if outcome == 'tail':
+                    conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content',?) "
+                        "WHERE script_id=? AND section_id='section_3'", ('changed tail', case.script_id))
+                elif outcome == 'source':
+                    path = Path(case.sources[-1]); path.write_bytes(path.read_bytes() + b'changed')
+                else:
+                    monkeypatch.setattr(case.owner, 'verify_identity', lambda actor: 'unauthorized')
+            return result
+        monkeypatch.setattr(case.scheduler, '_released_for_commit', changed)
+    if outcome == 'normal':
+        case.executor.execute(final, case.scheduler)
+    else:
+        with pytest.raises(RecoveryBlocked, match='原PCM结果未知'):
+            case.executor.execute(final, case.scheduler)
+        assert case.repo.get_creation_task('local', case.task_id).narration_cache_key is None
+        usage = case.repo.creation_narration_usage('local', case.job.id)
+        assert usage['unsettled'] and usage['used_output_bytes'] == checkpoint['pcm']['generated_bytes']
+        if outcome == 'unknown':
+            monkeypatch.setattr(case.repo, 'complete_creation_task_narration', original_complete)
+            assert case.executor.recover_pcm_unit(case.repo.get_job_run('local', case.job.id), case.actor, case.scheduler)
+    if outcome in {'normal', 'unknown'}:
+        task = case.repo.get_creation_task('local', case.task_id)
+        assert task.stage == 'montage' and task.narration_cache_key
+        assert case.scheduler._get(final.request_id).state == 'done'
+        usage = case.repo.creation_narration_usage('local', case.job.id)
+        assert not usage['unsettled'] and usage['used_output_bytes'] == 196
+        record = case.repo.get_narration_artifact('local', task.narration_cache_key)
+        expected = hashlib.sha256('\n'.join('ready-section_'+str(i) for i in range(1, 4)).encode()).hexdigest()
+        assert record.cache_key == expected and record.duration_seconds == .003
+        assert [asdict(row) for row in case.repo.list_narration_segments('local', case.task_id, case.script_id)] == case.original_segments
+    assert not case.generated and not case.merged
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    case.scheduler.close()

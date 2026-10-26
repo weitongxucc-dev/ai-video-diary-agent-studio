@@ -17,6 +17,45 @@ from app.device_scheduler import RecoveryBlocked
 EMPTY_PCM_SHA256 = hashlib.sha256(b'').hexdigest()
 
 
+def pcm_manifest_chunks(fields, segments):
+    """The original sorted JSON bytes, retaining only one segment's text.
+
+    PCM keys use json.dumps' default ensure_ascii=True, including its spaces
+    and datetime str() encoding. They are not execution_input digest bytes.
+    """
+    def encoded(value):
+        return json.dumps(value, sort_keys=True, default=str).encode()
+
+    yield b'{'
+    for index, name in enumerate(sorted((*fields, 'segments'))):
+        if index:
+            yield b', '
+        yield encoded(name) + b': '
+        if name != 'segments':
+            yield encoded(fields[name])
+            continue
+        yield b'['
+        for ordinal, segment in enumerate(segments):
+            if ordinal:
+                yield b', '
+            yield encoded(asdict(segment))
+        yield b']'
+    yield b'}'
+
+
+def pcm_manifest_digest(fields, segments, *, resources=None):
+    digest = hashlib.sha256()
+    if resources is not None:
+        digest.update(b'[')
+    for chunk in pcm_manifest_chunks(fields, segments):
+        digest.update(chunk)
+    if resources is not None:
+        digest.update(b', ')
+        digest.update(json.dumps(resources, sort_keys=True, default=str).encode())
+        digest.update(b']')
+    return digest.hexdigest()
+
+
 def _source_stat(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 

@@ -1025,30 +1025,31 @@ class CreationJobOwnerVerifier:
                     if budget.input_scope == 'single_call_prepared_v1' else None)))
             prefix = f'narration:segment:v1:{section.id}:'
         else:
-            # All-ready PCM assembly remains an aggregate consumer. Revisit the
-            # validated rows only on that branch; a pending unit retains no list
-            # of other section bodies, audio rows or source manifests.
+            # Whole-source metadata is the original request's recovery proof.
+            # Segment bodies are encoded one row at a time in this snapshot.
             audio = self.narration_audio_budget
-            ready_inputs, source_files, ordered_ids, saved_segments = [], [], [], []
+            ready_inputs, source_files, ordered_ids = [], [], []
             for section, segment in self.repository.iter_creation_narration_sections(task, script, connection=conn):
                 record = self.repository.get_narration_artifact(task.workspace_id,
                     segment.audio_reference.removeprefix('narration://artifact/'), connection=conn)
                 path = Path(record.audio_path)
                 source_stat = path.stat()
                 ordered_ids.append(section.id)
-                saved_segments.append(asdict(segment))
                 ready_inputs.append({'reference': segment.audio_reference, 'size_bytes': source_stat.st_size,
                     'duration_seconds': record.duration_seconds, 'sample_rate': record.sample_rate, 'channels': 1, 'uses': 1})
                 source_files.append([record.cache_key, str(path.resolve()), source_stat.st_size,
                     source_stat.st_mtime_ns, source_stat.st_ctime_ns])
             if audio is None or not ready_inputs:
                 raise ValueError('配音合并缺少全部ready片段或独立CPU音频预算')
-            manifest['segments'] = saved_segments
             manifest['source_files'] = source_files
-            source_digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+            from app.creation.narration_pcm import pcm_manifest_digest
+            def segments():
+                return (segment for _, segment in self.repository.iter_creation_narration_sections(
+                    task, script, connection=conn))
+            source_digest = pcm_manifest_digest(manifest, segments())
             resources = self.pcm_resources(conn, job, common, ready_inputs, source_files,
                 source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request)
-            prefix = 'narration:merge:v1:'
+            return 'narration:merge:v1:' + pcm_manifest_digest(manifest, segments(), resources=resources), resources
         digest = hashlib.sha256(json.dumps([manifest, resources], sort_keys=True, default=str).encode()).hexdigest()
         return prefix + digest, resources
 
@@ -1122,14 +1123,23 @@ class CreationJobOwnerVerifier:
                 generated=self.repository.get_narration_artifact(job.workspace_id,candidate['cache_key'])
                 section_id=self.repository.get_narration_segment(job.workspace_id,job.task_id,candidate['segment_id']).source_section_id
         paths=[]
-        for segment in self.repository.list_narration_segments(job.workspace_id,job.task_id,task.confirmed_script_id):
-            if segment.status!='ready' or generated is not None and segment.source_section_id==section_id:
-                continue
-            record=self.repository.get_narration_artifact(job.workspace_id,
-                segment.audio_reference.removeprefix('narration://artifact/'))
-            if record is None:
-                raise RecoveryBlocked('原PCM来源产物已丢失')
-            paths.append(record.audio_path)
+        with self.repository.creation_execution_read() as conn:
+            if job.kind == KIND:
+                snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
+                task = snapshot.task
+                segments = (segment for _, segment in self.repository.iter_creation_narration_sections(
+                    task, snapshot.script_header, connection=conn))
+            else:
+                segments = iter(self.repository.list_narration_segments(
+                    job.workspace_id,job.task_id,task.confirmed_script_id,connection=conn))
+            for segment in segments:
+                if segment is None or segment.status!='ready' or generated is not None and segment.source_section_id==section_id:
+                    continue
+                record=self.repository.get_narration_artifact(job.workspace_id,
+                    segment.audio_reference.removeprefix('narration://artifact/'),connection=conn)
+                if record is None:
+                    raise RecoveryBlocked('原PCM来源产物已丢失')
+                paths.append(record.audio_path)
         if generated is not None:
             paths.append(generated.audio_path)
         plan=self.repository.get_creation_plan(job.workspace_id,task.plan_id)
@@ -1158,7 +1168,15 @@ class CreationJobOwnerVerifier:
                 return self.pcm_assembly_baseline(request, reader, original_recovery=original_recovery)
         if request.resources.get('execution_mode') != 'cpu_pcm_wav_assembly':
             raise RecoveryBlocked('原请求不是PCM组装许可')
-        job,task,event,script,plan = self._facts(conn,request.workspace_id,request.owner_id)
+        job = self.repository.get_job_run(request.workspace_id, request.owner_id, connection=conn)
+        if job.kind == KIND:
+            job, snapshot, event = self._snapshot_facts(conn, request.workspace_id, request.owner_id)
+            task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+            if self._check_facts(job, task, event, script, plan, 'narration', request.member_id,
+                    revision=snapshot.input_digest) != 'ready':
+                raise RecoveryBlocked('原PCM作业的固定文案或制作输入已变化')
+        else:
+            job,task,event,script,plan = self._facts(conn,request.workspace_id,request.owner_id)
         key,resources = (self.narration_edit_facts(job,task,event,plan,connection=conn,request=request,original_recovery=original_recovery)
             if job.kind == NARRATION_EDIT_KIND else self.narration_unit_facts(conn,job,task,script,plan,request=request,original_recovery=original_recovery))
         if key != request.unit_key or resources != request.resources:
@@ -1396,6 +1414,16 @@ class CreationJobOwnerVerifier:
             # Release the observation first, then verify fresh facts below.
             if verdict == "ready":
                 self.task_authorizations.ensure(observed.task, original)
+        if (connection is None and pcm_preparation is None and request is None
+                and intent.unit_key.startswith('narration:merge:v1:')):
+            # External submission has no completion transaction's prepared WAV
+            # facts. Qualify outside the snapshot, then recheck current facts.
+            with self.repository.creation_execution_read() as reader:
+                observed_job, observed, _, observed_stage, original, verdict = current_facts(reader)
+                if verdict != 'ready' or self.authorization_verdict(
+                        observed.task, original, observed_stage, connection=reader) != 'ready':
+                    raise PermissionError('原PCM提交的身份或制作输入不可用')
+            pcm_preparation = self.prepare_pcm_sources(observed_job)
         with self.repository.creation_execution_read(connection) as conn:
             job, snapshot, event, stage, original, verdict = current_facts(conn)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
@@ -1880,6 +1908,9 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
                 and old.state == 'failed' and old.last_grant_generation is not None):
             return None  # Attempted narration units belong to original-unit recovery, not ungranted migration.
         if not legacy and owner.check_current(old, conn) == 'ready':
+            if (job.kind == KIND and old.unit_key.startswith('narration:merge:v1:')
+                    and old.state in {'waiting', 'blocked', 'granted', 'yield_requested'}):
+                return old  # Reentry owns this sealed prefix, even if the next unit's cap changed.
             if old.state in {'waiting', 'blocked'} and conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND job_id=? "
                     "AND event_type='creation_narration_source_revalidated' AND json_extract(payload_json,'$.new_request_id')=?",
                     (job.workspace_id, job.id, old.id)).fetchone():
@@ -1996,6 +2027,14 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         with nullcontext(connection) if connection is not None else repository._connect() as conn:
             stage, _resources = owner.render_facts(conn, task, plan, actor=actor, job=job, prepare_assembly=True)
     elif stage == 'narration':
+        if connection is None and pcm_preparation is None:
+            with repository.creation_execution_read() as reader:
+                observed = repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=reader)
+                all_ready = all(segment is not None and segment.status == 'ready'
+                    for _, segment in repository.iter_creation_narration_sections(
+                        observed.task, observed.script_header, connection=reader))
+            if all_ready:
+                pcm_preparation = owner.prepare_pcm_sources(job)
         with repository.creation_execution_read(connection) as conn:
             job, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
@@ -2379,8 +2418,12 @@ class CreationJobUnitExecutor:
         owner=scheduler.owners
         if hasattr(owner,'registrations'):
             owner=owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository._connect() as conn:
-            original,task,event,script,plan=owner._facts(conn,job.workspace_id,job.id)
+        with self.repository.creation_execution_read() as conn:
+            if job.kind == KIND:
+                original, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
+                task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+            else:
+                original,task,event,script,plan=owner._facts(conn,job.workspace_id,job.id)
             if (CreationExecutionActor.from_event(job.workspace_id,event)!=actor
                     or original.status=='cancelled'
                     or owner.authorization_verdict(task,actor,request.unit_key.split(':',1)[0],connection=conn)!='ready'):
@@ -2405,17 +2448,19 @@ class CreationJobUnitExecutor:
                 candidate=self.repository.narration_edit_generated(job.workspace_id,job.id)
                 commit=self.narration_stage.prepare_edit_adoption(job.workspace_id,job.task_id,event['edit_proposal_id'],
                     candidate,resources,receipt)
-            segments=self.repository.list_narration_segments(job.workspace_id,job.task_id,resources['script_id'])
-            by_section={item.source_section_id:item for item in segments}
-            ordered=[by_section[section.id] for section in script.sections]
-            record=self.narration_stage.pcm_record(task,resources,receipt,ordered) if receipt['finalized'] and job.kind==KIND else None
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 if job.kind != NARRATION_EDIT_KIND and write_guard is not None:
                     write_guard(conn)
                 if owner.pcm_assembly_baseline(request,conn,original_recovery=True)!=baseline:
                     raise RecoveryBlocked('原PCM恢复提交前依赖已变化')
-                current_job,current_task,current_event,current_script,current_plan=owner._facts(conn,job.workspace_id,job.id)
+                current_revision = None
+                if job.kind == KIND:
+                    current_job, snapshot, current_event = owner._snapshot_facts(conn, job.workspace_id, job.id)
+                    current_task, current_script, current_plan = snapshot.task, snapshot.script_header, snapshot.plan
+                    current_revision = snapshot.input_digest
+                else:
+                    current_job,current_task,current_event,current_script,current_plan=owner._facts(conn,job.workspace_id,job.id)
                 source_error = None
                 if current_job.kind == NARRATION_EDIT_KIND:
                     try:
@@ -2426,7 +2471,7 @@ class CreationJobUnitExecutor:
                     except (PermissionError, ValueError, KeyError) as exc:
                         source_error = str(exc)
                 if (owner._check_facts(current_job,current_task,current_event,current_script,current_plan,
-                        request.unit_key.split(':',1)[0],actor.member_id)!='ready'
+                        request.unit_key.split(':',1)[0],actor.member_id,revision=current_revision)!='ready'
                         or owner.authorization_verdict(current_task,actor,request.unit_key.split(':',1)[0],connection=conn)!='ready'):
                     raise PermissionError('原PCM恢复提交前授权或目标已变化')
                 verify_prepared()
@@ -2456,7 +2501,10 @@ class CreationJobUnitExecutor:
                         current_task.stage_reason=current_task.stage_impact=current_task.stage_repair_action=current_task.stage_retryable=None
                         conn.execute('UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?',
                             (json.dumps(asdict(current_task),default=str),datetime.now(timezone.utc).isoformat(),job.workspace_id,job.task_id))
-                        self.repository.complete_creation_task_narration(record,ordered,connection=conn)
+                        record = self.narration_stage.pcm_record(current_task, resources, receipt,
+                            (segment for _, segment in self.repository.iter_creation_narration_sections(
+                                current_task, current_script, connection=conn)))
+                        self.repository.complete_creation_task_narration(record, connection=conn)
                         checkpoint=self._checkpoint(conn,grant,status='queued',output=record.cache_key,stage='narration')
                 else:
                     checkpoint=self.repository.checkpoint_creation_narration_merge(grant,
@@ -2485,18 +2533,24 @@ class CreationJobUnitExecutor:
         if (resources.get('input_contract') != 'narration_units_v1'
                 or resources.get('narration_phase') not in {'segment', 'merge'}):
             raise PermissionError('原整阶段配音契约须先转换为逐段执行')
+        pcm_request = scheduler._get(grant.request_id) if resources['narration_phase'] == 'merge' else None
         scheduler.assert_grant(grant)
         owner = scheduler.owners
         if hasattr(owner, 'registrations'):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository._connect() as conn:
-            job, task, event, script, plan = owner._facts(conn, grant.workspace_id, grant.owner_id)
-        pending = [NarrationSegment(id=self.narration_stage.segment_id(task.id, script.id, section.id),
-            workspace_id=task.workspace_id, task_id=task.id, script_id=script.id, source_section_id=section.id,
-            text=section.content, audio_reference=None, duration_seconds=None, sample_rate=None,
-            model_id=resources['model_id'], voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'],
-            language=resources['language'], pronunciation_version=resources['pronunciation_version'], status='pending')
-            for section in script.sections]
+        with self.repository.creation_execution_read() as conn:
+            if resources['narration_phase'] == 'merge':
+                job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
+                task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+                pending = None
+            else:
+                job, task, event, script, plan = owner._facts(conn, grant.workspace_id, grant.owner_id)
+                pending = [NarrationSegment(id=self.narration_stage.segment_id(task.id, script.id, section.id),
+                    workspace_id=task.workspace_id, task_id=task.id, script_id=script.id, source_section_id=section.id,
+                    text=section.content, audio_reference=None, duration_seconds=None, sample_rate=None,
+                    model_id=resources['model_id'], voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'],
+                    language=resources['language'], pronunciation_version=resources['pronunciation_version'], status='pending')
+                    for section in script.sections]
         job, remaining_seconds, remaining_bytes = self.repository.start_creation_narration_unit(grant, resources, pending)
         already_elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation = threading.Event()
@@ -2567,6 +2621,13 @@ class CreationJobUnitExecutor:
             def commit(conn, current):
                 if self._application_quit.is_set():
                     raise GrantedCommandCancelled('应用退出，先结算原配音单元消耗')
+                if segment is None:
+                    current_task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+                    if owner.authorization_verdict(current_task, actor, 'narration',
+                            connection=conn, check_scope=False) != 'ready':
+                        raise PermissionError('原PCM提交前任务授权已变化')
+                    if owner.pcm_assembly_baseline(pcm_request, conn) != resources['pcm_assembly']:
+                        raise RecoveryBlocked('原PCM提交前来源或检查点已变化')
                 settle(conn, current)
                 if segment is None:
                     if not resources['merge_final']:
@@ -2574,9 +2635,7 @@ class CreationJobUnitExecutor:
                             source_digest=resources['merge_source_digest'], section_ids=resources['merge_section_ids'],
                             input_references=[item['reference'] for item in resources['inputs']],
                             pcm_receipt=pcm_receipt, connection=conn)
-                    segments = self.repository.list_narration_segments(job.workspace_id, job.task_id,
-                        resources['script_id'], connection=conn)
-                    self.repository.complete_creation_task_narration(artifact, segments, connection=conn)
+                    self.repository.complete_creation_task_narration(artifact, connection=conn)
                     return self._checkpoint(conn, current, status='queued', output=artifact.cache_key, stage='narration')
                 if video_preparation is not None:
                     self.segments.persist_video_preparation(video_preparation,current,connection=conn)

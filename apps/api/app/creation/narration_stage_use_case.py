@@ -121,24 +121,22 @@ class NarrationStageUseCase:
                       grant_context: CreationStageGrantContext) -> tuple[NarrationArtifactRecord, int]:
         """Combine only the bounded inputs declared by this original Job's permit."""
         self._check_preparation_grant(grant_context, 'narration:merge:v1:', workspace_id, task_id, script_id)
-        task, plan, script, inputs = self._preparation_inputs(workspace_id, task_id, script_id)
-        pronunciation_version = _pronunciation_version(_pronunciation_dictionary(
-            entries=inputs.pronunciation_entries, workspace_id=workspace_id,
-            person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
-        segments = self.repository.list_narration_segments(workspace_id, task.id, script.id)
-        by_section = {item.source_section_id: item for item in segments}
-        if (not script.sections or len(by_section) != len(segments)
-                or set(by_section) != {item.id for item in script.sections}):
-            raise ValueError('合并须包含当前确认文案的全部唯一配音片段')
+        with self.repository.creation_execution_read() as conn:
+            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+            task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
+            if task.stage != 'narration' or script.id != script_id or script.selection_status != 'confirmed':
+                raise ValueError('配音单元不匹配当前任务阶段或确认文案')
+            if plan.selected_voice is None:
+                raise MediaAuthorityError(reason='voice_identity_missing', impact='当前创作任务未生成配音，未调用声音模型。',
+                    repair_action='重新预检并选择已授权且支持目标语言的声音版本。')
+            inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id,
+                voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
+            pronunciation_version = _pronunciation_version(_pronunciation_dictionary(
+                entries=inputs.pronunciation_entries, workspace_id=workspace_id,
+                person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
+            for _ in self._merge_segments(task, script, inputs.voice, pronunciation_version, connection=conn):
+                pass
         language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
-        for section in script.sections:
-            segment = by_section[section.id]
-            if (segment.status != 'ready' or segment.text != section.content
-                    or segment.script_id != script.id or segment.language != language
-                    or segment.pronunciation_version != pronunciation_version
-                    or (segment.voice_profile_id, segment.voice_version) != (inputs.voice.id, inputs.voice.version)
-                    or not segment.audio_reference):
-                raise ValueError('合并片段尚未就绪或不匹配当前文案与声音版本')
         if not input_references or len(set(input_references)) != len(input_references):
             raise ValueError('合并单元须声明非空且唯一的实际音频输入')
         artifacts = []
@@ -167,16 +165,37 @@ class NarrationStageUseCase:
             raise PermissionError('配音组装输入不属于原PCM许可')
         grant_context.check()
         receipt = grant_context.run_pcm_assembly(resources)
-        record = self.pcm_record(task,resources,receipt,[by_section[section.id] for section in script.sections]) if receipt['finalized'] else None
+        record = None
+        if receipt['finalized']:
+            with self.repository.creation_execution_read() as conn:
+                record = self.pcm_record(task, resources, receipt, self._merge_segments(
+                    task, script, inputs.voice, pronunciation_version, connection=conn))
         return record,receipt['generated_bytes'],receipt
+
+    def _merge_segments(self, task, script, voice, pronunciation_version, *, connection):
+        if not script.sections_total_count:
+            raise ValueError('合并须包含当前确认文案的全部唯一配音片段')
+        language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
+        for section, segment in self.repository.iter_creation_narration_sections(task, script, connection=connection):
+            if (segment is None or segment.status != 'ready' or segment.text != section.content
+                    or segment.script_id != script.id or segment.language != language
+                    or segment.pronunciation_version != pronunciation_version
+                    or (segment.voice_profile_id, segment.voice_version) != (voice.id, voice.version)
+                    or not segment.audio_reference):
+                raise ValueError('合并片段尚未就绪或不匹配当前文案与声音版本')
+            yield segment
 
     def pcm_record(self, task, resources, receipt, segments):
         if not receipt['finalized'] or receipt['source_digest']!=resources['merge_source_digest']:
             raise ValueError('未封存的PCM工作文件不能成为配音产物')
         import hashlib
-        cache_key=hashlib.sha256('\n'.join(item.audio_reference.removeprefix('narration://artifact/')
-            for item in segments).encode()).hexdigest()
-        first=segments[0]
+        iterator = iter(segments)
+        first = next(iterator)
+        digest = hashlib.sha256(first.audio_reference.removeprefix('narration://artifact/').encode())
+        for segment in iterator:
+            digest.update(b'\n')
+            digest.update(segment.audio_reference.removeprefix('narration://artifact/').encode())
+        cache_key = digest.hexdigest()
         return NarrationArtifactRecord(id=f'narration_{cache_key[:16]}',workspace_id=task.workspace_id,
             task_id=task.id,script_id=resources['script_id'],voice_profile_id=first.voice_profile_id,cache_key=cache_key,
             audio_path=receipt['work_path'],duration_seconds=receipt['pcm_bytes']/48000,

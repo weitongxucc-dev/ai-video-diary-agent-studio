@@ -6265,13 +6265,26 @@ class ProductionRepository:
                 else budget['parent_max_output_bytes'] - usage['used_output_bytes'])
             if remaining_seconds <= 0 or remaining_bytes <= 0:
                 raise ValueError('原配音阶段累计额度已耗尽，不能重置额度重启')
-            current_segments = self.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
             if job.kind == 'creation_task_narration_edit':
                 pass  # Candidate generation does not replace applied segment facts.
-            elif not current_segments:
-                self.save_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, pending_segments, connection=conn)
-            elif len(current_segments) != len(pending_segments):
-                raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
+            elif resources['narration_phase'] == 'merge':
+                snapshot = self.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+                header = snapshot.script_header
+                if snapshot.input_digest != grant.input_digest:
+                    raise RecoveryBlocked('原PCM启动前固定文案或制作输入已变化')
+                count = 0
+                for _, segment in self.iter_creation_narration_sections(task, header, connection=conn):
+                    if segment is None or segment.status != 'ready' or not segment.audio_reference:
+                        raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
+                    count += 1
+                if count == 0 or count != header.sections_total_count:
+                    raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
+            else:
+                current_segments = self.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
+                if not current_segments:
+                    self.save_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, pending_segments, connection=conn)
+                elif len(current_segments) != len(pending_segments):
+                    raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
             if job.kind != 'creation_task_narration_edit':
                 task.stage_status, task.status = 'running', 'running'
             task.stage_reason = task.stage_impact = task.stage_repair_action = task.stage_retryable = None
