@@ -293,3 +293,51 @@ def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixe
         assert script.sections[0].content == state.fixed_body
         assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
     assert state.repository.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent
+
+
+@pytest.mark.parametrize('entry', ['http', 'task_business'])
+def test_script_context_denies_private_task_to_another_current_member(api_state, monkeypatch, entry):
+    import app.main as main
+    from fastapi import HTTPException
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+
+    state = api_state
+    reader, token = main.local_members_service.join(main.local_members_service.create_invite_code(), 'Other reader')
+    state.sources.set_knowledge_item_visibility('local', 'fixture', 'shared')
+    monkeypatch.setattr(main, '_creation_task_script_generator_for',
+        lambda *_: pytest.fail('context reads must not call a model'))
+    if entry == 'http':
+        response = state.client.get('/api/creation-tasks/task/assistant/script-context',
+            headers={'X-Local-Member-Token': token})
+        assert response.status_code == 404, response.text
+        assert 'sources' not in response.json()
+    else:
+        with pytest.raises((HTTPException, ScriptDraftRejected)) as denied:
+            main._task_business().script_context('local', 'task', reader.member_id)
+        assert denied.value.status_code == 404
+    assert state.client.get('/api/creation-tasks/task/assistant/script-context').status_code == 200
+
+
+@pytest.mark.parametrize('entry', ['http', 'task_business'])
+def test_script_context_denies_owner_private_sources_in_shared_task(api_state, monkeypatch, entry):
+    import app.main as main
+    from fastapi import HTTPException
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+
+    state = api_state
+    reader, token = main.local_members_service.join(main.local_members_service.create_invite_code(), 'Other reader')
+    state.repository.set_creation_task_visibility('local', 'task', 'shared')
+    monkeypatch.setattr(main, '_creation_task_script_generator_for',
+        lambda *_: pytest.fail('context reads must not call a model'))
+    if entry == 'http':
+        response = state.client.get('/api/creation-tasks/task/assistant/script-context',
+            headers={'X-Local-Member-Token': token})
+        assert response.status_code == 409, response.text
+        assert response.json()['detail']['error'] == 'assistant_reply_source_changed'
+        assert 'sources' not in response.json()
+    else:
+        with pytest.raises((HTTPException, ScriptDraftRejected)) as denied:
+            main._task_business().script_context('local', 'task', reader.member_id)
+        assert denied.value.status_code == 409
+        assert denied.value.detail['error'] == 'assistant_reply_source_changed'
+    assert state.client.get('/api/creation-tasks/task/assistant/script-context').status_code == 200

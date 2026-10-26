@@ -108,9 +108,9 @@ def test_script_section_http_reads_complete_versioned_windows_without_full_hydra
         assert summary['sections_total_count'] == 45
     from types import SimpleNamespace
     plan = state.repo.get_creation_plan(state.task.workspace_id, state.task.plan_id)
-    monkeypatch.setattr(main, '_assistant_script_inputs', lambda *_:
+    monkeypatch.setattr(main.ScriptContextUseCase, 'read_inputs', lambda *_:
         (state.task, plan, SimpleNamespace(title='Topic', angle='', audience='', outline=[]), [], []))
-    context = main._assistant_script_context_facts(state.task.workspace_id, state.task.id, state.member.member_id)
+    context = main._script_context_use_case().read_context(state.task.workspace_id, state.task.id, state.member.member_id, local_diagnostic=False)
     assert context['draft']['sections'] is None and context['draft']['sections_loaded'] is False
     assert context['draft']['sections_total_count'] == 45
     url = state.url + f'/scripts/{script_id}/sections'

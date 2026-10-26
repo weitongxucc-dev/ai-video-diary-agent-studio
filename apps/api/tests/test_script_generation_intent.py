@@ -185,9 +185,9 @@ def test_execute_finishes_actual_reviewed_window_without_adopting_or_saving_mode
         raise AssertionError("successful fixture unexpectedly produced unknown outcome") from sys.exception()
     monkeypatch.setattr(case, "_mark_unknown", unexpected_unknown)
     script_case = ScriptDraftUseCase(state.repository,
-        read_inputs=main._assistant_script_inputs,
+        read_inputs=main._script_context_use_case().read_inputs,
         validate_inputs=lambda ws, plan, refs: main._validate_script_input_sources(ws, plan, refs, actor.member_id),
-        script_goal=lambda plan, task, viewer: plan.goal, topic_origin=main._script_topic_origin,
+        script_goal=lambda plan, task, viewer: plan.goal, topic_origin=main._script_context_use_case().topic_origin,
         check_draft=lambda script_input, candidate: candidate,
         record_service=lambda **facts: None, route_snapshot=main._topic_route_snapshot,
         record_adoption=lambda **facts: pytest.fail("generation must not adopt"))

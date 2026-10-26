@@ -84,11 +84,11 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     ]
     production.confirm_topic_candidate("qa", task.id, candidate.id)
     sources.set_knowledge_item_use_state("qa", "knowledge", "excluded")
-    with pytest.raises(HTTPException) as blocked:
-        main._assistant_script_inputs("qa", task.id)
+    with pytest.raises(main.ScriptDraftRejected) as blocked:
+        main._script_context_use_case().read_inputs("qa", task.id)
     assert blocked.value.status_code == 409 and blocked.value.detail["reason"] == "knowledge_reference_missing"
     sources.set_knowledge_item_use_state("qa", "knowledge", "available")
-    task, _, _, _, inputs = main._assistant_script_inputs("qa", task.id)
+    task, _, _, _, inputs = main._script_context_use_case().read_inputs("qa", task.id)
     script_run = ScriptGenerationRun(
         id="script-run", workspace_id="qa", task_id=task.id, plan_id=plan.id, topic_id=candidate.id,
         status="running", route_snapshot={}, prompt_schema_version="fixture", input_references=inputs,

@@ -301,14 +301,14 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         candidate = json.loads(payload["messages"][1]["content"])["script"]
         response = {"sections": [{"index": index,
             "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
-                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}
+                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}]}
             for index, section in enumerate(candidate["sections"], start=1)]}
         return _review_tool_response(response)
     checker = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "controlled-review",
         transport=httpx.MockTransport(review))
     monkeypatch.setattr(main_module, "_creation_task_script_generator_for", lambda settings: checker)
 
-    def inputs(workspace_id, task_id):
+    def inputs(_case, workspace_id, task_id):
         task = main_module._creation_task_or_404(workspace_id, task_id)
         if task.stage != "script" or task.confirmed_script_id:
             raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
@@ -322,7 +322,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         }]
 
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(main_module, "_assistant_script_inputs", inputs)
+    monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", inputs)
     monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: SimpleNamespace(
             version="v1", title="已授权资料", authorization="available",
@@ -348,13 +348,13 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert first.json()["selection_status"] == "draft"
     assert repo.get_creation_task("local", "task-one").confirmed_script_id is None
     second = client.post(base + "/script-draft", json={
-        **body, "sections": [{**body["sections"][0], "content": "把开头缩短。"}],
+        **body, "edit_mode": "replace_all", "sections": [{**body["sections"][0], "content": "把开头缩短。"}],
         "expected_updated_at": first.json()["updated_at"],
     })
     assert second.status_code == 200 and second.json()["id"] == script_id
     assert len(repo.list_creation_task_scripts("local", "task-one")) == 1
     stale = client.post(base + "/script-draft", json={
-        **body,
+        **body, "edit_mode": "replace_all",
         "sections": [{**body["sections"][0], "content": "迟到的旧版本"}],
         "expected_updated_at": first.json()["updated_at"],
     })

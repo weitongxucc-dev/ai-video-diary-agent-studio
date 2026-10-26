@@ -454,7 +454,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
         },
         get_turn=lambda _turn_id: turn,
     ))
-    monkeypatch.setattr(main_module, "_assistant_script_inputs", lambda _workspace, _task_id: (
+    monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", lambda _case, _workspace, _task_id: (
         repo.get_creation_task(WORKSPACE, task.id), plan,
         SimpleNamespace(id=task.selected_topic_id, title="核心功能是什么"), (), INPUT_REFERENCES,
     ))
@@ -593,7 +593,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
     ))
-    monkeypatch.setattr(main_module, "_assistant_script_inputs", lambda _workspace, _task_id: (
+    monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", lambda _case, _workspace, _task_id: (
         repo.get_creation_task(WORKSPACE, task.id), repo.get_creation_plan(WORKSPACE, plan.id),
         topic, (bounded_source,), INPUT_REFERENCES,
     ))

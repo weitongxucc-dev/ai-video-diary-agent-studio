@@ -6613,94 +6613,22 @@ def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: 
     return origin
 
 
-def _script_topic_origin(workspace_id: str, plan: CreationPlan, topic: CreationTaskTopicCandidate) -> Literal["generated", "provided"]:
-    intent = plan.creation_intent
-    if not intent or not (intent.get("topic_title") or intent.get("final_script")):
-        return "generated"
-    run = production_repo.get_topic_generation_run(workspace_id, topic.run_id)
-    return "provided" if run.task_id == topic.task_id and run.route_snapshot.get("operation") == "provided_topic" else "generated"
+from app.creation.script_context_use_case import ScriptContextUseCase
 
 
-def _assistant_script_inputs(workspace_id: str, task_id: str):
-    task = _creation_task_or_404(workspace_id, task_id)
-    if task.confirmed_script_id and task.can_revise_script:
-        confirmed = next((item for item in production_repo.active_creation_task_script_headers(workspace_id, task_id)
-                          if item['id'] == task.confirmed_script_id), None)
-        if confirmed is None:
-            raise HTTPException(status_code=409, detail="当前确认文案不存在，请重新读取任务")
-        if confirmed.get('locked_body_digest'):
-            raise HTTPException(status_code=409, detail="当前定稿正文已锁定，不能自动改写；请明确采用新的定稿。")
-    elif task.stage != "script" or task.confirmed_script_id:
-        raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    topic = next((item for item in production_repo.list_topic_candidates(workspace_id, task_id)
-                  if item.id == task.selected_topic_id), None)
-    if topic is None:
-        raise HTTPException(status_code=409, detail="请先确认本次选题")
-    try:
-        sources, input_references, _ = _source_inputs_use_case().prepare(
-            workspace_id, task, plan, cloud_egress=True,
-        )
-    except _CreationTaskTopicPreflightError as exc:
-        raise HTTPException(status_code=409, detail={
-            "reason": exc.reason, "impact": exc.impact, "repair_action": exc.repair_action,
-        }) from exc
-    return task, plan, topic, sources, input_references
+def _script_context_use_case() -> ScriptContextUseCase:
+    return ScriptContextUseCase(production_repo, _source_inputs_use_case())
 
 
 @app.get("/api/creation-tasks/{task_id}/assistant/script-context")
 def get_assistant_script_context(task_id: str, request: Request) -> dict[str, object]:
-    return _assistant_script_context_facts(current_workspace_id(request),task_id,_content_reader(request,current_workspace_id(request))[0])
-
-
-def _assistant_script_context_facts(workspace_id,task_id,reader_id):
-    task, plan, topic, sources, _ = _assistant_script_inputs(workspace_id, task_id)
-    script_goal = _creation_task_script_goal(plan, task, reader_id)
-    scripts = production_repo.active_creation_task_script_headers(workspace_id, task.id)
-    draft = scripts[0] if scripts and scripts[0]['selection_status'] == "draft" else None
-    if task.can_revise_script and task.confirmed_script_id:
-        draft = next((item for item in scripts if item['id'] == task.confirmed_script_id), None)
-    retained_draft = None
-    if draft and not production_repo.script_knowledge_inputs_current(workspace_id, task.id, draft['id']):
-        retained_draft, draft = draft, None
-    reply_event = next((event for event in production_repo.list_task_events(workspace_id, task.id)
-                        if event.event_type == "assistant_reply_plan_confirmed"
-                        and event.payload.get("plan_id") == plan.id), None)
-    reply_reference = reply_event.payload.get("reply_reference") if reply_event else None
-    reply_origin = ({
-        "conversation_id": reply_reference["conversation_id"],
-        "turn_id": reply_reference["turn_id"],
-        "request_id": reply_event.payload["request_id"],
-    } if isinstance(reply_reference, dict)
-        and isinstance(reply_reference.get("conversation_id"), str)
-        and isinstance(reply_reference.get("turn_id"), str)
-        and isinstance(reply_event.payload.get("request_id"), str) else None)
-    return {
-        "task_id": task.id,
-        "goal": script_goal,
-        **({"creative_proposal": plan.goal,
-            "creative_proposal_role": "可修订的Agent方案，不是用户已定稿正文；本条交付以language和duration_target_seconds等结构化要求为准。"}
-           if script_goal != plan.goal else {}),
-        "creation_intent": plan.creation_intent,
-        "language": plan.language,
-        "duration_target_seconds": plan.duration_target_seconds,
-        "presenter_share_target": plan.presenter_share_target,
-        "style_instruction": str(plan.template_settings.get("style_instruction", "")),
-        "script_structure": list(plan.template_settings.get("script_structure", [])),
-        "script_section_count": plan.template_settings.get("script_section_count"),
-        "topic": {"title": topic.title, "angle": topic.angle, "audience": topic.audience,
-                  "outline": topic.outline},
-        "sources": [{"reference_id": source.reference_id, "title": source.title,
-                     "text": source.text} for source in sources],
-        "draft": ({"id": draft['id'], "title": draft['title'],
-                   "updated_at": draft['updated_at'], "sections": None,
-                   "draft_complete": draft.get('draft_complete', True),
-                   "sections_loaded": False, "sections_total_count": draft['sections_total_count']}
-                  if draft is not None else None),
-        "reply_origin": reply_origin,
-        "retained_draft": ({"id": retained_draft['id'], "title": retained_draft['title'],
-            "updated_at": retained_draft['updated_at'], "reason": "资料已追加，旧稿保留；新一轮文案将使用新引用。"} if retained_draft else None),
-    }
+    workspace_id = current_workspace_id(request)
+    reader_id, local_diagnostic = _content_reader(request, workspace_id)
+    try:
+        return _script_context_use_case().read_context(workspace_id, task_id, reader_id,
+            local_diagnostic=local_diagnostic)
+    except ScriptDraftRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 def _verified_assistant_reply(request: Request, conversation_id: str, turn_id: str, task_id: str | None) -> tuple[dict[str, str], str, str]:
@@ -6738,21 +6666,6 @@ def _validate_script_input_sources(workspace_id,plan,input_references,reader_id,
         }) from exc
 
 
-def _creation_task_script_goal(plan: CreationPlan, task: CreationTask, viewer_user_id: str | None) -> str:
-    from app.creation.intent_use_case import CreationIntentUseCase
-
-    try:
-        return CreationIntentUseCase.script_goal(production_repo, plan, task, viewer_user_id=viewer_user_id)
-    except (KeyError, ValueError) as exc:
-        raise _topic_failure_response(
-            status_code=409, error="script_goal_source_changed",
-            reason="当前任务的原始制作要求不可读取，或与已采用方案的来源不一致。",
-            impact="未调用文字模型，未保存或采用新文案。",
-            repair_action="读取当前任务及原创作请求，核对采用来源和当前成员权限后再制作。",
-            retryable=False,
-        ) from exc
-
-
 @app.post(
     "/api/creation-tasks/{task_id}/assistant/reply-transfer",
     response_model=CreationTaskScriptsResponse,
@@ -6764,7 +6677,10 @@ def transfer_assistant_reply_to_script(
     reference, reply_text, member_id = _verified_assistant_reply(
         request, str(payload.conversation_id), str(payload.turn_id), task_id,
     )
-    task, plan, topic, _sources, input_references = _assistant_script_inputs(workspace_id, task_id)
+    try:
+        task, plan, topic, _sources, input_references = _script_context_use_case().read_inputs(workspace_id, task_id)
+    except ScriptDraftRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
     reader_id, _local_diagnostic = _require_current_script_inputs(
         request, workspace_id, plan, input_references,
     )
@@ -6804,8 +6720,9 @@ def transfer_assistant_reply_to_script(
 
 
 def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None):
-    case=ScriptDraftUseCase(production_repo,read_inputs=_assistant_script_inputs,validate_inputs=validate_inputs,
-        script_goal=_creation_task_script_goal,topic_origin=_script_topic_origin,
+    context = _script_context_use_case()
+    case=ScriptDraftUseCase(production_repo,read_inputs=context.read_inputs,validate_inputs=validate_inputs,
+        script_goal=context.goal,topic_origin=context.topic_origin,
         check_draft=lambda inputs,candidate:_creation_task_script_generator_for(_workspace_settings_for(workspace_id)).check_draft(inputs,candidate),
         record_service=lambda **facts: record_llm_service_verification(_workspace_settings_for(workspace_id),**facts),
         route_snapshot=_topic_route_snapshot,
@@ -7089,7 +7006,10 @@ def _assistant_turn_scope(
     if task.stage == "script" or task.confirmed_script_id is None or stage == "script" and task.can_revise_script:
         if stage != "script":
             raise HTTPException(status_code=409, detail="当前任务尚未完成文案确认，不能使用剪辑对话")
-        _assistant_script_inputs(workspace_id, task.id)
+        try:
+            _script_context_use_case().read_inputs(workspace_id, task.id)
+        except ScriptDraftRejected as exc:
+            raise HTTPException(exc.status_code, exc.detail) from exc
         if payload.selected_object_refs or payload.playhead_ms is not None:
             raise HTTPException(status_code=422, detail="文案对话不能选择剪辑对象")
         return "script", []
@@ -13947,7 +13867,8 @@ def _creator_memory_facts(workspace_id, member_id):
 def _task_business(*, generation_case=None):
     return TaskBusiness(production_repo,conversation_repo,_task_authorizations_for_goal(),runtime=_creation_runtime,
         execution=None if generation_case is not None else _creation_execution_control(),workspace_facts=_creation_task_workspace_response,
-        script_context=_assistant_script_context_facts,
+        script_context=lambda ws, task_id, reader_id: _script_context_use_case().read_context(
+            ws, task_id, reader_id, local_diagnostic=False),
         script_facts=lambda ws, task: _creation_task_scripts_response(ws, task, include_body=False),
         script_case=lambda actor:(_generation_script_case(actor.workspace_id, actor.user_id or actor.member_id, generation_case)
             if generation_case is not None else _script_draft_use_case(actor.workspace_id,validate_inputs=lambda ws,plan,refs:
