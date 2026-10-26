@@ -97,10 +97,26 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
 
 
 @dataclass(frozen=True)
+class ObservedCommandResources:
+    peak_rss_bytes: int | None
+    peak_threads: int | None
+    rss_sample_complete: bool
+    threads_sample_complete: bool
+
+
+def _observed_command_resources(observation) -> ObservedCommandResources:
+    rss, threads = observation.get("observed_peak_rss"), observation.get("observed_peak_threads")
+    return ObservedCommandResources(
+        None if rss is None else rss["rss_bytes"], None if threads is None else threads["threads"],
+        bool(rss and rss["sample_complete"]), bool(threads and threads["sample_complete"]))
+
+
+@dataclass(frozen=True)
 class GrantedCommandResult:
     returncode: int
     stdout: bytes
     stderr: bytes
+    observed_resources: ObservedCommandResources | None = None
 
 
 class GrantedCommandError(RuntimeError):
@@ -686,7 +702,8 @@ def run_granted_command(
             "process_cpu_observation": process_cpu_observation,
             "process_resource_observation": process_resource_observation,
         })
-        return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
+        return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]),
+            _observed_command_resources(process_resource_observation))
     except BaseException as exc:
         before_termination_returncode = process.poll() if process is not None else None
         group_released = True if process is None else None

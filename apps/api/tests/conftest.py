@@ -24,6 +24,8 @@ for name, relative in {
     (path.parent if name == "DATABASE_PATH" else path).mkdir(parents=True, exist_ok=True)
     os.environ[name] = str(path)
 os.environ.update({
+    "DEVICE_RESOURCE_MODE": "experiment",
+    "DEVICE_RESOURCE_EXPERIMENT_ID": "pytest-isolated-fixture",
     "AI_VIDEO_DIARY_DOTENV": str(_test_root / "empty.env"),
     "NATIVE_OCR_WORKER_PATH": "",
     "NATIVE_PORTRAIT_WORKER_PATH": "",
@@ -43,6 +45,9 @@ os.environ.update({
 
 
 def pytest_sessionstart(session):
+    from app import device_paths
+    # Explicit test machine context: no test may acquire the real application lock.
+    device_paths.application_data_root = lambda: _test_root / "device-execution"
     from app.main import create_app
 
     create_app()

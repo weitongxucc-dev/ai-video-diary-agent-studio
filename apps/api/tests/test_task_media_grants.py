@@ -476,7 +476,7 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
     runtime.scheduler.processes=HostProcessProbe()
     runtime.scheduler.resources=HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=replace(main.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy)),
+        cpu_render=replace(main._device_operation_budget("cpu_render"),running_cpu_policy=_render_budget().running_cpu_policy)),
         memory_monitor=IsolatedMemoryMonitor())
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
@@ -550,7 +550,8 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
     payload = repo.get_creation_task_montage_plan('local', 'task')
     repo.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
-    monkeypatch.setattr(main, 'clip_preview_budget_from_env', main.cpu_render_budget_from_env)
+    selected_budget = main._device_host_budget()
+    monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, clip_preview=selected_budget.cpu_render))
     store = ArtifactStore(tmp_path/'output')
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'artifact_store', store)
@@ -583,7 +584,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     runtime.scheduler.processes = HostProcessProbe()
     runtime.scheduler.resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=replace(main.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy), clip_preview=main.clip_preview_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()),memory_monitor=IsolatedMemoryMonitor())
+        cpu_render=replace(main._device_operation_budget("cpu_render"),running_cpu_policy=_render_budget().running_cpu_policy), clip_preview=main._device_operation_budget("clip_preview"), cpu_audio=main._device_operation_budget("cpu_audio")),memory_monitor=IsolatedMemoryMonitor())
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
 

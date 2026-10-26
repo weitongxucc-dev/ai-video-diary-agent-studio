@@ -836,7 +836,9 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     access = MemberDeviceAccess(state.members,identity_verifier=live_identity)
     monkeypatch.setattr(main_module,'settings',replace(main_module.settings,native_ocr_worker_path=None))
     clip_profile = synthetic_clip_preview_budget()
-    monkeypatch.setattr(main_module, 'clip_preview_budget_from_env', lambda:clip_profile)
+    selected_budget_for = main_module._device_operation_budget
+    monkeypatch.setattr(main_module, '_device_operation_budget',
+        lambda name: clip_profile if name == 'clip_preview' else selected_budget_for(name))
     def facts(workspace,task_id,operation,arguments,original):
         assert original==actor
         if '_clip_preview' in arguments:
@@ -899,11 +901,11 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         from app.host_resource_probes import HostBudget, HostResourceProbe
         from tests.host_memory_boundary import IsolatedMemoryMonitor
         from test_host_resource_probes import _render_budget
-        _presenter, presenter_cpu = main_module.presenter_budgets_from_env()
+        presenter_cpu = main_module._device_operation_budget("presenter_cpu_render")
         resources = HostResourceProbe(state.production.database_path, disk_paths=(state.production.database_path.parent,),
             budget=HostBudget(75, 1, 1, 1, 32*1024**2, 32*1024**2,
-                cpu_render=replace(main_module.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy),
-                clip_preview=clip_profile,presenter_cpu_render=presenter_cpu,cpu_audio=main_module.cpu_audio_budget_from_env()),
+                cpu_render=replace(main_module._device_operation_budget("cpu_render"),running_cpu_policy=_render_budget().running_cpu_policy),
+                clip_preview=clip_profile,presenter_cpu_render=presenter_cpu,cpu_audio=main_module._device_operation_budget("cpu_audio")),
             memory_monitor=IsolatedMemoryMonitor())
     runtime=build_device_runtime(database_path=state.production.database_path,
         device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,

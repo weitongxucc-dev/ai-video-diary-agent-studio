@@ -90,6 +90,8 @@ function createServiceConfiguration({ userDataPath, resourcesPath, desktopDirect
   function apiEnvironment(port) {
     return {
       ...environment, ...distributionAuthEnv(), ...deviceIdentityEnv(), ...localModelEnv(),
+      DEVICE_RESOURCE_PROFILE_PATH: path.join(userDataPath, 'device-resource-profile.json'),
+      DEVICE_RESOURCE_MODE: environment.DEVICE_RESOURCE_MODE || 'normal',
       API_PORT: String(port), API_HOST: '127.0.0.1', AI_VIDEO_DIARY_DOTENV: userDotenvPath(),
     };
   }

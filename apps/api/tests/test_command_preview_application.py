@@ -14,8 +14,6 @@ import pytest
 import app.main as main
 from app.task_audio import media_digest,TASK_MEDIA_CONTEXT
 from app.production import EXACT_EDIT_SOURCE
-import app.member_permits as budgets
-import app.creation.editing.command_preview_use_case as command_module
 import test_montage_pipeline as domain_fixture
 import test_visual_preview_application as visual_fixture
 import test_task_media_grants as grant_fixture
@@ -66,9 +64,7 @@ def command_application(person_render_edit_state,monkeypatch):
     state=visual(permitted,monkeypatch)
     media_grant,grant_proof=_fixture_clone(grant_fixture.case,constructor=True)
     monkeypatch.setattr(grant_fixture,'case',media_grant)
-    # The old finite helper profiles keep their original values at the moved config ports.
-    monkeypatch.setattr(budgets,'cpu_render_budget_from_env',main.cpu_render_budget_from_env)
-    monkeypatch.setattr(command_module,'cpu_audio_budget_from_env',main.cpu_audio_budget_from_env)
+    # The finite helper profile is injected through the shared resource getter.
     state.media.command_preview=main._command_preview_use_case(state.production)
     state.fixture_assembly=[install_proof,permitted_proof,visual_proof,grant_proof]
     try:

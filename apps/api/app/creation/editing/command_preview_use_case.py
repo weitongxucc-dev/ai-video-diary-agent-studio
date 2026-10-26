@@ -12,13 +12,11 @@ from app.compound_edits import compile_compound_edit
 from app.graphic_overlays import compile_overlay_command
 from app.subtitle_style import compile_subtitle_style_command
 from app.visual_effects import compile_visual_command
-from app.member_permits import cpu_audio_budget_from_env
 from app.montage import creation_task_montage_plan_from_payload
 from app.montage import creation_task_montage_plan_to_payload
 from app.graphic_sources import graphic_sources
 from app.compound_edits import is_indexed_subtitle_command
 from app.task_audio import media_digest
-from app.member_permits import presenter_budgets_from_env
 import re
 import subprocess
 from dataclasses import asdict
@@ -30,7 +28,8 @@ from app.schemas import CreationTaskExactEditRequest,CreationTaskEditPreviewRequ
 from app.visual_effects import VisualEditRequest
 
 class CommandPreviewUseCase:
-    def __init__(self,repository,conversations,metadata,subtitles,linked,compound,exact,audio,visual,narration,person):
+    def __init__(self,repository,conversations,metadata,subtitles,linked,compound,exact,audio,visual,narration,person,*,budgets_for):
+        self.budgets_for=budgets_for
         self.repository,self.conversations=repository,conversations
         self.metadata,self.subtitles,self.linked,self.compound=metadata,subtitles,linked,compound
         self.exact,self.audio,self.visual,self.narration,self.person=exact,audio,visual,narration,person
@@ -215,7 +214,6 @@ class CommandPreviewUseCase:
     def facts(self, workspace_id, task_id, arguments, actor):
         operation = 'command_edit_preview'
         from app.canvas import canvas_size
-        from app.member_permits import cpu_render_budget_from_env
         task = self.repository.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
@@ -277,8 +275,9 @@ class CommandPreviewUseCase:
             facts['visual_preview'] = visual_scope
         if graphics:
             facts['graphic_sources'] = graphics
+        budgets = self.budgets_for()
         if 'command_edit_preview' in audio_operations:
-            budget = cpu_audio_budget_from_env()
+            budget = budgets.cpu_audio
             if budget is None:
                 raise ValueError('CPU 音频处理预算尚未标定，未启动媒体')
             if not audio_inputs:
@@ -305,17 +304,17 @@ class CommandPreviewUseCase:
         else:
             if plan is None:
                 raise ValueError('当前任务没有可预览的故事板')
-            budget = cpu_render_budget_from_env()
+            budget = budgets.cpu_render
             if budget is None:
                 raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
             if any((clip.person_render_id for clip in plan.clips)):
-                _, person_budget = presenter_budgets_from_env()
+                person_budget = budgets.presenter_cpu_render
                 if person_budget is None:
                     raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
                 budget = person_budget
             renderer = self.metadata.picture_renderer
             resources = renderer.picture_resources(plan, payload, picture_candidates, facts, budget)
-            audio_budget = cpu_audio_budget_from_env()
+            audio_budget = budgets.cpu_audio
             facts, resources = renderer.seal_audio_resources(task, picture_candidates, facts, resources, audio_budget, actor=actor)
             if re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', payload.get('raw_command', '').strip()):
                 selected = payload.get('selected_object_refs', [])

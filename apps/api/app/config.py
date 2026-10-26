@@ -216,6 +216,9 @@ def llm_service_verification(settings: Settings, workspace_id: str = "") -> dict
 
 @dataclass(frozen=True)
 class Settings:
+    device_resource_profile_path: str | None = None
+    device_resource_mode: str = "normal"
+    device_resource_experiment_id: str | None = None
     llm_provider: str | None = None
     llm_api_key: str | None = None
     llm_api_key_provider: str | None = None
@@ -392,6 +395,9 @@ class Settings:
         catalog_configuration = model_catalog_configuration(values)
         model_root_path = catalog_configuration["model_root_path"]
         return cls(
+            device_resource_profile_path=values.get("DEVICE_RESOURCE_PROFILE_PATH"),
+            device_resource_mode=values.get("DEVICE_RESOURCE_MODE", "normal"),
+            device_resource_experiment_id=values.get("DEVICE_RESOURCE_EXPERIMENT_ID"),
             llm_provider=values.get("LLM_PROVIDER"),
             llm_api_key=values.get("LLM_API_KEY"),
             llm_api_key_provider=values.get("LLM_API_KEY_PROVIDER"),
