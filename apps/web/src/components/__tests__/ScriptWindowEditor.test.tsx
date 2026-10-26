@@ -1,9 +1,19 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ScriptWindowEditor, ScriptWindowStart } from "../creation-task/ScriptWindowEditor";
 import type { CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptWindowSaved, CreationTaskScriptWindowResult } from "@/lib/types/creation-tasks";
 
-afterEach(() => vi.unstubAllGlobals());
+import { readPreflightDraftScope } from "@/lib/preflight-draft";
+vi.mock("@/lib/preflight-draft", async importOriginal => ({
+    ...await importOriginal<typeof import("@/lib/preflight-draft")>(),
+    readPreflightDraftScope: vi.fn(),
+}));
+const originalScope = { memberId: "local:member-a", workspaceId: "workspace-a" };
+beforeEach(() => {
+    sessionStorage.clear();
+    vi.mocked(readPreflightDraftScope).mockReset().mockResolvedValue(originalScope);
+});
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 function header(id = "script", count = 0): CreationTaskScript {
     return { id, task_id: "task", run_id: "", topic_id: "topic", title: "窗口长稿", language: "zh-CN",
         sections_loaded: false, sections: null, sections_total_count: count, draft_complete: false,
@@ -108,6 +118,7 @@ it("creates 45 sections through three real-client windows, edits section 45 and 
     const server = harness();
     const onSaved = vi.fn(async () => undefined);
     const view = render(<ScriptWindowStart taskId="task" onSaved={onSaved}/>);
+    await waitFor(() => expect(screen.getByLabelText("新文案标题")).toBeEnabled());
     fireEvent.change(screen.getByLabelText("新文案标题"), { target: { value: "窗口长稿" } });
     fill(20);
     fireEvent.click(screen.getByRole("button", { name: "保存首窗" }));
@@ -178,7 +189,7 @@ it("keeps an unknown patch request and draft without reposting or claiming saved
     fireEvent.change(screen.getByLabelText("第 1 段正文"), { target: { value: "结果未知的正文" } });
     fireEvent.click(screen.getByRole("button", { name: "保存本页修改" }));
     await screen.findByRole("alert");
-    expect(screen.getByText(/窗口保存结果尚待核对，草稿和原请求已保留/)).toBeInTheDocument();
+    expect(screen.getByText(/窗口保存结果尚待核对，原请求定位已保留/)).toBeInTheDocument();
     expect(screen.getByLabelText("第 1 段正文")).toHaveValue("结果未知的正文");
     expect(screen.getByLabelText("第 1 段正文")).toBeDisabled();
     expect(server.writes).toHaveLength(1);
@@ -251,6 +262,7 @@ it.each(['start','patch','confirm'] as const)('recovers unknown %s only by the o
   const onSaved=vi.fn(async(_receipt:CreationTaskScriptWindowResult)=>undefined);
   if(operation==='start') {
     render(<ScriptWindowStart taskId="task" onSaved={onSaved}/>);
+    await waitFor(() => expect(screen.getByLabelText('新文案标题')).toBeEnabled());
     fireEvent.change(screen.getByLabelText('新文案标题'),{target:{value:'首窗文案'}});
     fill(1);
     fireEvent.click(screen.getByRole('button',{name:'保存首窗'}));
@@ -266,13 +278,13 @@ it.each(['start','patch','confirm'] as const)('recovers unknown %s only by the o
   expect(onSaved).not.toHaveBeenCalled();
   expect(screen.getByLabelText('第 1 段正文')).toBeDisabled();
   fireEvent.click(screen.getByRole('button',{name:'查询原请求结果'}));
-  await screen.findByText('原请求结果仍未知。草稿和原请求继续保留。');
+  await screen.findByText('原请求结果仍未知。原请求继续保留。');
   server.missingOnce();
   fireEvent.click(screen.getByRole('button',{name:'查询原请求结果'}));
   await screen.findByText(/不代表请求未提交/);
   server.outcome('failed');
   fireEvent.click(screen.getByRole('button',{name:'查询原请求结果'}));
-  await screen.findByText('原请求记录为失败，但提交结果仍未确认。草稿和原请求继续保留。');
+  await screen.findByText('原请求记录为失败，但提交结果仍未确认。原请求继续保留。');
   expect(onSaved).not.toHaveBeenCalled();
   const receipt=server.completeLast();
   fireEvent.click(screen.getByRole('button',{name:'查询原请求结果'}));
@@ -339,4 +351,140 @@ it('fetches original request input only after explicit recovery and never overwr
   expect(server.queries[1].searchParams.get('include_input')).toBe('true');
   expect(screen.getByLabelText('第 1 段正文')).toHaveValue('待恢复正文');
   expect(server.writes).toHaveLength(1);
+});
+
+async function pendingWindow(operation: "start" | "patch" | "confirm" = "patch") {
+    const server = harness(operation === "start" ? [] : [section()]);
+    server.fail("unknown");
+    const onSaved = vi.fn(async () => undefined);
+    const element = operation === "start" ? <ScriptWindowStart taskId="task" onSaved={onSaved}/>
+        : <ScriptWindowEditor taskId="task" script={header("script", 1)} onSaved={onSaved}/>;
+    const view = render(element);
+    await waitFor(() => expect(screen.getByLabelText("第 1 段正文")).toBeEnabled());
+    if (operation === "start") {
+        fireEvent.change(screen.getByLabelText("新文案标题"), { target: { value: "首窗文案" } });
+        fill(1);
+    }
+    if (operation !== "confirm") fireEvent.change(screen.getByLabelText("第 1 段正文"), { target: { value: "原请求私有正文" } });
+    fireEvent.click(screen.getByRole("button", { name: operation === "start" ? "保存首窗" : operation === "patch" ? "保存本页修改" : "核查并采用完整文案" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原请求结果" })).toBeEnabled());
+    return { server, onSaved, element, view, key: sessionStorage.key(0)!, raw: sessionStorage.getItem(sessionStorage.key(0)!)! };
+}
+
+it.each(["start", "patch", "confirm"] as const)("refresh locator restores %s with no body cache or repost through unknown, 404 and failed receipts", async operation => {
+    const { server, onSaved, element, view, key, raw } = await pendingWindow(operation);
+    const locator = JSON.parse(raw);
+    expect(locator).toEqual({ ...originalScope, taskId: "task", scriptId: operation === "start" ? null : "script", operation, requestId: server.writes[0].body.request_id });
+    expect(raw).not.toContain("原请求私有正文");
+    view.unmount();
+    render(element); // fresh component state, with only sessionStorage retained
+    expect(screen.getByRole("button", { name: operation === "start" ? "保存首窗" : "核查并采用完整文案" })).toBeDisabled();
+    await screen.findByRole("region", { name: "原文案请求对账" });
+    expect(screen.getByText(/刷新仅保留原请求定位/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "原文案请求对账" })).toHaveTextContent(locator.requestId);
+    expect(screen.queryByDisplayValue("原请求私有正文")).not.toBeInTheDocument();
+    expect(server.queries).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await screen.findByText("原请求结果仍未知。原请求继续保留。");
+    server.missingOnce();
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await screen.findByText(/不代表请求未提交/);
+    server.outcome("failed");
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await screen.findByText("原请求记录为失败，但提交结果仍未确认。原请求继续保留。");
+    fireEvent.click(screen.getByRole("button", { name: "恢复原请求输入" }));
+    const input = await screen.findByRole("region", { name: "原请求输入" });
+    expect(input).toHaveTextContent(locator.requestId);
+    if (operation !== "confirm") expect(input).toHaveTextContent("原请求私有正文");
+    expect(server.queries.at(-1)!.searchParams.get("include_input")).toBe("true");
+    expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(onSaved).not.toHaveBeenCalled();
+    server.completeLast();
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(sessionStorage.getItem(key)).toBeNull();
+    expect(server.writes).toHaveLength(1);
+    for (const query of server.queries) {
+        expect(query.pathname.endsWith(locator.requestId)).toBe(true);
+        expect(query.searchParams.get("operation")).toBe(operation);
+        expect(query.searchParams.get("script_id")).toBe(locator.scriptId);
+    }
+});
+
+it.each(["getItem", "setItem"] as const)("refresh locator blocks submission when sessionStorage %s fails", async method => {
+    const server = harness();
+    if (method === "getItem") vi.spyOn(Storage.prototype, method).mockImplementation(() => { throw new Error("storage unavailable"); });
+    render(<ScriptWindowStart taskId="task" onSaved={vi.fn(async () => undefined)}/>);
+    if (method === "setItem") {
+        await waitFor(() => expect(screen.getByLabelText("新文案标题")).toBeEnabled());
+        fireEvent.change(screen.getByLabelText("新文案标题"), { target: { value: "私有标题" } });
+        fill(1);
+        vi.spyOn(Storage.prototype, method).mockImplementation(() => { throw new Error("storage unavailable"); });
+        fireEvent.click(screen.getByRole("button", { name: "保存首窗" }));
+    }
+    await waitFor(() => expect(screen.getAllByRole("alert").some(node => node.textContent?.includes("storage unavailable"))).toBe(true));
+    expect(screen.getByRole("button", { name: "保存首窗" })).toBeDisabled();
+    expect(server.writes).toHaveLength(0);
+});
+
+it("refresh locator keeps a successful receipt locked if storage removal fails", async () => {
+    const { server, onSaved, key, raw } = await pendingWindow();
+    server.completeLast();
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("cannot remove locator"); });
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await screen.findByText(/原请求恢复不可用：cannot remove locator/);
+    expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(screen.getByRole("button", { name: "核查并采用完整文案" })).toBeDisabled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(server.writes).toHaveLength(1);
+});
+
+it("refresh locator isolates a different identity and preserves the original scoped reference", async () => {
+    const { server, element, view, key, raw } = await pendingWindow();
+    view.unmount();
+    vi.mocked(readPreflightDraftScope).mockResolvedValue({ ...originalScope, memberId: "local:member-b" });
+    const other = render(element);
+    await waitFor(() => expect(screen.getByLabelText("第 1 段正文")).toBeEnabled());
+    expect(screen.queryByRole("region", { name: "原文案请求对账" })).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(server.queries).toHaveLength(0);
+    other.unmount();
+    vi.mocked(readPreflightDraftScope).mockResolvedValue(originalScope);
+    render(element);
+    await screen.findByRole("region", { name: "原文案请求对账" });
+    expect(server.writes).toHaveLength(1);
+});
+
+it("refresh locator discards a late input receipt after the current identity changes", async () => {
+    const { server, onSaved, key, raw } = await pendingWindow();
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await screen.findByRole("button", { name: "恢复原请求输入" });
+    const original = server.fetch.getMockImplementation()!;
+    let finish!: () => void;
+    server.fetch.mockImplementation(async (url, init) => {
+        const response = await original(url, init);
+        if (url.includes("include_input=true")) await new Promise<void>(resolve => { finish = resolve; });
+        return response;
+    });
+    fireEvent.click(screen.getByRole("button", { name: "恢复原请求输入" }));
+    await waitFor(() => expect(finish).toBeDefined());
+    vi.mocked(readPreflightDraftScope).mockResolvedValue({ ...originalScope, workspaceId: "other-workspace" });
+    await act(async () => { finish(); });
+    await screen.findByText(/当前身份或工作区已变化/);
+    expect(screen.queryByRole("region", { name: "原请求输入" })).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(server.writes).toHaveLength(1);
+});
+
+it("refresh locator rejects a receipt for a different operation without releasing the original request", async () => {
+    const { server, onSaved, key, raw } = await pendingWindow();
+    const original = server.fetch.getMockImplementation()!;
+    server.fetch.mockImplementation(async (url, init) => url.includes("/script-window-requests/")
+        ? new Response(JSON.stringify({ ...server.completeLast(), status: "confirmed" })) : original(url, init));
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await screen.findByText(/回执与原任务、稿件或请求操作不符/);
+    expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(server.writes).toHaveLength(1);
 });
