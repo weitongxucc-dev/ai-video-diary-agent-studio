@@ -265,7 +265,7 @@ from app.scheduled_tasks import (
     ScheduledTaskService,
     ScheduledTaskUpdateRequest,
 )
-from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, ScriptLibraryEntry, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_segment_eligible)
+from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_segment_eligible)
 from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
@@ -330,8 +330,7 @@ from app.schemas import (
     AssistantConversationUpdateRequest,
     JobProgressResponse,
     TaskJobProgressResponse,
-    ScriptLibrarySaveRequest, ScriptLibraryEntryResponse, ScriptLibraryListResponse,
-    ScriptLibrarySourceResponse, ScriptLibraryReuseRequest, ScriptLibraryReuseResponse,
+    ScriptLibrarySourceResponse,
     AuthorizationResponse,
     AuthorizationsResponse,
     AuthorizationUpsertRequest,
@@ -6532,23 +6531,26 @@ def _attach_cited_version_facts(
 
 
 def _script_library_sources(
-    request: Request, workspace_id: str, entry: ScriptLibraryEntry,
+    workspace_id: str, entry: dict, *, reader: tuple[str | None, bool],
 ) -> tuple[list[ScriptLibrarySourceResponse], list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
-    task = _script_library_task_access(request, workspace_id, entry.source_task_id)
+    task = production_repo.get_creation_task(workspace_id, entry['source_task_id'])
+    user_id, local_diagnostic = reader
+    if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
+                            visibility=task.visibility, owner_user_id=task.owner_user_id):
+        raise KeyError(entry['id'])
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     knowledge = {reference.id: reference for reference in plan.knowledge_references}
     sources = {reference.id: reference for reference in plan.source_references}
     resolved_knowledge: list[CreationPlanKnowledgeReference] = []
     resolved_sources: list[CreationPlanSourceReference] = []
     result: list[ScriptLibrarySourceResponse] = []
-    references = dict.fromkeys(ref for section in entry.sections for ref in section.reference_ids)
+    references = production_repo.script_records.script_library_reference_ids(workspace_id, entry['id'])
     for ref in references:
         state = ScriptLibrarySourceResponse(reference_id=ref, status="missing")
         if ref.startswith("knowledge:"):
             parts = ref.removeprefix("knowledge:").rsplit(":", 1)
             if len(parts) == 2:
                 item_id, version = parts
-                user_id, local_diagnostic = _content_reader(request, workspace_id)
                 try:
                     # 与知识域读取同一个判据：私有只对上传者本人，读不到当不存在。
                     item = source_repository.get_knowledge_item_readable_by(
@@ -6593,80 +6595,124 @@ def _script_library_sources(
     return result, resolved_knowledge, resolved_sources
 
 
-def _readable_script_library_entry(request: Request, workspace_id: str, entry_id: str) -> tuple[ScriptLibraryEntry, list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
+def _readable_script_library_entry(request: Request, workspace_id: str, entry_id: str):
     try:
-        entry = production_repo.get_script_library_entry(workspace_id, entry_id)
+        entry = _library_header_for_reader(workspace_id, entry_id, _content_reader(request, workspace_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
-    states, knowledge, sources = _script_library_sources(request, workspace_id, entry)
+    states, knowledge, sources = _script_library_sources(workspace_id, entry, reader=_content_reader(request, workspace_id))
     if any(source.status != "readable" for source in states):
         raise HTTPException(status_code=409, detail="文案引用的来源已不可读或版本已变化，请核对原任务来源")
     return entry, knowledge, sources
 
 
-@app.post("/api/production/script-library", response_model=ScriptLibraryEntryResponse)
-def save_script_library(request: Request, payload: ScriptLibrarySaveRequest) -> ScriptLibraryEntryResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        script = production_repo.get_creation_task_script(workspace_id, payload.source_script_id)
-        # Saving an owned confirmed script does not authorize reuse of its sources.
-        _script_library_task_access(request, workspace_id, script.task_id)
-        entry = production_repo.save_script_library_entry(
-            workspace_id, source_script_id=script.id, name=payload.name, category=payload.category,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="文案不存在") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ScriptLibraryEntryResponse.model_validate(asdict(entry))
+def _library_header_for_reader(workspace_id, entry_id, reader):
+    header = production_repo.script_records.read_script_library_entry_header(workspace_id, entry_id)
+    task = production_repo.get_creation_task(workspace_id, header['source_task_id'])
+    if not content_readable(user_id=reader[0], local_diagnostic=reader[1],
+                            visibility=task.visibility, owner_user_id=task.owner_user_id):
+        raise KeyError(entry_id)
+    return header
 
 
-@app.get("/api/production/script-library", response_model=ScriptLibraryListResponse)
-def list_script_library(request: Request, q: str = "", category: str = "") -> ScriptLibraryListResponse:
+def _script_header_for_reader(workspace_id, script_id, reader):
+    header = production_repo.script_records.read_creation_task_script_header(workspace_id, script_id)
+    task = production_repo.get_creation_task(workspace_id, header['task_id'])
+    if not content_readable(user_id=reader[0], local_diagnostic=reader[1],
+                            visibility=task.visibility, owner_user_id=task.owner_user_id):
+        raise KeyError(script_id)
+    return header
+
+
+def _library_request_case(request):
     workspace_id = current_workspace_id(request)
+    return _script_draft_use_case(workspace_id,
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
+        content_reader=lambda ws: _content_reader(request, ws))
+
+
+def save_script_library(request, payload):
+    workspace_id = current_workspace_id(request)
+    return _library_request_case(request).save_library_entry(workspace_id, payload,
+        member_id=_content_reader(request, workspace_id)[0])
+
+
+def _read_library_request(request, request_id, operation):
+    workspace_id = current_workspace_id(request)
+    case = _library_request_case(request)
+    read = case.library_save_request_result if operation == 'save' else case.library_reuse_request_result
+    return read(workspace_id, request_id, member_id=_content_reader(request, workspace_id)[0])
+
+
+def _list_script_library_headers(request, **window):
+    workspace_id = current_workspace_id(request)
+    page = production_repo.script_records.list_script_library_entry_headers(workspace_id, **window)
     items = []
-    for entry in production_repo.list_script_library_entries(workspace_id, query=q, category=category):
+    for entry in page['items']:
         try:
-            _script_library_task_access(request, workspace_id, entry.source_task_id)
+            _script_library_task_access(request, workspace_id, entry['source_task_id'])
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
             continue
-        items.append(ScriptLibraryEntryResponse.model_validate(asdict(entry)))
-    return ScriptLibraryListResponse(items=items, total_count=len(items))
+        items.append(entry)
+    return {**page, 'items': items, 'total_count': None}
+
+
+def _read_script_library_header(request, entry_id):
+    workspace_id = current_workspace_id(request)
+    header = production_repo.script_records.read_script_library_entry_header(workspace_id, entry_id)
+    _script_library_task_access(request, workspace_id, header['source_task_id'])
+    return header
+
+
+def _read_script_library_sections(request, entry_id, **window):
+    workspace_id = current_workspace_id(request)
+    _read_script_library_header(request, entry_id)
+    return production_repo.script_records.read_script_library_sections(workspace_id, entry_id, **window)
 
 
 @app.get("/api/production/script-library/{entry_id}/sources", response_model=list[ScriptLibrarySourceResponse])
 def script_library_sources(entry_id: str, request: Request) -> list[ScriptLibrarySourceResponse]:
     workspace_id = current_workspace_id(request)
     try:
-        entry = production_repo.get_script_library_entry(workspace_id, entry_id)
+        entry = _read_script_library_header(request, entry_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
-    states, _, _ = _script_library_sources(request, workspace_id, entry)
+    states, _, _ = _script_library_sources(workspace_id, entry, reader=_content_reader(request, workspace_id))
     return states
 
 
-@app.post("/api/production/script-library/{entry_id}/reuse", response_model=ScriptLibraryReuseResponse)
-def reuse_script_library(entry_id: str, request: Request, payload: ScriptLibraryReuseRequest) -> ScriptLibraryReuseResponse:
+def reuse_script_library(entry_id, request, payload):
     workspace_id = current_workspace_id(request)
     if not payload.requirements_confirmed:
         raise HTTPException(status_code=409, detail="请明确确认新任务要求")
     entry, knowledge, sources = _readable_script_library_entry(request, workspace_id, entry_id)
     plan = CreationPlan(
         id=f"plan_{uuid4().hex[:12]}", workspace_id=workspace_id,
-        name=payload.name.strip(), goal=f"复用文案：{entry.name}（版本{entry.version}），待重新确认正文",
-        target_count=1, language=entry.language, aspect_ratio=payload.aspect_ratio,
+        name=payload.name.strip(), goal=f"复用文案：{entry['name']}（版本{entry['version']}），待重新确认正文",
+        target_count=1, language=entry['language'], aspect_ratio=payload.aspect_ratio,
         duration_target_seconds=payload.duration_target_seconds,
         knowledge_references=knowledge, source_references=sources,
         selected_voice=None, pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
         material_rule_summary="复用稿尚未选材，确认正文后沿当前任务继续", model_snapshot=[],
-        confirmation_points=[], blockers=[], preflight_fingerprint=f"script-library:{entry.id}",
+        confirmation_points=[], blockers=[], preflight_fingerprint=f"script-library:{entry['id']}",
     )
     if not plan.name:
         raise HTTPException(status_code=422, detail="请输入新任务名称")
-    task, draft = production_repo.reuse_script_library_entry(workspace_id, entry.id, plan=plan)
-    return ScriptLibraryReuseResponse(task_id=task.id, script=CreationTaskScriptResponse.model_validate(asdict(draft)))
+    def guard(conn):
+        current, current_knowledge, current_sources = _readable_script_library_entry(request, workspace_id, entry_id)
+        if (current, current_knowledge, current_sources) != (entry, knowledge, sources):
+            raise ScriptDraftRejected(status_code=409, detail="文案库来源或许可已变化，没有创建新任务")
+    return _library_request_case(request).reuse_library_entry(workspace_id, entry_id, payload,
+        member_id=_content_reader(request, workspace_id)[0], plan=plan, write_guard=guard)
+
+
+from app.creation.script_library_routes import build_script_library_router
+app.include_router(build_script_library_router(
+    list_headers=_list_script_library_headers, read_header=_read_script_library_header,
+    read_sections=_read_script_library_sections, save_entry=save_script_library,
+    reuse_entry=reuse_script_library, read_request=_read_library_request))
 
 
 @app.get("/api/creation-tasks", response_model=CreationTasksResponse)
@@ -7155,7 +7201,7 @@ def transfer_assistant_reply_to_script(
     return _creation_task_scripts_response(workspace_id, task)
 
 
-def _script_draft_use_case(workspace_id, *, validate_inputs):
+def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None):
     case=ScriptDraftUseCase(production_repo,read_inputs=_assistant_script_inputs,validate_inputs=validate_inputs,
         script_goal=_creation_task_script_goal,topic_origin=_script_topic_origin,
         check_draft=lambda inputs,candidate:_creation_task_script_generator_for(_workspace_settings_for(workspace_id)).check_draft(inputs,candidate),
@@ -7167,6 +7213,9 @@ def _script_draft_use_case(workspace_id, *, validate_inputs):
     case.preflight_error_type=_CreationTaskTopicPreflightError
     case.topic_generator=lambda inputs:_creation_task_topic_generator_for(_workspace_settings_for(workspace_id)).generate(inputs)
     case.topic_response=_creation_task_topic_response
+    if content_reader is not None:
+        case.read_script_header=lambda ws, script_id: _script_header_for_reader(ws, script_id, content_reader(ws))
+        case.read_library_header=lambda ws, entry_id: _library_header_for_reader(ws, entry_id, content_reader(ws))
     return case
 
 
@@ -8194,7 +8243,8 @@ def _patch_creation_script_sections(request, task_id, script_id, payload):
     origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
               if payload.assistant_turn_id is not None else None)
     case = _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs))
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
+        content_reader=lambda ws: _content_reader(request, ws))
     return case.patch(task.workspace_id, task_id, script_id, payload, member_id=member_id,
         instruction_origin=origin,
         reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
@@ -8206,7 +8256,8 @@ def _start_creation_script_window(request, task_id, payload):
     origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
               if payload.assistant_turn_id is not None else None)
     case = _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs))
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
+        content_reader=lambda ws: _content_reader(request, ws))
     return case.start_window(task.workspace_id, task_id, payload, member_id=member_id,
         instruction_origin=origin,
         reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
@@ -8218,7 +8269,8 @@ def _confirm_saved_creation_script(request, task_id, script_id, payload):
     origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
               if payload.assistant_turn_id is not None else None)
     case = _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs))
+        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
+        content_reader=lambda ws: _content_reader(request, ws))
     return case.confirm_saved(task.workspace_id, task_id, script_id, payload, member_id=member_id,
         instruction_origin=origin,
         reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
@@ -8307,7 +8359,8 @@ def confirm_creation_task_script(
             raise HTTPException(status_code=409, detail="文案来源记录已不可用，请重新读取任务。") from exc
         _require_current_script_inputs(request, workspace_id, plan, generation_run.input_references)
     try:
-        task,adopted_script=_script_draft_use_case(workspace_id,validate_inputs=lambda ws,plan,refs:_require_current_script_inputs(request,ws,plan,refs)).confirm(
+        task,adopted_script=_script_draft_use_case(workspace_id,validate_inputs=lambda ws,plan,refs:_require_current_script_inputs(request,ws,plan,refs),
+            content_reader=lambda ws:_content_reader(request,ws)).confirm(
             workspace_id,task_id,script_id,payload,member_id=_content_reader(request,workspace_id)[0],origin=instruction_origin,
             reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
                 task_id,request,str(payload.assistant_turn_id),draft_only=False))
@@ -14154,7 +14207,8 @@ def _task_business():
         script_context=_assistant_script_context_facts,
         script_facts=lambda ws, task: _creation_task_scripts_response(ws, task, include_body=False),
         script_case=lambda actor:_script_draft_use_case(actor.workspace_id,validate_inputs=lambda ws,plan,refs:
-            _validate_script_input_sources(ws,plan,refs,actor.user_id or actor.member_id)),
+            _validate_script_input_sources(ws,plan,refs,actor.user_id or actor.member_id),
+            content_reader=lambda ws:(actor.user_id or actor.member_id,False)),
         generate_topics=lambda ws,task,guard:_script_draft_use_case(ws,validate_inputs=lambda *args:None).generate_topics(ws,task,write_guard=guard),
         topic_facts=_creation_task_topic_response,edit_capabilities=_task_edit_capability_facts,
         script_capabilities=_task_script_capability_facts,tool_capabilities=_script_tool_capability_facts,

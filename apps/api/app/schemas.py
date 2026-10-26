@@ -4211,6 +4211,8 @@ class CreatorProfileLearnResult(BaseModel):
 
 
 class ScriptLibrarySaveRequest(BaseModel):
+    request_id: UUID
+    expected_source_updated_at: datetime
     source_script_id: str
     name: str = Field(min_length=1)
     category: str = ""
@@ -4246,6 +4248,39 @@ class ScriptLibraryListResponse(BaseModel):
     total_count: int
 
 
+class ScriptLibraryEntryHeaderResponse(ScriptLibraryEntryResponse):
+    sections: None
+    sections_loaded: Literal[False] = False
+    sections_total_count: int = Field(ge=0)
+
+
+class ScriptLibraryCursorResponse(BaseModel):
+    after_created_at: datetime
+    after_entry_id: str
+
+
+class ScriptLibraryHeaderListResponse(BaseModel):
+    items: list[ScriptLibraryEntryHeaderResponse]
+    next: ScriptLibraryCursorResponse | None
+    total_count: int | None = None
+
+
+class ScriptLibrarySectionWindowItemResponse(BaseModel):
+    ordinal: int = Field(ge=1)
+    section: ScriptLibrarySectionResponse
+    digest: str
+
+
+class ScriptLibrarySectionWindowResponse(BaseModel):
+    entry_id: str
+    version: int
+    updated_at: datetime
+    total_count: int = Field(ge=0)
+    items: list[ScriptLibrarySectionWindowItemResponse]
+    next_after_ordinal: int | None
+    has_more: bool
+
+
 class ScriptLibrarySourceResponse(BaseModel):
     reference_id: str
     status: Literal["readable", "missing", "version_changed"]
@@ -4263,15 +4298,34 @@ class ScriptLibrarySourceResponse(BaseModel):
 
 
 class ScriptLibraryReuseRequest(BaseModel):
+    request_id: UUID
+    expected_entry_updated_at: datetime
     name: str = Field(min_length=1)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
-    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    duration_target_seconds: int = Field(default=60, ge=1, strict=True)
     requirements_confirmed: bool
 
 
 class ScriptLibraryReuseResponse(BaseModel):
+    request_id: UUID
+    entry_id: str
+    entry_version: int
     task_id: str
-    script: CreationTaskScriptResponse
+    script_id: str
+    updated_at: datetime
+    status: Literal["saved"]
+
+
+class ScriptLibrarySaveResponse(BaseModel):
+    request_id: UUID
+    status: Literal["saved"]
+    entry_id: str
+    version: int
+    updated_at: datetime
+    source_task_id: str
+    source_script_id: str
+    source_updated_at: datetime
+    entry: ScriptLibraryEntryHeaderResponse
 
 
 class TimelineVersionSummaryResponse(BaseModel):
