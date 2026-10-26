@@ -10,17 +10,42 @@ from app.montage import creation_task_montage_plan_from_payload, creation_task_m
 from app.task_audio import media_digest
 
 
-def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragments):
+def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragments, recovery_plan=None):
     from app.creation.render_stage_use_case import render_input_payload, render_input_digest_for
     from app.creation.duration_requirement import DurationRequirement
     from app.subtitle_schedule import subtitle_schedule, narration_schedule
     repo = delivery.repository
     manifest = delivery.manifest(job, actor=actor, connection=conn)
-    completed = delivery._artifact(job, manifest, 'final_mux', connection=conn)
+    if recovery_plan is None:
+        completed = delivery._artifact(job, manifest, 'final_mux', connection=conn)
+        expected_producer = (grant.request_id, grant.generation)
+    else:
+        plan = delivery.adoption_recovery.read_plan(job, recovery_plan['unit_id'], conn)
+        if plan != recovery_plan or plan['new_request_id'] != grant.request_id:
+            raise ValueError('仅采用恢复没有原后继事务的可信关联')
+        original = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (plan['original_request_id'],)).fetchone()
+        _manifest, completed, _receipt = delivery.adoption_recovery._known_media(job, original, actor, conn)
+        if completed != plan['video']:
+            raise ValueError('仅采用恢复的原媒体检查点已变化')
+        expected_producer = (plan['original_request_id'], plan['original_generation'])
     if (completed is None or completed['parent']['binding']['artifact_id'] != record.id
-            or completed['parent']['binding']['producer_request_id'] != grant.request_id
-            or completed['parent']['binding']['producer_generation'] != grant.generation):
+            or (completed['parent']['binding']['producer_request_id'], completed['parent']['binding']['producer_generation']) != expected_producer):
         raise ValueError('最终采用不属于本原Job与本次已结算封装许可')
+    if recovery_plan is None:
+        candidate = compile_delivery_adoption(delivery, conn, job, actor=actor, grant=grant, record=record,
+            picture_fragments=picture_fragments, manifest=manifest, completed=completed)
+    else:
+        candidate = instantiate_adoption_candidate(recovery_plan, grant)
+        if candidate['head'] != repo.get_creation_task(job.workspace_id, job.task_id, connection=conn).current_timeline_version_id:
+            raise ValueError('原采用候选HEAD已变化')
+    return apply_delivery_adoption(repo, conn, job, candidate)
+
+
+def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, picture_fragments, manifest, completed, recovery_plan=None):
+    from app.creation.render_stage_use_case import render_input_payload, render_input_digest_for
+    from app.creation.duration_requirement import DurationRequirement
+    from app.subtitle_schedule import subtitle_schedule, narration_schedule
+    repo = delivery.repository
     task = repo.get_creation_task(job.workspace_id, job.task_id, connection=conn)
     leaf_manifest = picture_fragments.manifest(job, actor=actor, connection=conn)
     if leaf_manifest is None or task.current_timeline_version_id != leaf_manifest['head']:
@@ -45,7 +70,6 @@ def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragmen
             'final_mux_transform_id': completed['parent']['binding']['transform_id'],
             'final_mux_transform_digest': completed['parent']['binding']['transform_digest']},
         status='succeeded', started_at=utc_now(), finished_at=utc_now())
-    repo.create_transform_run(transform, connection=conn)
     plan.status, plan.output_path = 'rendered', record.logical_ref
     plan.subtitle_path = subtitle.logical_ref if subtitle is not None else None
     plan.message = '成片已生成，等待检查。'
@@ -62,6 +86,11 @@ def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragmen
                 'video_artifact_id': record.id, 'subtitle_artifact_id': subtitle.id if subtitle is not None else None,
                 'render_input': input_payload, 'render_input_digest': render_input_digest_for(input_payload),
                 'video_parent': completed['parent'], 'video_file_identity': completed['file_identity']}})
+    if recovery_plan is not None:
+        version.snapshot['audio_delivery']['adoption_recovery'] = {
+            'event_id': delivery.adoption_recovery.plan_event_id(job, recovery_plan['unit_id']),
+            'unit_id': recovery_plan['unit_id'], 'original_request_id': recovery_plan['original_request_id'],
+            'original_generation': recovery_plan['original_generation']}
     from app.creation.transactions import clone_subtitle_track, clone_cover_asset
     cloned_tracks = [clone_subtitle_track(track, timeline_version_id=version.id,
         track_id=f'subtitle_delivery_{job.id}_{index}', artifact_ref=subtitle.logical_ref if subtitle is not None else None,
@@ -76,17 +105,62 @@ def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragmen
     cloned_cover = clone_cover_asset(cover, timeline_version_id=version.id) if cover is not None else None
     if cloned_cover is not None:
         version.snapshot['cover_asset_id'] = cloned_cover.id
-    repo.save_creation_task_montage_plan(job.workspace_id, job.task_id, plan.id, rendered, connection=conn,
-        expected_current_version_id=task.current_timeline_version_id)
-    repo.create_timeline_version(version, connection=conn, expected_current_version_id=task.current_timeline_version_id)
-    for cloned in cloned_tracks:
-        repo.create_subtitle_track(cloned, connection=conn)
-    if cloned_cover is not None:
-        repo.create_cover_asset(cloned_cover, connection=conn)
-    repo.append_task_event(TaskEvent(f'event_{job.id}_delivery_adopted', job.workspace_id, job.task_id, job.id,
+    event = TaskEvent(f'event_{job.id}_delivery_adopted', job.workspace_id, job.task_id, job.id,
         'render_succeeded', {'timeline_version_id': version.id, 'output_refs': output_refs,
             'request_id': grant.request_id, 'permit_generation': grant.generation,
-            'delivery_manifest_digest': manifest['digest']}), connection=conn)
+            'delivery_manifest_digest': manifest['digest']})
+    return {'head': task.current_timeline_version_id, 'plan_id': plan.id, 'montage': rendered,
+        'transform': transform, 'version': version, 'tracks': cloned_tracks, 'cover': cloned_cover, 'event': event}
+
+
+def serialized_adoption_candidate(candidate):
+    return json.loads(json.dumps({key: ([asdict(track) for track in value] if key == 'tracks' else
+        asdict(value) if key in {'transform', 'version', 'event', 'cover'} and value is not None else value)
+        for key, value in candidate.items()}, ensure_ascii=False, default=str))
+
+
+def adoption_candidate_bytes(candidate):
+    return len(json.dumps(candidate, ensure_ascii=False, sort_keys=True, allow_nan=False).encode())
+
+
+def instantiate_adoption_candidate(plan, grant):
+    from datetime import datetime
+    from app.creation.contracts import SubtitleTrack, SubtitleCue, CoverAsset
+    template = json.loads(json.dumps(plan['adoption_candidate']))
+    saved = template['version']['snapshot']['audio_delivery']
+    saved['request_id'], saved['permit_generation'] = grant.request_id, grant.generation
+    saved['adoption_recovery'] = {'event_id': f'event_{plan["job_id"]}_delivery_adoption_{plan["unit_id"]}',
+        'unit_id': plan['unit_id'], 'original_request_id': plan['original_request_id'],
+        'original_generation': plan['original_generation']}
+    template['event']['payload']['request_id'] = grant.request_id
+    template['event']['payload']['permit_generation'] = grant.generation
+    if adoption_candidate_bytes(template) > plan['metadata_bytes']:
+        raise ValueError('实际采用元数据超过原候选序列化分配')
+    def restore(kind, payload):
+        values = dict(payload)
+        for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
+            if values.get(key) is not None:
+                values[key] = datetime.fromisoformat(values[key])
+        if kind is SubtitleTrack:
+            values['cues'] = [SubtitleCue(**cue) for cue in values['cues']]
+        return kind(**values)
+    return {**template, 'transform': restore(TransformRun, template['transform']),
+        'version': restore(TimelineVersion, template['version']), 'event': restore(TaskEvent, template['event']),
+        'tracks': [restore(SubtitleTrack, track) for track in template['tracks']],
+        'cover': restore(CoverAsset, template['cover']) if template['cover'] is not None else None}
+
+
+def apply_delivery_adoption(repo, conn, job, candidate):
+    version, transform = candidate['version'], candidate['transform']
+    repo.create_transform_run(transform, connection=conn)
+    repo.save_creation_task_montage_plan(job.workspace_id, job.task_id, candidate['plan_id'], candidate['montage'],
+        connection=conn, expected_current_version_id=candidate['head'])
+    repo.create_timeline_version(version, connection=conn, expected_current_version_id=candidate['head'])
+    for track in candidate['tracks']:
+        repo.create_subtitle_track(track, connection=conn)
+    if candidate['cover'] is not None:
+        repo.create_cover_asset(candidate['cover'], connection=conn)
+    repo.append_task_event(candidate['event'], connection=conn)
     return version
 
 
@@ -136,9 +210,44 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     if request is None or settled is None:
         return False
     resources = json.loads(request['resources_json'])
-    if (resources['kind'] != 'creation_final_mux' or resources['manifest_digest'] != manifest['digest']
-            or resources['unit_id'] != final_transform.input_digest):
-        return False
+    recovery = saved.get('adoption_recovery')
+    if recovery is None:
+        if (resources['kind'] != 'creation_final_mux' or resources['manifest_digest'] != manifest['digest']
+                or resources['unit_id'] != final_transform.input_digest):
+            return False
+    else:
+        plan_event = repository.get_task_event(task.workspace_id, recovery['event_id'])
+        recovery_plan = plan_event.payload
+        if (plan_event.event_type != 'delivery_adoption_prepared' or plan_event.job_id != job.id or plan_event.task_id != task.id
+                or recovery_plan['unit_id'] != recovery['unit_id'] or recovery_plan['new_request_id'] != request['id']
+                or recovery_plan['input_digest'] != job.input_digest or recovery_plan['manifest_digest'] != manifest['digest']
+                or recovery_plan['head'] != version.parent_version_id or recovery_plan['video']['parent'] != saved['video_parent']
+                or recovery_plan['video']['file_identity'] != saved['video_file_identity'] or recovery_plan['resources'] != resources
+                or resources['kind'] != 'creation_delivery_adoption' or resources['max_output_bytes'] != 0
+                or recovery_plan['unit_id'] != media_digest({key: value for key, value in recovery_plan.items()
+                    if key not in {'unit_id', 'new_request_id', 'resources'}})):
+            return False
+        with repository._connect() as conn:
+            original = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND id=? AND owner_id=? "
+                "AND owner_type='creation_job' AND state='failed' AND last_grant_generation=?",
+                (task.workspace_id, recovery['original_request_id'], job.id, recovery['original_generation'])).fetchone()
+            old_receipt = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=? AND job_id=? "
+                "AND event_type='task_execution_unit_settled' AND json_extract(payload_json,'$.usage_id')=?",
+                (task.workspace_id, recovery_plan['original_receipt_id'], job.id,
+                    f'{recovery["original_request_id"]}:{recovery["original_generation"]}')).fetchone()
+            recovered_receipt = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                "AND event_type='task_execution_unit_settled' AND json_extract(payload_json,'$.usage_id')=?",
+                (task.workspace_id, job.id, f'{request["id"]}:{saved["permit_generation"]}')).fetchone()
+        if (original is None or original['input_digest'] != job.input_digest or old_receipt is None
+                or json.loads(old_receipt[0])['output_bytes'] is None or recovered_receipt is None
+                or json.loads(recovered_receipt[0])['output_bytes'] != 0
+                or saved['video_parent']['binding']['producer_request_id'] != original['id']
+                or saved['video_parent']['binding']['producer_generation'] != original['last_grant_generation']):
+            return False
+        original_resources = json.loads(original['resources_json'])
+        if (original_resources['kind'] != 'creation_final_mux' or original_resources['manifest_digest'] != manifest['digest']
+                or original_resources['unit_id'] != final_transform.input_digest):
+            return False
     video_path = store.resolve_file(video.logical_ref)
     if _identity(video_path) != saved['video_file_identity'] or video_path.stat().st_size != video.size_bytes:
         return False

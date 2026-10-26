@@ -6,6 +6,7 @@ This module validates resource declarations, never scans parents or grants work.
 from dataclasses import asdict, dataclass
 import json
 import math
+from pathlib import Path
 
 from app.packet_copy_policy import (
     _digest, _sha, _positive, _locations, packet_copy_output_allocation,
@@ -17,8 +18,10 @@ AUDIO_ENCODE_POLICY = 'master-aac-first-use/v1'
 FINAL_MUX_POLICY = 'picture-audio-mux-first-use/v1'
 AUDIO_ENCODE_UNIT_PREFIX = 'render:audio-encode:v1:'
 FINAL_MUX_UNIT_PREFIX = 'render:final-mux:v1:'
+DELIVERY_ADOPTION_UNIT_PREFIX = 'render:delivery-adopt:v1:'
 DELIVERY_KINDS = {'creation_audio_encode': ('audio_encode', AUDIO_ENCODE_UNIT_PREFIX),
-                  'creation_final_mux': ('final_mux', FINAL_MUX_UNIT_PREFIX)}
+                  'creation_final_mux': ('final_mux', FINAL_MUX_UNIT_PREFIX),
+                  'creation_delivery_adoption': ('final_mux', DELIVERY_ADOPTION_UNIT_PREFIX)}
 
 
 @dataclass(frozen=True)
@@ -192,22 +195,96 @@ def final_mux_resources(*, budget, manifest_digest, unit_id, picture, encoded_au
         'role': 'picture_audio_final_mux', 'mux_recipe': dict(mux_recipe)}
 
 
+def delivery_adoption_resources(*, budget, manifest_digest, unit_id, predecessor,
+                                video, subtitle, database_path, metadata_bytes):
+    """Declare verification of existing files and the bounded adoption write set.
+
+    The owner measures and binds serialized database metadata before admission.
+    That reservation is separate from generated media bytes, which remain zero.
+    It measures serialized metadata, not SQLite page or journal amplification;
+    the existing disk floor and transactional failure handling still apply.
+    """
+    from app.device_resource_volumes import existing_volume
+    if (type(budget) is not FinalMuxBudget or not _sha(manifest_digest) or not _sha(unit_id)
+            or not _positive(metadata_bytes) or metadata_bytes > budget.max_process_rss_bytes):
+        raise ValueError('Delivery adoption needs a finite metadata write set and process policy')
+    if (not isinstance(predecessor, dict)
+            or set(predecessor) != {'request_id', 'generation', 'receipt_id', 'resources_digest'}
+            or any(not isinstance(predecessor[key], str) or not predecessor[key].strip()
+                   for key in ('request_id', 'receipt_id'))
+            or not _positive(predecessor['generation']) or not _sha(predecessor['resources_digest'])):
+        raise ValueError('Delivery adoption needs the original failed request and settled receipt')
+    inputs = [video] + ([] if subtitle is None else [subtitle])
+    binding_fields = {'artifact_id', 'sha256', 'size_bytes', 'producer_request_id',
+                      'producer_generation', 'transform_id', 'transform_digest'}
+    bindings = []
+    for index, facts in enumerate(inputs):
+        fields = {'path', 'logical_ref', 'file_identity'} | ({'parent'} if index == 0 else binding_fields)
+        if (not isinstance(facts, dict) or set(facts) != fields
+                or any(not isinstance(facts[key], str) or not facts[key].strip() for key in ('path', 'logical_ref'))
+                or not Path(facts['path']).is_absolute()):
+            raise ValueError('Delivery adoption needs bound existing media paths')
+        parent = facts['parent'] if index == 0 else {'binding': {key: facts[key] for key in binding_fields}, 'clock': {}}
+        _parent(parent)
+        bindings.append(parent['binding'])
+        identity = facts['file_identity']
+        if (not isinstance(identity, dict)
+                or set(identity) != {'device', 'inode', 'size_bytes', 'mtime_ns', 'ctime_ns'}
+                or any(type(value) is not int for value in identity.values())
+                or identity['size_bytes'] != parent['binding']['size_bytes']):
+            raise ValueError('Delivery adoption file identity does not match its original artifact')
+    clock = video['parent']['clock']
+    if not isinstance(clock, dict) or set(clock) != {'picture', 'audio'}:
+        raise ValueError('Delivery adoption needs both original output clocks')
+    _clock(clock['picture'], picture=True)
+    _clock(clock['audio'], encoded=True)
+    # The immediate failed predecessor may itself be an adoption attempt.
+    # The owner verifies that chain back to the original video's producer.
+    database = Path(database_path).expanduser().resolve()
+    volume, _ = existing_volume(database.parent)
+    sealed = json.loads(json.dumps({'predecessor': predecessor, 'video': video, 'subtitle': subtitle},
+                                  ensure_ascii=False, allow_nan=False))
+    manifest_bytes = len(json.dumps(sealed, ensure_ascii=False, sort_keys=True, allow_nan=False).encode())
+    if manifest_bytes > budget.max_manifest_bytes:
+        raise ValueError('Delivery adoption references exceed the finite manifest allowance')
+    return {'kind': 'creation_delivery_adoption', 'execution_mode': 'verify_and_adopt',
+        'role': 'final_delivery_adoption', 'read_mode': 'stream',
+        'manifest_digest': manifest_digest, 'unit_id': unit_id, **sealed,
+        'parent_bindings_digest': _digest(sealed), 'input_count': len(inputs),
+        'source_bytes': sum(binding['size_bytes'] for binding in bindings),
+        'budget_digest': budget.digest, 'backend_identity': budget.backend_identity,
+        'threads': budget.threads, 'timeout_seconds': budget.preparation_timeout_seconds,
+        'max_stdout_bytes': budget.max_stdout_bytes, 'max_stderr_bytes': budget.max_stderr_bytes,
+        'manifest_bytes': manifest_bytes, 'metadata_bytes': metadata_bytes,
+        'max_output_bytes': 0, 'generated_bytes_limit': 0, 'database_path': str(database),
+        'write_paths': {'database': str(database.parent)}, 'write_volume_ids': {'database': volume},
+        'write_allocations': {'database': metadata_bytes},
+        'workload_provenance': {'mode': 'original_delivery_checkpoint_recovery',
+            'policy_id': budget.policy_id, 'deadline_source': 'sealed_delivery_process_policy',
+            'throughput_verification': 'unknown',
+            'database_reservation_basis': 'serialized_adoption_write_set'}}
+
+
 def audio_delivery_refusal(resources, budget):
     if budget is None:
         return 'audio_delivery_policy_unavailable'
     if resources.get('budget_digest') != budget.digest or resources.get('backend_identity') != budget.backend_identity:
         return 'audio_delivery_profile_changed'
     try:
-        common = {key: resources[key] for key in ('manifest_digest', 'unit_id', 'write_paths', 'write_files',
-            'manifest_bytes', 'publication_mode')}
-        common.update(budget=budget, output_limit_bytes=resources['max_output_bytes'])
-        if resources.get('kind') == 'creation_audio_encode' and len(resources['parents']) == 1:
-            expected = audio_encode_resources(**common, master=resources['parents'][0], audio_recipe=resources['audio_recipe'])
-        elif resources.get('kind') == 'creation_final_mux' and len(resources['parents']) == 2:
-            expected = final_mux_resources(**common, picture=resources['parents'][0],
-                encoded_audio=resources['parents'][1], mux_recipe=resources['mux_recipe'])
+        if resources.get('kind') == 'creation_delivery_adoption':
+            expected = delivery_adoption_resources(budget=budget, **{key: resources[key] for key in (
+                'manifest_digest', 'unit_id', 'predecessor', 'video', 'subtitle', 'database_path', 'metadata_bytes')})
         else:
-            return 'audio_delivery_resources_invalid'
+            common = {key: resources[key] for key in ('manifest_digest', 'unit_id', 'write_paths', 'write_files',
+                'manifest_bytes', 'publication_mode')}
+            common.update(budget=budget, output_limit_bytes=resources['max_output_bytes'])
+            if resources.get('kind') == 'creation_audio_encode' and len(resources['parents']) == 1:
+                expected = audio_encode_resources(**common, master=resources['parents'][0], audio_recipe=resources['audio_recipe'])
+            elif resources.get('kind') == 'creation_final_mux' and len(resources['parents']) == 2:
+                expected = final_mux_resources(**common, picture=resources['parents'][0],
+                    encoded_audio=resources['parents'][1], mux_recipe=resources['mux_recipe'])
+            else:
+                return 'audio_delivery_resources_invalid'
         if json.dumps(resources, sort_keys=True, allow_nan=False) != json.dumps(expected, sort_keys=True, allow_nan=False):
             return 'audio_delivery_resources_invalid'
     except OSError:

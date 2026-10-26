@@ -123,6 +123,66 @@ def test_delivery_new_outputs_use_actual_volumes_and_unknown_space_stays_unknown
     assert probe._sample(resources, running_io=True).verdict is True
 
 
+def test_delivery_adoption_streams_existing_media_and_reserves_only_database_metadata(tmp_path, monkeypatch):
+    from app.audio_delivery_policy import delivery_adoption_resources
+    budget, mux, probe, _paths, _files = fixture(tmp_path, monkeypatch, 'final_mux')
+    def facts(name, clock):
+        original = parent(clock, name)
+        return {'parent': original, 'path': str(tmp_path / (name + '.existing')),
+            'logical_ref': 'artifacts/' + name,
+            'file_identity': {'device': 1, 'inode': 2, 'size_bytes': original['binding']['size_bytes'],
+                              'mtime_ns': 3, 'ctime_ns': 4}}
+    video = facts('video', {'picture': mux['parents'][0]['clock'], 'audio': mux['parents'][1]['clock']})
+    subtitle = facts('subtitle', {})
+    subtitle = {**subtitle.pop('parent')['binding'], **subtitle}
+    arguments = dict(budget=budget, manifest_digest='d'*64, unit_id='e'*64,
+        predecessor={'request_id': 'original-video', 'generation': 3, 'receipt_id': 'settled-video',
+                     'resources_digest': 'f'*64}, video=video, subtitle=subtitle,
+        database_path=probe.database_path, metadata_bytes=8192)
+    resources = delivery_adoption_resources(**arguments)
+    retried = delivery_adoption_resources(**{**arguments,
+        'predecessor': {**arguments['predecessor'], 'request_id': 'failed-adoption-attempt', 'generation': 4}})
+    assert retried['video']['parent']['binding']['producer_request_id'] == 'original-video'
+    assert retried['predecessor']['request_id'] == 'failed-adoption-attempt'
+    unit = DELIVERY_KINDS[resources['kind']][1] + resources['unit_id']
+    request = SimpleNamespace(id='request', owner_type='creation_job', unit_key=unit, resources=resources)
+    assert resources['source_bytes'] == 2 * 2**30
+    assert resources['max_output_bytes'] == resources['generated_bytes_limit'] == 0
+    assert resources['write_paths'] == {'database': str(probe.database_path.parent)}
+    assert resources['write_allocations'] == {'database': 8192}
+    assert 'write_files' not in resources and 'publication_mode' not in resources
+    assert probe.admit(request).verdict is True
+    for key, value in [('source_bytes', 1), ('generated_bytes_limit', 1), ('max_output_bytes', 1),
+                       ('execution_mode', 'ffmpeg_stream_mux'), ('timeout_seconds', 21)]:
+        assert probe._sample({**resources, key: value}).verdict is False
+    assert probe.admit(SimpleNamespace(**{**vars(request), 'unit_key': 'render:final-mux:v1:' + resources['unit_id']})).verdict is False
+    other_database = delivery_adoption_resources(**{**arguments, 'database_path': tmp_path / 'other.sqlite'})
+    assert probe._sample(other_database).reason == 'delivery_adoption_database_mismatch'
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=200+8192))
+    assert probe._sample(resources).verdict is True
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=200+8191))
+    assert probe._sample(resources).verdict is False
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=None))
+    assert probe._sample(resources).verdict is None
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=2**40))
+    grant = Grant('request', 'workspace', 'creation_job', 'original-job', unit, 'input', 1, 4, 'token', probe.database_path)
+    with sqlite3.connect(probe.database_path) as conn:
+        conn.execute('CREATE TABLE device_work_requests(id,workspace_id,owner_type,owner_id,unit_key,input_digest,'
+                     'attempt_number,last_grant_generation,state,resources_json)')
+        conn.execute('INSERT INTO device_work_requests VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (grant.request_id, grant.workspace_id, grant.owner_type, grant.owner_id, grant.unit_key,
+             grant.input_digest, 1, 4, 'granted', json.dumps(resources)))
+    assert probe.scene_runtime_limits(grant, purpose='delivery_adoption').max_process_rss_bytes == budget.max_process_rss_bytes
+    assert probe.continue_unit(grant) is True and probe.released(grant) is True
+    with pytest.raises(RecoveryBlocked):
+        probe.scene_runtime_limits(grant, purpose='final_mux')
+    with pytest.raises(RecoveryBlocked):
+        probe.scene_runtime_limits(replace(grant, generation=5))
+    absent = replace(probe.budget, final_mux=None)
+    assert HostResourceProbe(tmp_path/'missing', disk_paths=(tmp_path,), budget=absent,
+        memory_monitor=IsolatedMemoryMonitor())._sample(resources).verdict is None
+
+
 def test_delivery_normal_first_use_is_explicit_unverified_and_invalid_explicit_policy_is_not_replaced(tmp_path):
     document = profile_document(); path = write_profile(tmp_path, document)
     settings = Settings(device_resource_profile_path=str(path))

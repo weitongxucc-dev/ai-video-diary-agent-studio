@@ -98,6 +98,8 @@ class AudioDeliveryAssembly:
         self.picture = packet_copy_assembly
         self.root = Path(temporary_root).expanduser().resolve() / 'audio-delivery'
         self.audio_budget, self.mux_budget, self.reserve_bytes = audio_budget, mux_budget, reserve_bytes
+        from app.creation.delivery_adoption_recovery import DeliveryAdoptionRecovery
+        self.adoption_recovery = DeliveryAdoptionRecovery(self)
 
     @staticmethod
     def manifest_id(job):

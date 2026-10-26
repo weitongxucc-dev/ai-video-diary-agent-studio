@@ -288,6 +288,16 @@ class CreationExecutionControl:
     def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
             latest = self.execution.latest(workspace_id, task_id)
+            owner = runtime.registrations['creation_job'].owner
+            delivery = owner.audio_delivery
+            recovered = (delivery.adoption_recovery.continue_adoption(runtime.scheduler, latest, actor,
+                owner=owner, write_guard=write_guard) if latest is not None and delivery is not None else None)
+            if recovered is not None:
+                if execution_source is not None:
+                    self.repository.bind_creation_execution_source(
+                        self.repository.get_job_run(workspace_id, latest.id), execution_source, write_guard=write_guard)
+                runtime.wake()
+                return self.status(workspace_id, task_id, verify_media=verify_media)
             if latest is not None and self.execution.rerender_current(latest,actor,runtime.scheduler,write_guard=write_guard):
                 job = self.repository.get_job_run(workspace_id,latest.id)
             else:

@@ -859,6 +859,10 @@ class CreationJobOwnerVerifier:
     def render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
         if self.packet_copy_assembly is not None and job is None and request is not None:
             job = self.repository.get_job_run(task.workspace_id, request.owner_id, connection=conn)
+        if self.audio_delivery is not None and job is not None:
+            adoption = self.audio_delivery.adoption_recovery.unit_facts(job, actor, self, request=request, connection=conn)
+            if adoption is not None:
+                return adoption
         if self.picture_fragments is not None and job is not None and not plan.presenter_share_target:
             if prepare_assembly:
                 def guard(current):
@@ -2933,8 +2937,10 @@ class CreationJobUnitExecutor:
         from app.granted_subprocess import GrantedCommandCancelled
         packet_copy = grant.unit_key.startswith('render:packet-copy:v1:')
         delivery = grant.unit_key.startswith(('render:audio-encode:v1:', 'render:final-mux:v1:'))
+        adoption = grant.unit_key.startswith('render:delivery-adopt:v1:')
         picture_leaf = grant.unit_key.startswith('render:picture-fragment:v1:')
-        assembly = (self.picture_fragments if picture_leaf else self.audio_delivery if delivery else
+        assembly = (self.audio_delivery.adoption_recovery if adoption and self.audio_delivery is not None else
+            self.picture_fragments if picture_leaf else self.audio_delivery if delivery else
             self.packet_copy_assembly if packet_copy else self.audio_assembly)
         if assembly is None:
             raise PermissionError('本机媒体组装端口未装配')
@@ -2958,17 +2964,17 @@ class CreationJobUnitExecutor:
                 (job.workspace_id, job.id)).fetchone()
             if unknown is not None:
                 raise RecoveryBlocked('原组装单元消耗未知，须先核对原回执，不能新许可清账')
-            if (packet_copy or delivery or picture_leaf) and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
+            if (packet_copy or delivery or picture_leaf or adoption) and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
                 raise PermissionError('画面归约在启动前已撤权或父事实变化')
             job = self.repository.claim_job_run(job.workspace_id, job.id, connection=conn)
-            family = 'picture_fragment' if picture_leaf else 'audio_delivery' if delivery else 'picture_packet' if packet_copy else 'audio_assembly'
+            family = 'delivery_adoption' if adoption else 'picture_fragment' if picture_leaf else 'audio_delivery' if delivery else 'picture_packet' if packet_copy else 'audio_assembly'
             started_id = f'event_{job.id}_{family}_started_{grant.generation}'
-            receipt_id = (f'event_{job.id}_{family}_usage_{grant.generation}' if packet_copy or delivery or picture_leaf else
+            receipt_id = (f'event_{job.id}_{family}_usage_{grant.generation}' if packet_copy or delivery or picture_leaf or adoption else
                 f'event_{job.id}_audio_assembly_settled_{grant.generation}')
             self.repository.append_task_event(TaskEvent(started_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_started', {'usage_id': f'{grant.request_id}:{grant.generation}',
                     'request_id': grant.request_id, 'permit_generation': grant.generation,
-                    'unit_key': grant.unit_key, 'phase': family if picture_leaf else 'audio_delivery' if delivery else 'picture_packet_copy' if packet_copy else 'audio_assembly'}), connection=conn)
+                    'unit_key': grant.unit_key, 'phase': family if picture_leaf or adoption else 'audio_delivery' if delivery else 'picture_packet_copy' if packet_copy else 'audio_assembly'}), connection=conn)
             scopes = ExecutionBudgetScopes(self.repository)
             try:
                 binding = scopes.binding(conn, job.workspace_id, job.id)
@@ -2979,7 +2985,8 @@ class CreationJobUnitExecutor:
                 scopes.reserve(conn, job.workspace_id, job.id, actor, request_id=grant.request_id,
                     permit_generation=grant.generation, started_event_id=started_id, receipt_id=receipt_id,
                     authorization_revision=policy.payload['revision'], maximum={
-                        'execution_seconds': resources['timeout_seconds'], 'generated_bytes': (resources['picture_generated_bytes_limit'] if picture_leaf else sum(resources['write_allocations'].values())
+                        'execution_seconds': resources['timeout_seconds'], 'generated_bytes': (0 if adoption else
+                            resources['picture_generated_bytes_limit'] if picture_leaf else sum(resources['write_allocations'].values())
                             if packet_copy or delivery or picture_leaf else resources['max_output_bytes'])})
         started = time.monotonic() - max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation = threading.Event()
@@ -2988,28 +2995,31 @@ class CreationJobUnitExecutor:
             resources['max_output_bytes'], resources['threads'], cancellation)
         rendering = [False]
         def settle(conn, current):
-            try:
-                measured = self.repository.get_task_event(job.workspace_id,
-                    (assembly.measured_event_id(grant) if delivery or picture_leaf else
-                     f'event_{grant.request_id}_{grant.generation}_picture_output' if packet_copy else
-                     f'event_{job.id}_audio_assembly_measured_{grant.generation}'), connection=conn)
-            except KeyError:
-                if rendering[0]:
-                    raise RecoveryBlocked('音频组装真实输出计量未知，保留原预留与started')
-                generated = 0  # No renderer was entered, so no output could be created.
+            if adoption:
+                generated = 0  # This unit reads immutable media and writes only original checkpoint metadata.
             else:
-                matches = ((measured.payload['request_id'], measured.payload['permit_generation']) ==
-                    (current.request_id, current.generation)) if packet_copy or delivery or picture_leaf else measured.payload['usage_id'] == f'{current.request_id}:{current.generation}'
-                if not matches:
-                    raise RecoveryBlocked('音频组装原输出计量与许可不一致')
-                if (packet_copy or delivery or picture_leaf) and not measured.payload['consumption_known']:
-                    raise RecoveryBlocked('画面归约真实新文件字节未知，保留原预留与started')
-                generated = measured.payload['output_bytes'] if packet_copy or delivery or picture_leaf else measured.payload['generated_bytes']
+                try:
+                    measured = self.repository.get_task_event(job.workspace_id,
+                        (assembly.measured_event_id(grant) if delivery or picture_leaf else
+                         f'event_{grant.request_id}_{grant.generation}_picture_output' if packet_copy else
+                         f'event_{job.id}_audio_assembly_measured_{grant.generation}'), connection=conn)
+                except KeyError:
+                    if rendering[0]:
+                        raise RecoveryBlocked('音频组装真实输出计量未知，保留原预留与started')
+                    generated = 0  # No renderer was entered, so no output could be created.
+                else:
+                    matches = ((measured.payload['request_id'], measured.payload['permit_generation']) ==
+                        (current.request_id, current.generation)) if packet_copy or delivery or picture_leaf else measured.payload['usage_id'] == f'{current.request_id}:{current.generation}'
+                    if not matches:
+                        raise RecoveryBlocked('音频组装原输出计量与许可不一致')
+                    if (packet_copy or delivery or picture_leaf) and not measured.payload['consumption_known']:
+                        raise RecoveryBlocked('画面归约真实新文件字节未知，保留原预留与started')
+                    generated = measured.payload['output_bytes'] if packet_copy or delivery or picture_leaf else measured.payload['generated_bytes']
             self.repository.append_task_event(TaskEvent(receipt_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_settled', {'usage_id': f'{current.request_id}:{current.generation}',
                     'request_id': current.request_id, 'permit_generation': current.generation, 'unit_key': current.unit_key,
                     'elapsed_seconds': max(0, time.monotonic() - started), 'output_bytes': generated,
-                    'usage_source': ('picture_fragment_worker_output_measurement' if picture_leaf else 'audio_delivery_worker_output_measurement' if delivery else
+                    'usage_source': ('read_only_delivery_adoption' if adoption else 'picture_fragment_worker_output_measurement' if picture_leaf else 'audio_delivery_worker_output_measurement' if delivery else
                                      'picture_packet_worker_output_measurement' if packet_copy else
                                      'audio_assembly_worker_output_measurement')}), connection=conn)
             if binding is not None:
@@ -3037,7 +3047,11 @@ class CreationJobUnitExecutor:
             return (intent, owner.verify_submission(intent, actor, connection=conn)) if intent is not None else None
         try:
             context.check()
-            if packet_copy or delivery or picture_leaf:
+            if adoption:
+                recovery_plan = assembly.execute(job, actor=actor, context=context, owner=owner)
+                record = self.repository.get_artifact_record(job.workspace_id,
+                    recovery_plan['video']['parent']['binding']['artifact_id'])
+            elif packet_copy or delivery or picture_leaf:
                 def publication_guard(conn):
                     current = scheduler._get(grant.request_id)
                     if owner.check_current(current, conn) != 'ready':
@@ -3053,6 +3067,11 @@ class CreationJobUnitExecutor:
             context.check()
             def commit(conn, current):
                 settle(conn, current)
+                if adoption:
+                    version = assembly.adopt(conn, job, actor=actor, context=context, plan=recovery_plan,
+                        picture_fragments=self.picture_fragments)
+                    return self._checkpoint(conn, current, status='succeeded', output=f'{version.id}:{record.logical_ref}',
+                        final_output_refs=version.snapshot['output_refs'])
                 if delivery and resources['kind'] == 'creation_final_mux' and self.picture_fragments is not None:
                     version = assembly.adopt(conn, job, actor=actor, grant=current, record=record,
                         picture_fragments=self.picture_fragments)
@@ -3061,7 +3080,7 @@ class CreationJobUnitExecutor:
                 return self._checkpoint(conn, current, status='queued', output=record.logical_ref)
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=commit, next_unit_write=next_unit)
-            if delivery and resources['kind'] == 'creation_final_mux' and self.picture_fragments is not None:
+            if (adoption or delivery and resources['kind'] == 'creation_final_mux') and self.picture_fragments is not None:
                 self._notify_render_completed(job)
         except Exception as exc:
             cancelled = isinstance(exc, GrantedCommandCancelled) or self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled'
@@ -3082,14 +3101,15 @@ class CreationJobUnitExecutor:
                 def failed(conn, current):
                     settle(conn, current)
                     return self._checkpoint(conn, current, status='failed', reason=str(exc))
-                scheduler.fail_unit(grant, reason='picture_fragment_failed' if picture_leaf else 'audio_delivery_failed' if delivery else 'picture_packet_copy_failed' if packet_copy else 'audio_assembly_failed', failure_write=failed)
+                scheduler.fail_unit(grant, reason='delivery_adoption_failed' if adoption else 'picture_fragment_failed' if picture_leaf else 'audio_delivery_failed' if delivery else 'picture_packet_copy_failed' if packet_copy else 'audio_assembly_failed', failure_write=failed)
         finally:
             with self._cancellation_lock:
                 self._cancellations.pop(grant.request_id, None)
 
     def _execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
         if grant.unit_key.startswith(('render:audio-assembly:', 'render:packet-copy:v1:',
-                                      'render:audio-encode:v1:', 'render:final-mux:v1:', 'render:picture-fragment:v1:')):
+                                      'render:audio-encode:v1:', 'render:final-mux:v1:', 'render:picture-fragment:v1:',
+                                      'render:delivery-adopt:v1:')):
             return self._execute_media_assembly(grant, scheduler)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
             return self._execute_narration_unit(grant, scheduler)

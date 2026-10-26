@@ -210,10 +210,20 @@ class ExecutionBudgetScopes:
             raise PermissionError('当前作业累计授权已撤销或范围已变化')
         if set(maximum) != {'execution_seconds', 'generated_bytes'}:
             raise ValueError('累计占用需要本次有限执行上界')
+        zero_media = False
+        if maximum.get('generated_bytes') == 0:
+            row = connection.execute("SELECT resources_json,unit_key FROM device_work_requests "
+                "WHERE workspace_id=? AND owner_type='creation_job' AND owner_id=? AND id=?",
+                (workspace_id, job_id, request_id)).fetchone()
+            declared = json.loads(row['resources_json']) if row is not None else {}
+            zero_media = (row is not None and row['unit_key'].startswith('render:delivery-adopt:v1:')
+                and declared.get('kind') == 'creation_delivery_adoption'
+                and declared.get('max_output_bytes') == 0 and declared.get('read_mode') == 'stream')
         for key, value in maximum.items():
             if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
-                    or value <= 0 or key == 'generated_bytes' and not isinstance(value, int)):
-                raise ValueError('单元最大占用必须为有限正数，不能预留无限余额')
+                    or value < 0 or value == 0 and not (key == 'generated_bytes' and zero_media)
+                    or key == 'generated_bytes' and not isinstance(value, int)):
+                raise ValueError('单元最大占用须有限且为正，仅原许可的只读采用可声明零生成')
         started = self.repository.get_task_event(workspace_id, started_event_id, connection=connection)
         usage_id = f'{request_id}:{permit_generation}'
         if (started.job_id != job_id or started.payload.get('usage_id') != usage_id

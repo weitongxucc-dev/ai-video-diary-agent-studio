@@ -1305,6 +1305,8 @@ class HostResourceProbe:
             refusal = audio_delivery_refusal(resources, delivery)
             if refusal is not None:
                 return decision(None if delivery is None or refusal == 'audio_delivery_filesystem_unavailable' else False, refusal)
+            if kind == 'creation_delivery_adoption' and resources['database_path'] != str(self.database_path):
+                return decision(False, 'delivery_adoption_database_mismatch')
             checks['audio_delivery_policy'] = {'limits': asdict(delivery),
                 'throughput_verification': 'unknown', 'source_bytes': resources['source_bytes'],
                 'input_count': resources['input_count'], 'resident_allocation': False}
@@ -1645,7 +1647,7 @@ class HostResourceProbe:
         duration = None
         try:
             observation_only_io = self.budget.max_disk_io_bytes_per_second is None
-            sustained = not observation_only_io and kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux"}
+            sustained = not observation_only_io and kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux", "creation_delivery_adoption"}
             def io_counters():
                 try:
                     return psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
@@ -1724,7 +1726,13 @@ class HostResourceProbe:
             checks["swap_used_bytes"] = {**memory.facts.get("swap_used_bytes", {"value": None}),
                 "diagnostic_only": True, "legacy_configured_limit": self.budget.max_swap_used_bytes}
             disk_passed = True
-            if kind == 'creation_packet_copy' or kind in DELIVERY_KINDS:
+            if kind == 'creation_delivery_adoption':
+                from app.device_resource_volumes import sample_write_volumes
+                sampling = 'delivery_adoption_database_volume'
+                checks['write_volumes'] = sample_write_volumes(resources['write_paths'], resources['write_allocations'],
+                    reserve_bytes=self.budget.min_free_disk_bytes)
+                disk_passed = all(item['passed'] for item in checks['write_volumes'].values())
+            elif kind == 'creation_packet_copy' or kind in DELIVERY_KINDS:
                 from app.device_resource_volumes import sample_write_volumes
                 sampling = 'audio_delivery_write_volumes' if kind in DELIVERY_KINDS else 'packet_copy_write_volumes'
                 allocations = packet_copy_remaining_allocations(resources, running=memory_running)
@@ -1830,6 +1838,9 @@ class HostResourceProbe:
                     and (grant.owner_type != 'creation_job' or grant.unit_key !=
                          DELIVERY_KINDS[resources['kind']][1] + str(resources.get('unit_id')))):
                 return None
+            if (isinstance(resources, dict) and resources.get('kind') == 'creation_delivery_adoption'
+                    and resources.get('database_path') != str(self.database_path)):
+                return None
             if (isinstance(resources, dict) and resources.get('kind') == 'creation_packet_copy'
                     and (grant.owner_type != 'creation_job'
                          or grant.unit_key != PACKET_COPY_UNIT_PREFIX + str(resources.get('unit_id')))):
@@ -1840,7 +1851,7 @@ class HostResourceProbe:
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux"}
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux", "creation_delivery_adoption"}
                 and (getattr(self.budget, DELIVERY_KINDS[resources["kind"]][0]) if resources["kind"] in DELIVERY_KINDS else
                      self.budget.packet_copy if resources["kind"] == "creation_packet_copy" else
                      self.budget.material_visual_query if resources["kind"] == "material_visual_query" else
@@ -1879,7 +1890,8 @@ class HostResourceProbe:
         if resources.get('kind') in DELIVERY_KINDS:
             operation = DELIVERY_KINDS[resources['kind']][0]
             delivery = getattr(self.budget, operation)
-            if purpose not in {None, operation} or audio_delivery_refusal(resources, delivery) is not None:
+            expected_purpose = 'delivery_adoption' if resources['kind'] == 'creation_delivery_adoption' else operation
+            if purpose not in {None, expected_purpose} or audio_delivery_refusal(resources, delivery) is not None:
                 raise RecoveryBlocked('音频交付许可、原单元或过程策略不一致')
             return SceneRuntimeLimits(delivery.max_process_rss_bytes, delivery.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
