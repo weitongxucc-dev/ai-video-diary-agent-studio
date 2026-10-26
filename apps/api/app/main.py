@@ -14190,7 +14190,7 @@ def _run_goal_turn(claim, fresh):
     if (claim["event"].get("status") == "confirmed" and "adopted_operation" in fresh["facts"]
             or stage == "review" and task.stage == "montage"):
         stage = task.stage
-    message = claim['event']['message'] if claim['phase'] == 'input' else goal['original_instruction']
+    message = claim['event']['message'] if claim['event'].get('phase') == 'input' else goal['original_instruction']
     payload = CreationTaskAssistantTurnRequest(conversation_id=goal["conversation_id"], message=message,
         client_request_id=turn_id, expected_draft_version=0, context_stage=context["stage"],
         selected_object_refs=[ref for ref in context.get("selected_object_refs", [])

@@ -1,4 +1,5 @@
 import copy
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
@@ -13,13 +14,13 @@ from app.schemas import WorkspaceAssistantPlanTurnRequest
 from test_creation_request_api import client_state, create
 
 
-def adopted(c, *, count=1, kind="goal_delegation", confirm=True, finish=True):
+def adopted(c, *, count=1, kind="goal_delegation", confirm=True, finish=True, workspace_id="request-test"):
     message = "请制作玉米脱粒介绍，文案和剪辑由你完成。"
     if count == 2:
         message = "请制作玉米脱粒介绍，中文和英文各一条，文案和剪辑由你完成。"
-    chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "目标")
-    draft = c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
-    turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id,
+    chat = c.conversations.create(workspace_id, c.member.member_id, "home", "home", "目标")
+    draft = c.conversations.save_draft(chat["id"], workspace_id, c.member.member_id, message, 0)
+    turn, _ = c.conversations.create_turn_idempotent(chat["id"], workspace_id, c.member.member_id,
         message, str(uuid4()), draft["draft_version"], request_context={"kind": "home"})
     saved = create(c, goal=message, target_count=count, output_relation="variants" if count == 2 else "single",
         assistant_turn_id=turn["id"], request_key=turn["id"], intent={"kind": kind, "topic_title": "玉米脱粒"}).json()
@@ -141,10 +142,17 @@ def test_home_response_and_live_replay_register_the_same_actual_tasks(client_sta
 
 def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_state, monkeypatch):
     c = client_state
-    _, source, saved, message = adopted(c)
+    # The real native actor boundary permits local tokens only in the local workspace.
+    # Keep the request fixture isolated while binding the same real local member.
+    monkeypatch.setattr(main, "current_workspace_id", lambda _request: "local")
+    original_preflight = main._creation_plan_preflight
+    monkeypatch.setattr(main, "_creation_plan_preflight", lambda *args, **kwargs:
+        replace(original_preflight(*args, **kwargs), workspace_id="local"))
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(c.repository.database_path)))
+    _, source, saved, message = adopted(c, workspace_id="local")
     model_calls = []
     def model(settings, **kwargs):
-        origin = c.conversations.task_turn_source(kwargs["turn_id"], "request-test", c.member.member_id, kwargs["task_id"])
+        origin = c.conversations.task_turn_source(kwargs["turn_id"], "local", c.member.member_id, kwargs["task_id"])
         assert origin["raw_command"] == message
         assert isinstance(kwargs["business_handler"], main.TaskBusinessAdapter)
         assert kwargs["business_handler"].business is business
@@ -163,7 +171,9 @@ def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_st
     continuation = GoalContinuationService(c.conversations, verify_current_goal=lambda goal, event: {
         "status": "ready", "task_version": {"timeline_version_id": None, "timeline_sequence": 0},
         "facts": {}, "request": request, "business": business}, run_goal_turn=main._run_goal_turn)
-    continuation.register_creation_request(source["id"], "request-test", c.member.member_id, saved)
+    roots = continuation.register_creation_request(source["id"], "local", c.member.member_id, saved)
+    for root_id in roots:
+        main._bind_goal_business_scope(request, c.conversations.get_task_goal(root_id))
     assert continuation.reconcile() == 1
     assert len(model_calls) == 1 and model_calls[0]["stage"] == "script"
     assert model_calls[0]["task_id"] == saved["current_window"]["entries"][0]["task_id"]
