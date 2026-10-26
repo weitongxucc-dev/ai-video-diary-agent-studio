@@ -1173,6 +1173,24 @@ class CreationTaskTopicsResponse(BaseModel):
 
 class CreationTaskScriptGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+
+
+class CreationTaskScriptGenerationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    task_id: str
+    conversation_id: UUID
+    turn_id: UUID
+    turn_status: Literal["running", "completed", "failed", "stopped"]
+    run_id: str
+    run_status: Literal["running", "succeeded", "failed"]
+    status: Literal["running", "stopping", "draft_ready", "failed", "stopped", "incomplete", "unknown"]
+    requested_effect: Literal["draft"]
+    stop_requested: bool
+    result_stale: bool
+    script_id: str | None
+    script_updated_at: str | None
 
 
 class TaskKnowledgeAdoptionRequest(BaseModel):

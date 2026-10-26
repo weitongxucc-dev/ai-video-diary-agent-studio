@@ -8,7 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 from app.config import Settings
-from app.assistant.catalogue import (MEMORY_TOOLS, SCRIPT_TOOL_READS, ASSISTANT_BUSINESS_TOOLS,
+from app.assistant.script_generation_policy import is_script_generation
+from app.assistant.catalogue import (SCRIPT_GENERATION_TOOLS, MEMORY_TOOLS, SCRIPT_TOOL_READS, ASSISTANT_BUSINESS_TOOLS,
     TASK_READ_PREVIEW_TOOLS, SYSTEM_PROMPT, PLAN_PROMPT, MATERIAL_PROMPT, SCRIPT_PROMPT, TOPIC_PROMPT, _PI_TOOL_LABELS)
 from app.assistant.failures import (AssistantUnavailable, _fail, _classify_output, _tool_error_seen,
     _FAILURES, FAILURE_KEY_REJECTED, FAILURE_ADDRESS_UNREACHABLE, FAILURE_TIMEOUT, FAILURE_RUNTIME_MISSING,
@@ -104,14 +105,32 @@ def run_task_turn(
     tools = ",".join(ASSISTANT_BUSINESS_TOOLS[
         "task_edit" if continuation_context else "topic" if topic_turn else "script" if script_turn else "task_edit"
     ])
+    generation = is_script_generation(source_binding or {})
+    prompt = SYSTEM_PROMPT if continuation_context else TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT
+    if generation:
+        binding = source_binding or {}
+        expected = {'workspace_id': workspace_id, 'task_id': task_id, 'member_id': caller_user_id,
+                    'conversation_id': conversation_id, 'turn_id': turn_id}
+        if (binding.get('intent_kind') != 'script_generation' or not binding.get('generation_request_id')
+                or business_handler is None or not script_turn or continuation_context is not None
+                or any(value is None or binding.get(key) != value for key,value in expected.items())
+                or binding.get('input_id') is not None or binding.get('input_turn_id') is not None):
+            raise ValueError('生成动作缺少真实原请求、会话或宿主业务绑定')
+        tools = ','.join(SCRIPT_GENERATION_TOOLS)
+        native_handler = None
+        input_handler = None
+        prompt += ('\n本轮来自真实的生成文案按钮动作，不是新的用户发言，也不是整任务制作委托。'
+                   'message是原请求的创作要求数据；只保存本请求的完整待审稿。'
+                   '按原窗口版本与稳定段落ID规划；未知仅查原请求，不换键或重新开始。'
+                   '不采用稿件、不启动制作、不写偏好；服务端独立核查并收口draft-ready，不以模型话术判完成。')
     return _run_turn(
         settings, workspace_id=workspace_id, task_id=task_id, message=message,
         stage=stage, selected_refs=selected_refs, playhead_ms=playhead_ms,
         authorization=authorization, cookie=cookie,
         local_member_token=local_member_token, caller_user_id=caller_user_id,
         on_event=on_event,
-        prompt=SYSTEM_PROMPT if continuation_context else TOPIC_PROMPT if topic_turn else SCRIPT_PROMPT if script_turn else SYSTEM_PROMPT,
-        tool_names=tools + (",read_selected_profile" if profile_reference else "") + (",read_selected_knowledge" if knowledge_reference else ""),
+        prompt=prompt,
+        tool_names=tools if generation else tools + (",read_selected_profile" if profile_reference else "") + (",read_selected_knowledge" if knowledge_reference else ""),
         preview_kind="edit_preview" if continuation_context else "topic_generation" if topic_turn else "script_draft" if script_turn else "edit_preview",
         session_key=(f"conversation:{conversation_id}"
                      if conversation_id else f"task:{task_id}:{'topic' if topic_turn else 'script' if script_turn else 'edit'}"),

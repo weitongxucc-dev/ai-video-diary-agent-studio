@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import sqlite3
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -163,9 +164,13 @@ class ConversationRepository:
         assert row is not None
         return self._conversation(row)
 
-    def current_or_create(self, workspace_id: str, member_id: str, scope_kind: str, scope_id: str) -> dict:
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+    def current_or_create(self, workspace_id: str, member_id: str, scope_kind: str, scope_id: str,
+                          *, connection: sqlite3.Connection | None = None) -> dict:
+        if connection is not None:
+            self._require_action_transaction(connection)
+        with self._connect() if connection is None else nullcontext(connection) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT c.* FROM assistant_conversation_current current "
                 "JOIN assistant_conversations c ON c.id=current.conversation_id "
@@ -608,6 +613,112 @@ class ConversationRepository:
             self._write_goal(conn,root,goal)
             sealed=seal(conn,old_goal,goal,context)
             return {'item':item,'goal':goal,'context':context,'scope':sealed}
+
+    def _require_action_transaction(self, connection: sqlite3.Connection) -> None:
+        database = next((row[2] for row in connection.execute("PRAGMA database_list")
+                         if row[1] == "main"), None)
+        if (not connection.in_transaction or not database
+                or Path(database).resolve() != self.database_path.resolve()):
+            raise ValueError("按钮请求必须与原业务对象在同一数据库事务中保存")
+
+    def read_user_action_request(self, connection, workspace_id, task_id, request_id, member_id):
+        """Read the original typed action, never infer it from a latest turn."""
+        row = connection.execute(
+            "SELECT r.*,t.status AS turn_status,t.result_json,t.events_json "
+            "FROM assistant_conversation_request_receipts r "
+            "JOIN assistant_conversations c ON c.id=r.conversation_id "
+            "AND c.workspace_id=r.workspace_id AND c.member_id=r.member_id "
+            "JOIN assistant_conversation_turns t ON t.id=r.turn_id AND t.conversation_id=r.conversation_id "
+            "WHERE r.client_request_id=?", (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        context = json.loads(row["request_context_json"])
+        if ((row["workspace_id"], row["member_id"], row["scope_kind"], row["scope_id"], row["outcome"])
+                != (workspace_id, member_id, "task", task_id, "consumed")
+                or context.get("source_kind") != "user_action" or context.get("task_id") != task_id):
+            raise ConversationTurnRequestConflict("此请求身份不属于当前任务的原按钮动作")
+        return {**dict(row), "request_context": context,
+                "result": json.loads(row["result_json"]) if row["result_json"] else None,
+                "events": json.loads(row["events_json"])}
+
+    def create_user_action_turn_idempotent(
+        self, connection, *, conversation_id, workspace_id, member_id, task_id,
+        client_request_id, request_context,
+    ) -> tuple[dict, bool]:
+        """Persist a typed action without sending or clearing the chat draft.
+
+        The caller owns the transaction that also creates its business Run and
+        source event. A replay returns the original turn and cannot dispatch it.
+        """
+        self._require_action_transaction(connection)
+        self._validate_draft_request(client_request_id, 0)
+        if (request_context.get("kind") != "script_generation" or request_context.get("source_kind") != "user_action"
+                or request_context.get("task_id") != task_id or request_context.get("requested_effect") != "draft"):
+            raise ValueError("按钮动作缺少原任务的类型化来源")
+        existing = self.read_user_action_request(
+            connection, workspace_id, task_id, client_request_id, member_id,
+        )
+        if existing is not None:
+            if existing["conversation_id"] != conversation_id or existing["request_context"] != request_context:
+                raise ConversationTurnRequestConflict("此按钮请求身份已绑定其他输入")
+            row = connection.execute("SELECT * FROM assistant_conversation_turns WHERE id=?",
+                                     (existing["turn_id"],)).fetchone()
+            return dict(row), False
+        conversation = connection.execute(
+            "SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=? "
+            "AND scope_kind='task' AND scope_id=?",
+            (conversation_id, workspace_id, member_id, task_id),
+        ).fetchone()
+        if conversation is None:
+            raise KeyError(conversation_id)
+        if connection.execute(
+            "SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? AND status='running' LIMIT 1",
+            (conversation_id,),
+        ).fetchone() is not None:
+            raise ConversationTurnAlreadyRunning("此对话已有正在运行的助手轮次")
+        self._invalidate_conversation_goals(connection, conversation_id, "new_user_action")
+        sequence = connection.execute(
+            "SELECT COALESCE(MAX(sequence),0)+1 FROM assistant_conversation_turns WHERE conversation_id=?",
+            (conversation_id,),
+        ).fetchone()[0]
+        turn_id, now = str(uuid4()), _now()
+        connection.execute(
+            "INSERT INTO assistant_conversation_turns "
+            "(id,conversation_id,sequence,user_message,assistant_text,status,events_json,result_json,created_at,updated_at) "
+            "VALUES(?,?,?,'','','running','[]',NULL,?,?)",
+            (turn_id, conversation_id, sequence, now, now),
+        )
+        connection.execute(
+            "INSERT INTO assistant_conversation_request_receipts "
+            "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
+            "expected_draft_version,request_context_json,outcome,turn_id,created_at) "
+            "VALUES(?,?,?,?,'task',?,'',?,?,'consumed',?,?)",
+            (client_request_id, conversation_id, workspace_id, member_id, task_id,
+             conversation["draft_version"], json.dumps(request_context, ensure_ascii=False, allow_nan=False), turn_id, now),
+        )
+        row = connection.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
+        return dict(row), True
+
+    def bind_user_action_result(self, connection, workspace_id, task_id, request_id, member_id, result):
+        """Keep the action's actual result locator in its original request receipt."""
+        self._require_action_transaction(connection)
+        receipt = self.read_user_action_request(connection, workspace_id, task_id, request_id, member_id)
+        if receipt is None or receipt["turn_status"] != "running":
+            raise ValueError("原按钮回合已结束，不能替换生成结果")
+        context = receipt["request_context"]
+        previous = context.get("generation_result")
+        if (context.get("kind") != "script_generation" or context.get("run_id") != result.get("run_id")
+                or result.get("requested_effect") != "draft" or result.get("status") not in {"draft_partial", "draft_ready"}
+                or not result.get("script_id") or not result.get("updated_at")):
+            raise ValueError("文案结果定位与原按钮请求不匹配")
+        if previous and (previous["script_id"] != result["script_id"]
+                         or previous["status"] == "draft_ready" and previous != result):
+            raise ValueError("原生成请求不能切换草稿或覆盖已就绪版本")
+        connection.execute("UPDATE assistant_conversation_request_receipts SET request_context_json=? "
+                           "WHERE client_request_id=? AND turn_id=? AND outcome='consumed'",
+                           (json.dumps({**context, "generation_result": result}, ensure_ascii=False, allow_nan=False),
+                            request_id, receipt["turn_id"]))
 
     def create_turn_idempotent(
         self, conversation_id: str, workspace_id: str, member_id: str, user_message: str,
@@ -1858,11 +1969,15 @@ class ConversationRepository:
         return latest['input_id']
 
     def finish_turn(self, turn_id: str, status: str, assistant_text: str | None = None,
-                    result: dict | None = None, *, write_guard=None, completed_input_id=None) -> dict | None:
+                    result: dict | None = None, *, write_guard=None, completed_input_id=None,
+                    connection: sqlite3.Connection | None = None) -> dict | None:
         if status not in {"completed", "failed", "stopped"}:
             raise ValueError("invalid assistant turn terminal status")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        if connection is not None:
+            self._require_action_transaction(connection)
+        with self._connect() if connection is None else nullcontext(connection) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
             from app.assistant.inputs import settle_delivered_input
@@ -1901,14 +2016,24 @@ class ConversationRepository:
             row = conn.execute("SELECT * FROM assistant_conversation_turns WHERE id=?", (turn_id,)).fetchone()
         return dict(row) if row else None
 
-    def fail_interrupted_turns(self) -> int:
+    def fail_interrupted_turns(self, *, recover_user_action=None) -> int:
         """Do not replay a running assistant turn after the API process restarts."""
         now = _now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute("SELECT t.id,t.result_json,t.events_json,r.request_context_json FROM assistant_conversation_turns t "
-                "LEFT JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id AND r.outcome='consumed' WHERE t.status='running'").fetchall()
+            rows = conn.execute("SELECT t.id,t.status,t.result_json,t.events_json,r.request_context_json,"
+                "r.workspace_id,r.member_id,r.scope_id,r.client_request_id FROM assistant_conversation_turns t "
+                "LEFT JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id AND r.outcome='consumed' "
+                "WHERE t.status='running' OR (t.status='failed' AND json_extract(t.result_json,'$.reason')='api_restarted' "
+                "AND json_extract(r.request_context_json,'$.kind')='script_generation')").fetchall()
             for row in rows:
+                context = json.loads(row["request_context_json"] or "{}")
+                if context.get("kind") == "script_generation":
+                    if recover_user_action is None:
+                        raise RuntimeError("原按钮请求恢复需要业务 owner 同事务收口")
+                    recover_user_action(conn, row["workspace_id"], row["scope_id"],
+                        row["client_request_id"], row["member_id"])
+                    continue
                 from app.assistant.inputs import settle_inputs, settle_delivered_input
                 settle_delivered_input(conn,row['id'],'failed')
                 latest = latest_consumed_input(json.loads(row["events_json"]))

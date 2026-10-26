@@ -178,8 +178,13 @@ class CreationExecutionControl:
             "input_digest": digest,
         }
 
-    def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
+    def status_summary(self, workspace_id: str, task_id: str, *, actor=None, job_id=None) -> dict[str, object]:
+        """Read persisted execution facts without probing or assembling media."""
         task = self.task_or_missing(workspace_id, task_id)
+        return self._status_summary(task, actor=actor, job_id=job_id)
+
+    def _status_summary(self, task, *, actor, job_id):
+        workspace_id, task_id = task.workspace_id, task.id
         job = self.execution.latest(workspace_id, task_id) if job_id is None else self.repository.get_job_run(workspace_id,job_id)
         if actor is not None and job_id is None and task.owner_user_id==(actor.user_id or actor.member_id):
             with self.repository._connect() as conn:
@@ -204,10 +209,6 @@ class CreationExecutionControl:
             ]
             if job else []
         )
-        covers = (
-            self.repository.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
-            if task.current_timeline_version_id else []
-        )
         current_stage = None
         if job and events:
             latest_stage_event = events[-1]
@@ -231,14 +232,7 @@ class CreationExecutionControl:
         if job and job.status == "queued" and montage_waiting_for_confirmation(self.repository, task):
             current_stage = "montage_plan"
             waiting_reason = "故事板仍有镜头等待确认；确认后点击继续制作。"
-        decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job.id if job else None) if (
-            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
-        if decisions['items']:
-            waiting_reason=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
-                else '段落配音已保存，画面候选需要用户明确确认。')
-            current_stage='segment_video'
         return {
-            "visual_decisions":decisions,
             "task_id": task_id,
             "job": asdict(job) if job else None,
             "stages": events,
@@ -247,11 +241,29 @@ class CreationExecutionControl:
             "status_updated_at": status_updated_at,
             "input_rejection":creation_input_rejection(task_events,job.id) if job else None,
             "narration_usage": self.repository.creation_narration_usage(workspace_id, job.id) if job else None,
-            "video_ready": self.render_valid(
-                workspace_id, task_id, verify_media=verify_media),
+        }
+
+    def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
+        task = self.task_or_missing(workspace_id, task_id)
+        result = self._status_summary(task, actor=actor, job_id=job_id)
+        job = result["job"]
+        decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job["id"] if job else None) if (
+            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
+        if decisions['items']:
+            result['waiting_reason']=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
+                else '段落配音已保存，画面候选需要用户明确确认。')
+            result['current_stage']='segment_video'
+        covers = (
+            self.repository.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
+            if task.current_timeline_version_id else []
+        )
+        result.update({
+            "visual_decisions": decisions,
+            "video_ready": self.render_valid(workspace_id, task_id, verify_media=verify_media),
             "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
             "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
-        }
+        })
+        return result
 
     def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:

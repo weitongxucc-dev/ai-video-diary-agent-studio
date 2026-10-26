@@ -8,6 +8,7 @@ import hashlib
 
 from app.creation.editing.metadata_use_case import EditPreviewRejected
 from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected, TaskInvocation
+from app.assistant.script_generation_policy import SCRIPT_GENERATION_OPERATIONS, is_script_generation
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.creation.output_observation_use_case import read_original_observation_request
 from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
@@ -51,7 +52,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -70,9 +71,13 @@ class TaskBusiness:
         self.execution_capabilities=execution_capabilities
         self.read_script_sections=read_script_sections
         self.device_preparation=device_preparation
+        self.generation_case,self.creator_memory=generation_case,creator_memory
+        self.execution_status=execution_status
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
+        if is_script_generation(source_binding):
+            raise TaskBusinessRejected('生成按钮不授权原生执行或采用操作')
         actor,task,goal,origin,_scope=self.check(source_binding,cancel_event,deadline_monotonic,check_version=False)
         if self.native_case is None: raise TaskBusinessRejected('原生执行用例尚未装配')
         native_origin={**origin,'task_id':task.id,'assistant_turn_id':source_binding['turn_id'],
@@ -105,6 +110,8 @@ class TaskBusiness:
     def check(self, binding, cancelled, deadline, *, connection=None, check_version=True):
         if cancelled.is_set() or time.monotonic()>=deadline:
             raise TaskBusinessRejected('本次原目标调用已停止或超过截止',kind='conflict')
+        if is_script_generation(binding):
+            return self._check_generation(binding,connection=connection)
         ws,task_id=binding['workspace_id'],binding['task_id']
         with (self.production._connect() if connection is None else _Borrow(connection)) as conn:
             origin=self.conversations._task_turn_source(conn,binding['turn_id'],ws,binding['member_id'],task_id)
@@ -139,6 +146,33 @@ class TaskBusiness:
                     [item['id'] for item in sealed['sources']],connection=conn)!=sealed['source_revisions']:
                 raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',kind='conflict')
         return actor,task,root['goal'],origin,sealed
+
+    def _check_generation(self, binding, *, connection):
+        if (binding.get('intent_kind') != 'script_generation' or not binding.get('generation_request_id')
+                or binding.get('input_id') is not None or binding.get('input_turn_id') is not None):
+            raise TaskBusinessRejected('生成动作没有原始按钮请求来源')
+        if self.generation_case is None:
+            raise TaskBusinessRejected('原生成请求业务尚未装配',kind='unavailable')
+        ws,task_id,member=binding['workspace_id'],binding['task_id'],binding['member_id']
+        with (self.production._connect() if connection is None else _Borrow(connection)) as conn:
+            try:
+                facts=self.generation_case.read_generation_request(conn,ws,task_id,binding['generation_request_id'],member)
+            except PermissionError as exc:
+                raise TaskBusinessRejected(str(exc)) from exc
+            source=facts['source']
+            if (facts['request_id']!=binding['generation_request_id'] or facts['task_id']!=task_id
+                    or facts['conversation_id']!=binding['conversation_id'] or facts['turn_id']!=binding['turn_id']
+                    or facts['requested_effect']!='draft' or facts['can_continue'] is not True
+                    or source!={'kind':'user_action','request_id':facts['request_id'],'member_id':member,
+                        'conversation_id':facts['conversation_id'],'assistant_turn_id':facts['turn_id']}):
+                raise TaskBusinessRejected('原生成请求、回合或写稿范围已变化',kind='conflict')
+            actor=CreationExecutionActor.from_event(ws,facts['actor'])
+            if (actor.user_id or actor.member_id)!=member:
+                raise TaskBusinessRejected('原生成动作成员与真实身份不一致')
+            task=self.production.get_creation_task(ws,task_id,connection=conn)
+        origin={**source,'intent_kind':'script_generation','generation_request_id':facts['request_id'],
+                'requested_effect':'draft','raw_command':''}
+        return actor,task,facts,origin,None
 
     def visual_job_belongs_to_goal(self, goal, actor, job_id):
         from app.assistant_goal_continuation import GoalResultProjection
@@ -192,6 +226,8 @@ class TaskBusiness:
 
     def invoke(self, operation, arguments, *, call_id, tool_call_id, source_binding, cancel_event, deadline_monotonic, invocation: TaskInvocation):
         binding=dict(source_binding)
+        if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
+            raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
         reconcile_original=(operation in {'read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
             or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
         # Section owners validate the frozen target and dependency digest at
@@ -220,6 +256,8 @@ class TaskBusiness:
         guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,check_version=check_version)
         invocation.owner_entered=True
         value=self.execute(operation,arguments,actor,task,goal,{**origin,'assistant_turn_id':binding['turn_id']},sealed,guard)
+        if is_script_generation(binding):
+            self.check(binding,cancel_event,deadline_monotonic,check_version=False)
         return value
 
     def input_delivery(self, source_binding):
@@ -387,6 +425,11 @@ class TaskBusiness:
 
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
+        generation = is_script_generation(origin)
+        if generation and (origin.get('requested_effect')!='draft' or operation not in SCRIPT_GENERATION_OPERATIONS):
+            raise TaskBusinessRejected('本次生成动作不授权采用、制作或其他写入')
+        if generation and operation in {'patch_script_sections','read_script_sections'} and args['script_id']!=goal['script_id']:
+            raise TaskBusinessRejected('生成窗口不能切换原请求的稿件')
         if operation=='read_segment_visual_decision':
             if not self.visual_job_belongs_to_goal(goal,actor,args['job_id']):
                 raise TaskBusinessRejected('画面决定不属于原目标来源')
@@ -468,7 +511,12 @@ class TaskBusiness:
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
                 {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
         if operation=='read_task_workspace': return self.workspace_facts(ws,task)
-        if operation=='read_creator_memory': return sealed['memory']
+        if operation=='read_creator_memory':
+            if generation:
+                if self.creator_memory is None:
+                    raise TaskBusinessRejected('当前成员偏好读取尚未装配',kind='unavailable')
+                return self.creator_memory(ws,actor.user_id or actor.member_id)
+            return sealed['memory']
         if operation=='read_assistant_script_context': return self.script_context(ws,task_id,actor.user_id or actor.member_id)
         if operation in {'prepare_device_resources','read_device_preparation','finalize_device_preparation'}:
             from pydantic import ValidationError
@@ -520,7 +568,14 @@ class TaskBusiness:
         if operation=='read_media_script_capabilities': return self.script_capabilities(task,actor.user_id or actor.member_id)
         if operation=='read_media_script_tool_capabilities': return self.tool_capabilities()
         if operation=='read_creation_execution_preview': return self.execution.preview(ws,task_id)
-        if operation=='read_creation_execution': return self.read_execution(goal,actor,job_id=args.get('job_id'))
+        if operation=='read_creation_execution':
+            if generation:
+                if args.get('job_id') is not None:
+                    raise TaskBusinessRejected('生成动作只读取当前任务的制作摘要')
+                if self.execution_status is None:
+                    raise TaskBusinessRejected('任务制作摘要读取尚未装配',kind='unavailable')
+                return self.execution_status(ws,task_id,actor=actor)
+            return self.read_execution(goal,actor,job_id=args.get('job_id'))
         if operation in {'search_task_materials','read_task_material'}:
             allowed=self.authorizations.material_asset_ids(ws,task_id)
             if operation=='read_task_material':
@@ -544,6 +599,8 @@ class TaskBusiness:
             from uuid import UUID
             case=self.script_case(actor)
             common={'member_id':actor.user_id or actor.member_id}
+            if generation:
+                common['generation_request_id']=origin['generation_request_id']
             try:
                 if operation=='read_script_window_request':
                     if type(args.get('include_input',False)) is not bool:
@@ -553,6 +610,8 @@ class TaskBusiness:
                 common.update(instruction_origin=origin,reread_origin=lambda draft_only:self._adoption_origin(origin,draft_only),write_guard=guard)
                 if operation=='start_script_window':
                     payload=CreationTaskScriptWindowStartRequest.model_validate(args['payload'])
+                    if generation:
+                        return case.start_generation_window(ws,task_id,payload,**common)
                     return case.start_window(ws,task_id,payload,**common)
                 if operation=='patch_script_sections':
                     payload=CreationTaskScriptSectionsPatchRequest.model_validate(args['payload'])
@@ -594,6 +653,8 @@ class TaskBusiness:
 
     @staticmethod
     def _adoption_origin(origin,draft_only):
+        if is_script_generation(origin) and not draft_only:
+            raise TaskBusinessRejected('生成按钮不能升级为采用授权')
         if not draft_only: CreationIntentUseCase.reject_discussion_only_input(origin['raw_command'])
         return origin
 

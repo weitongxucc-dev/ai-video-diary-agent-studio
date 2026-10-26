@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.config import Settings, llm_service_verification, record_llm_service_verification
 from app.local_members import LocalMemberService
+from app.creation.script_generation_use_case import ScriptGenerationUseCase, ScriptGenerationRejected
 from app.production import (
     CreationPlan, CreationPlanKnowledgeReference, CreationTask, CreationTaskScript,
     CreationTaskScriptSection, ProductionRepository, ScriptGenerationRun, TopicCandidate,
@@ -573,8 +574,7 @@ def test_invalid_generated_draft_never_reaches_review(invalid):
     assert len(calls) == 1
 
 
-@pytest.fixture
-def api_state(tmp_path, monkeypatch):
+def _script_domain_state(tmp_path, monkeypatch):
     repository = ProductionRepository(tmp_path / 'isolated.sqlite', tmp_path / 'library')
     members = LocalMemberService(repository.database_path)
     owner, token = members.whoami(None)
@@ -619,12 +619,26 @@ def api_state(tmp_path, monkeypatch):
         title=knowledge.title, authorization_or_license='authorized', source_url=None)]
     repository.complete_topic_generation(run.id, [topic], evidence)
     repository.confirm_topic_candidate('local', task.id, topic.id)
-    app = FastAPI()
-    app.add_api_route('/api/creation-tasks/{task_id}/scripts/generate', main.generate_creation_task_script, methods=['POST'])
-    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-draft', main.save_assistant_script_draft, methods=['POST'])
-    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-context', main.get_assistant_script_context, methods=['GET'])
     return SimpleNamespace(repository=repository, owner=owner, task=task, plan=plan, refs=input_refs,
-        client=TestClient(app, headers={'X-Local-Member-Token': token}), verifications=verifications, settings=settings, sources=sources)
+        token=token, verifications=verifications, settings=settings, sources=sources)
+
+
+@pytest.fixture
+def script_domain_state(tmp_path, monkeypatch):
+    return _script_domain_state(tmp_path,monkeypatch)
+
+
+@pytest.fixture
+def api_state(tmp_path, monkeypatch):
+    from app.creation.script_generation_routes import build_script_generation_router
+    state=_script_domain_state(tmp_path,monkeypatch)
+    app=FastAPI()
+    app.include_router(build_script_generation_router(
+        accept=main._accept_script_generation,read=main._read_script_generation,execute=main._execute_script_generation))
+    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-draft',main.save_assistant_script_draft,methods=['POST'])
+    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-context',main.get_assistant_script_context,methods=['GET'])
+    state.client=TestClient(app,headers={'X-Local-Member-Token':state.token})
+    return state
 
 
 def set_api_provider(monkeypatch, document, review, calls):
@@ -632,12 +646,19 @@ def set_api_provider(monkeypatch, document, review, calls):
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
 
 
-def test_api_saves_supported_draft_as_unconfirmed_v2_run(api_state, monkeypatch):
+def generate_with_provider(state):
+    case=ScriptGenerationUseCase(repository=state.repository,source_inputs=main._creation_task_topic_inputs,
+        route_snapshot=main._topic_route_snapshot('local'),
+        generate=lambda inputs:main._creation_task_script_generator_for(state.settings).generate(inputs),
+        record_service=lambda **facts:main.record_llm_service_verification(state.settings,workspace_id='local',**facts))
+    return case.generate_script('local','task',viewer_user_id=state.owner.member_id)
+
+
+def test_provider_use_case_saves_supported_draft_as_unconfirmed_v2_run(api_state, monkeypatch):
     document = draft()
     calls = []
     set_api_provider(monkeypatch, document, reviewed(document), calls)
-    result = api_state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert result.status_code == 200, result.text
+    generate_with_provider(api_state)
     scripts = api_state.repository.list_creation_task_scripts('local', 'task')
     assert len(scripts) == 1 and scripts[0].selection_status == 'draft'
     assert api_state.repository.get_creation_task('local', 'task').confirmed_script_id is None
@@ -648,14 +669,14 @@ def test_api_saves_supported_draft_as_unconfirmed_v2_run(api_state, monkeypatch)
     assert json.loads(calls[1][1]['messages'][1]['content'])['requirements']['presenter_share_target'] == api_state.plan.presenter_share_target
 
 
-@pytest.mark.parametrize('endpoint', ['scripts/generate', 'assistant/script-draft'])
+@pytest.mark.parametrize('endpoint', ['provider_use_case', 'assistant/script-draft'])
 @pytest.mark.parametrize('code,reason_code,section_index', [
     ('script_review_invalid', 'issue_reference', 3),
     ('script_review_invalid', 'support_quote', 5),
     ('script_fact_unsupported', 'unsupported_fact', 3),
     ('script_goal_conflict', 'goal_conflict', 2),
 ])
-def test_script_http_errors_preserve_safe_category_section_and_retryability(
+def test_script_consumers_preserve_safe_category_section_and_retryability(
     api_state, monkeypatch, endpoint, code, reason_code, section_index,
 ):
     location = ({'candidate_section_index': 0, 'candidate_field': 'title',
@@ -674,13 +695,18 @@ def test_script_http_errors_preserve_safe_category_section_and_retryability(
         raise failure
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings:
         SimpleNamespace(generate=reject, check_draft=reject))
-    body = {} if endpoint == 'scripts/generate' else agent_payload(api_state)
-    response = api_state.client.post('/api/creation-tasks/task/' + endpoint, json=body)
-    assert response.status_code == (502 if code == 'script_review_invalid' else 422), response.text
-    detail = response.json()['detail']
+    if endpoint=='provider_use_case':
+        with pytest.raises(ScriptGenerationRejected) as rejected:
+            generate_with_provider(api_state)
+        assert rejected.value.kind==('content_rejected' if code!='script_review_invalid' else 'provider_failed')
+        detail=rejected.value.details
+    else:
+        response=api_state.client.post('/api/creation-tasks/task/assistant/script-draft',json=agent_payload(api_state))
+        assert response.status_code==(502 if code=='script_review_invalid' else 422),response.text
+        detail=response.json()['detail']
     assert {key: detail[key] for key in ('error', 'reason_code', 'section_index', 'retryable')} == {
         'error': code, 'reason_code': reason_code, 'section_index': section_index, 'retryable': False}
-    assert {key: value for key, value in detail.items() if key.startswith('candidate_')} == location
+    assert {key: value for key, value in detail.items() if key.startswith('candidate_') and value is not None} == location
     assert detail.get('review_issues') == review_issues
     assert api_state.repository.list_creation_task_scripts('local', 'task') == []
 
@@ -700,8 +726,7 @@ def test_provided_topic_without_generated_metadata_reaches_real_script_provider(
         conn.execute("UPDATE topic_generation_runs SET payload=? WHERE id='topic-run'", (json.dumps(run),))
     document, calls = draft(), []
     set_api_provider(monkeypatch, document, reviewed(document), calls)
-    response = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert response.status_code == 200, response.text
+    generate_with_provider(state)
     supplied = json.loads(calls[0][1]['messages'][1]['content'])['confirmed_topic']
     assert supplied == {'origin': 'provided', 'title': '本机工作区导览', 'angle': '', 'audience': '', 'outline': []}
     assert len(calls) == 2
@@ -717,7 +742,7 @@ def test_generated_topic_still_requires_its_actual_metadata():
 
 
 @pytest.mark.parametrize('failure', ['unsupported', 'goal', 'review', 'transport', 'http'])
-def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_state, monkeypatch, caplog, failure):
+def test_provider_use_case_failed_review_preserves_old_draft_and_classifies_connection(api_state, monkeypatch, caplog, failure):
     repository = api_state.repository
     old_run = ScriptGenerationRun(id='old-run', workspace_id='local', task_id='task', plan_id='plan', topic_id='topic',
         status='running', route_snapshot={}, prompt_schema_version='old-fixture', input_references=api_state.refs)
@@ -728,7 +753,7 @@ def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_sta
             evidence_reference_ids=[item['reference_id'] for item in api_state.refs])])
     repository.complete_script_generation(old_run.id, old)
     # Recovery fixture: a failed script stage has retained its previous,
-    # unconfirmed draft. Keep the real route's stage/membership/source checks.
+    # unconfirmed draft. The application still checks current task and source bindings.
     with repository._connect() as conn:
         row = conn.execute("SELECT payload FROM creation_tasks WHERE id='task'").fetchone()
         task_payload = json.loads(row['payload'])
@@ -752,9 +777,11 @@ def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_sta
         review = httpx.Response(503, text='isolated provider failure')
     calls = []
     set_api_provider(monkeypatch, document, review, calls)
-    response = api_state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert response.status_code == (422 if failure in {'unsupported', 'goal'} else 502), response.text
-    assert response.json()['detail']['error'] == expected_code
+    with pytest.raises(ScriptGenerationRejected) as failure_result:
+        generate_with_provider(api_state)
+    detail=failure_result.value.details
+    assert failure_result.value.kind==('content_rejected' if failure in {'unsupported','goal'} else 'provider_failed')
+    assert detail['error']==expected_code
     if failure in {'transport', 'http'}:
         records = [record.getMessage() for record in caplog.records
             if record.name == 'app.topics' and record.getMessage().startswith('creation_script_review_request_failed ')]
@@ -762,8 +789,8 @@ def test_api_failed_review_preserves_old_draft_and_classifies_connection(api_sta
         assert json.loads(records[0].removeprefix('creation_script_review_request_failed ')) == {
             'error_category': expected_code, 'http_status': 503 if failure == 'http' else None}
         assert 'isolated' not in records[0] and FACT not in records[0]
-        assert ('HTTP 503' if failure == 'http' else '未取得完整HTTP响应') in response.json()['detail']['reason']
-        assert '额度' not in response.json()['detail']['repair_action']
+        assert ('HTTP 503' if failure == 'http' else '未取得完整HTTP响应') in detail['reason']
+        assert '额度' not in detail['repair_action']
     assert len(calls) == 2
     assert len(repository.list_creation_task_scripts('local', 'task')) == 1
     with repository._connect() as conn:
@@ -1757,7 +1784,7 @@ def test_estimated_speech_above_delivery_target_still_receives_full_source_revie
     assert '文字估算仅用于规划' in calls[0][1]['messages'][0]['content']
 
 
-@pytest.mark.parametrize('endpoint', ['scripts/generate', 'assistant/script-draft'])
+@pytest.mark.parametrize('endpoint', ['provider_use_case', 'assistant/script-draft'])
 @pytest.mark.parametrize('template_count', [None, 2])
 def test_mixed_presentation_uses_only_explicit_template_section_count(api_state, monkeypatch, endpoint, template_count):
     state = api_state
@@ -1777,9 +1804,7 @@ def test_mixed_presentation_uses_only_explicit_template_section_count(api_state,
     assert estimate_speech_seconds(''.join(section['content'] for section in document['script']['sections'])) > 15
     calls = []
     set_api_provider(monkeypatch, document, reviewed(document), calls)
-    if endpoint == 'scripts/generate':
-        body = {}
-    else:
+    if endpoint == 'assistant/script-draft':
         body = agent_payload(state)
         original = body['sections'][0]
         body['sections'] = [{**original, 'id': f'section-{index}'} for index in range(6)]
@@ -1792,13 +1817,23 @@ def test_mixed_presentation_uses_only_explicit_template_section_count(api_state,
         generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
             transport=httpx.MockTransport(review_only))
         monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
-    response = state.client.post('/api/creation-tasks/task/' + endpoint, json=body)
-    if template_count:
-        assert response.status_code in (422, 502), response.text
-        assert '模板要求 2 段' in response.text
-        assert state.repository.list_creation_task_scripts('local', 'task') == []
+    if endpoint=='provider_use_case':
+        if template_count:
+            with pytest.raises(ScriptGenerationRejected) as error:
+                generate_with_provider(state)
+            assert '模板要求 2 段' in error.value.details['reason']
+        else:
+            generate_with_provider(state)
     else:
-        assert response.status_code == 200, response.text
+        response=state.client.post('/api/creation-tasks/task/assistant/script-draft',json=body)
+        if template_count:
+            assert response.status_code in (422,502),response.text
+            assert '模板要求 2 段' in response.text
+        else:
+            assert response.status_code==200,response.text
+    if template_count:
+        assert state.repository.list_creation_task_scripts('local','task')==[]
+    else:
         scripts = state.repository.list_creation_task_scripts('local', 'task')
         assert len(scripts) == 1 and len(scripts[0].sections) == 6
         review_input = json.loads(calls[-1][1]['messages'][1]['content'])
@@ -1818,8 +1853,7 @@ def test_confirm_does_not_treat_estimated_speech_as_real_delivery_duration(api_s
     document = draft(content)
     calls = []
     set_api_provider(monkeypatch, document, reviewed(document), calls)
-    generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert generated.status_code == 200, generated.text
+    generate_with_provider(state)
     script = state.repository.list_creation_task_scripts('local', 'task')[0]
     body = {'title': script.title, 'sections': [vars(section) for section in script.sections],
         'expected_updated_at': script.updated_at.isoformat()}
@@ -1968,7 +2002,7 @@ def test_mixed_fact_and_rhetorical_sections_require_each_own_review(borrow_other
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize('endpoint', ['scripts/generate', 'assistant/script-draft'])
+@pytest.mark.parametrize('endpoint', ['provider_use_case', 'assistant/script-draft'])
 def test_no_facts_draft_saves_updates_and_confirms_without_inventing_evidence(api_state, monkeypatch, endpoint):
     state = api_state
     document = rhetorical_draft()
@@ -1987,12 +2021,12 @@ def test_no_facts_draft_saves_updates_and_confirms_without_inventing_evidence(ap
         generator = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
             transport=httpx.MockTransport(review_without_generation))
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
-    if endpoint == 'scripts/generate':
-        body = {}
+    if endpoint=='provider_use_case':
+        generate_with_provider(state)
     else:
-        body = {'title': document['script']['title'], 'sections': [{**document['script']['sections'][0], 'id': 'rhetorical'}]}
-    response = state.client.post('/api/creation-tasks/task/' + endpoint, json=body)
-    assert response.status_code == 200, response.text
+        body={'title':document['script']['title'],'sections':[{**document['script']['sections'][0],'id':'rhetorical'}]}
+        response=state.client.post('/api/creation-tasks/task/assistant/script-draft',json=body)
+        assert response.status_code==200,response.text
     script = state.repository.list_creation_task_scripts('local', 'task')[0]
     assert script.sections[0].evidence_reference_ids == []
     if endpoint == 'assistant/script-draft':
@@ -2091,8 +2125,7 @@ def test_confirmation_reviews_the_entire_changed_candidate_identity(api_state, m
     document['script']['sections'][0]['evidence_reference_ids'] = ['evidence_1']
     generator, _ = no_facts_provider(document)
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: generator)
-    saved = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert saved.status_code == 200, saved.text
+    generate_with_provider(state)
     script = state.repository.list_creation_task_scripts('local', 'task')[0]
     body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
             'expected_updated_at': script.updated_at.isoformat()}
@@ -2150,8 +2183,7 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',main.confirm_creation_task_script,methods=['POST'])
     original_calls = []
     set_api_provider(monkeypatch, draft(), reviewed(draft()), original_calls)
-    generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert generated.status_code == 200, generated.text
+    generate_with_provider(state)
     original = state.repository.list_creation_task_scripts('local', 'task')[0]
     confirmed = state.client.post(f'/api/creation-tasks/task/scripts/{original.id}/confirm', json={
         'title': original.title, 'sections': [vars(section) for section in original.sections],

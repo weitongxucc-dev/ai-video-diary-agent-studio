@@ -8989,6 +8989,9 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
+    def generation_run_state(self, connection, workspace_id, task_id, run_id):
+        return self.script_records.generation_run_state(connection,workspace_id,task_id,run_id)
+
     def start_script_generation(self, run: ScriptGenerationRun, *, write_guard=None, connection=None) -> tuple[CreationTask, ScriptGenerationRun]:
         return self.script_records.start_script_generation(run, write_guard=write_guard, connection=connection)
 
@@ -9008,8 +9011,8 @@ class ProductionRepository:
     def complete_script_generation(self, run_id: str, script: CreationTaskScript, *, write_guard=None, result_write=None, connection=None) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
         return self.script_records.complete_script_generation(run_id, script, write_guard=write_guard, result_write=result_write, connection=connection)
 
-    def fail_script_generation(self, run_id: str, *, reason: str, impact: str, repair_action: str, retryable: bool, provider_attempted: bool=False, provider_failed: bool=True) -> tuple[CreationTask, ScriptGenerationRun]:
-        return self.script_records.fail_script_generation(run_id, reason=reason, impact=impact, repair_action=repair_action, retryable=retryable, provider_attempted=provider_attempted, provider_failed=provider_failed)
+    def fail_script_generation(self, run_id: str, *, reason: str, impact: str, repair_action: str, retryable: bool, provider_attempted: bool=False, provider_failed: bool=True, connection=None) -> tuple[CreationTask, ScriptGenerationRun]:
+        return self.script_records.fail_script_generation(run_id, reason=reason, impact=impact, repair_action=repair_action, retryable=retryable, provider_attempted=provider_attempted, provider_failed=provider_failed, connection=connection)
 
     def get_script_generation_run(self, workspace_id: str, run_id: str) -> ScriptGenerationRun:
         return self.script_records.get_script_generation_run(workspace_id, run_id)

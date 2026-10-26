@@ -11,15 +11,42 @@ import styles from "../CreationTaskWorkspace.module.css";
 import { ScriptWindowEditor } from "./ScriptWindowEditor";
 import { getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
+export function ScriptGenerationStatus({ requestId, receipt, working, stopping, error, onRead, onStop }: {
+    requestId: string;
+    receipt: import("@/lib/types/creation-tasks").CreationTaskScriptGenerationReceipt | null;
+    working: "submit" | "read" | "stop" | null;
+    stopping: boolean;
+    error: string | null;
+    onRead: () => void;
+    onStop: () => void;
+}) {
+    const [reading, setReading] = useState(false);
+    const turnLabels = { running: "运行中", completed: "已结束", failed: "失败", stopped: "已停止" };
+    const runLabels = { running: "运行中", succeeded: "已结束", failed: "失败" };
+    const labels = { running: "生成进行中", stopping: "正在停止", draft_ready: "草稿已保存，待用户检查和采用", failed: "生成失败", stopped: "已停止", incomplete: "目标文案尚未完整", unknown: "原结果尚未核实" };
+    return <div aria-label="原生成请求">
+        <p role="status">原生成请求 {requestId}：{receipt ? `${labels[receipt.status]}；回合${turnLabels[receipt.turn_status]}；文案运行${runLabels[receipt.run_status]}。` : working === "submit" ? "正在提交，结果尚待核对。" : "结果尚待核对，不重复提交。"}</p>
+        <p>此按钮只生成草稿，不会自动确认或执行。</p>
+        {receipt?.result_stale ? <p>原结果与当前来源或版本不一致，仅按原请求查看。</p> : null}
+        {(stopping || receipt?.stop_requested) && receipt?.turn_status === "running" ? <p role="status">已请求停止，等待原回合回执。</p> : null}
+        {error ? <p role="alert">{error}</p> : null}
+        <button type="button" disabled={working !== null} onClick={onRead}>查询原生成结果</button>
+        {receipt?.turn_status === "running" ? <button type="button" disabled={working !== null || stopping || receipt.stop_requested} onClick={onStop}>停止本次生成</button> : null}
+        {receipt?.script_id && receipt.script_updated_at ? <>
+            <button type="button" onClick={() => setReading(value => !value)}>{reading ? "收起原请求稿件" : "只读查看原请求稿件"}</button>
+            {reading ? <ScriptSectionReader key={`${receipt.script_id}:${receipt.script_updated_at}`} script={{task_id: receipt.task_id, id: receipt.script_id}} expectedVersion={receipt.script_updated_at}/> : null}
+        </> : null}
+    </div>;
+}
 export function ConfirmedScriptView({ script }: {
     script: CreationTaskScript;
 }) {
     return <ScriptSectionReader key={`${script.task_id}:${script.id}:${script.updated_at}`} script={script}/>;
 }
-function ScriptSectionReader({ script }: { script: CreationTaskScript }) {
+function ScriptSectionReader({ script, expectedVersion }: { script: { task_id: string; id: string; title?: string; selection_status?: CreationTaskScript["selection_status"] }; expectedVersion?: string }) {
     const [cursors, setCursors] = useState([0]);
     const [reload, setReload] = useState(0);
-    const revision = useRef<string | undefined>(undefined);
+    const revision = useRef<string | undefined>(expectedVersion);
     const [read, setRead] = useState<
         { status: "loading" } | { status: "failed"; message: string }
         | { status: "ready"; page: CreationTaskScriptSectionWindow }
@@ -32,21 +59,22 @@ function ScriptSectionReader({ script }: { script: CreationTaskScript }) {
             after_ordinal: after, expected_updated_at: revision.current,
         }).then((page) => {
             if (!active) return;
+            if (expectedVersion && (page.task_id !== script.task_id || page.script_id !== script.id || page.updated_at !== expectedVersion)) throw new Error("原请求稿件版本与回执不符，当前草稿保留。");
             revision.current = page.updated_at;
             setRead({ status: "ready", page });
         }).catch((cause) => {
             if (active) setRead({ status: "failed", message: cause instanceof Error ? cause.message : "文案段落没有读回。" });
         });
         return () => { active = false; };
-    }, [script.task_id, script.id, after, reload]);
+    }, [script.task_id, script.id, after, reload, expectedVersion]);
     function restart() {
-        revision.current = undefined;
+        revision.current = expectedVersion;
         setCursors([0]);
         setReload((value) => value + 1);
     }
     const page = read.status === "ready" ? read.page : null;
     return <section className={styles.workSection}>
-        <div className={styles.sectionHeading}><h2>{page?.title ?? script.title}</h2><span className={styles.artifactStatus}>{(page?.selection_status ?? script.selection_status) === "confirmed" ? "已确认" : "待确认草稿"}</span></div>
+        <div className={styles.sectionHeading}><h2>{page?.title ?? script.title}</h2><span className={styles.artifactStatus}>{(page?.selection_status ?? script.selection_status) === "confirmed" ? "已确认" : (page?.selection_status ?? script.selection_status) === "draft" ? "待确认草稿" : "正在核对原稿状态"}</span></div>
         {read.status === "loading" ? <p role="status">正在读取文案段落…</p> : null}
         {read.status === "failed" ? <><p role="alert">{read.message}</p><Button variant="outline" onClick={restart}>重新读取文案</Button></> : null}
         {page ? <>

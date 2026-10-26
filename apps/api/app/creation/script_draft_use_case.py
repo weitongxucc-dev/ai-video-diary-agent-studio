@@ -26,6 +26,9 @@ class ScriptDraftUseCase:
         self.scripts=repository.script_records
         self.read_library_header=None
         self.read_script_header=None
+        self.read_generation_request=None
+        self.read_generation_result=None
+        self.bind_generation_result=None
         self.read_inputs,self.validate_inputs=read_inputs,validate_inputs
         self.script_goal,self.topic_origin=script_goal,topic_origin
         self.check_draft,self.record_service=check_draft,record_service
@@ -210,7 +213,8 @@ class ScriptDraftUseCase:
             topic_audience=topic.audience if topic is not None else "",
             topic_outline=tuple(topic.outline) if topic is not None else (),
             topic_origin=topic_origin,
-            current_instruction=instruction_origin["raw_command"] if instruction_origin else "",
+            current_instruction=("" if instruction_origin and instruction_origin.get("kind")=="user_action"
+                else instruction_origin["raw_command"] if instruction_origin else ""),
             sources=tuple(sources), style_instruction=str(plan.template_settings.get("style_instruction", "")),
             script_structure=tuple(plan.template_settings.get("script_structure", [])),
             script_section_count=plan.template_settings.get("script_section_count"), review_window=review_window,
@@ -251,13 +255,86 @@ class ScriptDraftUseCase:
         self.record_service( ok=True, cause="verified", workspace_id=workspace_id)
         return binding_digest
 
-    def _claimed_window_operation(self, operation, workspace_id, task_id, script_id, payload, member_id, callback, write_guard):
+    def _generation_guard(self, workspace_id, task_id, generation_request_id, member_id, parent_guard, *, script_id=None):
+        if self.read_generation_request is None or self.bind_generation_result is None:
+            raise ScriptDraftRejected(status_code=409,detail="生成原请求有限读写端口尚未装配")
+        state={}
+        def guard(conn):
+            if parent_guard is not None: parent_guard(conn)
+            current=self.read_generation_request(conn,workspace_id,task_id,str(generation_request_id),member_id)
+            if current.get('can_continue') is not True or current.get('requested_effect')!='draft' or not current.get('run_id'):
+                raise PermissionError('原请求没有当前草稿生成授权')
+            if script_id is not None and (current.get('script') or {}).get('id')!=script_id:
+                raise PermissionError('该稿件不属于原生成请求')
+            state.update(current)
+        return state,guard
+
+    def _generation_replay(self, workspace_id, task_id, generation_request_id, member_id, record):
+        if self.read_generation_result is None:
+            raise ScriptDraftRejected(status_code=409,detail="原生成结果只读端口尚未装配")
+        if record.get('generation_request_id')!=str(generation_request_id):
+            raise ScriptDraftRejected(status_code=409,detail="窗口原请求不属于该生成动作")
+        self.read_generation_result(workspace_id,task_id,str(generation_request_id),member_id)
+        return record['result']
+
+    def start_generation_window(self, workspace_id, task_id, payload, *, member_id, generation_request_id,
+                                instruction_origin=None, reread_origin=None, write_guard=None):
+        from app.topics import CreationTaskScriptReviewWindow
+        from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
         request_id=str(payload.request_id)
         digest=hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
-        claimed=self.scripts.claim_script_window_request(workspace_id,task_id,script_id,operation,request_id,member_id,digest,submitted_input=payload.model_dump(mode='json'),write_guard=write_guard)
+        prior=self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)
+        if prior is not None:
+            if prior['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原首窗不能更换输入")
+            return self._generation_replay(workspace_id,task_id,generation_request_id,member_id,prior)
+        state,guard=self._generation_guard(workspace_id,task_id,generation_request_id,member_id,write_guard)
+        def save_first():
+            if state.get('script') is not None: raise ScriptDraftRejected(status_code=409,detail="原生成已有稿，请沿原稿窗口继续")
+            task,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
+            reader=self.validate_inputs(workspace_id,plan,refs)
+            sections=[CreationTaskScriptSection(**p.model_dump()) for p in payload.sections]
+            if not 1<=len(sections)<=SCRIPT_SECTION_WINDOW_LIMIT or len({p.id for p in sections})!=len(sections):
+                raise ScriptDraftRejected(status_code=422,detail="首窗大小或稳定段ID不合法")
+            script_id='script_'+uuid5(NAMESPACE_URL,json.dumps([workspace_id,task_id,str(generation_request_id),member_id])).hex
+            window=CreationTaskScriptReviewWindow(script_id,'new',tuple(p.id for p in sections),len(sections))
+            binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,payload.title,sections,instruction_origin,review_window=window)
+            commit_guard=self._source_commit_guard(workspace_id,task_id,(asdict(plan),asdict(topic),tuple(sources),refs,reader),guard,instruction_origin,reread_origin,draft_only=True)
+            script=CreationTaskScript(id=script_id,workspace_id=workspace_id,task_id=task_id,run_id=state['run_id'],topic_id=topic.id,
+                title=payload.title,language=plan.language,sections=sections,draft_complete=False)
+            def result_write(conn,saved):
+                self.scripts.record_script_window_start(saved,request_id,member_id,digest,binding,connection=conn,generation_request_id=str(generation_request_id))
+                self.bind_generation_result(conn,workspace_id,task_id,str(generation_request_id),member_id,run_id=saved.run_id,script_id=saved.id,draft_ready=False)
+            self.scripts.attach_generation_window(state['run_id'],script,write_guard=commit_guard,result_write=result_write)
+            return self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)['result']
+        return self._claimed_window_operation('start',workspace_id,task_id,None,payload,member_id,save_first,guard,generation_request_id=generation_request_id)
+
+    def finish_generation_draft(self, workspace_id, task_id, script_id, payload, *, member_id, generation_request_id,
+                               instruction_origin=None, reread_origin=None, write_guard=None):
+        request_id=str(payload.request_id)
+        digest=hashlib.sha256(json.dumps([str(generation_request_id),payload.expected_updated_at.isoformat()]).encode()).hexdigest()
+        prior=self.scripts.generation_draft_result(workspace_id,task_id,script_id,request_id,member_id)
+        if prior is not None:
+            if prior['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原草稿收口不能更换输入")
+            return self._generation_replay(workspace_id,task_id,generation_request_id,member_id,prior)
+        state,guard=self._generation_guard(workspace_id,task_id,generation_request_id,member_id,write_guard,script_id=script_id)
+        def finish():
+            if self.scripts.generation_window_requests_pending(workspace_id,task_id,generation_request_id,member_id):
+                raise ScriptDraftRejected(status_code=409,detail="原生成仍有未知窗口写入，请先查询原结果")
+            context,binding,current_guard=self._review_saved_ranges(workspace_id,task_id,script_id,payload.expected_updated_at,
+                instruction_origin,reread_origin,guard,draft_only=True)
+            return self.scripts.finish_generation_draft(workspace_id,task_id,script_id,run_id=state['run_id'],generation_request_id=str(generation_request_id),
+                expected_updated_at=payload.expected_updated_at,request_id=request_id,member_id=member_id,binding_digest=binding,
+                layout_digest=context['layout_digest'],write_guard=current_guard,
+                result_write=lambda conn,**fields:self.bind_generation_result(conn,workspace_id,task_id,str(generation_request_id),member_id,**fields))
+        return self._claimed_window_operation('finish_generation',workspace_id,task_id,script_id,payload,member_id,finish,guard,generation_request_id=generation_request_id)
+
+    def _claimed_window_operation(self, operation, workspace_id, task_id, script_id, payload, member_id, callback, write_guard, *, generation_request_id=None):
+        request_id=str(payload.request_id)
+        digest=hashlib.sha256((payload.model_dump_json()+("\0"+str(generation_request_id) if generation_request_id is not None else "")).encode()).hexdigest()
+        claimed=self.scripts.claim_script_window_request(workspace_id,task_id,script_id,operation,request_id,member_id,digest,submitted_input=payload.model_dump(mode='json'),write_guard=write_guard,generation_request_id=generation_request_id)
         if not claimed:
-            result=self.window_request_result(workspace_id,task_id,request_id,member_id=member_id,operation=operation,script_id=script_id)
-            if result['status'] in {'saved','confirmed'}:
+            result=self.window_request_result(workspace_id,task_id,request_id,member_id=member_id,operation=operation,script_id=script_id,generation_request_id=generation_request_id)
+            if result['status'] in {'saved','confirmed','draft_ready'}:
                 return callback()
             return result
         try:
@@ -268,10 +345,19 @@ class ScriptDraftUseCase:
             self.scripts.end_script_window_request_with_error(workspace_id,task_id,script_id,operation,request_id,member_id,error_detail=detail)
             raise
 
-    def patch(self, workspace_id, task_id, script_id, payload, *, member_id, instruction_origin=None, reread_origin=None, write_guard=None):
+    def patch(self, workspace_id, task_id, script_id, payload, *, member_id, instruction_origin=None, reread_origin=None, write_guard=None, generation_request_id=None):
+        if generation_request_id is not None:
+            prior=self.scripts.script_patch_request_result(workspace_id,task_id,script_id,str(payload.request_id),member_id)
+            if prior is not None:
+                from app.creation.script_windows import script_patch_digest
+                digest=script_patch_digest([p.model_dump() for p in payload.sections],payload.expected_updated_at,payload.insert_after_section_id)
+                if prior['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原修改请求不能更换输入")
+                return self._generation_replay(workspace_id,task_id,generation_request_id,member_id,prior)
+            state,write_guard=self._generation_guard(workspace_id,task_id,generation_request_id,member_id,write_guard,script_id=script_id)
         return self._claimed_window_operation('patch',workspace_id,task_id,script_id,payload,member_id,
             lambda:self._patch(workspace_id,task_id,script_id,payload,member_id=member_id,instruction_origin=instruction_origin,
-                               reread_origin=reread_origin,write_guard=write_guard),write_guard)
+                reread_origin=reread_origin,write_guard=write_guard,generation_run_id=state['run_id'] if generation_request_id is not None else None,
+                generation_request_id=generation_request_id),write_guard,generation_request_id=generation_request_id)
 
     def start_window(self, workspace_id, task_id, payload, *, member_id, instruction_origin=None, reread_origin=None, write_guard=None):
         return self._claimed_window_operation('start',workspace_id,task_id,None,payload,member_id,
@@ -284,7 +370,7 @@ class ScriptDraftUseCase:
                                        reread_origin=reread_origin,write_guard=write_guard),write_guard)
 
     def _patch(self, workspace_id, task_id, script_id, payload, *, member_id, instruction_origin=None,
-              reread_origin=None, write_guard=None):
+              reread_origin=None, write_guard=None, generation_run_id=None, generation_request_id=None):
         from app.creation.script_windows import script_patch_digest
         from app.topics import CreationTaskScriptReviewWindow
         sections = [CreationTaskScriptSection(**part.model_dump()) for part in payload.sections]
@@ -297,7 +383,7 @@ class ScriptDraftUseCase:
                 raise ScriptDraftRejected(status_code=409, detail="同一文案请求不能更换输入；请读取原结果。")
             return previous['result']
         context = self.scripts.script_section_patch_context(workspace_id,task_id,script_id,sections,
-            payload.expected_updated_at, insert_after_section_id=after)
+            payload.expected_updated_at, insert_after_section_id=after,generation_run_id=generation_run_id)
         metadata = context['metadata']
         task,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,metadata)
         reader=self.validate_inputs(workspace_id,plan,refs)
@@ -315,13 +401,18 @@ class ScriptDraftUseCase:
         commit_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=True,source_metadata=metadata)
         return self.scripts.patch_assistant_script_sections(workspace_id,task_id,script_id,sections=sections,
             expected_updated_at=payload.expected_updated_at,request_id=request_id,member_id=member_id,
-            insert_after_section_id=after,write_guard=commit_guard,review_binding=review_binding)
+            insert_after_section_id=after,write_guard=commit_guard,review_binding=review_binding,generation_run_id=generation_run_id,generation_request_id=str(generation_request_id) if generation_request_id is not None else None)
 
-    def window_request_result(self, workspace_id, task_id, request_id, *, member_id, operation, script_id=None, include_input=False):
+    def window_request_result(self, workspace_id, task_id, request_id, *, member_id, operation, script_id=None, include_input=False, generation_request_id=None):
+        if generation_request_id is not None:
+            if self.read_generation_result is None: raise ScriptDraftRejected(status_code=409,detail="原生成结果只读端口尚未装配")
+            self.read_generation_result(workspace_id,task_id,str(generation_request_id),member_id)
         if operation == 'start':
             record=self.scripts.script_window_start_result(workspace_id,task_id,str(request_id),member_id)
         elif operation == 'patch' and script_id is not None:
             record=self.scripts.script_patch_request_result(workspace_id,task_id,script_id,str(request_id),member_id)
+        elif operation == 'finish_generation' and script_id is not None:
+            record=self.scripts.generation_draft_result(workspace_id,task_id,script_id,str(request_id),member_id)
         elif operation == 'confirm' and script_id is not None:
             record=self.scripts.script_confirm_saved_result(workspace_id,task_id,script_id,str(request_id),member_id)
         else:
@@ -329,7 +420,11 @@ class ScriptDraftUseCase:
         if record is None:
             pending=self.scripts.pending_script_window_request(workspace_id,task_id,script_id,operation,str(request_id),member_id,include_input=include_input)
             if pending is None: raise KeyError(str(request_id))
+            if generation_request_id is not None and pending.get('generation_request_id')!=str(generation_request_id):
+                raise KeyError(str(request_id))
             return pending
+        if generation_request_id is not None and record.get('generation_request_id')!=str(generation_request_id):
+            raise KeyError(str(request_id))
         return record['result']
 
     def _record_confirmed_origin(self, workspace_id, task_id, script_id, result, payload, member_id, instruction_origin):
@@ -340,10 +435,34 @@ class ScriptDraftUseCase:
         self.record_adoption(str(payload.assistant_turn_id),workspace_id,member_id,actual_task,actual_plan,facts,instruction_origin,
                              verified_body_digest=facts.body_digest)
 
+    def _review_saved_ranges(self, workspace_id, task_id, script_id, expected_updated_at, instruction_origin, reread_origin, write_guard, *, draft_only):
+        from app.topics import CreationTaskScriptReviewWindow
+        context=self.scripts.saved_script_review_context(workspace_id,task_id,script_id,expected_updated_at)
+        metadata=context['metadata']
+        task,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,metadata)
+        reader=self.validate_inputs(workspace_id,plan,refs)
+        required=plan.template_settings.get('script_section_count')
+        if context['total_count']==0 or (required is not None and context['total_count']!=required):
+            raise ScriptDraftRejected(status_code=409,detail="真实全稿段数尚未满足采用要求，请补齐草稿后继续。")
+        binding=self._window_binding(plan,topic,sources,refs,reader,entry)
+        current_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=draft_only,source_metadata=metadata)
+        cursor,review_binding=0,None
+        while cursor is not None:
+            page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
+                expected_updated_at=expected_updated_at,after_ordinal=cursor)
+            parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
+            window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
+            review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,
+                library_entry=entry,review_window=window,reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,parts,
+                    binding_digest=key,layout_digest=context['layout_digest']))
+            self.scripts.record_saved_script_section_review(workspace_id,task_id,script_id,parts,expected_updated_at,
+                binding_digest=review_binding,layout_digest=context['layout_digest'],write_guard=current_guard)
+            cursor=page['next_after_ordinal']
+        return context,review_binding,current_guard
+
     def _confirm_saved(self, workspace_id, task_id, script_id, payload, *, member_id, instruction_origin=None,
                       reread_origin=None, write_guard=None):
         from app.creation.script_windows import script_confirmation_digest
-        from app.topics import CreationTaskScriptReviewWindow
         request_id=str(payload.request_id)
         digest=script_confirmation_digest(payload.expected_updated_at,payload.adoption_kind)
         prior=self.scripts.script_confirm_saved_result(workspace_id,task_id,script_id,request_id,member_id)
@@ -352,27 +471,8 @@ class ScriptDraftUseCase:
                 raise ScriptDraftRejected(status_code=409,detail="原确认请求不能更换输入，请读取原结果。")
             self._record_confirmed_origin(workspace_id,task_id,script_id,prior['result'],payload,member_id,instruction_origin)
             return prior['result']
-        context=self.scripts.saved_script_review_context(workspace_id,task_id,script_id,payload.expected_updated_at)
-        metadata=context['metadata']
-        task,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,metadata)
-        reader=self.validate_inputs(workspace_id,plan,refs)
-        required=plan.template_settings.get('script_section_count')
-        if context['total_count']==0 or (required is not None and context['total_count']!=required):
-            raise ScriptDraftRejected(status_code=409,detail="真实全稿段数尚未满足采用要求，请补齐草稿后继续。")
-        binding=self._window_binding(plan,topic,sources,refs,reader,entry)
-        current_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=False,source_metadata=metadata)
-        cursor,review_binding=0,None
-        while cursor is not None:
-            page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
-                expected_updated_at=payload.expected_updated_at,after_ordinal=cursor)
-            parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
-            window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
-            review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,
-                library_entry=entry,review_window=window,reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,parts,
-                    binding_digest=key,layout_digest=context['layout_digest']))
-            self.scripts.record_saved_script_section_review(workspace_id,task_id,script_id,parts,payload.expected_updated_at,
-                binding_digest=review_binding,layout_digest=context['layout_digest'],write_guard=current_guard)
-            cursor=page['next_after_ordinal']
+        context,review_binding,current_guard=self._review_saved_ranges(workspace_id,task_id,script_id,payload.expected_updated_at,
+            instruction_origin,reread_origin,write_guard,draft_only=False)
         result=self.scripts.confirm_reviewed_script(workspace_id,task_id,script_id,expected_updated_at=payload.expected_updated_at,
             request_id=request_id,member_id=member_id,binding_digest=review_binding,layout_digest=context['layout_digest'],
             adoption_kind=payload.adoption_kind,write_guard=current_guard)

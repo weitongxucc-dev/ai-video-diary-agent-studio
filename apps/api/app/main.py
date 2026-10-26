@@ -4,7 +4,8 @@ from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
 from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.source_errors import SourcePreflightError as _CreationTaskTopicPreflightError
-from app.creation.script_generation_use_case import ScriptGenerationUseCase, ScriptGenerationRejected
+from app.creation.script_generation_intent import ScriptGenerationIntent
+from app.creation.script_generation_routes import build_script_generation_router
 from app.creation.script_draft_use_case import ScriptDraftUseCase, ScriptDraftRejected
 from app.creation.execution_control import CreationExecutionControl, DesktopShutdownUseCase, ExecutionControlRejected
 from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejected
@@ -360,7 +361,6 @@ from app.schemas import (
     TaskKnowledgeAdoptionResponse,
     AssistantReplyScriptTransferRequest,
     CreationTaskScriptResponse,
-    CreationTaskScriptGenerateRequest,
     CreationTaskScriptsResponse,
     CreationTaskNarrationResponse,
     CreationTaskRecordingAdoptRequest,
@@ -5459,6 +5459,20 @@ def stop_assistant_conversation_turn(
         raise HTTPException(status_code=404, detail="对话轮次不存在。")
     if turn["status"] != "running":
         raise HTTPException(status_code=409, detail="这一轮已经结束，未重复执行停止。")
+    context = conversation_repo.consumed_turn_request_context(
+        str(payload.turn_id), conversation_id, _workspace_id, _member_id)
+    if context.get("kind") == "script_generation":
+        try:
+            _script_generation_intent(_workspace_id).request_stop(
+                _workspace_id, context["task_id"], context["generation_request_id"], _member_id)
+        except KeyError as exc:
+            raise HTTPException(404, "原生成请求不存在") from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        request_stop_turn(str(payload.turn_id))
+        return {"turn_id": str(payload.turn_id), "status": "stopping"}
     if not request_stop_turn(str(payload.turn_id)):
         raise HTTPException(status_code=409, detail="这一轮已结束或没有可停止的助手进程。")
     _goal_service().invalidate(str(payload.turn_id), "user_stopped")
@@ -7195,7 +7209,8 @@ def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None
         script_goal=_creation_task_script_goal,topic_origin=_script_topic_origin,
         check_draft=lambda inputs,candidate:_creation_task_script_generator_for(_workspace_settings_for(workspace_id)).check_draft(inputs,candidate),
         record_service=lambda **facts: record_llm_service_verification(_workspace_settings_for(workspace_id),**facts),
-        route_snapshot=_topic_route_snapshot,record_adoption=_goal_service().record_script_adoption)
+        route_snapshot=_topic_route_snapshot,
+        record_adoption=lambda *args, **kwargs: _goal_service().record_script_adoption(*args, **kwargs))
 
     case.plan_for_task=_creation_plan_for_task_or_404
     case.topic_inputs=_creation_task_topic_inputs
@@ -8284,37 +8299,71 @@ app.include_router(build_script_sections_router(
 ))
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/scripts/generate",
-    response_model=CreationTaskScriptsResponse,
-)
-def generate_creation_task_script(
-    task_id: str,
-    request: Request,
-    _payload: CreationTaskScriptGenerateRequest,
-) -> CreationTaskScriptsResponse:
-    workspace_id = current_workspace_id(request)
-    _require_automation_task_open(request, workspace_id, task_id)
-    settings_for_workspace = _workspace_settings_for(workspace_id)
-    case = ScriptGenerationUseCase(
-        repository=production_repo,
-        source_inputs=_creation_task_topic_inputs,
-        route_snapshot=_topic_route_snapshot(workspace_id),
-        generate=lambda inputs: _creation_task_script_generator_for(settings_for_workspace).generate(inputs),
-        record_service=lambda **facts: record_llm_service_verification(
-            settings_for_workspace, workspace_id=workspace_id, **facts),
-    )
-    try:
-        task = case.generate_script(workspace_id, task_id,
-            viewer_user_id=_content_reader(request, workspace_id)[0])
-    except ScriptGenerationRejected as exc:
-        if exc.kind == 'not_found':
-            raise HTTPException(status_code=404, detail=exc.details['reason']) from exc
-        status = {'goal_source_changed': 409, 'topic_missing': 409, 'stage_conflict': 409,
-            'preflight_failed': 503, 'content_rejected': 422, 'provider_failed': 502,
-            'output_invalid': 502}[exc.kind]
-        raise _topic_failure_response(status_code=status, **exc.details) from exc
-    return _creation_task_scripts_response(workspace_id, task)
+def _script_generation_intent(workspace_id):
+    return ScriptGenerationIntent(production_repo, conversation_repo,
+        source_inputs=_creation_task_topic_inputs, route_snapshot=_topic_route_snapshot(workspace_id),
+        verify_identity=_verify_creation_identity)
+
+
+def _generation_script_case(workspace_id, member_id, intent):
+    case = _script_draft_use_case(workspace_id,
+        validate_inputs=lambda ws, plan, refs: _validate_script_input_sources(ws, plan, refs, member_id),
+        content_reader=lambda ws: (member_id, False))
+    case.read_generation_request = intent.read_generation_request
+    case.read_generation_result = intent.read
+    case.bind_generation_result = intent.bind_generation_result
+    return case
+
+
+def _accept_script_generation(request, task_id, request_id):
+    task = _readable_creation_task(request, task_id)
+    _require_automation_task_open(request, task.workspace_id, task_id)
+    actor = _require_permit_actor(request, task.workspace_id)
+    case = _script_generation_intent(task.workspace_id)
+    record, created = case.start(task.workspace_id, task_id, request_id, actor)
+    dispatch = (task.workspace_id, task_id, request_id, actor.user_id or actor.member_id) if created else None
+    return case.public_projection(record), dispatch
+
+
+def _read_script_generation(request, task_id, request_id):
+    task = _readable_creation_task(request, task_id)
+    member_id = _assistant_member_id(request, task.workspace_id)
+    case = _script_generation_intent(task.workspace_id)
+    return case.public_projection(case.read(task.workspace_id, task_id, request_id, member_id))
+
+
+def _execute_script_generation(dispatch):
+    workspace_id, task_id, request_id, member_id = dispatch
+    case = _script_generation_intent(workspace_id)
+    return case.execute(workspace_id, task_id, request_id, member_id,
+        run_agent=lambda record: _run_script_generation_agent(workspace_id, member_id, case, record),
+        script_case=_generation_script_case(workspace_id, member_id, case))
+
+
+def _run_script_generation_agent(workspace_id, member_id, case, record):
+    from app.assistant.script_generation_runner import run_generation_agent
+    def on_event(event):
+        if event.get("type") == "context_compaction":
+            safe = _safe_compaction_event(event)
+        elif event.get("type") in {"tool_start", "tool_end"}:
+            safe = {key: event[key] for key in ("type", "tool_id", "label", "ok", "summary") if key in event}
+            for key in ("label", "summary"):
+                if key in safe:
+                    safe[key] = _assistant_stream_safe_text(str(safe[key]), workspace_id)
+            if isinstance(event.get("failure"), dict):
+                safe["failure"] = _safe_business_failure(event["failure"])
+        else:
+            return
+        if safe is not None:
+            conversation_repo.append_event(record["turn_id"], safe)
+    return run_generation_agent(_workspace_settings_for(workspace_id), workspace_id=workspace_id,
+        member_id=member_id, record=record, business=_task_business(generation_case=case),
+        read_request=lambda: case.read(workspace_id, record["task_id"], record["request_id"], member_id),
+        on_event=on_event)
+
+
+app.include_router(build_script_generation_router(
+    accept=_accept_script_generation, read=_read_script_generation, execute=_execute_script_generation))
 
 
 @app.post(
@@ -13636,6 +13685,11 @@ def _require_permit_actor(request: Request, workspace_id: str) -> CreationExecut
 
 
 
+def _creation_execution_summary(workspace_id: str, task_id: str, *, actor=None) -> dict[str, object]:
+    return CreationExecutionControl(production_repo, creation_execution, None, _verify_creation_identity).status_summary(
+        workspace_id, task_id, actor=actor)
+
+
 def _creation_execution_status(workspace_id: str, task_id: str, *, actor=None) -> dict[str, object]:
     try:
         return _creation_execution_control().status(workspace_id, task_id, verify_media=device_runtime is None,actor=actor)
@@ -14216,7 +14270,9 @@ def stop_automation_due_driver() -> None:
 @app.on_event("startup")
 def recover_interrupted_assistant_turns() -> None:
     conversation_repo.initialize()
-    conversation_repo.fail_interrupted_turns()
+    recovery = ScriptGenerationIntent(production_repo, conversation_repo,
+        source_inputs=_creation_task_topic_inputs, route_snapshot={}, verify_identity=_verify_creation_identity)
+    conversation_repo.fail_interrupted_turns(recover_user_action=recovery.recover_interrupted)
 
 
 assistant_continuation_driver = None
@@ -14255,23 +14311,34 @@ def _bind_goal_business_scope(request,goal):
     authorizations.bind_business_context(task,actor,goal,memory=memory,references=references,write_guard=current)
 
 
-def _task_business():
+def _creator_memory_facts(workspace_id, member_id):
+    profile = get_creator_profile(settings.database_path, workspace_id=workspace_id, owner_user_id=member_id)
+    return (_creator_profile_response(profile).model_dump(mode="json") if profile is not None else
+            {"id": "", "revision": 0, "common_expressions": [], "banned_words": [], "style_preferences": {}})
+
+
+def _task_business(*, generation_case=None):
     return TaskBusiness(production_repo,conversation_repo,_task_authorizations_for_goal(),runtime=_creation_runtime,
-        execution=_creation_execution_control(),workspace_facts=_creation_task_workspace_response,
+        execution=None if generation_case is not None else _creation_execution_control(),workspace_facts=_creation_task_workspace_response,
         script_context=_assistant_script_context_facts,
         script_facts=lambda ws, task: _creation_task_scripts_response(ws, task, include_body=False),
-        script_case=lambda actor:_script_draft_use_case(actor.workspace_id,validate_inputs=lambda ws,plan,refs:
+        script_case=lambda actor:(_generation_script_case(actor.workspace_id, actor.user_id or actor.member_id, generation_case)
+            if generation_case is not None else _script_draft_use_case(actor.workspace_id,validate_inputs=lambda ws,plan,refs:
             _validate_script_input_sources(ws,plan,refs,actor.user_id or actor.member_id),
-            content_reader=lambda ws:(actor.user_id or actor.member_id,False)),
+            content_reader=lambda ws:(actor.user_id or actor.member_id,False))),
         generate_topics=lambda ws,task,guard:_script_draft_use_case(ws,validate_inputs=lambda *args:None).generate_topics(ws,task,write_guard=guard),
         topic_facts=_creation_task_topic_response,edit_capabilities=_task_edit_capability_facts,
         script_capabilities=_task_script_capability_facts,tool_capabilities=_script_tool_capability_facts,
         material_facts=_material_asset_response,observation_facts=lambda task,actor:_task_observation_metadata(task,actor.user_id or actor.member_id),
         observe_output=_submit_goal_observation,request_result=_goal_request_metadata,media_result=_goal_media_metadata,
-        record_adoption=_goal_service().record_script_adoption,segments=_segment_production_use_case(),native_case=_native_task_operations_case(),
-        timeline_restores=_timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
+        record_adoption=lambda *args, **kwargs: _goal_service().record_script_adoption(*args, **kwargs),
+        segments=None if generation_case is not None else _segment_production_use_case(),
+        native_case=None if generation_case is not None else _native_task_operations_case(),
+        timeline_restores=None if generation_case is not None else _timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation,
+        generation_case=generation_case, creator_memory=_creator_memory_facts,
+        execution_status=_creation_execution_summary,
         read_script_sections=lambda task, script_id, **values:
             production_repo.read_creation_task_script_sections(task.workspace_id, task.id, script_id, **values))
 

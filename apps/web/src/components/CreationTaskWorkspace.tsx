@@ -10,6 +10,7 @@ import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } fr
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
 import { ScriptWindowStart } from "./creation-task/ScriptWindowEditor";
+import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationRequest";
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
@@ -33,7 +34,7 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
-import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskScript, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
+import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
 import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
@@ -53,7 +54,7 @@ import { assistantHistoryTurns } from './creation-task/assistant-history';
 import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
 import { ConfirmedTopicView } from './creation-task/TopicStage';
-import { ReadonlyScriptsView, ConfirmedScriptView, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
+import { ReadonlyScriptsView, ConfirmedScriptView, ScriptGenerationStatus, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
 import { NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
 import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
@@ -238,6 +239,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     draftInput.current = { taskId: task.id, conversationId: assistantConversation.conversation?.id, text: editCommand };
   }
   function setEditCommand(text: string) {
+    generationReadOwner.current = null;
     draftInput.current = { taskId: task.id, conversationId: assistantConversation.conversation?.id, text };
     assistantConversation.setDraftText(text);
   }
@@ -286,6 +288,26 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }, [task.id]);
   const latestScript = workspace.scripts[0] ?? null;
   const [manualScriptOpen, setManualScriptOpen] = useWorkspaceViewState("manual-script-open", false);
+  const manualForGeneration = useRef(manualScriptOpen); manualForGeneration.current = manualScriptOpen;
+  const generationReadOwner = useRef<{ workspace: WorkspaceState; navigation: number; revision: number } | null>(null);
+  const scriptGeneration = useScriptGenerationRequest({
+    taskId: task.id, visible: activeView === "script",
+    onStart: () => {
+      navigationReadRevision.current += 1; pendingNavigationRead.current = null;
+      generationReadOwner.current = { workspace: currentWorkspace.current, navigation: navigationReadRevision.current, revision: editContextRevision.current };
+    },
+    getContextKey: () => {
+      const owner = generationReadOwner.current;
+      return owner && owner.workspace === currentWorkspace.current
+        && owner.navigation === navigationReadRevision.current && owner.revision === editContextRevision.current
+        && !manualForGeneration.current && !currentEditorDraft.current ? owner : null;
+    },
+    onDraftReady: async (receipt, stillCurrent) => {
+      await refresh(true, next => stillCurrent() && next.task.id === receipt.task_id && next.scripts.some(script =>
+        script.id === receipt.script_id && script.run_id === receipt.run_id
+        && script.updated_at.replace(/\+00:00$/, "Z") === receipt.script_updated_at?.replace(/\+00:00$/, "Z")));
+    },
+  });
   const windowScript = latestScript?.selection_status === "draft" && (!latestScript.draft_complete || latestScript.sections_total_count > 20);
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
   const zhSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid");
@@ -1417,7 +1439,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <><button type="button" aria-pressed={addReferences} onClick={()=>setAddReferences(value=>!value)}>{addReferences ? "多选引用中" : "多选引用"}</button><ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} /></>
+    ? <><button type="button" aria-pressed={addReferences} onClick={()=>setAddReferences(value=>!value)}>{addReferences ? "多选引用中" : "多选引用"}</button><ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { generationReadOwner.current = null; assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} /></>
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (
@@ -1479,9 +1501,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           }); }} /> : null}
         {activeView === "topic" && task.stage !== "topic" ? <ConfirmedTopicView topic={workspace.selected_topic} evidence={workspace.topic_evidence} /> : null}
 
+        {activeView === "script" && scriptGeneration.input ? <section className={styles.workSection}><ScriptGenerationStatus key={scriptGeneration.input.requestId}
+          requestId={scriptGeneration.input.requestId} receipt={scriptGeneration.receipt} working={scriptGeneration.working}
+          stopping={scriptGeneration.stopping} error={scriptGeneration.error} onRead={() => void scriptGeneration.query()} onStop={() => void scriptGeneration.stop()}/></section> : null}
+        {activeView === "script" && !scriptGeneration.input && scriptGeneration.error ? <p role="alert">{scriptGeneration.error}</p> : null}
         {activeView === "script" && task.stage === "script" && !latestScript ? manualScriptOpen ? <ScriptWindowStart taskId={task.id} onSaved={async () => { await refresh(true); setManualScriptOpen(false); }}/> : <>
           <PlanReplyDraftAction busy={busy !== null} task={task} onComplete={async () => { await refresh(true); setNotice("已保存对话回复为待确认文案草稿；请补充当前资料引用和画面建议。"); }} />
-          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
+          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null || scriptGeneration.blocked} onClick={() => void scriptGeneration.generate()} type="button">{scriptGeneration.working ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
           <Button variant="outline" disabled={busy !== null} onClick={() => setManualScriptOpen(true)}>手动编写文案</Button>
         </> : null}
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}

@@ -1,3 +1,4 @@
+import type { CreationTaskScriptGenerationInput, CreationTaskScriptGenerationReceipt } from "../types/creation-tasks";
 import type { CreationTaskStoryboardRegenerationInput, CreationTaskStoryboardRegenerationReceipt } from '../types/creation-tasks';
 import type { TaskMediaJob } from '../types/task-edits';
 import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse } from '../types/creation-tasks';
@@ -92,8 +93,11 @@ export function getCreationTaskScriptWindowRequest(taskId: string, requestId: st
     if (locator.operation !== "start") query.set("script_id", locator.script_id);
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/script-window-requests/${encodeURIComponent(requestId)}?${query}`);
 }
-export function generateCreationTaskScript(taskId: string): Promise<CreationTaskScriptsResponse> {
-    return creationPlanRequest<CreationTaskScriptsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`, { method: "POST", body: JSON.stringify({}) });
+export function generateCreationTaskScript(taskId: string, input: CreationTaskScriptGenerationInput): Promise<CreationTaskScriptGenerationReceipt> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`, { method: "POST", body: JSON.stringify(input) });
+}
+export function getCreationTaskScriptGenerationRequest(taskId: string, requestId: string): Promise<CreationTaskScriptGenerationReceipt> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generation-requests/${encodeURIComponent(requestId)}`);
 }
 export function confirmCreationTaskScript(taskId: string, scriptId: string, input: {
     title: string;
