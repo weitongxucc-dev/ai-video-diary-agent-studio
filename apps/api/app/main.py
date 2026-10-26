@@ -168,7 +168,8 @@ def _device_resource_profile():
         return active
     try:
         return resolve_device_resources(settings, os.environ, model_catalog=model_catalog,
-                                        select_packet_copy_preparation=True)
+                                        select_packet_copy_preparation=True,
+                                        select_audio_delivery_preparation=True)
     except DeviceProfileUnavailable as exc:
         raise HostBudgetUncalibrated(str(exc)) from exc
 
