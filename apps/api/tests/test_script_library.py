@@ -50,9 +50,10 @@ def library(tmp_path, monkeypatch):
         )],
     )
     with repo._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) "
-            "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", json.dumps(asdict(script), default=str),
+            "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", repo._script_payload(conn, script),
                                       script.updated_at.isoformat()),
         )
     repo.confirm_creation_task_script(

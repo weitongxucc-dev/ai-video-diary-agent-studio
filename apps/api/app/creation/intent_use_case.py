@@ -82,13 +82,14 @@ class CreationIntentUseCase:
         return plan
 
     @staticmethod
-    def adopted_for_execution(plan, script) -> bool:
+    def adopted_for_execution(plan, script, *, verified_body_digest: str | None = None) -> bool:
         intent = plan.creation_intent
         return bool(intent and intent["kind"] in {"goal_delegation", "final_script"} and script
             and script.selection_status == "confirmed" and script.adoption
             and script.adoption["kind"] == "delegated_system"
             and script.adoption["authorization_source"] == intent["source"]
-            and script.adoption["body_digest"] == hashlib.sha256("".join(part.content for part in script.sections).encode()).hexdigest())
+            and script.adoption["body_digest"] == (verified_body_digest if verified_body_digest is not None
+                else hashlib.sha256("".join(part.content for part in script.sections).encode()).hexdigest()))
 
     @staticmethod
     def script_goal(repository, plan, task, *, viewer_user_id: str | None) -> str:

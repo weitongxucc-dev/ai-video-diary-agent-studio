@@ -135,11 +135,12 @@ class GoalContinuationService:
         # never infers goals from pre-existing completed conversations.
         return self.repo.register_task_goal(turn_id)
 
-    def record_script_adoption(self, turn_id: str, workspace_id: str, member_id: str, task, plan, script, source: dict) -> bool:
+    def record_script_adoption(self, turn_id: str, workspace_id: str, member_id: str, task, plan, script, source: dict,
+                               *, verified_body_digest: str | None = None) -> bool:
         from app.creation.intent_use_case import CreationIntentUseCase
 
         if (task.confirmed_script_id != script.id or script.task_id != task.id
-                or not CreationIntentUseCase.adopted_for_execution(plan, script)):
+                or not CreationIntentUseCase.adopted_for_execution(plan, script, verified_body_digest=verified_body_digest)):
             return False
         try:
             CreationIntentUseCase.reject_discussion_only_input(source["raw_command"])

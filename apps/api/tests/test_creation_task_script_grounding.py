@@ -793,6 +793,7 @@ def agent_payload(state, script=None, *, content=FACT, visual='用途设置界�
         'title': '素材用途', 'content': content, 'visual_prompt': visual,
         'evidence_reference_ids': [item['reference_id'] for item in state.refs]}]}
     if script:
+        body['edit_mode'] = 'replace_all'
         body['expected_updated_at'] = script.updated_at.isoformat()
     return body
 
@@ -1005,7 +1006,7 @@ def test_minimax_reasoning_only_length_response_is_rejected_without_retry():
 
 @pytest.mark.parametrize('failure_kind', ['length', 'envelope', 'tool_arguments', 'section_count',
     'section_shape', 'index', 'legacy_flags', 'support_shape', 'support_quote', 'support_reference',
-    'source_quote', 'issue_shape', 'issue_quote', 'issue_reference', 'issue_count'])
+    'source_quote', 'issue_shape', 'issue_quote', 'issue_reference'])
 def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(caplog, failure_kind):
     import logging
 
@@ -1048,12 +1049,6 @@ def test_protocol_rejection_logs_fixed_reason_and_counts_without_sensitive_data(
             issue['candidate_quote_id'] = 'private-absent-quote'
         else:
             issue['reference_ids'] = [source_id]
-    elif failure_kind == 'issue_count':
-        document['script']['sections'] *= 5
-        issue = {'kind': 'unsupported_fact', 'candidate_quote_id': '@content:0',
-            'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-issue-detail'}
-        review['sections'] = [{'index': index,
-            'issues': [copy.deepcopy(issue) for _ in range(3)]} for index in range(1, 6)]
     content = 'private-content-report-sentinel'
     message = {'content': content, 'reasoning_content': reasoning_secret,
                'refusal': 'private-refusal-sentinel', 'tool_calls': [{'id': source_id, 'type': 'function', 'function': {
@@ -1633,7 +1628,7 @@ def test_complete_review_returns_every_verified_finding_without_changing_first_i
     assert 'isolated-key' not in json.dumps(error.review_issues, ensure_ascii=False)
 
 
-def test_all_twelve_findings_are_returned_with_the_existing_report_limit():
+def test_all_twelve_findings_are_returned_without_a_business_total_limit():
     document = draft()
     document['script']['sections'] *= 4
     review = reviewed(document)
@@ -2001,6 +1996,7 @@ def test_no_facts_draft_saves_updates_and_confirms_without_inventing_evidence(ap
     script = state.repository.list_creation_task_scripts('local', 'task')[0]
     assert script.sections[0].evidence_reference_ids == []
     if endpoint == 'assistant/script-draft':
+        body['edit_mode'] = 'replace_all'
         body['expected_updated_at'] = script.updated_at.isoformat()
         body['sections'][0]['content'] = '你想先从哪一个瞬间讲起？'
         updated = state.client.post('/api/creation-tasks/task/assistant/script-draft', json=body)
@@ -2010,7 +2006,7 @@ def test_no_facts_draft_saves_updates_and_confirms_without_inventing_evidence(ap
         assert len(state.repository.list_creation_task_scripts('local', 'task')) == 1
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
         main.confirm_creation_task_script, methods=['POST'])
-    confirm_body = {'title': script.title, 'sections': [vars(section) for section in script.sections],
+    confirm_body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [vars(section) for section in script.sections],
                     'expected_updated_at': script.updated_at.isoformat()}
     confirmation_calls = []
     def confirmation_review(request):
@@ -2098,7 +2094,7 @@ def test_confirmation_reviews_the_entire_changed_candidate_identity(api_state, m
     saved = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
     assert saved.status_code == 200, saved.text
     script = state.repository.list_creation_task_scripts('local', 'task')[0]
-    body = {'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
+    body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
             'expected_updated_at': script.updated_at.isoformat()}
     if change == 'title': body['title'] = '换一个问题'
     elif change == 'references': body['sections'][1]['evidence_reference_ids'] = [state.refs[0]['reference_id']]
@@ -2169,7 +2165,7 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
     script = state.repository.get_creation_task_script('local', reused.json()['script']['id'])
     task = state.repository.get_creation_task('local', new_task_id)
     assert task.selected_topic_id is None and script.run_id == '' and script.topic_id == ''
-    body = {'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
+    body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
             'expected_updated_at': script.updated_at.isoformat()}
     if change != 'unchanged':
         body['sections'][0]['content'] += '从这里开始。' if change != 'unsupported' else '每天自动备份。'
@@ -2200,3 +2196,472 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
         assert state.repository.get_creation_task('local', new_task_id).confirmed_script_id == script.id
     assert len(calls) == (0 if change == 'unchanged' else 1)
     assert state.repository.get_creation_task_script('local', original.id).sections == original.sections
+
+
+def saved_row_draft(state, count=25):
+    run = ScriptGenerationRun(id='row-run', workspace_id='local', task_id='task', plan_id='plan', topic_id='topic',
+        status='running', route_snapshot={}, prompt_schema_version='creation-task-script/v2', input_references=state.refs)
+    state.repository.start_script_generation(run)
+    script = CreationTaskScript(id='row-script', workspace_id='local', task_id='task', run_id=run.id,
+        topic_id='topic', title=f'{count}段完整稿', language='zh-CN', sections=[CreationTaskScriptSection(
+            id=f'section-{i}', title=f'段落{i}', content=FACT, visual_prompt=f'计划画面{i}',
+            evidence_reference_ids=[state.refs[0]['reference_id']]) for i in range(count)])
+    state.repository.complete_script_generation(run.id, script)
+    return script
+
+
+def test_public_script_repository_reads_updates_and_confirms_all_25_rows(api_state):
+    from app.creation.script_windows import ScriptWindowConflict
+    state = api_state
+    script = saved_row_draft(state)
+    version = script.updated_at.isoformat()
+    headers = state.repository.active_creation_task_script_headers('local', 'task')
+    assert len(headers) == 1 and headers[0]['id'] == script.id
+    assert headers[0]['sections'] is None and headers[0]['sections_total_count'] == 25
+    assert headers[0]['sections_loaded'] is False
+    assert 'sections_truncated' not in headers[0] and 'section_window' not in headers[0]
+    first = state.repository.read_creation_task_script_sections('local', 'task', script.id)
+    with pytest.raises(ValueError, match='版本'):
+        state.repository.read_creation_task_script_sections('local', 'task', script.id, after_ordinal=20)
+    second = state.repository.read_creation_task_script_sections('local', 'task', script.id,
+        expected_updated_at=script.updated_at, after_ordinal=first['next_after_ordinal'])
+    assert first['total_count'] == second['total_count'] == 25
+    assert [item['section']['id'] for item in first['items'] + second['items']] == [part.id for part in script.sections]
+    assert second['next_after_ordinal'] is None
+    revised = copy.deepcopy(script.sections)
+    revised[-1].content += '从这里讲起。'
+    saved = state.repository.update_assistant_script_draft('local', 'task', script.id, title=script.title,
+        sections=revised, expected_updated_at=script.updated_at)
+    with pytest.raises(ScriptWindowConflict):
+        state.repository.read_creation_task_script_sections('local', 'task', script.id, expected_updated_at=version, after_ordinal=20)
+    assert state.repository.get_creation_task_script('local', script.id).sections == revised
+    _, confirmed = state.repository.confirm_creation_task_script('local', 'task', script.id, title=script.title,
+        sections=revised, expected_updated_at=saved.updated_at, verified_owner_user_id=state.owner.member_id)
+    assert confirmed.selection_status == 'confirmed' and len(confirmed.sections) == 25
+    assert state.repository.effective_creation_script('local', 'task').sections == revised
+    with state.repository._connect() as conn:
+        header = json.loads(conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script.id,)).fetchone()[0])
+        assert 'sections' not in header and header['_sections_storage'] == 'rows'
+        assert conn.execute('SELECT COUNT(*) FROM creation_task_script_sections WHERE script_id=?', (script.id,)).fetchone()[0] == 25
+
+
+def test_script_active_headers_only_include_latest_and_confirmed_roles(api_state, monkeypatch):
+    state = api_state
+    # Same canonical write used by the legal manual/reused-draft fixtures; no model run is claimed.
+    for script_id, sequence in [('history', 1), ('confirmed', 2), ('latest', 3)]:
+        script = CreationTaskScript(id=script_id, workspace_id='local', task_id='task', run_id='', topic_id='',
+            title=script_id, language='zh-CN', sections=[], updated_at=datetime(2026, 10, 24, 0, 0, sequence, tzinfo=timezone.utc))
+        with state.repository._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('INSERT INTO creation_task_scripts VALUES(?,?,?,?,?,?)',
+                (script.id, 'local', 'task', '', state.repository._script_payload(conn, script), script.updated_at.isoformat()))
+    with state.repository._connect() as conn:
+        task = json.loads(conn.execute("SELECT payload FROM creation_tasks WHERE id='task'").fetchone()[0])
+        task['confirmed_script_id'] = 'confirmed'
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id='task'", (json.dumps(task),))
+    monkeypatch.setattr(state.repository, 'get_creation_task_script', lambda *args, **kwargs: pytest.fail('active headers must not hydrate a full script'))
+    monkeypatch.setattr(state.repository, 'list_creation_task_scripts', lambda *args, **kwargs: pytest.fail('active headers must not list full scripts'))
+    headers = state.repository.active_creation_task_script_headers('local', 'task')
+    assert [header['id'] for header in headers] == ['latest', 'confirmed']
+    assert all(header['sections'] is None and header['sections_loaded'] is False and header['sections_total_count'] == 0 for header in headers)
+    with state.repository._connect() as conn:
+        task['confirmed_script_id'] = 'latest'
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id='task'", (json.dumps(task),))
+    assert [header['id'] for header in state.repository.active_creation_task_script_headers('local', 'task')] == ['latest']
+
+
+
+def test_atomic_section_patch_preserves_unloaded_rows_and_replays_original_receipt(api_state, monkeypatch):
+    state = api_state
+    script = saved_row_draft(state)
+    member = state.owner.member_id
+    before = copy.deepcopy(script.sections)
+    existing = copy.deepcopy(before[-1])
+    existing.content += '窗口内的修订。'
+    inserted = CreationTaskScriptSection(id='inserted', title='新增段', content=FACT, visual_prompt='计划画面', evidence_reference_ids=existing.evidence_reference_ids)
+    monkeypatch.setattr(state.repository, '_creation_task_script_from_payload', lambda *a, **k: pytest.fail('patch must not hydrate the complete script'))
+    args = dict(sections=[existing, inserted], expected_updated_at=script.updated_at, request_id='patch-1', member_id=member,
+                insert_after_section_id=before[0].id)
+    receipt = state.repository.patch_assistant_script_sections('local', 'task', script.id, **args)
+    assert receipt['total_count'] == 26 and receipt['affected_section_ids'] == [existing.id, inserted.id]
+    first = state.repository.read_creation_task_script_sections('local', 'task', script.id)
+    second = state.repository.read_creation_task_script_sections('local', 'task', script.id,
+        after_ordinal=20, expected_updated_at=first['updated_at'])
+    actual = [item['section'] for item in first['items'] + second['items']]
+    expected = [vars(part) for part in before[:1] + [inserted] + before[1:-1] + [existing]]
+    assert actual == expected
+    assert state.repository.patch_assistant_script_sections('local', 'task', script.id, **args) == receipt
+    with pytest.raises(ValueError, match='同一文案请求'):
+        state.repository.patch_assistant_script_sections('local', 'task', script.id, **{**args, 'sections': [inserted]})
+    with pytest.raises(ValueError, match='修订已变化'):
+        state.repository.patch_assistant_script_sections('local', 'task', script.id, **{**args, 'request_id': 'another-request'})
+    with state.repository._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='assistant_script_window_saved'").fetchone()[0] == 1
+
+
+def test_section_patch_receipt_failure_rolls_back_body_order_and_header(api_state, monkeypatch):
+    state = api_state
+    script = saved_row_draft(state)
+    added = CreationTaskScriptSection(id='inserted', title='新增段', content=FACT, visual_prompt='计划画面', evidence_reference_ids=script.sections[0].evidence_reference_ids)
+    def fail_receipt(*args, **kwargs): raise RuntimeError('receipt persistence failed')
+    monkeypatch.setattr(state.repository, 'append_task_event', fail_receipt)
+    with pytest.raises(RuntimeError, match='receipt persistence'):
+        state.repository.patch_assistant_script_sections('local', 'task', script.id, sections=[added],
+            expected_updated_at=script.updated_at, request_id='patch-1', member_id=state.owner.member_id,
+            insert_after_section_id=script.sections[0].id)
+    assert state.repository.get_creation_task_script('local', script.id) == script
+    with state.repository._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM creation_task_script_sections WHERE script_id=?', (script.id,)).fetchone()[0] == 25
+
+
+@pytest.mark.parametrize('rejection', ['scope', 'duplicates', 'oversize', 'wrong_task'])
+def test_section_patch_keeps_existing_write_protections(api_state, rejection):
+    state = api_state
+    script = saved_row_draft(state)
+    candidate = copy.deepcopy(script.sections[0])
+    sections = [candidate]
+    if rejection == 'scope': candidate.evidence_reference_ids = ['foreign-source']
+    elif rejection == 'duplicates': sections *= 2
+    elif rejection == 'oversize': sections *= 21
+    with pytest.raises(KeyError if rejection == 'wrong_task' else ValueError):
+        state.repository.patch_assistant_script_sections('local', 'other-task' if rejection == 'wrong_task' else 'task', script.id,
+            sections=sections, expected_updated_at=script.updated_at, request_id='patch-1', member_id=state.owner.member_id)
+    assert state.repository.get_creation_task_script('local', script.id) == script
+
+
+
+@pytest.mark.parametrize('count', [17, 45])
+def test_partial_body_is_not_implicit_whole_script_replacement(api_state, monkeypatch, count):
+    from app.schemas import CreationTaskScriptDraftRequest
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+    state = api_state
+    script = saved_row_draft(state, count=count)
+    body = CreationTaskScriptDraftRequest(title=script.title, sections=[vars(part) for part in script.sections[:10]],
+                                         expected_updated_at=script.updated_at)
+    calls = []
+    set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
+    case = main._script_draft_use_case('local', validate_inputs=lambda ws,plan,refs:
+        main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    monkeypatch.setattr(state.repository,'list_creation_task_scripts',lambda *a,**k: pytest.fail('reject partial replacement before hydrating full scripts'))
+    with pytest.raises(ScriptDraftRejected) as failure:
+        case.save('local','task',body)
+    assert failure.value.status_code == 422 and calls == []
+    assert state.repository.get_creation_task_script('local', script.id) == script
+
+
+def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_state, monkeypatch):
+    from app.schemas import CreationTaskScriptWindowStartRequest, CreationTaskScriptSectionsPatchRequest
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+    from uuid import uuid4
+    state = api_state
+    with state.repository._connect() as conn:
+        plan = json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()[0])
+        plan['template_settings'] = {'script_section_count':45}
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'", (json.dumps(plan),))
+    calls = []
+    def review(request):
+        body = json.loads(request.content)
+        data = json.loads(body['messages'][1]['content'])
+        calls.append(data)
+        assert data['requirements']['section_count'] == 45
+        assert data['review_scope']['stage'] == 'script_section_window'
+        assert len(data['review_window']['section_ids']) == len(data['script']['sections'])
+        report = {'sections':[{'index':part['index'],'supports':[{
+            'candidate_quote_id':part['content'][0]['quote_id'],
+            'source_quote_id':part['allowed_source_quote_ids']['evidence_1'][0]}]} for part in data['script']['sections']]}
+        return _review_tool_response(report)
+    checker = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
+    case = main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    def parts(start,end):
+        return [{'id':f'section-{index}','title':f'段落{index}','content':FACT,'visual_prompt':'计划画面',
+                 'evidence_reference_ids':[state.refs[0]['reference_id']]} for index in range(start,end)]
+    initial = CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='45段稿',sections=parts(0,20))
+    first = case.start_window('local','task',initial,member_id=state.owner.member_id)
+    assert first['total_count'] == 20 and len(calls) == 1
+    assert case.start_window('local','task',initial,member_id=state.owner.member_id) == first
+    assert len(calls) == 1
+    current = state.repository.get_creation_task_script('local',first['script_id'])
+    assert current.draft_complete is False and len(current.sections) == 20
+    from app.schemas import CreationTaskScriptConfirmRequest
+    with pytest.raises(ScriptDraftRejected) as failure:
+        case.confirm('local','task',current.id,CreationTaskScriptConfirmRequest(title=current.title,
+            sections=[vars(part) for part in current.sections],expected_updated_at=current.updated_at),member_id=state.owner.member_id)
+    assert failure.value.status_code == 409 and len(calls) == 1
+    last = first
+    for start,end in [(20,40),(40,45)]:
+        payload = CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=last['updated_at'],sections=parts(start,end))
+        last = case.patch('local','task',first['script_id'],payload,member_id=state.owner.member_id)
+    assert last['total_count'] == 45 and len(calls) == 3
+    assert state.repository.get_creation_task('local','task').confirmed_script_id is None
+    all_parts, cursor = [], 0
+    while cursor is not None:
+        page = state.repository.read_creation_task_script_sections('local','task',first['script_id'],
+            expected_updated_at=last['updated_at'],after_ordinal=cursor)
+        all_parts.extend(page['items']); cursor=page['next_after_ordinal']
+    assert [item['section']['id'] for item in all_parts] == [f'section-{index}' for index in range(45)]
+    with state.repository._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM creation_task_scripts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM script_generation_runs').fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='script_sections_reviewed'").fetchone()[0] == 3
+
+    from app.schemas import CreationTaskScriptConfirmSavedRequest
+    confirmation=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=last['updated_at'])
+    with monkeypatch.context() as bounded:
+        bounded.setattr(state.repository,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('confirm-saved must not hydrate complete script'))
+        bounded.setattr(state.repository,'list_creation_task_scripts',lambda *a,**k:pytest.fail('confirm-saved must not list full scripts'))
+        bounded.setattr(state.repository,'get_creation_task_script',lambda *a,**k:pytest.fail('confirm-saved must not fetch complete script'))
+        result=case.confirm_saved('local','task',first['script_id'],confirmation,member_id=state.owner.member_id)
+        assert result['status']=='confirmed' and result['total_count']==45
+        assert case.confirm_saved('local','task',first['script_id'],confirmation,member_id=state.owner.member_id)==result
+    assert len(calls)==6
+    assert state.repository.get_creation_task('local','task').confirmed_script_id==first['script_id']
+    stored=state.repository.get_creation_task_script('local',first['script_id'])
+    assert stored.draft_complete is True and stored.selection_status=='confirmed' and len(stored.sections)==45
+    assert case.window_request_result('local','task',confirmation.request_id,member_id=state.owner.member_id,
+                                     operation='confirm',script_id=stored.id)==result
+
+
+def test_same_window_request_in_flight_is_query_only_not_a_second_model_call(api_state, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from uuid import uuid4
+    from app.schemas import CreationTaskScriptWindowStartRequest
+    state=api_state
+    entered,release=Event(),Event()
+    calls=[]
+    def review(request):
+        data=json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data); entered.set()
+        assert release.wait(5)
+        return _review_tool_response(bound_review(reviewed(draft()),data))
+    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    request=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='首窗',sections=[{
+        'id':'first','title':'素材用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future=pool.submit(case.start_window,'local','task',request,member_id=state.owner.member_id)
+        assert entered.wait(5)
+        try:
+            duplicate=case.start_window('local','task',request,member_id=state.owner.member_id)
+            lookup=case.window_request_result('local','task',request.request_id,operation='start',member_id=state.owner.member_id)
+            assert duplicate==lookup and lookup['status']=='unknown' and lookup['submission_effect']=='unknown'
+            assert 'submitted_input' not in lookup and lookup['submitted_input_available'] is True
+            recovered=case.window_request_result('local','task',request.request_id,operation='start',member_id=state.owner.member_id,include_input=True)
+            assert recovered['submitted_input']==request.model_dump(mode='json')
+            with pytest.raises(KeyError):
+                case.window_request_result('local','task',request.request_id,operation='start',member_id='different-member')
+            assert len(calls)==1
+            with state.repository._connect() as conn:
+                assert conn.execute('SELECT COUNT(*) FROM creation_task_scripts').fetchone()[0]==0
+        finally:
+            release.set()
+        result=future.result(timeout=5)
+    assert result['status']=='saved'
+    assert case.window_request_result('local','task',request.request_id,operation='start',member_id=state.owner.member_id)==result
+    assert case.start_window('local','task',request,member_id=state.owner.member_id)==result
+    assert len(calls)==1
+
+
+
+@pytest.mark.parametrize('finding_count',[5,13])
+def test_all_actual_findings_fit_a_report_without_a_business_finding_quota(finding_count):
+    claims=[f'支持功能{index}。' for index in range(finding_count)]
+    document=draft(''.join(claims))
+    review={'sections':[{'index':1,'issues':[{'kind':'unsupported_fact','candidate_quote_id':'@content:0',
+        'reference_ids':['evidence_1'],'missing_or_conflicting':f'来源没有支持功能{index}的说明。'} for index in range(finding_count)]}]}
+    calls=[]
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        provider(document,review,calls).generate(inputs())
+    assert error.value.code=='script_fact_unsupported'
+    assert len(error.value.review_issues)==finding_count
+    assert [item['review_explanation'] for item in error.value.review_issues]==[f'来源没有支持功能{index}的说明。' for index in range(finding_count)]
+    branch=calls[1][1]['tools'][0]['function']['parameters']['properties']['sections']['items']['anyOf'][1]
+    assert 'maxItems' not in branch['properties']['issues']
+    assert calls[1][1]['max_tokens']==8192 and len(calls)==2
+
+
+def test_partial_review_coverage_cannot_be_adopted_as_a_complete_script(api_state):
+    from uuid import uuid4
+    from app.creation.script_windows import ScriptWindowConflict, script_layout_digest
+    state=api_state
+    script=saved_row_draft(state)
+    with state.repository._connect() as conn:
+        layout=script_layout_digest(conn,'local',script.id)
+    state.repository.record_saved_script_section_review('local','task',script.id,script.sections[:1],script.updated_at,
+        binding_digest='binding',layout_digest=layout)
+    with pytest.raises(ScriptWindowConflict,match='未完成'):
+        state.repository.confirm_reviewed_script('local','task',script.id,expected_updated_at=script.updated_at,
+            request_id=str(uuid4()),member_id=state.owner.member_id,binding_digest='binding',layout_digest=layout)
+    assert state.repository.get_creation_task('local','task').confirmed_script_id is None
+    assert state.repository.get_creation_task_script('local',script.id)==script
+
+
+
+def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_ranges(api_state, monkeypatch):
+    from uuid import uuid4
+    from app.schemas import CreationTaskScriptWindowStartRequest,CreationTaskScriptSectionsPatchRequest,CreationTaskScriptConfirmSavedRequest
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+    state=api_state
+    with state.repository._connect() as conn:
+        plan=json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()[0])
+        plan['template_settings']={'script_section_count':25}
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'",(json.dumps(plan),))
+    calls=[]; mode={'truncate':True}
+    def review(request):
+        data=json.loads(json.loads(request.content)['messages'][1]['content']); calls.append(data)
+        if data['review_window']['finalizing'] and data['review_window']['section_ids'][0]=='part-20' and mode['truncate']:
+            return httpx.Response(200,json={'choices':[{'finish_reason':'length','message':{'content':''}}]})
+        return _review_tool_response({'sections':[{'index':part['index'],'supports':[{
+            'candidate_quote_id':part['content'][0]['quote_id'],'source_quote_id':part['allowed_source_quote_ids']['evidence_1'][0]}]}
+            for part in data['script']['sections']]})
+    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
+    monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    def parts(start,end): return [{'id':f'part-{i}','title':f'段落{i}','content':FACT,'visual_prompt':'计划画面',
+        'evidence_reference_ids':[state.refs[0]['reference_id']]} for i in range(start,end)]
+    first=case.start_window('local','task',CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='完整稿',sections=parts(0,20)),member_id=state.owner.member_id)
+    last=case.patch('local','task',first['script_id'],CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=first['updated_at'],sections=parts(20,25)),member_id=state.owner.member_id)
+    request=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=last['updated_at'])
+    with pytest.raises(ScriptDraftRejected) as failure:
+        case.confirm_saved('local','task',first['script_id'],request,member_id=state.owner.member_id)
+    assert failure.value.status_code==502 and len(calls)==4
+    assert state.repository.get_creation_task('local','task').confirmed_script_id is None
+    assert state.repository.get_creation_task_script('local',first['script_id']).draft_complete is False
+    original=case.window_request_result('local','task',request.request_id,member_id=state.owner.member_id,operation='confirm',script_id=first['script_id'])
+    assert original['status']=='failed' and original['error_detail']['error']=='script_review_invalid'
+    mode['truncate']=False
+    retry=request.model_copy(update={'request_id':uuid4()})
+    result=case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)
+    assert result['status']=='confirmed' and len(calls)==5
+    assert calls[-1]['review_window']['section_ids']==[f'part-{i}' for i in range(20,25)]
+    assert case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)==result
+    assert len(calls)==5
+
+
+def test_delegated_saved_adoption_records_real_goal_journal_without_full_script(api_state, monkeypatch):
+    from uuid import uuid4
+    from app.conversation_repository import ConversationRepository
+    from app.assistant_goal_continuation import GoalContinuationService
+    from app.creation.intent_use_case import CreationIntentUseCase
+    from app.schemas import CreationTaskScriptWindowStartRequest,CreationTaskScriptConfirmSavedRequest
+    state=api_state
+    conversations=ConversationRepository(state.repository.database_path)
+    member=state.owner.member_id
+    conversation=conversations.create('local',member,scope_kind='task',scope_id='task')
+    message='使用当前资料完成文案并采用，继续原任务。'
+    conversation=conversations.save_draft(conversation['id'],'local',member,message,conversation['draft_version'])
+    context={'kind':'task','task_id':'task','stage':'script','plan_id':'plan','target_snapshot':{'task_id':'task','stage':'script'}}
+    request_id=str(uuid4())
+    turn,_=conversations.create_turn_idempotent(conversation['id'],'local',member,user_message=message,
+        client_request_id=request_id,expected_draft_version=conversation['draft_version'],request_context=context)
+    source=conversations.task_turn_source(turn['id'],'local',member,'task')
+    authority={'kind':'conversation_input','member_id':member,'conversation_id':conversation['id'],'turn_id':turn['id'],'request_id':request_id}
+    intent=CreationIntentUseCase.receive_intent({'kind':'goal_delegation','topic_title':'素材用途'},source=authority,target_count=1,original_message=message)
+    with state.repository._connect() as conn:
+        plan=json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()[0])
+        plan.update(goal=message,creation_intent=intent)
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'",(json.dumps(plan),))
+    calls=[]
+    set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,member))
+    service=GoalContinuationService(conversations,verify_current_goal=lambda *a:pytest.fail('recording must not execute a goal'),
+        run_goal_turn=lambda *a:pytest.fail('recording must not launch a model'))
+    case.record_adoption=service.record_script_adoption
+    initial=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
+        'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
+    saved=case.start_window('local','task',initial,member_id=member)
+    confirmation=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],
+        adoption_kind='delegated_system',assistant_turn_id=turn['id'])
+    with monkeypatch.context() as bounded:
+        bounded.setattr(state.repository,'get_creation_task_script',lambda *a,**k:pytest.fail('journal must use actual streamed adoption facts'))
+        bounded.setattr(state.repository,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('journal must not reconstruct full body'))
+        result=case.confirm_saved('local','task',saved['script_id'],confirmation,member_id=member,
+            instruction_origin=source,reread_origin=lambda draft_only:conversations.task_turn_source(turn['id'],'local',member,'task'))
+        assert result['status']=='confirmed'
+        assert case.confirm_saved('local','task',saved['script_id'],confirmation,member_id=member,
+            instruction_origin=source,reread_origin=lambda draft_only:conversations.task_turn_source(turn['id'],'local',member,'task'))==result
+    with conversations._connect() as conn:
+        row=conn.execute('SELECT events_json,result_json FROM assistant_conversation_turns WHERE id=?',(turn['id'],)).fetchone()
+        proofs=json.loads(row['result_json'])['goal_business_actions']
+        assert len(proofs)==1 and proofs[0]['id']==saved['script_id'] and proofs[0]['version']==result['updated_at']
+        assert len([event for event in json.loads(row['events_json']) if event.get('phase')=='script_adoption'])==1
+    assert len(calls)==2
+
+
+
+def test_legacy_single_response_generation_redirects_to_windows_before_provider_call():
+    calls=[]
+    with pytest.raises(CreationTaskScriptGenerationError) as error:
+        provider(draft(),reviewed(draft()),calls).generate(replace(inputs(),script_section_count=45))
+    assert error.value.code=='window_required' and not error.value.retryable and calls==[]
+    assert '目标保留' in error.value.reason
+
+
+def test_patch_rechecks_revoked_source_after_preflight_inside_writer_transaction(api_state, monkeypatch):
+    from uuid import uuid4
+    from fastapi import HTTPException
+    from app.schemas import CreationTaskScriptWindowStartRequest,CreationTaskScriptSectionsPatchRequest
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+    state=api_state; calls=[]
+    set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    saved=case.start_window('local','task',CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
+        'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]),member_id=state.owner.member_id)
+    before=state.repository.get_creation_task_script('local',saved['script_id'])
+    writer=state.repository.patch_assistant_script_sections
+    def revoke_before_begin(*args,**kwargs):
+        state.sources.set_knowledge_item_use_state('local','fixture','excluded')
+        return writer(*args,**kwargs)
+    monkeypatch.setattr(state.repository,'patch_assistant_script_sections',revoke_before_begin)
+    with pytest.raises((ScriptDraftRejected,HTTPException)) as error:
+        case.patch('local','task',saved['script_id'],CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],sections=[{
+            'id':'first','title':'用途','content':FACT,'visual_prompt':'另一种计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]),member_id=state.owner.member_id)
+    assert error.value.status_code==409 and len(calls)==2
+    assert state.repository.get_creation_task_script('local',saved['script_id'])==before
+
+
+def test_first_window_receipt_failure_rolls_back_original_task_run_and_body_together(api_state, monkeypatch):
+    from uuid import uuid4
+    from app.schemas import CreationTaskScriptWindowStartRequest
+    state=api_state; calls=[]
+    set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    before=state.repository.get_creation_task('local','task')
+    def deny(*a,**k): raise RuntimeError('synthetic receipt failure')
+    monkeypatch.setattr(state.repository,'record_script_window_start',deny)
+    request=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
+        'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
+    with pytest.raises(RuntimeError,match='synthetic receipt failure'):
+        case.start_window('local','task',request,member_id=state.owner.member_id)
+    assert len(calls)==1 and state.repository.get_creation_task('local','task')==before
+    with state.repository._connect() as conn:
+        for table in ('creation_task_scripts','script_generation_runs','creation_task_script_sections'):
+            assert conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]==0
+    recovered=case.window_request_result('local','task',request.request_id,operation='start',member_id=state.owner.member_id,include_input=True)
+    assert recovered['status']=='failed' and recovered['submitted_input']==request.model_dump(mode='json')
+    assert recovered['error_detail'] is None and 'synthetic receipt failure' not in json.dumps(recovered)
+
+
+def test_legacy_changed_confirmation_checks_revocation_at_its_commit_boundary(api_state, monkeypatch):
+    from app.schemas import CreationTaskScriptDraftRequest,CreationTaskScriptConfirmRequest
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+    from fastapi import HTTPException
+    state=api_state; calls=[]
+    set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    before=case.save('local','task',CreationTaskScriptDraftRequest(title='有据稿',sections=[{
+        'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]))
+    writer=state.repository.confirm_creation_task_script
+    def revoke_before_begin(*args,**kwargs):
+        state.sources.set_knowledge_item_use_state('local','fixture','excluded')
+        return writer(*args,**kwargs)
+    monkeypatch.setattr(state.repository,'confirm_creation_task_script',revoke_before_begin)
+    request=CreationTaskScriptConfirmRequest(title=before.title,expected_updated_at=before.updated_at,edit_mode='replace_all',sections=[{
+        'id':'first','title':'用途','content':FACT,'visual_prompt':'另一种计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
+    with pytest.raises((ScriptDraftRejected,HTTPException)) as error:
+        case.confirm('local','task',before.id,request,member_id=state.owner.member_id)
+    assert error.value.status_code==409 and len(calls)==2
+    assert state.repository.get_creation_task_script('local',before.id)==before
+    assert state.repository.get_creation_task('local','task').confirmed_script_id is None

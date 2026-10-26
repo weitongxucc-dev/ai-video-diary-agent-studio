@@ -40,6 +40,7 @@ from app.profiles.records import (
     ProfileRecordStore, _person_profile_payload, _versioned_voice_profile_payload,
     _profile_reference_payload, _profile_reference_fields,
 )
+from app.creation.script_windows import ScriptWindowConflict, SCRIPT_SECTION_WINDOW_LIMIT, read_script_sections, write_script_sections, upsert_script_sections, script_layout_digest, script_patch_digest, script_patch_event_id, script_confirmation_digest
 from app.database_migrations import (
     CONTENT_VISIBILITY_DEFAULT,
     LOCAL_ADOPTION_RECEIPTS_DDL,
@@ -633,6 +634,7 @@ class CreationTaskScript:
     source_reply_reference: dict[str, str] | None = None
     adoption: dict[str, object] | None = None
     locked_body_digest: str | None = None
+    draft_complete: bool = True
 
 
 @dataclass
@@ -4419,7 +4421,7 @@ class ProductionRepository:
             conn.execute("INSERT INTO script_generation_runs VALUES(?,?,?,?,?,?,?,?)", (run.id, task.workspace_id,
                 task.id, plan.id, run.topic_id, _json_payload(run), now.isoformat(), now.isoformat()))
             conn.execute("INSERT INTO creation_task_scripts VALUES(?,?,?,?,?,?)", (script.id, task.workspace_id,
-                task.id, run.id, _json_payload(script), script.updated_at.isoformat()))
+                task.id, run.id, self._script_payload(conn, script), script.updated_at.isoformat()))
             task.confirmed_script_id = script.id
             task.stage, task.stage_status, task.recovery_point = "narration", "not_started", "narration"
             task.status, task.progress = "running", max(task.progress, 40)
@@ -5986,12 +5988,14 @@ class ProductionRepository:
 
     def effective_creation_script(self, workspace_id, task_id, *, connection=None):
         with nullcontext(connection) if connection is not None else self._connect() as conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
             task = self._require_creation_task(conn, workspace_id, task_id)
             row = conn.execute('SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?',
                 (workspace_id, task_id, task.confirmed_script_id)).fetchone()
             if row is None:
                 raise ValueError('当前任务没有确认文案')
-            script = self._creation_task_script_from_payload(json.loads(row['payload']))
+            script = self._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
             sections = []
             for section in script.sections:
                 state = self.stage_segment_state(workspace_id, task_id, section.id, connection=conn)
@@ -6178,7 +6182,7 @@ class ProductionRepository:
         plan = self._creation_plan_from_payload(plan_payload)
         script = self._creation_task_script_from_payload(json.loads(connection.execute(
             'SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?',
-            (job.workspace_id, task.confirmed_script_id)).fetchone()['payload']))
+            (job.workspace_id, task.confirmed_script_id)).fetchone()['payload']), connection=connection)
         if revision_digest(script, plan) != prepared['adoption_revision_digest']:
             raise ValueError('文案或方案在来源准备后变化，未封存新输入')
         if job.kind == 'creation_task_execution' and input_digest != prepared['adoption_revision_digest']:
@@ -8445,7 +8449,7 @@ class ProductionRepository:
         if script_row is None:
             raise ValueError("配音分段关联的文案不属于当前工作区与任务")
         script = self._creation_task_script_from_payload(
-            json.loads(str(script_row["payload"]))
+            json.loads(str(script_row["payload"])), connection=conn
         )
         if script.selection_status != "confirmed":
             raise ValueError("配音分段只能关联已确认文案")
@@ -9003,13 +9007,13 @@ class ProductionRepository:
 
     def start_script_generation(
         self,
-        run: ScriptGenerationRun, *, write_guard=None) -> tuple[CreationTask, ScriptGenerationRun]:
+        run: ScriptGenerationRun, *, write_guard=None, connection=None) -> tuple[CreationTask, ScriptGenerationRun]:
         if run.run_kind != "generation" or run.source_reply_reference is not None:
             raise ValueError("对话回复移交不能伪装成模型生成运行")
         if run.status != "running":
             raise ValueError("文案运行必须以 running 状态开始")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if connection is None: conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
             row = conn.execute(
@@ -9060,6 +9064,7 @@ class ProductionRepository:
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
                 (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
             )
+        if connection is not None: return task,run
         return (
             self.get_creation_task(run.workspace_id, run.task_id),
             self.get_script_generation_run(run.workspace_id, run.id),
@@ -9212,7 +9217,7 @@ class ProductionRepository:
                     (workspace_id, task_id),
                 ).fetchall()
                 latest = (
-                    self._creation_task_script_from_payload(json.loads(str(current_scripts[0]["payload"])))
+                    self._creation_task_script_from_payload(json.loads(str(current_scripts[0]["payload"])), connection=conn)
                     if current_scripts else None
                 )
                 if latest is not None and not self._script_knowledge_inputs_current(conn, task, latest.id):
@@ -9283,12 +9288,12 @@ class ProductionRepository:
                 if latest is None:
                     conn.execute(
                         "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        (script.id, workspace_id, task_id, run.id, _json_payload(script), now.isoformat()),
+                        (script.id, workspace_id, task_id, run.id, self._script_payload(conn, script), now.isoformat()),
                     )
                 else:
                     conn.execute(
                         "UPDATE creation_task_scripts SET run_id = ?, payload = ?, updated_at = ? WHERE workspace_id = ? AND task_id = ? AND id = ?",
-                        (run.id, _json_payload(script), now.isoformat(), workspace_id, task_id, script.id),
+                        (run.id, self._script_payload(conn, script), now.isoformat(), workspace_id, task_id, script.id),
                     )
                 conn.execute(
                     "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
@@ -9380,10 +9385,18 @@ class ProductionRepository:
             if not reference_id or item != expected.get(reference_id):
                 raise ValueError("文案输入来源与当前方案的固定版本不一致")
 
+    def save_reviewed_script_generation(self, run, script, *, write_guard=None, result_write=None):
+        """Persist an already-reviewed candidate and its original receipt atomically."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None: write_guard(conn)
+            self.start_script_generation(run,connection=conn)
+            return self.complete_script_generation(run.id,script,connection=conn,result_write=result_write)
+
     def complete_script_generation(
         self,
         run_id: str,
-        script: CreationTaskScript, *, write_guard=None, result_write=None) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
+        script: CreationTaskScript, *, write_guard=None, result_write=None, connection=None) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
         if not script.title.strip() or not script.sections:
             raise ValueError("文案必须包含标题和正文")
         if any(
@@ -9394,8 +9407,8 @@ class ProductionRepository:
             for section in script.sections
         ):
             raise ValueError("文案段落必须包含画面建议和来源证据")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if connection is None: conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
             row = conn.execute(
@@ -9464,7 +9477,7 @@ class ProductionRepository:
                     script.workspace_id,
                     script.task_id,
                     script.run_id,
-                    _json_payload(script),
+                    self._script_payload(conn, script),
                     now.isoformat(),
                 ),
             )
@@ -9474,6 +9487,7 @@ class ProductionRepository:
             )
             if result_write is not None:
                 result_write(conn,script)
+        if connection is not None: return task,run,script
         return (
             self.get_creation_task(run.workspace_id, run.task_id),
             self.get_script_generation_run(run.workspace_id, run.id),
@@ -9573,33 +9587,50 @@ class ProductionRepository:
             else None
         )
 
-    def list_creation_task_scripts(
-        self, workspace_id: str, task_id: str
-    ) -> list[CreationTaskScript]:
+    def list_creation_task_scripts(self, workspace_id: str, task_id: str) -> list[CreationTaskScript]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload FROM creation_task_scripts
-                WHERE workspace_id = ? AND task_id = ? ORDER BY updated_at DESC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [
-            self._creation_task_script_from_payload(json.loads(str(row["payload"])))
-            for row in rows
-        ]
+            conn.execute("BEGIN")
+            rows = conn.execute("SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? ORDER BY updated_at DESC",
+                                (workspace_id, task_id)).fetchall()
+            return [self._creation_task_script_from_payload(json.loads(str(row["payload"])), connection=conn) for row in rows]
 
-    def get_creation_task_script(
-        self, workspace_id: str, script_id: str
-    ) -> CreationTaskScript:
+    def get_creation_task_script(self, workspace_id: str, script_id: str) -> CreationTaskScript:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND id = ?",
-                (workspace_id, script_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(script_id)
-        return self._creation_task_script_from_payload(json.loads(str(row["payload"])))
+            conn.execute("BEGIN")
+            row = conn.execute("SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?", (workspace_id, script_id)).fetchone()
+            if row is None:
+                raise KeyError(script_id)
+            return self._creation_task_script_from_payload(json.loads(str(row["payload"])), connection=conn)
+
+    def active_creation_task_script_headers(self, workspace_id, task_id):
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute("""SELECT s.payload,s.updated_at,
+                (SELECT COUNT(*) FROM creation_task_script_sections p
+                 WHERE p.workspace_id=s.workspace_id AND p.script_id=s.id) AS total_count
+                FROM creation_task_scripts s WHERE s.workspace_id=? AND s.task_id=?
+                AND (s.id=? OR s.id=(SELECT id FROM creation_task_scripts
+                    WHERE workspace_id=? AND task_id=? ORDER BY updated_at DESC,id DESC LIMIT 1))
+                ORDER BY s.updated_at DESC,s.id DESC""",
+                (workspace_id, task_id, task.confirmed_script_id, workspace_id, task_id)).fetchall()
+            result = []
+            for row in rows:
+                metadata = json.loads(row["payload"])
+                if metadata.pop("_sections_storage", None) != "rows" or "sections" in metadata:
+                    raise ValueError("文案正文存储版本无效，请先完成正式行化迁移")
+                total = row["total_count"]
+                metadata.update(sections=None, sections_loaded=False, sections_total_count=total)
+                result.append(metadata)
+            return result
+
+    def read_creation_task_script_sections(self, workspace_id, task_id, script_id, *, expected_updated_at=None,
+                                          after_ordinal=0, limit=SCRIPT_SECTION_WINDOW_LIMIT):
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            self._require_creation_task(conn, workspace_id, task_id)
+            return read_script_sections(conn, workspace_id, task_id, script_id,
+                expected_updated_at=expected_updated_at, after_ordinal=after_ordinal, limit=limit)
 
     def confirmed_creation_task_script_digest(
         self, workspace_id: str, task_id: str, script_id: str | None = None,
@@ -9633,6 +9664,59 @@ class ProductionRepository:
                 'assistant_script_saved',{'script_id':script.id,'updated_at':script.updated_at.isoformat(),
                     'request_digest':request_digest,'source':source}),connection=connection)
 
+    def _mutable_assistant_script_metadata(self, conn, workspace_id, task_id, script_id, sections, expected_updated_at):
+        task = self._require_creation_task(conn, workspace_id, task_id)
+        row = conn.execute(
+            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
+            (workspace_id, task_id, script_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(script_id)
+        metadata = json.loads(str(row["payload"]))
+        if metadata.get("_sections_storage") != "rows" or "sections" in metadata:
+            raise ValueError("文案尚未完成行化迁移")
+        if expected_updated_at is None:
+            raise ValueError("更新文案草稿必须提供当前 updated_at")
+        if _revision_value(metadata["updated_at"]) != _revision_value(expected_updated_at):
+            raise ScriptWindowConflict("文案草稿修订已变化，请重新读取后再保存")
+        if not self._script_knowledge_inputs_current(conn, task, script_id):
+            raise ValueError("任务已追加资料，旧稿仅保留为历史；请基于当前资料另存新稿。")
+        if (
+            task.stage != "script"
+            or task.stage_status != "waiting_for_user"
+            or task.confirmed_script_id is not None
+            or metadata["selection_status"] != "draft"
+            or metadata["topic_id"] != task.selected_topic_id
+        ):
+            raise ValueError("当前创作任务不允许修改这份待确认文案")
+        if metadata.get("source_reply_reference") is None and any(
+            not section.visual_prompt.strip()
+            for section in sections
+        ):
+            raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
+        run_row = conn.execute(
+            "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
+            "AND json_extract(payload, '$.status')='succeeded' "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
+            (workspace_id, task_id),
+        ).fetchone()
+        if run_row is None:
+            raise ValueError("这份文案没有已完成的生成记录")
+        run = self._script_generation_run_from_payload(json.loads(str(run_row["payload"])))
+        if metadata["run_id"] != run.id or run.topic_id != task.selected_topic_id or run.plan_id != task.plan_id:
+            raise ValueError("这份文案不是当前任务的最新草稿")
+        allowed_references = {
+            str(item["reference_id"])
+            for item in run.input_references
+            if isinstance(item, dict) and item.get("reference_id")
+        }
+        used_references = {
+            reference_id for section in sections for reference_id in section.evidence_reference_ids
+        }
+        if not used_references.issubset(allowed_references):
+            raise ValueError("文案引用了本次模型输入之外的资料")
+        return metadata
+
     def update_assistant_script_draft(
         self,
         workspace_id: str,
@@ -9654,64 +9738,282 @@ class ProductionRepository:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
-            task = self._require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
-                (workspace_id, task_id, script_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(script_id)
-            script = self._creation_task_script_from_payload(json.loads(str(row["payload"])))
-            if expected_updated_at is None:
-                raise ValueError("更新文案草稿必须提供当前 updated_at")
-            if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
-                raise ValueError("文案草稿修订已变化，请重新读取后再保存")
-            if not self._script_knowledge_inputs_current(conn, task, script.id):
-                raise ValueError("任务已追加资料，旧稿仅保留为历史；请基于当前资料另存新稿。")
-            if (
-                task.stage != "script"
-                or task.stage_status != "waiting_for_user"
-                or task.confirmed_script_id is not None
-                or script.selection_status != "draft"
-                or script.topic_id != task.selected_topic_id
-            ):
-                raise ValueError("当前创作任务不允许修改这份待确认文案")
-            if script.source_reply_reference is None and any(
-                not section.visual_prompt.strip()
-                for section in sections
-            ):
-                raise ValueError("文案草稿必须包含标题、正文、画面建议和来源证据")
-            run_row = conn.execute(
-                "SELECT payload FROM script_generation_runs WHERE workspace_id=? AND task_id=? "
-                "AND json_extract(payload, '$.status')='succeeded' "
-                "ORDER BY started_at DESC, id DESC LIMIT 1",
-                (workspace_id, task_id),
-            ).fetchone()
-            if run_row is None:
-                raise ValueError("这份文案没有已完成的生成记录")
-            run = self._script_generation_run_from_payload(json.loads(str(run_row["payload"])))
-            if script.run_id != run.id or run.topic_id != task.selected_topic_id or run.plan_id != task.plan_id:
-                raise ValueError("这份文案不是当前任务的最新草稿")
-            allowed_references = {
-                str(item["reference_id"])
-                for item in run.input_references
-                if isinstance(item, dict) and item.get("reference_id")
-            }
-            used_references = {
-                reference_id for section in sections for reference_id in section.evidence_reference_ids
-            }
-            if not used_references.issubset(allowed_references):
-                raise ValueError("文案引用了本次模型输入之外的资料")
+            self._mutable_assistant_script_metadata(conn, workspace_id, task_id, script_id, sections, expected_updated_at)
+            row = conn.execute("SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?",
+                               (workspace_id, task_id, script_id)).fetchone()
+            script = self._creation_task_script_from_payload(json.loads(row["payload"]), connection=conn)
             script.title = title.strip()
             script.sections = sections
+            script.draft_complete = True
             script.updated_at = utc_now()
             conn.execute(
                 "UPDATE creation_task_scripts SET payload=?, updated_at=? WHERE workspace_id=? AND task_id=? AND id=?",
-                (_json_payload(script), script.updated_at.isoformat(), workspace_id, task_id, script_id),
+                (self._script_payload(conn, script), script.updated_at.isoformat(), workspace_id, task_id, script_id),
             )
             if result_write is not None:
                 result_write(conn,script)
         return script
+
+    @staticmethod
+    def _window_claim_key(task_id, script_id, operation, request_id, member_id):
+        return 'script_claim_' + hashlib.sha256(json.dumps([task_id,script_id,operation,request_id,member_id]).encode()).hexdigest()
+
+    def claim_script_window_request(self, workspace_id, task_id, script_id, operation, request_id, member_id,
+                                    input_digest, *, submitted_input, write_guard=None):
+        key=self._window_claim_key(task_id,script_id,operation,request_id,member_id)
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if write_guard: write_guard(conn)
+            self._require_creation_task(conn,workspace_id,task_id)
+            previous=conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+                                  (workspace_id,task_id,key)).fetchone()
+            if previous:
+                if json.loads(previous['payload_json'])['input_digest']!=input_digest:
+                    raise ScriptWindowConflict('同一文案请求不能改变输入，请读取原请求')
+                return False
+            self.append_task_event(TaskEvent(key,workspace_id,task_id,None,'script_window_request_claimed',
+                {'operation':operation,'script_id':script_id,'request_id':request_id,'member_id':member_id,'input_digest':input_digest,'submitted_input':submitted_input}),connection=conn)
+            return True
+
+    def end_script_window_request_with_error(self, workspace_id, task_id, script_id, operation, request_id, member_id, *, error_detail=None):
+        key=self._window_claim_key(task_id,script_id,operation,request_id,member_id)+'_error'
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if conn.execute('SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',(workspace_id,task_id,key)).fetchone() is None:
+                self.append_task_event(TaskEvent(key,workspace_id,task_id,None,'script_window_request_error',
+                    {'operation':operation,'request_id':request_id,'member_id':member_id,'status':'failed','error_detail':error_detail}),connection=conn)
+
+    def pending_script_window_request(self, workspace_id, task_id, script_id, operation, request_id, member_id, *, include_input=False):
+        key=self._window_claim_key(task_id,script_id,operation,request_id,member_id)
+        with self._connect() as conn:
+            self._require_creation_task(conn,workspace_id,task_id)
+            row=conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+                             (workspace_id,task_id,key)).fetchone()
+            if row is None: return None
+            error=conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+                               (workspace_id,task_id,key+'_error')).fetchone()
+            result={'task_id':task_id,'request_id':request_id,'operation':operation,'status':'failed' if error else 'unknown',
+                    'submission_effect':'unknown','message':'原请求尚无完整成功回执；请核对原请求，不自动重提模型核查。'}
+            result['submitted_input_available']=True
+            if include_input: result['submitted_input']=json.loads(row['payload_json'])['submitted_input']
+            if error: result['error_detail']=json.loads(error['payload_json'])['error_detail']
+            if script_id is not None: result['script_id']=script_id
+            return result
+
+    def script_window_start_result(self, workspace_id, task_id, request_id, member_id):
+        key = 'script_start_' + hashlib.sha256(json.dumps([task_id,request_id,member_id]).encode()).hexdigest()
+        with self._connect() as conn:
+            self._require_creation_task(conn,workspace_id,task_id)
+            row = conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+                               (workspace_id,task_id,key)).fetchone()
+            return json.loads(row['payload_json']) if row else None
+
+    def record_script_window_start(self, script, request_id, member_id, request_digest, binding_digest, *, connection):
+        key = 'script_start_' + hashlib.sha256(json.dumps([script.task_id,request_id,member_id]).encode()).hexdigest()
+        result = {'task_id':script.task_id,'script_id':script.id,'request_id':request_id,'status':'saved',
+                  'updated_at':script.updated_at.isoformat(),'total_count':len(script.sections),
+                  'affected_section_ids':[part.id for part in script.sections]}
+        self._record_script_section_review(connection,script.workspace_id,script.task_id,script.id,script.sections,
+            binding_digest=binding_digest,layout_digest=script_layout_digest(connection,script.workspace_id,script.id))
+        self.append_task_event(TaskEvent(key,script.workspace_id,script.task_id,None,'script_window_started',
+            {'request_digest':request_digest,'member_id':member_id,'result':result}),connection=connection)
+        return result
+
+    def saved_script_review_context(self, workspace_id, task_id, script_id, expected_updated_at):
+        with self._connect() as conn:
+            conn.execute('BEGIN')
+            self._require_creation_task(conn,workspace_id,task_id)
+            row=conn.execute('SELECT payload,updated_at FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?',
+                             (workspace_id,task_id,script_id)).fetchone()
+            if row is None: raise KeyError(script_id)
+            if _revision_value(row['updated_at']) != _revision_value(expected_updated_at):
+                raise ScriptWindowConflict('文案版本已变化，请重新读取后确认')
+            total=conn.execute('SELECT COUNT(*) FROM creation_task_script_sections WHERE workspace_id=? AND script_id=?',
+                               (workspace_id,script_id)).fetchone()[0]
+            return {'metadata':json.loads(row['payload']),'total_count':total,
+                    'layout_digest':script_layout_digest(conn,workspace_id,script_id)}
+
+    def record_saved_script_section_review(self, workspace_id, task_id, script_id, sections, expected_updated_at, *,
+                                          binding_digest, layout_digest, write_guard=None):
+        from app.creation.script_windows import section_digest
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if write_guard: write_guard(conn)
+            self._require_creation_task(conn,workspace_id,task_id)
+            row=conn.execute('SELECT updated_at FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?',
+                             (workspace_id,task_id,script_id)).fetchone()
+            if row is None: raise KeyError(script_id)
+            if _revision_value(row['updated_at']) != _revision_value(expected_updated_at) or script_layout_digest(conn,workspace_id,script_id)!=layout_digest:
+                raise ScriptWindowConflict('核查期间文案已变化，没有记录过期覆盖')
+            for part in sections:
+                stored=conn.execute('SELECT digest FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? AND section_id=?',
+                                    (workspace_id,script_id,part.id)).fetchone()
+                if stored is None or stored['digest']!=section_digest(asdict(part)):
+                    raise ScriptWindowConflict('核查正文与已保存段落不一致，没有记录覆盖')
+            self._record_script_section_review(conn,workspace_id,task_id,script_id,sections,binding_digest=binding_digest,layout_digest=layout_digest)
+
+    def script_confirm_saved_result(self, workspace_id, task_id, script_id, request_id, member_id):
+        key='script_confirm_' + hashlib.sha256(json.dumps([script_id,request_id,member_id]).encode()).hexdigest()
+        with self._connect() as conn:
+            self._require_creation_task(conn,workspace_id,task_id)
+            row=conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+                             (workspace_id,task_id,key)).fetchone()
+            return json.loads(row['payload_json']) if row else None
+
+    def confirmed_script_adoption_facts(self, workspace_id, task_id, script_id, expected_updated_at):
+        from app.creation.script_windows import ScriptAdoptionFacts, script_revision
+        with self._connect() as conn:
+            conn.execute('BEGIN')
+            task=self._require_creation_task(conn,workspace_id,task_id)
+            row=conn.execute('SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?',
+                             (workspace_id,task_id,script_id)).fetchone()
+            if row is None: raise KeyError(script_id)
+            metadata=json.loads(row['payload'])
+            if task.confirmed_script_id!=script_id or metadata['selection_status']!='confirmed' or script_revision(metadata['updated_at'])!=script_revision(expected_updated_at):
+                raise ScriptWindowConflict('采用结果与当前确认版不一致，未记录错误来源')
+            digest=hashlib.sha256()
+            for item in conn.execute("SELECT json_extract(section_json,'$.content') FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? ORDER BY ordinal",(workspace_id,script_id)):
+                digest.update(item[0].encode())
+            if metadata['adoption']['body_digest']!=digest.hexdigest():
+                raise ScriptWindowConflict('确认正文与采用摘要不一致')
+            return ScriptAdoptionFacts(script_id,task_id,metadata['selection_status'],script_revision(metadata['updated_at']),
+                                       metadata['adoption'],digest.hexdigest())
+
+    def confirm_reviewed_script(self, workspace_id, task_id, script_id, *, expected_updated_at, request_id, member_id,
+                                binding_digest, layout_digest, adoption_kind='manual', write_guard=None):
+        request_digest=script_confirmation_digest(expected_updated_at,adoption_kind)
+        key='script_confirm_' + hashlib.sha256(json.dumps([script_id,request_id,member_id]).encode()).hexdigest()
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if write_guard: write_guard(conn)
+            prior=conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+                               (workspace_id,task_id,key)).fetchone()
+            if prior:
+                saved=json.loads(prior['payload_json'])
+                if saved['request_digest']!=request_digest: raise ScriptWindowConflict('同一确认请求不能更换输入')
+                return saved['result']
+            task,metadata,plan,adoption=self._script_adoption_context(conn,workspace_id,task_id,script_id,
+                expected_updated_at,adoption_kind,member_id)
+            if metadata.get('locked_body_digest'):
+                raise ValueError('此正文为锁定定稿，请沿原采用结果继续，不重新采用')
+            if task.stage!='script' or task.stage_status!='waiting_for_user' or task.confirmed_script_id is not None or metadata['selection_status']!='draft':
+                raise ScriptWindowConflict('当前稿件不处于待确认状态')
+            count=conn.execute('SELECT COUNT(*) FROM creation_task_script_sections WHERE workspace_id=? AND script_id=?',
+                               (workspace_id,script_id)).fetchone()[0]
+            required=plan.template_settings.get('script_section_count')
+            if count==0 or (required is not None and count!=required):
+                raise ValueError('真实全稿段数与采用要求不符，不能采用部分正文')
+            if script_layout_digest(conn,workspace_id,script_id)!=layout_digest:
+                raise ScriptWindowConflict('稿件顺序已变化，核查覆盖已失效')
+            uncovered=conn.execute("""SELECT 1 FROM creation_task_script_sections s
+                WHERE s.workspace_id=? AND s.script_id=? AND NOT EXISTS (
+                    SELECT 1 FROM task_events e,json_each(e.payload_json,'$.sections') p
+                    WHERE e.workspace_id=s.workspace_id AND e.task_id=? AND e.event_type='script_sections_reviewed'
+                    AND json_extract(e.payload_json,'$.script_id')=s.script_id
+                    AND json_extract(e.payload_json,'$.binding_digest')=? AND json_extract(e.payload_json,'$.layout_digest')=?
+                    AND json_extract(p.value,'$.id')=s.section_id AND json_extract(p.value,'$.digest')=s.digest) LIMIT 1""",
+                (workspace_id,script_id,task_id,binding_digest,layout_digest)).fetchone()
+            if uncovered: raise ScriptWindowConflict('仍有实际正文未完成当前来源和要求下的核查，不能采用')
+            digest=hashlib.sha256()
+            for row in conn.execute("SELECT json_extract(section_json,'$.content') AS content,json_extract(section_json,'$.visual_prompt') AS visual FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? ORDER BY ordinal",(workspace_id,script_id)):
+                if not row['content'].strip() or not row['visual'].strip(): raise ValueError('完整正文或画面建议缺失')
+                digest.update(row['content'].encode())
+            now=utc_now()
+            metadata.update(selection_status='confirmed',confirmed_at=now.isoformat(),updated_at=now.isoformat(),draft_complete=True,
+                adoption={**adoption,'script_id':script_id,'version':now.isoformat(),'body_digest':digest.hexdigest()})
+            self._persist_script_adoption(conn,task,script_id,metadata,now)
+            result={'task_id':task_id,'script_id':script_id,'request_id':request_id,'updated_at':now.isoformat(),'status':'confirmed','total_count':count}
+            self.append_task_event(TaskEvent(key,workspace_id,task_id,None,'script_saved_confirmed',
+                {'request_digest':request_digest,'member_id':member_id,'result':result}),connection=conn)
+            return result
+
+    def script_patch_request_result(self, workspace_id, task_id, script_id, request_id, member_id):
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?",
+                (workspace_id,task_id,script_patch_event_id(script_id,request_id,member_id))).fetchone()
+            return json.loads(row['payload_json']) if row else None
+
+    def script_section_patch_context(self, workspace_id, task_id, script_id, sections, expected_updated_at, *, insert_after_section_id=None):
+        if not 1 <= len(sections) <= SCRIPT_SECTION_WINDOW_LIMIT or len({part.id for part in sections}) != len(sections):
+            raise ValueError("文案修改窗口大小或段落ID无效")
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            metadata = self._mutable_assistant_script_metadata(conn,workspace_id,task_id,script_id,sections,expected_updated_at)
+            ids = [part.id for part in sections]
+            slots = ','.join('?' for _ in ids)
+            existing = {row['section_id'] for row in conn.execute(
+                f'SELECT section_id FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? AND section_id IN ({slots})',
+                (workspace_id,script_id,*ids))}
+            new_ids = [part.id for part in sections if part.id not in existing]
+            total = conn.execute('SELECT COUNT(*) FROM creation_task_script_sections WHERE workspace_id=? AND script_id=?',
+                                 (workspace_id,script_id)).fetchone()[0]
+            return {'metadata':metadata, 'total_count':total + len(new_ids),
+                'layout_digest':script_layout_digest(conn,workspace_id,script_id,insert_ids=new_ids,insert_after_section_id=insert_after_section_id)}
+
+    def _record_script_section_review(self, conn, workspace_id, task_id, script_id, sections, *, binding_digest, layout_digest):
+        from app.creation.script_windows import section_digest, SCRIPT_REVIEW_PROTOCOL_VERSION
+        facts = {'script_id':script_id, 'binding_digest':binding_digest, 'layout_digest':layout_digest,
+                 'review_protocol':SCRIPT_REVIEW_PROTOCOL_VERSION,
+                 'sections':[{'id':part.id,'digest':section_digest(asdict(part))} for part in sections]}
+        event_id = 'script_review_' + hashlib.sha256(json.dumps(facts,sort_keys=True).encode()).hexdigest()
+        if conn.execute('SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? AND id=?', (workspace_id,task_id,event_id)).fetchone() is None:
+            self.append_task_event(TaskEvent(event_id,workspace_id,task_id,None,'script_sections_reviewed',facts),connection=conn)
+
+    def script_sections_have_review(self, workspace_id, task_id, script_id, sections, *, binding_digest, layout_digest):
+        from app.creation.script_windows import section_digest
+        with self._connect() as conn:
+            self._require_creation_task(conn,workspace_id,task_id)
+            for part in sections:
+                row = conn.execute("""SELECT 1 FROM task_events e,json_each(e.payload_json,'$.sections') p
+                    WHERE e.workspace_id=? AND e.task_id=? AND e.event_type='script_sections_reviewed'
+                    AND json_extract(e.payload_json,'$.script_id')=? AND json_extract(e.payload_json,'$.binding_digest')=?
+                    AND json_extract(e.payload_json,'$.layout_digest')=? AND json_extract(p.value,'$.id')=?
+                    AND json_extract(p.value,'$.digest')=? LIMIT 1""",
+                    (workspace_id,task_id,script_id,binding_digest,layout_digest,part.id,section_digest(asdict(part)))).fetchone()
+                if row is None: return False
+            return True
+
+    def patch_assistant_script_sections(self, workspace_id, task_id, script_id, *, sections,
+                                        expected_updated_at, request_id, member_id,
+                                        insert_after_section_id=None, write_guard=None, review_binding=None):
+        if not 1 <= len(sections) <= SCRIPT_SECTION_WINDOW_LIMIT:
+            raise ValueError("单次文案修改超出窗口，请分次保存同一稿件")
+        if not isinstance(member_id, str) or not member_id or not isinstance(request_id, str) or not request_id:
+            raise ValueError("文案窗口保存必须绑定当前身份与原请求")
+        if expected_updated_at is None:
+            raise ValueError("文案窗口保存必须提供当前稿件版本")
+        if any(not part.id.strip() or not part.title.strip() or not part.content.strip() for part in sections):
+            raise ValueError("文案窗口必须包含稳定段落ID、标题和正文")
+        inputs = {"sections": [asdict(part) for part in sections], "expected_updated_at": _revision_value(expected_updated_at),
+                  "insert_after_section_id": insert_after_section_id}
+        request_digest = script_patch_digest(inputs['sections'], expected_updated_at, insert_after_section_id)
+        event_id = script_patch_event_id(script_id, request_id, member_id)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
+            self._require_creation_task(conn, workspace_id, task_id)
+            receipt = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?",
+                                   (workspace_id, task_id, event_id)).fetchone()
+            if receipt is not None:
+                recorded = json.loads(receipt['payload_json'])
+                if recorded['request_digest'] != request_digest:
+                    raise ValueError("同一文案请求不能更换输入；请查询原请求结果")
+                return recorded['result']
+            metadata = self._mutable_assistant_script_metadata(conn, workspace_id, task_id, script_id, sections, expected_updated_at)
+            result = upsert_script_sections(conn, workspace_id, script_id, inputs['sections'], insert_after_section_id=insert_after_section_id)
+            now = utc_now()
+            metadata['updated_at'] = now.isoformat()
+            conn.execute('UPDATE creation_task_scripts SET payload=?,updated_at=? WHERE workspace_id=? AND task_id=? AND id=?',
+                         (json.dumps(metadata, ensure_ascii=False), now.isoformat(), workspace_id, task_id, script_id))
+            if review_binding is not None:
+                self._record_script_section_review(conn, workspace_id, task_id, script_id, sections,
+                    binding_digest=review_binding, layout_digest=script_layout_digest(conn,workspace_id,script_id))
+            result.update(task_id=task_id, script_id=script_id, request_id=request_id, updated_at=now.isoformat(), status='saved')
+            self.append_task_event(TaskEvent(event_id,workspace_id,task_id,None,'assistant_script_window_saved',
+                {'member_id':member_id,'request_id':request_id,'request_digest':request_digest,'result':result}), connection=conn)
+            return result
 
     def save_script_library_entry(
         self, workspace_id: str, *, source_script_id: str, name: str, category: str,
@@ -9819,7 +10121,7 @@ class ProductionRepository:
             conn.execute(
                 "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (draft.id, workspace_id, task.id, "", _json_payload(draft), draft.updated_at.isoformat()),
+                (draft.id, workspace_id, task.id, "", self._script_payload(conn, draft), draft.updated_at.isoformat()),
             )
         return task, draft
 
@@ -9840,18 +10142,59 @@ class ProductionRepository:
             (workspace_id, task_id, confirmed_script_id),
         ).fetchall()
         for row in rows:
-            other = self._creation_task_script_from_payload(
-                json.loads(str(row["payload"]))
-            )
-            if other.selection_status != "confirmed":
+            metadata = json.loads(row['payload'])
+            if metadata['selection_status'] != 'confirmed':
                 continue
-            other.selection_status = "draft"
-            other.confirmed_at = None
-            other.updated_at = updated_at
-            conn.execute(
-                "UPDATE creation_task_scripts SET payload = ?, updated_at = ? WHERE id = ?",
-                (_json_payload(other), updated_at.isoformat(), other.id),
-            )
+            metadata.update(selection_status='draft',confirmed_at=None,updated_at=updated_at.isoformat())
+            conn.execute('UPDATE creation_task_scripts SET payload=?,updated_at=? WHERE id=?',
+                         (json.dumps(metadata,ensure_ascii=False),updated_at.isoformat(),row['id']))
+
+    def _script_adoption_context(self, conn, workspace_id, task_id, script_id, expected_updated_at, adoption_kind, member_id):
+        task_row = conn.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        script_row = conn.execute(
+            "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND task_id = ? AND id = ?",
+            (workspace_id, task_id, script_id),
+        ).fetchone()
+        if task_row is None or script_row is None:
+            raise KeyError(script_id)
+        task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+        metadata = json.loads(str(script_row["payload"]))
+        if metadata.get('_sections_storage')!='rows' or 'sections' in metadata:
+            raise ScriptWindowConflict('文案未采用当前唯一正文存储，不能混用旧快照确认')
+        if expected_updated_at is None:
+            raise ValueError("确认文案必须提供当前 updated_at")
+        if _revision_value(metadata["updated_at"]) != _revision_value(expected_updated_at):
+            raise ScriptWindowConflict("文案草稿修订已变化，请重新读取后再确认")
+        if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
+                (workspace_id, task_id)).fetchone():
+            raise ValueError("此任务仍有未结束的制作作业；先等作业结算或取消，再确认修订文案。")
+        if task.narration_cache_key or task.montage_plan_id or task.current_timeline_version_id or task.output_ready:
+            raise ValueError("此任务已有配音或剪辑结果，不能通过此入口改写文案。")
+        if not self._script_knowledge_inputs_current(conn, task, script_id):
+            raise ValueError("任务已追加资料，不能采用旧资料生成的草稿；请基于当前资料另存新稿。")
+        from app.creation.intent_use_case import CreationIntentUseCase
+        plan_row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
+        plan = self._creation_plan_from_payload(json.loads(plan_row["payload"]))
+        adoption = CreationIntentUseCase.adoption(plan.creation_intent, kind=adoption_kind,
+            member_id=content_owner(member_id) or task.owner_user_id, version=metadata["updated_at"])
+        return task, metadata, plan, adoption
+
+    def _persist_script_adoption(self, conn, task, script_id, metadata, now):
+        self._demote_other_confirmed_scripts(conn,workspace_id=task.workspace_id,task_id=task.id,
+            confirmed_script_id=script_id,updated_at=now)
+        task.confirmed_script_id = script_id
+        task.stage,task.stage_status,task.status = 'narration','not_started','running'
+        task.progress = max(task.progress,40)
+        task.recovery_point = 'narration'
+        task.stage_reason=task.stage_impact=task.stage_repair_action=task.stage_retryable=None
+        task.updated_at=now
+        conn.execute('UPDATE creation_task_scripts SET payload=?,updated_at=? WHERE workspace_id=? AND task_id=? AND id=?',
+            (json.dumps(metadata,ensure_ascii=False),now.isoformat(),task.workspace_id,task.id,script_id))
+        conn.execute('UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?',
+            (_json_payload(task),now.isoformat(),task.workspace_id,task.id))
 
     def confirm_creation_task_script(
         self,
@@ -9868,34 +10211,14 @@ class ProductionRepository:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
-            task_row = conn.execute(
-                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
-                (workspace_id, task_id),
-            ).fetchone()
-            script_row = conn.execute(
-                "SELECT payload FROM creation_task_scripts WHERE workspace_id = ? AND task_id = ? AND id = ?",
-                (workspace_id, task_id, script_id),
-            ).fetchone()
-            if task_row is None or script_row is None:
-                raise KeyError(script_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
-            script = self._creation_task_script_from_payload(json.loads(str(script_row["payload"])))
-            if expected_updated_at is None:
-                raise ValueError("确认文案必须提供当前 updated_at")
-            if _revision_value(script.updated_at) != _revision_value(expected_updated_at):
-                raise ValueError("文案草稿修订已变化，请重新读取后再确认")
-            if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
-                    (workspace_id, task_id)).fetchone():
-                raise ValueError("此任务仍有未结束的制作作业；先等作业结算或取消，再确认修订文案。")
-            if task.narration_cache_key or task.montage_plan_id or task.current_timeline_version_id or task.output_ready:
-                raise ValueError("此任务已有配音或剪辑结果，不能通过此入口改写文案。")
-            if not self._script_knowledge_inputs_current(conn, task, script.id):
-                raise ValueError("任务已追加资料，不能采用旧资料生成的草稿；请基于当前资料另存新稿。")
-            from app.creation.intent_use_case import CreationIntentUseCase
-            plan_row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
-            plan = self._creation_plan_from_payload(json.loads(plan_row["payload"]))
-            adoption = CreationIntentUseCase.adoption(plan.creation_intent, kind=adoption_kind,
-                member_id=content_owner(verified_owner_user_id) or task.owner_user_id, version=script.updated_at.isoformat())
+            task,metadata,plan,adoption = self._script_adoption_context(conn,workspace_id,task_id,script_id,
+                expected_updated_at,adoption_kind,verified_owner_user_id)
+            script = self._creation_task_script_from_payload(metadata,connection=conn)
+            if not script.draft_complete:
+                raise ValueError("分窗草稿尚未完成全稿采用核查，请使用完整稿确认入口；没有采用部分正文")
+            required_count = plan.template_settings.get("script_section_count")
+            if required_count is not None and len(sections) != required_count:
+                raise ValueError("实际完整正文段数与已采用模板不符，不能确认部分稿件")
             if script.locked_body_digest:
                 if hashlib.sha256("".join(part.content for part in sections).encode()).hexdigest() != script.locked_body_digest:
                     raise ValueError("此文案已按定稿锁定，不能通过重复确认改写正文；请明确采用新的定稿。")
@@ -9948,32 +10271,7 @@ class ProductionRepository:
             script.updated_at = now
             script.adoption = {**adoption, "script_id": script.id, "version": now.isoformat(),
                 "body_digest": hashlib.sha256("".join(part.content for part in script.sections).encode()).hexdigest()}
-            self._demote_other_confirmed_scripts(
-                conn,
-                workspace_id=workspace_id,
-                task_id=task_id,
-                confirmed_script_id=script.id,
-                updated_at=now,
-            )
-            task.confirmed_script_id = script.id
-            task.stage = "narration"
-            task.stage_status = "not_started"
-            task.status = "running"
-            task.progress = max(task.progress, 40)
-            task.recovery_point = "narration"
-            task.stage_reason = None
-            task.stage_impact = None
-            task.stage_repair_action = None
-            task.stage_retryable = None
-            task.updated_at = now
-            conn.execute(
-                "UPDATE creation_task_scripts SET payload = ?, updated_at = ? WHERE id = ?",
-                (_json_payload(script), now.isoformat(), script.id),
-            )
-            conn.execute(
-                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
-            )
+            self._persist_script_adoption(conn,task,script.id,json.loads(self._script_payload(conn,script)),now)
             if result_write is not None:
                 result_write(conn,script)
         return self.get_creation_task(workspace_id, task_id), self.get_creation_task_script(
@@ -11106,19 +11404,23 @@ class ProductionRepository:
             **_with_datetime(data, "started_at", "finished_at")
         )
 
-    @staticmethod
-    def _creation_task_script_from_payload(
-        data: dict[str, object],
-    ) -> CreationTaskScript:
-        section_payloads = data.pop("sections", [])
-        return CreationTaskScript(
-            **_with_datetime(data, "created_at", "updated_at", "confirmed_at"),
-            sections=[
-                CreationTaskScriptSection(**section)
-                for section in section_payloads
-                if isinstance(section, dict)
-            ],
-        )
+    def _script_payload(self, connection, script, *, write_sections=True):
+        if write_sections:
+            write_script_sections(connection, script.workspace_id, script.id, (asdict(section) for section in script.sections))
+        metadata = json.loads(_json_payload(replace(script, sections=[])))
+        del metadata["sections"]
+        metadata["_sections_storage"] = "rows"
+        return json.dumps(metadata, ensure_ascii=False)
+
+    def _creation_task_script_from_payload(self, data: dict[str, object], *, connection=None) -> CreationTaskScript:
+        if data.pop("_sections_storage", None) != "rows" or "sections" in data:
+            raise ValueError("文案正文存储版本无效，请先完成正式行化迁移")
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            section_rows = conn.execute("""SELECT section_json FROM creation_task_script_sections
+                WHERE workspace_id=? AND script_id=? ORDER BY ordinal""", (data["workspace_id"], data["id"])).fetchall()
+            return CreationTaskScript(**_with_datetime(data, "created_at", "updated_at", "confirmed_at"),
+                sections=[CreationTaskScriptSection(**json.loads(row["section_json"])) for row in section_rows])
+
 
 
 class MaterialLinkProvenanceSink:

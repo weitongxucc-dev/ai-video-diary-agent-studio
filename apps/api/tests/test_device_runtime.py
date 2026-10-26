@@ -615,3 +615,33 @@ def test_stale_error_inside_executor_keeps_original_stop_boundary(tmp_path):
     assert runtime.last_error is stopped.value and runtime._stop.is_set()
     assert runtime.scheduler._get(request.id).state == "granted"
     assert runtime.scheduler._held_fd is not None and runtime.stop(.1)
+
+
+@pytest.mark.parametrize('invalid_ids', [False, True])
+def test_script_row_migration_is_one_version_transaction(tmp_path, invalid_ids):
+    from app.database_migrations import PRODUCTION_SCHEMA_VERSION
+    path = tmp_path / 'legacy-script.sqlite'
+    body = {'title': '原完整稿', 'language': 'zh-CN', 'sections': [
+        {'id': 'same' if invalid_ids else f'section-{i}', 'content': f'正文{i}'} for i in range(25)]}
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute('CREATE TABLE production_schema_migrations(version INTEGER PRIMARY KEY)')
+        conn.executemany('INSERT INTO production_schema_migrations VALUES (?)', [(v,) for v in range(1, 22)])
+        conn.execute('CREATE TABLE creation_task_scripts(id TEXT PRIMARY KEY,workspace_id TEXT,task_id TEXT,run_id TEXT,payload TEXT,updated_at TEXT)')
+        conn.execute('INSERT INTO creation_task_scripts VALUES (?,?,?,?,?,?)', ('script', 'workspace', 'task', 'run', json.dumps(body), 'version'))
+        conn.commit()
+        if invalid_ids:
+            with pytest.raises(sqlite3.IntegrityError):
+                apply_production_migrations(conn)
+            assert conn.execute('SELECT 1 FROM production_schema_migrations WHERE version=22').fetchone() is None
+            assert json.loads(conn.execute('SELECT payload FROM creation_task_scripts').fetchone()[0]) == body
+            assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='creation_task_script_sections'").fetchone() is None
+        else:
+            apply_production_migrations(conn)
+            header = json.loads(conn.execute('SELECT payload FROM creation_task_scripts').fetchone()[0])
+            assert 'sections' not in header and header['_sections_storage'] == 'rows'
+            rows = conn.execute('SELECT section_json FROM creation_task_script_sections ORDER BY ordinal').fetchall()
+            assert [json.loads(row[0]) for row in rows] == body['sections']
+            assert max(row[0] for row in conn.execute('SELECT version FROM production_schema_migrations')) == PRODUCTION_SCHEMA_VERSION
+            apply_production_migrations(conn)
+            assert conn.execute('SELECT COUNT(*) FROM creation_task_script_sections').fetchone()[0] == 25

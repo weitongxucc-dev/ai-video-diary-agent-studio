@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 21
+PRODUCTION_SCHEMA_VERSION = 22
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -829,6 +829,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             FOREIGN KEY(task_id) REFERENCES creation_tasks(id)
         );
     """),
+    (22, ""),  # Transactional section-row migration is applied below.
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
@@ -947,6 +948,16 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
     conn.commit()
     for version, sql in _MIGRATIONS:
         if version in applied:
+            continue
+        if version == 22:
+            from app.creation.script_windows import migrate_script_sections
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("""CREATE TABLE IF NOT EXISTS creation_task_scripts (
+                    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+                migrate_script_sections(conn)
+                conn.execute("INSERT INTO production_schema_migrations(version) VALUES (?)", (version,))
             continue
         # Older assembled databases can have migration markers for 1..14 but
         # lack the narration table originally created by migration 4. Restore
