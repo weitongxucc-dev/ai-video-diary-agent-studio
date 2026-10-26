@@ -3,6 +3,8 @@ from app.schemas import SegmentVisualDecisionAdoptRequest
 from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
 from app.assistant.task_business_adapter import TaskBusinessAdapter
+from app.creation.source_errors import SourcePreflightError as _CreationTaskTopicPreflightError
+from app.creation.script_generation_use_case import ScriptGenerationUseCase, ScriptGenerationRejected
 from app.creation.script_draft_use_case import ScriptDraftUseCase, ScriptDraftRejected
 from app.creation.execution_control import CreationExecutionControl, DesktopShutdownUseCase, ExecutionControlRejected
 from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejected
@@ -3066,22 +3068,6 @@ def _creation_plan_response(
         }
     )
     return CreationPlanResponse.model_validate(payload)
-
-
-class _CreationTaskTopicPreflightError(RuntimeError):
-    def __init__(
-        self,
-        *,
-        reason: str,
-        impact: str,
-        repair_action: str,
-        retryable: bool,
-    ) -> None:
-        self.reason = reason
-        self.impact = impact
-        self.repair_action = repair_action
-        self.retryable = retryable
-        super().__init__(reason)
 
 
 def _topic_route_snapshot(workspace_id: str) -> dict[str, object]:
@@ -8144,186 +8130,26 @@ def generate_creation_task_script(
     _payload: CreationTaskScriptGenerateRequest,
 ) -> CreationTaskScriptsResponse:
     workspace_id = current_workspace_id(request)
-    _require_automation_task_open(request,workspace_id,task_id)
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    script_goal = _creation_task_script_goal(plan, task, _content_reader(request, workspace_id)[0])
-    selected_topic = next(
-        (
-            candidate
-            for candidate in production_repo.list_topic_candidates(workspace_id, task.id)
-            if candidate.id == task.selected_topic_id
-        ),
-        None,
-    )
-    if selected_topic is None:
-        raise _topic_failure_response(
-            status_code=409,
-            error="confirmed_topic_missing",
-            reason="当前创作任务还没有已确认选题。",
-            impact="未调用文字模型，未生成文案。",
-            repair_action="先生成并确认一个选题。",
-            retryable=False,
-        )
-    route_snapshot = _topic_route_snapshot(workspace_id)
-    provider_sources: tuple[CreationTaskTopicSource, ...] = ()
-    input_references: list[dict[str, object]] = []
-    preflight_error: _CreationTaskTopicPreflightError | None = None
-    try:
-        provider_sources, input_references, _ = _creation_task_topic_inputs(
-            workspace_id,
-            task,
-            plan,
-            cloud_egress=route_snapshot["execution_location"] == "cloud",
-        )
-        if route_snapshot["availability"] == "unconfigured":
-            raise _CreationTaskTopicPreflightError(
-                reason="capability_unavailable",
-                impact="当前没有可调用的文字模型连接，未生成文案。",
-                repair_action="在本机运行时设置中配置 OpenAI-compatible 文字模型后重试。",
-                retryable=True,
-            )
-    except _CreationTaskTopicPreflightError as exc:
-        preflight_error = exc
-    run = ScriptGenerationRun(
-        id=f"script_run_{uuid4().hex[:12]}",
-        workspace_id=workspace_id,
-        task_id=task.id,
-        plan_id=plan.id,
-        topic_id=selected_topic.id,
-        status="running",
-        route_snapshot=route_snapshot,
-        prompt_schema_version="creation-task-script/v2",
-        input_references=input_references,
+    _require_automation_task_open(request, workspace_id, task_id)
+    settings_for_workspace = _workspace_settings_for(workspace_id)
+    case = ScriptGenerationUseCase(
+        repository=production_repo,
+        source_inputs=_creation_task_topic_inputs,
+        route_snapshot=_topic_route_snapshot(workspace_id),
+        generate=lambda inputs: _creation_task_script_generator_for(settings_for_workspace).generate(inputs),
+        record_service=lambda **facts: record_llm_service_verification(
+            settings_for_workspace, workspace_id=workspace_id, **facts),
     )
     try:
-        task, run = production_repo.start_script_generation(run)
-    except (KeyError, ValueError) as exc:
-        raise _topic_failure_response(
-            status_code=409,
-            error="creation_task_script_stage_conflict",
-            reason="当前创作任务不能开始生成文案。",
-            impact="没有创建重复文案或重复模型调用。",
-            repair_action=str(exc),
-            retryable=task.stage_status == "failed",
-        ) from exc
-    if preflight_error is not None:
-        production_repo.fail_script_generation(
-            run.id,
-            reason=preflight_error.reason,
-            impact=preflight_error.impact,
-            repair_action=preflight_error.repair_action,
-            retryable=preflight_error.retryable,
-        )
-        raise _topic_failure_response(
-            status_code=503,
-            error="capability_unavailable",
-            reason=preflight_error.reason,
-            impact=preflight_error.impact,
-            repair_action=preflight_error.repair_action,
-            retryable=preflight_error.retryable,
-        )
-    try:
-        generated: CreationTaskGeneratedScript = (
-            _creation_task_script_generator_for(_workspace_settings_for(workspace_id)).generate(
-                CreationTaskScriptInput(
-                    goal=script_goal,
-                    language=plan.language,
-                    presenter_share_target=plan.presenter_share_target,
-                    duration_target_seconds=plan.duration_target_seconds,
-                    topic_title=selected_topic.title,
-                    topic_origin=_script_topic_origin(workspace_id, plan, selected_topic),
-                    topic_angle=selected_topic.angle,
-                    topic_audience=selected_topic.audience,
-                    topic_outline=tuple(selected_topic.outline),
-                    sources=provider_sources,
-                    style_instruction=str(plan.template_settings.get("style_instruction", "")),
-                    script_structure=tuple(plan.template_settings.get("script_structure", [])),
-                    script_section_count=plan.template_settings.get("script_section_count"),
-                )
-            )
-        )
-    except CreationTaskScriptGenerationError as exc:
-        content_failure = exc.code in {"script_fact_unsupported", "script_goal_conflict"}
-        if content_failure or exc.code == "script_review_invalid":
-            # Both provider HTTP calls succeeded. Content/review rejection is
-            # not evidence that the user's text service connection is broken.
-            record_llm_service_verification(
-                _workspace_settings_for(workspace_id), ok=True, cause="verified",
-                workspace_id=workspace_id,
-            )
-        elif exc.code not in {"input_invalid", "route_configuration_invalid", "language_unavailable"}:
-            record_llm_service_verification(
-                _workspace_settings_for(workspace_id), ok=False, cause=exc.code,
-                detail=exc.reason, repair_action=exc.repair_action,
-                workspace_id=workspace_id,
-            )
-        production_repo.fail_script_generation(
-            run.id,
-            reason=exc.reason,
-            impact=exc.impact,
-            repair_action=exc.repair_action,
-            retryable=exc.retryable,
-            provider_attempted=True,
-            provider_failed=not (content_failure or exc.code == "script_review_invalid"),
-        )
-        raise _topic_failure_response(
-            status_code=422 if content_failure else 502,
-            error=exc.code,
-            reason=exc.reason,
-            impact=exc.impact,
-            repair_action=exc.repair_action,
-            retryable=exc.retryable,
-            reason_code=exc.reason_code,
-            section_index=exc.section_index,
-            candidate_section_index=exc.candidate_section_index,
-            candidate_field=exc.candidate_field,
-            candidate_fragment_index=exc.candidate_fragment_index,
-            candidate_field_digest=exc.candidate_field_digest,
-            review_issues=exc.review_issues,
-        ) from exc
-    record_llm_service_verification(
-        _workspace_settings_for(workspace_id), ok=True, cause="verified",
-        workspace_id=workspace_id,
-    )
-    script = CreationTaskScript(
-        id=f"script_{uuid4().hex[:12]}",
-        workspace_id=workspace_id,
-        task_id=task.id,
-        run_id=run.id,
-        topic_id=selected_topic.id,
-        title=generated.title,
-        language=generated.language,
-        sections=[
-            CreationTaskScriptSection(
-                id=f"section_{index:02d}_{uuid4().hex[:6]}",
-                title=section.title,
-                content=section.content,
-                visual_prompt=section.visual_prompt,
-                evidence_reference_ids=list(section.evidence_reference_ids),
-            )
-            for index, section in enumerate(generated.sections, start=1)
-        ],
-    )
-    try:
-        task, _, _ = production_repo.complete_script_generation(run.id, script)
-    except ValueError as exc:
-        production_repo.fail_script_generation(
-            run.id,
-            reason="provider_output_invalid",
-            impact="文字模型输出未通过文案与证据持久化校验，未保存文案。",
-            repair_action="检查模型 JSON 输出与来源引用后重试。",
-            retryable=True,
-            provider_attempted=True,
-        )
-        raise _topic_failure_response(
-            status_code=502,
-            error="provider_output_invalid",
-            reason="文案输出未通过持久化校验。",
-            impact="未保存无效文案。",
-            repair_action="检查模型 JSON 输出与来源引用后重试。",
-            retryable=True,
-        ) from exc
+        task = case.generate_script(workspace_id, task_id,
+            viewer_user_id=_content_reader(request, workspace_id)[0])
+    except ScriptGenerationRejected as exc:
+        if exc.kind == 'not_found':
+            raise HTTPException(status_code=404, detail=exc.details['reason']) from exc
+        status = {'goal_source_changed': 409, 'topic_missing': 409, 'stage_conflict': 409,
+            'preflight_failed': 503, 'content_rejected': 422, 'provider_failed': 502,
+            'output_invalid': 502}[exc.kind]
+        raise _topic_failure_response(status_code=status, **exc.details) from exc
     return _creation_task_scripts_response(workspace_id, task)
 
 
