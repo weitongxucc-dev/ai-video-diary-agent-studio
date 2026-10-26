@@ -2736,6 +2736,13 @@ def _queued_creation_admission_case(tmp_path, *, static):
     register_synthetic_profiles(repo,workspace_id='local',member_id=actor.member_id,
         person_id='person_1',voice_id='voice_1',person_version='v1',voice_version='v1',language='zh',model_id='test',
         person_authorization_id='person_auth_1',voice_authorization_id='voice_auth_1')
+    with repo._connect() as conn:
+        for table in ('creation_tasks', 'creation_plans'):
+            row = conn.execute(f'SELECT id,payload FROM {table} WHERE workspace_id=?', ('local',)).fetchone()
+            owned = json.loads(row['payload']); owned['owner_user_id'] = actor.member_id
+            conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
+    task = repo.get_creation_task('local', task_id)
+    digest = revision_digest(repo.get_creation_task_script('local', script_id), repo.get_creation_plan('local', task.plan_id))
     job=execution.start('local',task_id,script_id,digest,actor=actor)
     budget=NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024)
     owner=CreationJobOwnerVerifier(repo,narration_budget=budget,verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
@@ -2746,6 +2753,7 @@ def _queued_creation_admission_case(tmp_path, *, static):
         'duration_seconds':30,'max_output_bytes':3145728,'threads':2,'timeout_seconds':300.0}
     key='narration:'+'b'*64
     owner.stage_facts=lambda *_:(key,dict(resources))
+    owner.narration_unit_facts=lambda *args,**kwargs:owner.stage_facts()
     calls=[]
     def admit(request):
         calls.append(request.id)
@@ -2786,8 +2794,13 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
             assert owner.record_admission(conn,request,SimpleNamespace(verdict=False,
                 reason='declared_resources_exceed_budget',declared=request.resources),datetime.now(timezone.utc))=='input_rejected'
         assert repo.get_task_event('local',stored.id)==stored
+        def must_not_render(*args, **kwargs):
+            raise AssertionError('admission recovery must not execute media')
+        executor=CreationJobUnitExecutor(repo,render_action=must_not_render,render_is_valid=must_not_render)
+        runtime=SimpleNamespace(registrations={'creation_job':SimpleNamespace(owner=owner,executor=executor)},
+            scheduler=scheduler,wake=lambda:None)
         with pytest.raises(ExecutionControlRejected) as same_input:
-            control.resume('local',task_id,actor,SimpleNamespace(registrations={'creation_job':SimpleNamespace(owner=owner)}),verify_media=False)
+            control.resume('local',task_id,actor,runtime,verify_media=False)
         assert same_input.value.detail['job_id']==request.owner_id
         assert len(repo.list_job_runs('local',task_id))==1
         from fastapi.encoders import jsonable_encoder
@@ -2796,8 +2809,6 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         # entry; the old refusal survives and no admission/model is run here.
         changed={**request.resources,'text_chars':300}
         owner.stage_facts=lambda *_:('narration:'+'c'*64,changed)
-        runtime=SimpleNamespace(registrations={'creation_job':SimpleNamespace(owner=owner)},
-            scheduler=scheduler,wake=lambda:None)
         resumed=control.resume('local',task_id,actor,runtime,verify_media=False)
         assert resumed['job']['status']=='queued' and resumed['job']['id']!=request.owner_id
         assert repo.get_job_run('local',request.owner_id).status=='failed'
