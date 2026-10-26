@@ -23,7 +23,7 @@ ASSISTANT_BUSINESS_TOOLS = {
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
 }
 
-TASK_READ_PREVIEW_TOOLS = ("prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -84,6 +84,10 @@ _PI_TOOL_LABELS = {
     "apply_typed_edit": "保存明确修改",
     "read_task_edit_capabilities": "读取真实编辑能力",
     "read_script_sections": "按版本读取文案段落窗口",
+    "start_script_window": "创建文案首窗草稿",
+    "patch_script_sections": "修改或追加文案窗口",
+    "confirm_saved_script": "核查并采用完整已存稿",
+    "read_script_window_request": "查询原文案窗口请求",
     "read_task_object": "读取任务对象细节",
     "read_task_media_job": "读取预览作业结果",
     "read_task_media_jobs": "读取任务媒体作业",
@@ -170,7 +174,7 @@ MATERIAL_PROMPT = """你是 AI 视频日记素材库里的对话助手，只使�
 
 SCRIPT_PROMPT = """你是 AI 视频日记当前创作任务的文案助手。每轮先调用 read_current_task，读取已确认选题、本次时长和允许使用的资料；需要补充事实时调用 find_knowledge。
 你只能使用工具列出的当前任务来源 ID 作为文案证据，不能编造引用、事实、素材或已完成的制作结果。资料不足就问一个具体问题。
-用户要起草或修改文案时，调用 preview_script_draft 保存待确认文案。修改已有草稿时沿用其段落 ID；先说明想怎么改，再根据用户本轮要求提交新的完整草稿。每轮最多保存一次。
+文案按本轮授权目标和真实窗口迭代：新长稿用start_script_window创建首窗，再用patch_script_sections按稳定段ID修改或追加；只改一段不重写全稿。preview_script_draft仅供明确整稿replacement或适用的新小稿，不把未加载段省略。原请求不确定先read_script_window_request对账，unknown/failed/404不重POST或换键；明确未提交可修正。保存窗口不是采用，完整采用用confirm_saved_script由服务端核真实覆盖，不自报已审或要求额外人工加载许可。
 读取plan.creation_intent：只讨论保持草稿；明确自主委托时，工具采用实际文案版本后回读当前任务，条件就绪便继续原来已授权的制作步骤，不逐步要求人工确认。定稿正文受保护，不通过起草工具改写；是否已采用或生成以真实回执为准。
 不要请求、读取或发送原始媒体文件。回答用日常中文，不说工具名、模型名、预检、版本号等内部词。""" + "\n" + SCRIPT_WRITING_RULES
 

@@ -1,10 +1,13 @@
 import type {BusinessRequest, ToolRegistrar, ActionSource} from './contracts.ts';
 import {createHash} from 'node:crypto';
-import {BusinessRequestError, safeScriptCandidateLocation, safeScriptReviewIssues} from './transport.ts';
+import {BusinessRequestError, BusinessResultUnknown, RequestNotSubmitted, safeBusinessFailure,
+  safeFailureText, safeScriptCandidateLocation, safeScriptReviewIssues} from './transport.ts';
 import type {BusinessFailure, ScriptDraftFailure} from './transport.ts';
 import {rankByQuery, tokenizeQuery} from '../retrieval.ts';
+import {typedRequestId as windowRequestIdentity} from './request-identity.ts';
 
 const LEGACY_DRAFT_REPLACEMENT_MAX_SECTIONS = 20;
+const SCRIPT_SECTION_WINDOW_LIMIT = 20;
 
 export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readActionSource, readCurrentTaskFacts, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt}: {
   request: BusinessRequest; taskId: string | undefined; readActionSource: () => ActionSource; readCurrentTaskFacts: () => Promise<any>; isTaskRead: () => boolean; hasPreview: () => boolean; markPreview: () => void; getScriptDraftUpdatedAt: () => string | null; setScriptDraftUpdatedAt: (value: string) => void;
@@ -15,12 +18,12 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
     parameters: {type: "object", properties: {
       script_id: {type: "string", minLength: 1},
       after_ordinal: {type: "integer", minimum: 0},
-      limit: {type: "integer", minimum: 1, maximum: 20},
+      limit: {type: "integer", minimum: 1, maximum: SCRIPT_SECTION_WINDOW_LIMIT},
       expected_updated_at: {type: "string", minLength: 1},
     }, required: ["script_id"], additionalProperties: false},
     execute: async (_id: string, params: {script_id: string; after_ordinal?: number; limit?: number; expected_updated_at?: string}) => {
       const after = params.after_ordinal ?? 0, limit = params.limit;
-      if (!Number.isSafeInteger(after) || after < 0 || (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)))
+      if (!Number.isSafeInteger(after) || after < 0 || (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > SCRIPT_SECTION_WINDOW_LIMIT)))
         throw new Error("文案读取窗口参数无效");
       if (after > 0 && !params.expected_updated_at) throw new Error("文案续页必须提供原窗口版本");
       const query = new URLSearchParams({after_ordinal: String(after)});
@@ -35,6 +38,21 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
     },
   });
   let blockedReview: {inputKey: string | undefined; failure: ScriptDraftFailure; receipt?: Partial<BusinessFailure>} | null = null;
+  let uncertainWrite: {request_id: string; operation: string; script_id?: string} | null = null;
+  const validScriptRevision = (value: unknown): value is string => {
+    if (typeof value !== 'string' || value.length > 80) return false;
+    const local = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+    if (!local || local[1].startsWith('0000-')) return false;
+    const time = Date.parse(local[1] + 'Z');
+    return Number.isFinite(time) && new Date(time).toISOString().slice(0,19) === local[1]
+      && Number.isFinite(Date.parse(value));
+  };
+  const completeWindowReceipt = (receipt: any, operation: string, requestId: string, scriptId?: string) =>
+    receipt && typeof receipt === 'object' && receipt.task_id === taskId && receipt.request_id === requestId
+    && receipt.status === (operation === 'confirm' ? 'confirmed' : 'saved')
+    && typeof receipt.script_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(receipt.script_id)
+    && (!scriptId || receipt.script_id === scriptId) && validScriptRevision(receipt.updated_at);
+
   function rejectedDraft(failure: ScriptDraftFailure, submitted?: {
     title: string; sections: {title: string; content: string; visual_prompt: string}[];
   }, receipt?: Partial<BusinessFailure>) {
@@ -120,7 +138,7 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
     },
   });
 
-  pi.registerTool({
+  const scriptDraftTool = {
     name: "preview_script_draft",
     label: "保存待确认文案",
     description: "以完整replacement保存当前任务旁白及真实来源，不是把一页合并回原稿。metadata或一页读取不证明正文完整；局部修改应使用已声明的patch，不能省略未加载段。此旧接口的单次载荷不代表作品规模上限。content全部会朗读；片头、署名等画面要求只放visual_prompt，不能单独作为旁白段。提交前按本轮目标语言、字数及时长检查。已保存自主委托时采用这个实际版本并继续；讨论仅保留草稿。固定定稿不能经此工具改写。",
@@ -150,6 +168,7 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
     },
     execute: async (_id: string, params: { title: string; edit_mode?: "replace_all"; sections: { id?: string; title: string; content: string; visual_prompt: string; evidence_reference_ids: string[] }[] }) => {
       if (!taskId) throw new Error("当前步骤不能保存文案草稿");
+      if (uncertainWrite) throw new Error(`原文案窗口结果尚未核清，保留请求 ${uncertainWrite.request_id}；不能用旧整稿工具绕过未知写保护`);
       const source = readActionSource();
       const inputKey = source.inputId ?? source.turnId;
       if (blockedReview && blockedReview.inputKey === inputKey) return rejectedDraft(blockedReview.failure, undefined, blockedReview.receipt);
@@ -212,6 +231,130 @@ export function registerScriptTools(pi: ToolRegistrar, {request, taskId, readAct
         details: { kind: "script_draft", preview },
       };
     },
-  });
+  };
+  pi.registerTool(scriptDraftTool);
 
+  if (taskId) {
+    const sectionItems = scriptDraftTool.parameters.properties.sections.items;
+    const sections = {type: 'array', minItems: 1, maxItems: SCRIPT_SECTION_WINDOW_LIMIT,
+      items: {...sectionItems, required: ['id', ...sectionItems.required]}};
+    const writeWindow = async (callId: string, operation: 'start' | 'patch' | 'confirm', params: any) => {
+      const source = readActionSource(), inputKey = source.inputId ?? source.turnId;
+      if (!source.turnId || !isTaskRead()) throw new Error('先读取当前任务和授权来源，再编写文案窗口');
+      if (blockedReview?.inputKey === inputKey)
+        return rejectedDraft(blockedReview.failure, undefined, blockedReview.receipt);
+      if (uncertainWrite)
+        throw new Error(`原文案窗口结果尚未核清，保留请求 ${uncertainWrite.request_id}；只查询已声明的原请求结果，不换键或重POST`);
+      const requestId = params.request_id ?? windowRequestIdentity(taskId, source.turnId, callId);
+      const locator = {task_id: taskId, request_id: requestId, operation,
+        ...(operation !== 'start' ? {script_id: params.script_id} : {})};
+      const path = operation === 'start'
+        ? `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/windows`
+        : `/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(params.script_id)}/${operation === 'confirm' ? 'confirm-saved' : 'sections'}`;
+      let adoptionKind: 'manual' | 'delegated_system' = 'manual';
+      if (operation === 'confirm') {
+        const context = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/script-context`);
+        if (context.task_id !== taskId) throw new Error('文案采用上下文身份不一致');
+        if (context.creation_intent?.kind === 'goal_delegation') adoptionKind = 'delegated_system';
+      }
+      const body = {request_id: requestId, assistant_turn_id: source.turnId,
+        ...(operation === 'confirm' ? {expected_updated_at: params.expected_updated_at, adoption_kind: adoptionKind}
+          : {sections: params.sections,...(operation === 'start' ? {title: params.title}
+            : {expected_updated_at: params.expected_updated_at,
+              ...(params.insert_after_section_id ? {insert_after_section_id: params.insert_after_section_id} : {})})})};
+      uncertainWrite = locator;
+      let receipt;
+      try {
+        receipt = await request(path, {method: operation === 'patch' ? 'PATCH' : 'POST', body: JSON.stringify(body)});
+      } catch (error) {
+        const known = error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted;
+        const original = known ? error.businessFailure : undefined;
+        const review = error instanceof BusinessRequestError ? error.scriptFailure : undefined;
+        const rejected = error instanceof RequestNotSubmitted || original?.submission_effect === 'not_submitted'
+          || error instanceof BusinessRequestError && error.httpStatus === 422
+          || review && original?.submission_effect === 'rejected';
+        if (rejected) uncertainWrite = null;
+        if (review?.error === 'script_review_invalid' && !review.retryable)
+          blockedReview = {inputKey, failure: review, receipt: original};
+        const details = {kind: 'script_window_request', ...locator,
+          failure: {...safeBusinessFailure(original ?? {}), ...review,
+            reason: review?.reason ?? safeFailureText(error instanceof Error ? error.message : String(error), []) ?? '文案窗口结果未知',
+            repair_action: rejected ? '按明确拒绝修正文案；仍须完整独立核查，不表示已保存或采用。'
+              : '保留原request_id和候选，只用已声明的原请求查询；尚无查询入口时说明缺口，不重POST或换键。'}};
+        return {isError: true, content: [{type: 'text', text: JSON.stringify(details)}], details};
+      }
+      if (receipt && typeof receipt === 'object' && receipt.task_id === taskId && receipt.request_id === requestId
+          && (operation === 'start' || receipt.script_id === params.script_id)
+          && ['unknown','failed'].includes(receipt.status)) {
+        const details = {kind:'script_window_request',...locator,receipt,failure:{submission_effect:'unknown',
+          reason:'原请求尚无完整成功回执，未宣称保存或采用',
+          repair_action:'保留原request_id和候选，只查询原请求，不换键或重POST。'}};
+        return {isError:true,content:[{type:'text',text:JSON.stringify(details)}],details};
+      }
+      if (!completeWindowReceipt(receipt,operation,requestId,operation === 'start' ? undefined : params.script_id)) {
+        const details = {kind: 'script_window_request', ...locator, failure: {
+          reason: '文案窗口回执身份或版本不一致，未宣称保存或采用', submission_effect: 'unknown',
+          repair_action: '保留原request_id和候选，只核对原请求，不重POST或换键。'}};
+        return {isError: true, content: [{type: 'text', text: JSON.stringify(details)}], details};
+      }
+      uncertainWrite = null;
+      const details = {kind: 'script_window_request', ...locator, receipt,
+        instruction: operation === 'confirm' ? '原请求已由服务端完整核查并采用；未启动制作，后续仍沿原授权和实际版本。'
+          : '仅原窗口已保存；保留未修改段。首窗草稿未完整，保存窗口不代表整稿已核查或已采用。'};
+      return {content: [{type: 'text', text: JSON.stringify(details)}], details};
+    };
+    pi.registerTool({name: 'start_script_window', label: '创建文案首窗草稿',
+      description: '从零创建同一文案的首个有限窗口；稳定段id必填。首窗不是完整稿，不自动采用或开始制作；后续用patch_script_sections追加，20只是传输窗，不是作品段数上限。已有稿不得再创建首稿。未知只保原请求，不重POST。',
+      parameters: {type: 'object', properties: {request_id: {type:'string',format:'uuid'},
+        title: {type:'string',minLength:1,maxLength:160}, sections}, required:['title','sections'], additionalProperties:false},
+      execute: (callId: string, params: any) => writeWindow(callId, 'start', params)});
+    pi.registerTool({name: 'patch_script_sections', label: '修改或追加文案窗口',
+      description: '按原script_id/expected_updated_at修改实际稳定段id，或用新id与insert_after_section_id追加到原位置；仅upsert提交段，不删除未加载段，不是整稿replacement。先用read_script_sections核当前段和版本；窗口保存不代表全稿采用，未知不重POST。',
+      parameters: {type:'object',properties:{request_id:{type:'string',format:'uuid'},
+        script_id:{type:'string',minLength:1},expected_updated_at:{type:'string',minLength:1},sections,
+        insert_after_section_id:{type:'string',minLength:1}},
+        required:['script_id','expected_updated_at','sections'],additionalProperties:false},
+      execute: (callId: string, params: any) => writeWindow(callId, 'patch', params)});
+    pi.registerTool({name: 'confirm_saved_script', label: '核查并采用完整已存稿',
+      description: '仅在本轮实际采用意图或已委托范围内提交script_id和当前版本；不传正文、已审布尔或自报digest。服务端核真实全稿覆盖/来源/要求后才采用，失败或未知不称完成，也不自动启动制作。',
+      parameters: {type:'object',properties:{request_id:{type:'string',format:'uuid'},script_id:{type:'string',minLength:1},
+        expected_updated_at:{type:'string',minLength:1}},required:['script_id','expected_updated_at'],additionalProperties:false},
+      execute: (callId: string, params: any) => writeWindow(callId, 'confirm', params)});
+    pi.registerTool({name: 'read_script_window_request', label: '查询原文案窗口请求',
+      description: '只读原start/patch/confirm请求，不重复模型核查或POST；patch和confirm须原script_id。unknown/failed/404不表示未提交，仍保留原键；只有实际saved/confirmed回执才解除本轮未知写锁。',
+      parameters: {type:'object',properties:{request_id:{type:'string',format:'uuid'},operation:{type:'string',enum:['start','patch','confirm']},
+        script_id:{type:'string',minLength:1},include_input:{type:'boolean',description:'确需恢复时读取原有限候选；不表示核查已通过。'}},required:['request_id','operation'],additionalProperties:false},
+      execute: async (_id: string, params: {request_id:string;operation:'start'|'patch'|'confirm';script_id?:string;include_input?:boolean}) => {
+        if (params.operation !== 'start' && !params.script_id) throw new Error('原patch/confirm请求须指定真实script_id');
+        const query = new URLSearchParams({operation:params.operation});
+        if (params.script_id) query.set('script_id',params.script_id);
+        if (params.include_input !== undefined) query.set('include_input',String(params.include_input));
+        let receipt;
+        try {
+          receipt = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/script-window-requests/${encodeURIComponent(params.request_id)}?${query}`);
+        } catch (error) {
+          const known=error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted;
+          const details={kind:'script_window_request',task_id:taskId,request_id:params.request_id,operation:params.operation,
+            ...(params.script_id?{script_id:params.script_id}:{}),failure:{...safeBusinessFailure(known?error.businessFailure:{}),
+              submission_effect:'unknown',reason:'原请求查询未成功；不证明原写入未提交',
+              repair_action:'保留原request_id，只核对原请求，不重POST或换键。'}};
+          return {isError:true,content:[{type:'text',text:JSON.stringify(details)}],details};
+        }
+        const complete=completeWindowReceipt(receipt,params.operation,params.request_id,params.script_id);
+        if (!receipt || typeof receipt !== 'object' || receipt.task_id !== taskId || receipt.request_id !== params.request_id
+            || params.script_id && receipt.script_id !== params.script_id
+            || ['saved','confirmed'].includes(receipt.status) && !complete) {
+          const details={kind:'script_window_request',task_id:taskId,request_id:params.request_id,operation:params.operation,
+            ...(params.script_id?{script_id:params.script_id}:{}),failure:{submission_effect:'unknown',
+              reason:'原文案请求回执身份或版本不完整，未核定成功',repair_action:'保留原request_id，不重POST或换键。'}};
+          return {isError:true,content:[{type:'text',text:JSON.stringify(details)}],details};
+        }
+        if (uncertainWrite?.request_id === params.request_id && uncertainWrite.operation === params.operation
+            && (uncertainWrite.operation === 'start' || uncertainWrite.script_id === params.script_id)
+            && complete) uncertainWrite = null;
+        const details = {kind:'script_window_request',task_id:taskId,request_id:params.request_id,operation:params.operation,
+          ...(params.script_id?{script_id:params.script_id}:{}),receipt};
+        return {content:[{type:'text',text:JSON.stringify(details)}],details};
+      }});
+  }
 }

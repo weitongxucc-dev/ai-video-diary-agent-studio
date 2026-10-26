@@ -25,7 +25,8 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
     const scriptContext = rawScriptContext ? {...rawScriptContext, draft: draft ? {
       id: draft.id, title: draft.title, updated_at: draft.updated_at,
       sections_total_count: typeof draft.sections_total_count === "number" ? draft.sections_total_count : null,
-      sections: null, sections_loaded: false, read_tool: "read_script_sections",
+      sections: null, sections_loaded: false, draft_complete: typeof draft.draft_complete === "boolean" ? draft.draft_complete : null,
+      read_tool: "read_script_sections",
     } : null} : null;
     currentScriptDraftUpdatedAt = typeof scriptContext?.draft?.updated_at === "string"
       ? scriptContext.draft.updated_at : null;
@@ -69,7 +70,9 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       confirmed_script: confirmedScript ? {
         id: confirmedScript.id, title: metadata(confirmedScript.title), language: confirmedScript.language,
         selection_status: confirmedScript.selection_status, updated_at: confirmedScript.updated_at,
-        sections_total_count: sectionCount, sections: null, sections_loaded: false, read_tool: "read_script_sections",
+        sections_total_count: sectionCount, sections: null, sections_loaded: false,
+        draft_complete: typeof confirmedScript.draft_complete === "boolean" ? confirmedScript.draft_complete : null,
+        read_tool: "read_script_sections",
       } : null,
       execution: executionFacts(execution),
       available_voices: (task.available_voices || []).slice(0, 24).map((voice: Record<string, unknown>) => ({

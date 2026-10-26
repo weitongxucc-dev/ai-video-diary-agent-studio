@@ -7,6 +7,7 @@ const inputBoundActions = new Set([
   'start_creation_execution', 'resume_creation_execution', 'cancel_creation_execution',
   'read_creation_execution', 'read_segment_visual_decision', 'read_execution_capabilities', 'read_script_sections',
   'prepare_device_resources', 'read_device_preparation', 'finalize_device_preparation',
+  'start_script_window', 'patch_script_sections', 'confirm_saved_script', 'read_script_window_request',
   'regenerate_storyboard', 'read_storyboard_regeneration',
   'select_narration_voice',
   'preview_edit_selection', 'discard_edit_proposal', 'undo_last_edit', 'redo_last_edit',

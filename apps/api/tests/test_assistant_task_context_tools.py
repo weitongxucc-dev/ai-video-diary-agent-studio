@@ -17,7 +17,7 @@ const server=createServer((req,res)=>{
   res.setHeader('content-type','application/json');
   const execution=req.url.endsWith('/execution');
   res.statusCode=execution?input.executionStatus:200;
-  res.end(JSON.stringify(execution?input.execution:input.workspace));
+  res.end(JSON.stringify(execution?input.execution:req.url.endsWith('/assistant/script-context')?input.scriptContext:input.workspace));
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 process.env.AI_VIDEO_DIARY_AGENT_API_BASE=`http://127.0.0.1:${server.address().port}`;
@@ -30,7 +30,7 @@ finally{await new Promise(resolve=>server.close(resolve));}
 """
 
 
-def run_tool(tmp_path, workspace, *, execution=None, execution_status=200, stage="topic"):
+def run_tool(tmp_path, workspace, *, execution=None, execution_status=200, stage="topic", script_context=None):
     env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_TASK_ID="task-real", AI_VIDEO_DIARY_AGENT_STAGE=stage,
                AI_VIDEO_DIARY_AGENT_SELECTED_REFS="[]", AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="controlled-member",
@@ -38,7 +38,7 @@ def run_tool(tmp_path, workspace, *, execution=None, execution_status=200, stage
     completed = subprocess.run([
         os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"), "--experimental-strip-types", "--input-type=module",
         "-e", RUNNER, MODULE.as_uri(),
-    ], input=json.dumps({"workspace":workspace, "executionStatus":execution_status,
+    ], input=json.dumps({"workspace":workspace, "scriptContext":script_context, "executionStatus":execution_status,
         "execution":execution if execution is not None else {"task_id":"task-real","job":None,
           "current_stage":None,"waiting_reason":None,"status_updated_at":None}}), text=True, capture_output=True, check=True,
         cwd=tmp_path, env=env, timeout=10)
@@ -207,3 +207,17 @@ def test_actual_relative_artifact_refs_preserve_distinct_current_and_registered_
     for physical in ("/private/audio.wav","file:///private/audio.wav"):
         workspace["narration"]["audio_reference"]=physical
         assert run_tool(tmp_path,workspace)["result"]["details"]["narration"]["audio_reference"] is None
+
+
+@pytest.mark.parametrize('complete',[False,True])
+def test_script_context_preserves_server_completeness_without_embedding_body(tmp_path,complete):
+    workspace=task_workspace()
+    workspace['task']['stage']='script'
+    context={'task_id':'task-real','draft':{'id':'draft','updated_at':'v1','sections_total_count':20,
+        'sections':[{'id':'section','content':'正文不可嵌入当前上下文'}], 'draft_complete':complete}}
+    output=run_tool(tmp_path,workspace,stage='script',script_context=context)
+    draft=output['result']['details']['script_context']['draft']
+    assert draft['draft_complete'] is complete
+    assert draft['sections'] is None and draft['sections_loaded'] is False
+    assert draft['sections_total_count']==20 and draft['read_tool']=='read_script_sections'
+    assert '正文不可嵌入' not in json.dumps(output['result'],ensure_ascii=False)

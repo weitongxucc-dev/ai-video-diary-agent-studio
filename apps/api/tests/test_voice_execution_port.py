@@ -136,3 +136,29 @@ def test_qwen_granted_port_requires_context_and_never_uses_offline_runner(tmp_pa
     assert len(calls) == 1 and Path(result.audio_path) == kwargs["output_path"]
     assert calls[0][1]["env"]["HF_HUB_OFFLINE"] == "1"
     assert kwargs["output_path"].resolve() in calls[0][1]["output_paths"]
+
+
+def test_task_output_directory_is_a_pure_fact_and_both_task_writers_use_it(tmp_path,narration_input,monkeypatch):
+    import app.narration as narration_module
+    root=tmp_path/'output'
+    generator=NarrationGenerator(root,AlternateGrantedProvider())
+    assert generator.task_output_directory('workspace_a','task')==root/'creation-tasks'/'workspace_a'/'task'
+    assert not root.exists()
+    declared=tmp_path/'actual-task-output'
+    class ScopedGenerator(NarrationGenerator):
+        def task_output_directory(self,workspace_id,task_id):
+            assert (workspace_id,task_id)==('workspace_a','task')
+            return declared
+    def forbidden(*args,**kwargs):
+        raise AssertionError('directory contract tests must not execute subprocesses')
+    monkeypatch.setattr(narration_module.subprocess,'run',forbidden)
+    monkeypatch.setattr(narration_module,'_probe_audio_duration',lambda *args,**kwargs:1.0)
+    scoped=ScopedGenerator(root,AlternateGrantedProvider())
+    context,_=granted_context()
+    artifact=scoped.generate_for_creation_task(**narration_input,grant_context=context)
+    assert Path(artifact.audio_path).parent==declared
+    combined=scoped.combine_creation_task_segments(workspace_id='workspace_a',task_id='task',script_id='script',
+        segments=[artifact],max_duration_seconds=30)
+    assert Path(combined.audio_path).parent==declared
+    assert Path(combined.audio_path).read_bytes()==Path(artifact.audio_path).read_bytes()
+    assert not root.exists()

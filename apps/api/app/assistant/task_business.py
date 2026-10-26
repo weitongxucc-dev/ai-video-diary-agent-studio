@@ -215,7 +215,7 @@ class TaskBusiness:
         entered=False
         try:
             binding=dict(source_binding)
-            reconcile_original=(operation in {'read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+            reconcile_original=(operation in {'read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
                 or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
             # Section owners validate the frozen target and dependency digest at
             # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -238,7 +238,7 @@ class TaskBusiness:
             if operation in {'record_input_understanding','record_narration_semantic_review','revise_narration_segment'}:
                 if arguments['payload'].get('input_id')!=(origin.get('input_id') or binding['turn_id']):
                     raise TaskBusinessRejected('局部修改不能切换原输入')
-            if operation in {'save_assistant_script_draft','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
+            if operation in {'save_assistant_script_draft','start_script_window','patch_script_sections','confirm_saved_script','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
                 arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
             guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,check_version=check_version)
             entered=True
@@ -362,7 +362,7 @@ class TaskBusiness:
             **{key:sealed.get(key) if frozen.get(key) else None for key in ('profile_reference','knowledge_reference')}}
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
-    def finish(self, claim, reply):
+    def finish(self, claim, reply, *, script_window_request=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
@@ -374,6 +374,19 @@ class TaskBusiness:
         events=self.production.list_task_events(ws,task_id)
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
+        if script_window_request is not None:
+            from app.assistant.result_projection import resolve_script_window_request, script_window_message
+            if script_window_request.get('input_id')!=goal.get('source_input_id'):
+                raise TaskBusinessRejected('文案窗口回执不属于当前输入',status_code=409)
+            window=resolve_script_window_request(script_window_request,task_id=task_id,
+                read_original=lambda request_id,operation,script_id:self.script_case(actor).window_request_result(
+                    ws,task_id,request_id,member_id=actor.user_id or actor.member_id,
+                    operation=operation,script_id=script_id))
+            reply=script_window_message(window)
+            response.update(reply=reply,script_window_request=window)
+            proofs.append({'kind':'script_window_request','id':window['request_id'],
+                'operation':window['operation'],'status':window['status'],
+                **({'input_id':goal['source_input_id']} if goal.get('source_input_id') else {})})
         located=[event for event in events if event.event_type=='assistant_execution_located'
             and event.payload['source']['assistant_turn_id']==claim['turn_id']
             and event.payload['source'].get('input_id')==goal.get('source_input_id')]
@@ -385,7 +398,7 @@ class TaskBusiness:
         drafts=[event for event in events if event.event_type=='assistant_script_saved'
             and event.payload['source']['turn_id']==claim['turn_id']
             and event.payload['source'].get('input_id')==goal.get('source_input_id')]
-        if drafts:
+        if drafts and script_window_request is None:
             response['script_draft']=asdict(self.production.get_creation_task_script(ws,drafts[-1].payload['script_id']))
         jobs=[event for event in events if event.event_type=='task_media_submitted'
             and event.payload['arguments'].get('_typed_source',{}).get('assistant_turn_id')==claim['turn_id']
@@ -501,7 +514,9 @@ class TaskBusiness:
             try:
                 if operation=='prepare_device_resources':
                     payload=DevicePreparationRequest.model_validate(args['payload'])
-                    result=self.device_preparation('prepare',shape=payload.shape.model_dump(),request_id=str(payload.request_id),actor=actor)
+                    shape=payload.shape.model_dump()
+                    if payload.kind=='narration': shape['task_id']=task.id
+                    result=self.device_preparation('prepare',kind=payload.kind,shape=shape,request_id=str(payload.request_id),actor=actor)
                 elif operation=='read_device_preparation':
                     result=self.device_preparation('status',request_id=args['request_id'],actor=actor)
                 else:
@@ -555,6 +570,35 @@ class TaskBusiness:
             assets=[asset for asset in self.production.list_assets(ws,viewer_user_id=actor.user_id or actor.member_id)
                     if asset.id in allowed and (not query or query in (asset.file_name+' '+asset.user_description+' '+' '.join(asset.user_tags)).casefold())]
             return {"assets":[self.material_facts(asset) for asset in assets[:limit]],"total_count":len(assets),"has_more":len(assets)>limit}
+        if operation in {'start_script_window','patch_script_sections','confirm_saved_script','read_script_window_request'}:
+            from app.schemas import (CreationTaskScriptWindowStartRequest, CreationTaskScriptSectionsPatchRequest,
+                                     CreationTaskScriptConfirmSavedRequest)
+            from app.creation.script_windows import ScriptWindowConflict
+            from uuid import UUID
+            case=self.script_case(actor)
+            common={'member_id':actor.user_id or actor.member_id}
+            try:
+                if operation=='read_script_window_request':
+                    if type(args.get('include_input',False)) is not bool:
+                        raise ValueError('include_input须为布尔值')
+                    return case.window_request_result(ws,task_id,str(UUID(args['request_id'])),operation=args['operation'],
+                        script_id=args.get('script_id'),include_input=args.get('include_input',False),**common)
+                common.update(instruction_origin=origin,reread_origin=lambda draft_only:self._adoption_origin(origin,draft_only),write_guard=guard)
+                if operation=='start_script_window':
+                    payload=CreationTaskScriptWindowStartRequest.model_validate(args['payload'])
+                    return case.start_window(ws,task_id,payload,**common)
+                if operation=='patch_script_sections':
+                    payload=CreationTaskScriptSectionsPatchRequest.model_validate(args['payload'])
+                    return case.patch(ws,task_id,args['script_id'],payload,**common)
+                self._adoption_origin(origin,False)
+                payload=CreationTaskScriptConfirmSavedRequest.model_validate({**args['payload'],'adoption_kind':'delegated_system'})
+                return case.confirm_saved(ws,task_id,args['script_id'],payload,**common)
+            except ScriptWindowConflict as exc:
+                raise HTTPException(status_code=409,detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(status_code=404,detail='文案或原请求不存在') from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=422,detail=str(exc)) from exc
         if operation=='save_assistant_script_draft':
             payload=CreationTaskScriptDraftRequest.model_validate(args['payload'])
             return self.script_case(actor).save(ws,task_id,payload,instruction_origin=origin,

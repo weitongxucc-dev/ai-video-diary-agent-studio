@@ -188,7 +188,19 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (!task) return null;
   const args = {task_id: decodeURIComponent(task[1])};
   const suffix = task[2];
+  if (method === 'POST' && suffix === '/scripts/windows' && !search) return result('start_script_window',{...args,payload});
+  const patchScriptSections=suffix.match(/^\/scripts\/([^/]+)\/sections$/);
+  if (method === 'PATCH' && patchScriptSections && !search)
+    return result('patch_script_sections',{...args,script_id:decodeURIComponent(patchScriptSections[1]),payload});
+  const confirmSaved=suffix.match(/^\/scripts\/([^/]+)\/confirm-saved$/);
+  if (method === 'POST' && confirmSaved && !search)
+    return result('confirm_saved_script',{...args,script_id:decodeURIComponent(confirmSaved[1]),payload});
   if (method === 'GET') {
+    const scriptWindowRequest=suffix.match(/^\/script-window-requests\/([^/]+)$/);
+    if (scriptWindowRequest && query.has('operation') && only('operation','script_id','include_input'))
+      return result('read_script_window_request',{...args,request_id:decodeURIComponent(scriptWindowRequest[1]),
+        operation:query.get('operation'),...(query.has('script_id')?{script_id:query.get('script_id')}:{}),
+        ...(query.has('include_input')?{include_input:query.get('include_input')==='true'?true:query.get('include_input')==='false'?false:query.get('include_input')}:{})});
     if (suffix === '/timeline/versions' && only('limit', 'before_sequence')) return result('read_timeline_history',
       {...args, limit: Number(query.get('limit') || 20), ...(query.has('before_sequence') ? {before_sequence: Number(query.get('before_sequence'))} : {})});
     const restoreRequest = suffix.match(/^\/timeline\/restore-requests\/([^/]+)$/);

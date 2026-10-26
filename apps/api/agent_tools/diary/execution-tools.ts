@@ -16,24 +16,37 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
       return {content: [{type: 'text', text: JSON.stringify(details)}], details};
     };
     pi.registerTool({name: 'prepare_device_resources', label: '提交有界设备准备',
-      description: '按当前授权目标的实际媒体形状提交基础CPU有界准备。只提交既有准备owner，不运行旧作品或normal制作；不得传路径、env或许可阈值。首次请求键由宿主生成；回应未知只沿原键和原shape对账，不换ID重做。收到id后查询原队列；终态且finalize明确释放后，可因实际需要显式新键再次准备，默认重调仍只查原结果。',
+      description: '按当前授权目标提交cpu媒体形状或narration真实声音版本的有界准备。narration须给实际有限样本文案、目标语言、输出单元时长及原词典id/version引用；当前任务由宿主绑定，不传词典正文。只提交既有准备owner，不运行旧作品或normal制作；不得传路径、env或许可阈值。首次请求键由宿主生成；回应未知只沿原键和原shape对账，不换ID重做。收到id后查询原队列；终态且finalize明确释放后，可因实际需要显式新键再次准备，默认重调仍只查原结果。',
       parameters: {type: 'object', properties: {
         request_id: {type: 'string',format: 'uuid',description: '用于已知原键恢复，或原队列终态经finalize释放后明确新一轮准备；未知或active不可换键。不是队列id。'},
-        shape: {type: 'object',properties: {
+        kind: {type:'string',enum:['cpu','narration'],default:'cpu'},
+        shape: {oneOf: [{type: 'object',properties: {
           width_px: {type:'integer',minimum:2,multipleOf:2},height_px: {type:'integer',minimum:2,multipleOf:2},
           frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0},
           clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1},
           sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
           source_bytes: {type:'integer',minimum:1},
         },required:['width_px','height_px','frame_rate','duration_seconds','clip_count','audio_input_count','sample_rate','channels'],additionalProperties:false},
+          {type:'object',properties:{
+            voice_profile_id:{type:'string',minLength:1},voice_version:{type:'string',minLength:1},
+            text:{type:'string',minLength:1},language:{type:'string',enum:['zh','en','zh-en']},
+            output_duration_seconds:{type:'number',exclusiveMinimum:0},
+            pronunciation_references:{type:'array',items:{type:'object',properties:{
+              id:{type:'string',minLength:1},version:{type:'string',minLength:1}},required:['id','version'],additionalProperties:false}},
+          },required:['voice_profile_id','voice_version','text','language','output_duration_seconds'],additionalProperties:false}]},
       },required:['shape'],additionalProperties:false},
-      execute: async (callId: string,params: {request_id?:string;shape:Record<string,number>}) => {
-        if (!Number.isSafeInteger(params.shape.width_px) || params.shape.width_px<=0 || params.shape.width_px%2
-            || !Number.isSafeInteger(params.shape.height_px) || params.shape.height_px<=0 || params.shape.height_px%2)
-          throw new Error('设备准备需要明确的偶数YUV宽高，未提交请求');
+      execute: async (callId: string,params: {request_id?:string;kind?:'cpu'|'narration';shape:Record<string,any>}) => {
+        const kind=params.kind ?? 'cpu';
+        if (!['cpu','narration'].includes(kind)) throw new Error('未知设备准备类型，未提交请求');
+        if (kind==='cpu' && (!Number.isSafeInteger(params.shape.width_px) || params.shape.width_px<=0 || params.shape.width_px%2
+            || !Number.isSafeInteger(params.shape.height_px) || params.shape.height_px<=0 || params.shape.height_px%2))
+          throw new Error('CPU准备需要明确的偶数YUV宽高；声音准备须明确kind=narration，未提交请求');
+        const shape=kind==='narration' ? {...params.shape,pronunciation_references:(params.shape.pronunciation_references ?? [])
+          .map((ref:Record<string,string>)=>Object.fromEntries(Object.entries(ref).sort(([a],[b])=>a.localeCompare(b))))
+          .sort((a:Record<string,string>,b:Record<string,string>)=>a.id.localeCompare(b.id)||a.version.localeCompare(b.version))} : params.shape;
         const source=readActionSource(),inputKey=source.inputId ?? source.turnId;
         if (!source.turnId || !inputKey) throw new Error('当前准备缺少原输入身份');
-        const shapeKey=JSON.stringify(Object.entries(params.shape).sort(([a],[b])=>a.localeCompare(b)));
+        const shapeKey=JSON.stringify([kind,Object.entries(shape).sort(([a],[b])=>a.localeCompare(b))]);
         if (preparationAttempt?.inputKey===inputKey) {
           const sameShape=preparationAttempt.shapeKey===shapeKey;
           const newKey=Boolean(params.request_id && params.request_id!==preparationAttempt.requestId);
@@ -50,7 +63,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
         const attempt=preparationAttempt!;
         let receipt;
         try {
-          receipt=await request(preparationRoot,{method:'POST',body:JSON.stringify({request_id:attempt.requestId,shape:params.shape})});
+          receipt=await request(preparationRoot,{method:'POST',body:JSON.stringify({request_id:attempt.requestId,kind,shape})});
         } catch (error) {
           const original=error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted ? error.businessFailure : undefined;
           const notSubmitted=error instanceof RequestNotSubmitted || original?.submission_effect==='not_submitted'

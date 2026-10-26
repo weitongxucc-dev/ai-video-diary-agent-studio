@@ -1058,3 +1058,102 @@ def test_material_reference_keeps_workspace_creation_and_exact_tag_target(monkey
                   selected_references=[{"kind": "material", "selection": {"scope": "asset", "asset_id": "selected"}}])
     assert seen["material_selection"] == {"scope": "asset", "assetId": "selected"}
     assert {"prepare_creation_window", "preview_creation_plan", "update_selected_material_tags"} <= set(seen["tool_names"].split(","))
+
+
+@pytest.mark.parametrize('status',['saved','confirmed','unknown','failed','not_submitted','rejected'])
+def test_script_window_projection_keeps_original_facts_and_discards_raw_candidate(status):
+    request_id=str(uuid4())
+    operation='confirm' if status=='confirmed' else 'patch'
+    receipt={'task_id':'task','script_id':'script','request_id':request_id,'status':status,
+             'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'affected_section_ids':['section-45'],
+             'submitted_input':{'content':'原文秘密'},'raw_provider':'/private/source'}
+    diagnostics={'error':'script_fact_unsupported','reason_code':'unsupported_fact','section_index':1,
+        'candidate_section_index':1,'candidate_field':'content','candidate_fragment_index':0,
+        'candidate_field_digest':'a'*64,'reason':'第1段事实无据'}
+    details={'kind':'script_window_request','operation':operation,'task_id':'task','script_id':'script',
+             'request_id':request_id,'receipt':receipt,'invocation_input_id':'input','input_id':'input',
+             'input_turn_id':'turn','raw_diagnostics':{'source':'/private/file'}}
+    if status=='failed': receipt['error_detail']=diagnostics
+    if status in {'not_submitted','rejected','unknown'}:
+        details['failure']={**(diagnostics if status=='rejected' else {}),'submission_effect':status}
+    tool='confirm_saved_script' if operation=='confirm' else 'patch_script_sections'
+    claim='全部已经导出完毕。'
+    output='\n'.join(json.dumps(value,ensure_ascii=False) for value in [
+        {'type':'tool_execution_end','toolName':tool,'isError':status not in {'saved','confirmed'},'result':{'details':details}},
+        {'type':'message_end','message':{'role':'assistant','stopReason':'stop','content':[{'type':'text','text':claim}]}},
+        {'type':'agent_settled'}])
+    message,projected=project_event_fixture(output)
+    assert message!=claim
+    assert projected['request_id']==request_id and projected['status']==status
+    assert projected['operation']==operation and projected['task_id']=='task' and projected['script_id']=='script'
+    assert projected['input_id']=='input'
+    if status in {'saved','confirmed'}:
+        assert projected['total_count']==45 and projected['updated_at']==receipt['updated_at']
+    if status in {'unknown','failed'}: assert projected['submission_effect']=='unknown'
+    if status in {'failed','rejected'}: assert projected['failure']['candidate_field']=='content'
+    public=json.dumps(projected,ensure_ascii=False)
+    assert '/private/' not in public and '原文秘密' not in public and 'submitted_input' not in public
+
+
+def test_script_window_projection_filters_previous_input_and_queries_do_not_invent_success():
+    request_id=str(uuid4())
+    current={'kind':'script_window_request','operation':'start','task_id':'task','request_id':request_id,
+             'invocation_input_id':'new','input_id':'new','failure':{'submission_effect':'unknown','error':'http_404'}}
+    old={**current,'invocation_input_id':'old','input_id':'old',
+         'receipt':{'task_id':'task','request_id':request_id,'script_id':'script','status':'saved',
+                    'updated_at':'2026-10-25T00:00:00+00:00','total_count':20}}
+    events=[{'type':'tool_execution_end','toolName':'start_script_window','isError':False,'result':{'details':old}},
+            {'type':'tool_execution_end','toolName':'read_script_window_request','isError':True,'result':{'details':current}},
+            {'type':'agent_settled'}]
+    _,value=project_event_fixture('\n'.join(json.dumps(event) for event in events))
+    assert value['status']=='unknown' and value['input_id']=='new'
+    assert value['failure']['error']=='http_404' and value['submission_effect']=='unknown'
+
+
+def test_script_window_resolver_reads_only_original_receipt_and_never_treats_404_as_unsubmitted():
+    from app.assistant.result_projection import resolve_script_window_request
+    value={'kind':'script_window_request','operation':'confirm','task_id':'task','script_id':'script',
+           'request_id':str(uuid4()),'status':'unknown','submission_effect':'unknown'}
+    calls=[]
+    def missing(request_id,operation,script_id):
+        calls.append((request_id,operation,script_id))
+        raise KeyError(request_id)
+    absent=resolve_script_window_request(value,task_id='task',read_original=missing)
+    assert absent['status']=='unknown' and absent['submission_effect']=='unknown'
+    receipt={'task_id':'task','script_id':'script','request_id':value['request_id'],'status':'confirmed',
+             'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'submitted_input':{'body':'不持久复制原文'}}
+    resolved=resolve_script_window_request(value,task_id='task',read_original=lambda *args:receipt)
+    assert resolved['status']=='confirmed' and resolved['total_count']==45
+    assert 'submitted_input' not in resolved and 'failure' not in resolved
+    broken=resolve_script_window_request({**value,'status':'confirmed','updated_at':receipt['updated_at'],'total_count':45},
+        task_id='task',read_original=lambda *args:None)
+    assert broken['status']=='unknown' and 'updated_at' not in broken
+    with pytest.raises(ValueError):
+        resolve_script_window_request(value,task_id='another-task',read_original=missing)
+    assert calls==[(value['request_id'],'confirm','script')]
+
+
+@pytest.mark.parametrize('operation',['patch','confirm'])
+def test_real_window_query_producer_projects_script_identity_for_restored_requests(tmp_path,operation):
+    node=shutil.which('node')
+    if not node: pytest.skip('node unavailable')
+    module=Path(__file__).resolve().parents[1]/'agent_tools/diary/script-tools.ts'
+    request_id=str(uuid4())
+    code="""
+const {registerScriptTools}=await import(process.argv[1]);
+const operation=process.argv[2],request_id=process.argv[3],tools=new Map();
+registerScriptTools({registerTool:tool=>tools.set(tool.name,tool)},{taskId:'task',request:async()=>({
+ task_id:'task',script_id:'script',request_id,status:operation==='confirm'?'confirmed':'saved',
+ updated_at:'2026-10-25T00:00:00+00:00',total_count:45,submitted_input:{content:'不能持久复制'}})});
+const result=await tools.get('read_script_window_request').execute('restore',{request_id,operation,script_id:'script',include_input:true});
+console.log(JSON.stringify(result));
+"""
+    completed=subprocess.run([node,'--experimental-strip-types','--input-type=module','-e',code,module.as_uri(),operation,request_id],
+        cwd=tmp_path,capture_output=True,text=True,check=True,timeout=10)
+    producer=json.loads(completed.stdout)
+    assert producer['details']['script_id']=='script'
+    event={'type':'tool_execution_end','toolName':'read_script_window_request','isError':producer.get('isError',False),'result':producer}
+    _,projected=project_event_fixture(json.dumps(event)+'\n'+json.dumps({'type':'agent_settled'}))
+    assert projected['status']==('confirmed' if operation=='confirm' else 'saved')
+    assert projected['script_id']=='script' and projected['request_id']==request_id
+    assert projected['total_count']==45 and 'submitted_input' not in projected

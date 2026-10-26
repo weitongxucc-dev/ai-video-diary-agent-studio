@@ -240,6 +240,49 @@ console.log('versioned script window host: PASS');`,
   assert.match(stdout,/versioned script window host: PASS/);
 });
 
+test('script window writes and full confirmation use the task host without full-body hydration', async t => {
+  const tree=await resourceTree(t);
+  const {stdout}=await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`
+import assert from 'node:assert/strict';
+const {createBusinessRequest}=await import(process.argv[1]);
+const {registerScriptTools}=await import(process.argv[2]);
+const tools=new Map(),calls=[],ids=new Set();let sequence=0,last;
+const turn='11111111-1111-4111-8111-111111111111';
+const request=createBusinessRequest({taskId:'task',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw Error('credentials forbidden')},getSignal:()=>undefined,fetchRequest(){throw Error('HTTP forbidden')},
+ businessCall:async(operation,args)=>{
+  calls.push({operation,args});assert.equal(args.task_id,'task');
+  if(operation==='read_assistant_script_context')return {ok:true,value:{task_id:'task',creation_intent:{kind:'goal_delegation'},draft:{sections:null,sections_loaded:false,draft_complete:false,sections_total_count:45}}};
+  if(operation==='read_script_window_request')return {ok:true,value:last};
+  assert.ok(['start_script_window','patch_script_sections','confirm_saved_script'].includes(operation));
+  assert.equal(args.payload.assistant_turn_id,turn);
+  if(operation==='confirm_saved_script'){
+   assert.deepEqual(Object.keys(args.payload).sort(),['adoption_kind','assistant_turn_id','expected_updated_at','request_id']);
+  }else args.payload.sections.forEach(s=>ids.add(s.id));
+  sequence++;last={task_id:'task',script_id:'script',request_id:args.payload.request_id,
+   status:operation==='confirm_saved_script'?'confirmed':'saved',updated_at:'2026-10-25T00:00:0'+sequence+'Z',total_count:ids.size};
+  return {ok:true,value:last};
+ }});
+registerScriptTools({registerTool:tool=>tools.set(tool.name,tool)},{request,taskId:'task',
+ readActionSource:()=>({turnId:turn,inputId:'input'}),isTaskRead:()=>true});
+const sections=(start,n)=>Array.from({length:n},(_,i)=>({id:'section-'+(start+i),title:'提问',content:'接下来呢？',visual_prompt:'原画面',evidence_reference_ids:[]}));
+const first=(await tools.get('start_script_window').execute('start',{title:'45段目标',sections:sections(1,20)})).details.receipt;
+const second=(await tools.get('patch_script_sections').execute('next20',{script_id:first.script_id,expected_updated_at:first.updated_at,insert_after_section_id:'section-20',sections:sections(21,20)})).details.receipt;
+const third=(await tools.get('patch_script_sections').execute('next5',{script_id:first.script_id,expected_updated_at:second.updated_at,insert_after_section_id:'section-40',sections:sections(41,5)})).details.receipt;
+assert.equal(third.total_count,45);
+const confirmed=(await tools.get('confirm_saved_script').execute('confirm',{script_id:first.script_id,expected_updated_at:third.updated_at})).details.receipt;
+assert.equal(confirmed.status,'confirmed');assert.equal(confirmed.total_count,45);
+const read=await tools.get('read_script_window_request').execute('query',{request_id:confirmed.request_id,operation:'confirm',script_id:'script'});
+assert.equal(read.details.receipt.request_id,confirmed.request_id);
+assert.deepEqual(calls.map(c=>c.operation),['start_script_window','patch_script_sections','patch_script_sections','read_assistant_script_context','confirm_saved_script','read_script_window_request']);
+assert.equal(calls.some(c=>c.operation==='read_task_workspace'||c.operation==='save_assistant_script_draft'||c.operation==='start_creation_execution'),false);
+console.log('script window write host: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','script-tools.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/script window write host: PASS/);
+});
+
 test('device preparation correction distinguishes unsubmitted validation from an uncertain conflict', async t => {
   const tree = await resourceTree(t);
   const {stdout} = await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`

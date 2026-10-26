@@ -129,3 +129,84 @@ def test_device_preparation_preserves_parameter_conflict_missing_and_unassembled
     with pytest.raises(TaskBusinessRejected) as failure:
         business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
     assert failure.value.status_code==503
+
+
+def test_script_window_operations_reuse_actor_bound_case_and_do_not_write_repository_directly():
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.assistant.task_business import TaskBusiness
+    from app.creation_execution import CreationExecutionActor
+    actor=CreationExecutionActor.account(str(uuid4()),str(uuid4()),str(uuid4()))
+    task=SimpleNamespace(workspace_id=actor.workspace_id,id='task')
+    origin={'assistant_turn_id':str(uuid4()),'raw_command':'请确认当前文案并继续制作。'}
+    calls=[]
+    def operation(name):
+        def invoke(*args,**kwargs):
+            calls.append((name,args,kwargs))
+            return {'status':'confirmed' if name=='confirm' else 'saved'}
+        return invoke
+    case=SimpleNamespace(start_window=operation('start'),patch=operation('patch'),
+        confirm_saved=operation('confirm'),window_request_result=operation('read'))
+    business=object.__new__(TaskBusiness)
+    def script_case(current):
+        assert current is actor
+        return case
+    business.script_case=script_case
+    def guard(conn):
+        return 'actual-source-guard'
+    section={'id':'section','title':'提问','content':'你会如何开始？','visual_prompt':'原画面','evidence_reference_ids':[]}
+    request_id=str(uuid4())
+    start={'request_id':request_id,'title':'目标','sections':[section],'assistant_turn_id':origin['assistant_turn_id']}
+    patch={'request_id':str(uuid4()),'expected_updated_at':'2026-10-25T00:00:00Z',
+           'sections':[section],'assistant_turn_id':origin['assistant_turn_id']}
+    confirm={'request_id':str(uuid4()),'expected_updated_at':'2026-10-25T00:00:00Z',
+             'assistant_turn_id':origin['assistant_turn_id']}
+    for name,args in [('start_script_window',{'payload':start}),('patch_script_sections',{'script_id':'script','payload':patch}),
+                      ('confirm_saved_script',{'script_id':'script','payload':confirm}),
+                      ('read_script_window_request',{'request_id':request_id,'operation':'start'})]:
+        business.execute(name,args,actor,task,None,origin,None,guard)
+    assert [name for name,_,_ in calls]==['start','patch','confirm','read']
+    for _,args,kwargs in calls[:3]:
+        assert args[0:2]==(actor.workspace_id,'task')
+        assert kwargs['member_id']==actor.user_id and kwargs['instruction_origin'] is origin
+        assert kwargs['write_guard'] is guard and kwargs['reread_origin'](True) is origin
+    assert calls[2][1][3].adoption_kind=='delegated_system'
+    assert calls[3][2]=={'member_id':actor.user_id,'operation':'start','script_id':None,'include_input':False}
+
+
+def test_window_finish_persists_public_original_receipt_without_legacy_full_script_getter():
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.assistant.task_business import TaskBusiness
+    from app.creation_execution import CreationExecutionActor
+    turn=str(uuid4());request_id=str(uuid4())
+    goal={'current_turn_id':turn,'original_turn_id':turn,'task_id':'task','workspace_id':'workspace',
+          'member_id':'member','conversation_id':'conversation','status':'running','request_context':{},
+          'source_input_id':None,'source_input_turn_id':None}
+    actor=CreationExecutionActor('workspace','member');task=SimpleNamespace(id='task')
+    saved=[]
+    def finish_turn(*args,**kwargs): saved.append((args,kwargs))
+    conversations=SimpleNamespace(get_task_goal=lambda _:goal,finish_turn=finish_turn)
+    def forbidden(*args,**kwargs): raise AssertionError('new window results must not hydrate an old full script')
+    event=SimpleNamespace(event_type='assistant_script_saved',payload={'source':{'turn_id':turn},'script_id':'script'})
+    production=SimpleNamespace(list_task_events=lambda *_:[event],get_creation_task_script=forbidden)
+    receipt={'task_id':'task','script_id':'script','request_id':request_id,'status':'saved',
+             'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'submitted_input':{'text':'不复制原文'}}
+    case=SimpleNamespace(window_request_result=lambda *args,**kwargs:receipt)
+    business=object.__new__(TaskBusiness)
+    business.conversations=conversations;business.production=production
+    business.original=lambda _:(actor,task,None);business.script_case=lambda _:case
+    value={'kind':'script_window_request','operation':'patch','task_id':'task','script_id':'script',
+           'request_id':request_id,'status':'unknown','submission_effect':'unknown'}
+    response=business.finish({'turn_id':turn,'goal':dict(goal)},'模型说已全部完成',script_window_request=value)
+    assert response['script_window_request']['status']=='saved'
+    assert response['script_window_request']['total_count']==45 and 'script_draft' not in response
+    assert 'submitted_input' not in response['script_window_request']
+    assert saved[0][0][3]['response']['script_window_request']==response['script_window_request']
+    assert callable(saved[0][1]['write_guard'])
+    import pytest
+    from app.assistant.task_business import TaskBusinessRejected
+    goal['source_input_id']='appended-input'
+    with pytest.raises(TaskBusinessRejected) as failure:
+        business.finish({'turn_id':turn,'goal':dict(goal)},'旧回执',script_window_request=value)
+    assert failure.value.status_code==409 and len(saved)==1

@@ -206,6 +206,156 @@ test('an invalid review cannot attach a candidate locator or permit the same inp
   assert.equal(state.calls.filter(call => call.url.endsWith('/script-draft')).length, 1);
 });
 
+function windowTools(request) {
+  const tools = {};
+  registerScriptTools({registerTool:tool=>{tools[tool.name]=tool;}},{request,taskId:'task',
+    readActionSource:()=>({turnId:'11111111-1111-4111-8111-111111111111',inputId:'input'}),
+    isTaskRead:()=>true,hasPreview:()=>false,markPreview(){throw Error('window writes are not proposals')},
+    readCurrentTaskFacts(){throw Error('must not hydrate workspace')},
+    getScriptDraftUpdatedAt(){throw Error('window CAS comes from explicit version')},
+    setScriptDraftUpdatedAt(){throw Error('must not switch legacy draft identity')}});
+  return tools;
+}
+
+const windowRevision = n=>'2026-10-25T00:00:'+String(n).padStart(2,'0')+'Z';
+const windowSections = (start,count)=>Array.from({length:count},(_,i)=>({
+  id:'section-'+(start+i),title:'转场',content:'接下来呢？',visual_prompt:'当前画面',evidence_reference_ids:[]}));
+
+test('script window producers create 20 plus 20 plus 5 and update one stable section without replacement or adoption', async () => {
+  const calls=[],ids=new Set();let version=0;
+  const tools=windowTools(async(path,options)=>{
+    const body=JSON.parse(options.body);calls.push({path,method:options.method,body});
+    body.sections.forEach(section=>ids.add(section.id));version++;
+    return {task_id:'task',script_id:'script',request_id:body.request_id,status:'saved',updated_at:windowRevision(version),total_count:ids.size,affected_section_ids:body.sections.map(s=>s.id)};
+  });
+  const first=(await tools.start_script_window.execute('start',{title:'完整45段目标',sections:windowSections(1,20)})).details.receipt;
+  const second=(await tools.patch_script_sections.execute('append20',{script_id:first.script_id,expected_updated_at:first.updated_at,insert_after_section_id:'section-20',sections:windowSections(21,20)})).details.receipt;
+  const third=(await tools.patch_script_sections.execute('append5',{script_id:first.script_id,expected_updated_at:second.updated_at,insert_after_section_id:'section-40',sections:windowSections(41,5)})).details.receipt;
+  const edited=await tools.patch_script_sections.execute('edit45',{script_id:first.script_id,expected_updated_at:third.updated_at,sections:[{...windowSections(45,1)[0],content:'修改后的提问？'}]});
+  assert.deepEqual(calls.map(c=>c.method),['POST','PATCH','PATCH','PATCH']);
+  assert.deepEqual(calls.map(c=>c.body.sections.length),[20,20,5,1]);assert.equal(ids.size,45);
+  assert.equal(calls[0].path,'/api/creation-tasks/task/scripts/windows');
+  assert.equal(calls[3].path,'/api/creation-tasks/task/scripts/script/sections');
+  assert.equal(calls[3].body.expected_updated_at,windowRevision(3));assert.equal(calls[3].body.sections[0].id,'section-45');
+  assert.equal(edited.details.receipt.total_count,45);
+  assert.equal(new Set(calls.map(c=>c.body.request_id)).size,4);
+  assert.ok(calls.every(c=>!('edit_mode' in c.body)&&!('draft_complete' in c.body)&&!('coverage' in c.body)));
+});
+
+test('uncertain window writes keep their original request and cannot be rePOSTed', async () => {
+  for(const outcome of ['lost','malformed','unknown','failed']){
+    const calls=[];
+    const tools=windowTools(async(path,options)=>{
+      calls.push(JSON.parse(options.body));
+      if(outcome==='lost')throw Error('response lost');
+      if(['unknown','failed'].includes(outcome))return {task_id:'task',request_id:calls[0].request_id,status:outcome,submission_effect:'unknown'};
+      return {task_id:'other-task',script_id:'script',request_id:calls[0].request_id,status:'saved',updated_at:windowRevision(1)};
+    });
+    const first=await tools.start_script_window.execute('original',{title:'原目标',sections:windowSections(1,20)});
+    assert.equal(first.isError,true);assert.equal(first.details.request_id,calls[0].request_id);
+    if(['unknown','failed'].includes(outcome))assert.equal(first.details.receipt.status,outcome);
+    await assert.rejects(()=>tools.start_script_window.execute('new-key',{title:'原目标',sections:windowSections(1,20)}));
+    await assert.rejects(()=>tools.patch_script_sections.execute('patch',{script_id:'script',expected_updated_at:windowRevision(1),sections:windowSections(1,1)}));
+    assert.equal(calls.length,1);
+  }
+});
+
+test('malformed write and query success receipts keep a shared lock including legacy replacement', async () => {
+  const calls=[];let reads=0;
+  const tools=windowTools(async(path,options)=>{
+    calls.push({path,options});
+    if(options?.method==='POST'){
+      const body=JSON.parse(options.body);
+      return {task_id:'task',script_id:'script',request_id:body.request_id,status:'saved',updated_at:''};
+    }
+    if(options?.method==='PATCH'){
+      const body=JSON.parse(options.body);
+      return {task_id:'task',script_id:'script',request_id:body.request_id,status:'saved',updated_at:windowRevision(2)};
+    }
+    reads++;
+    const id=path.split('/script-window-requests/')[1].split('?')[0];
+    if(reads===1)return {task_id:'task',request_id:id,status:'saved',updated_at:windowRevision(1)};
+    return {task_id:'task',script_id:'script',request_id:id,status:'saved',updated_at:reads===2?'2026-02-30T00:00:00Z':windowRevision(1)};
+  });
+  const first=await tools.start_script_window.execute('bad-write',{title:'目标',sections:windowSections(1,20)});
+  assert.equal(first.isError,true);const request_id=first.details.request_id;
+  await assert.rejects(()=>tools.preview_script_draft.execute('legacy',{title:'目标',sections:windowSections(1,1)}));
+  assert.equal(calls.length,1);
+  for(let i=0;i<2;i++){
+    const queried=await tools.read_script_window_request.execute('bad-query',{request_id,operation:'start'});
+    assert.equal(queried.isError,true);
+    const count=calls.length;
+    await assert.rejects(()=>tools.patch_script_sections.execute('blocked',{script_id:'script',expected_updated_at:windowRevision(1),sections:windowSections(1,1)}));
+    await assert.rejects(()=>tools.preview_script_draft.execute('legacy',{title:'目标',sections:windowSections(1,1)}));
+    assert.equal(calls.length,count);
+  }
+  const resolved=await tools.read_script_window_request.execute('good-query',{request_id,operation:'start',script_id:'script'});
+  assert.equal(resolved.details.script_id,'script');
+  const patched=await tools.patch_script_sections.execute('allowed',{script_id:'script',expected_updated_at:windowRevision(1),sections:windowSections(1,1)});
+  assert.equal(patched.details.receipt.status,'saved');
+  assert.equal(calls.filter(c=>c.options?.method==='POST').length,1);
+  assert.equal(calls.filter(c=>c.options?.method==='PATCH').length,1);
+});
+
+test('original request lookup alone resolves uncertainty and never replays a window POST', async () => {
+  const calls=[];let reads=0;
+  const tools=windowTools(async(path,options)=>{
+    calls.push({path,options});
+    if(options?.method==='POST')throw Error('lost response');
+    if(options?.method==='PATCH'){
+      const body=JSON.parse(options.body);
+      return {task_id:'task',script_id:'script',request_id:body.request_id,status:'saved',updated_at:windowRevision(2),total_count:21};
+    }
+    reads++;
+    const id=path.split('/script-window-requests/')[1].split('?')[0];
+    if(reads===3)throw new (await import('../diary/transport.ts')).BusinessRequestError('not found',404);
+    if(reads<4)return {task_id:'task',request_id:id,status:reads===1?'unknown':'failed',submission_effect:'unknown'};
+    return {task_id:'task',script_id:'script',request_id:id,status:'saved',updated_at:windowRevision(1),total_count:20};
+  });
+  const first=await tools.start_script_window.execute('original',{title:'目标',sections:windowSections(1,20)});
+  const request_id=first.details.request_id;
+  for(let i=0;i<3;i++){
+    const query=()=>tools.read_script_window_request.execute('query',{request_id,operation:'start'});
+    if(i===2){const missing=await query();assert.equal(missing.isError,true);assert.equal(missing.details.request_id,request_id);assert.equal(missing.details.failure.submission_effect,'unknown');}else await query();
+    await assert.rejects(()=>tools.start_script_window.execute('new',{title:'目标',sections:windowSections(1,20)}));
+  }
+  await tools.read_script_window_request.execute('resolved',{request_id,operation:'start',script_id:'script'});
+  const appended=await tools.patch_script_sections.execute('append',{script_id:'script',expected_updated_at:windowRevision(1),insert_after_section_id:'section-20',sections:windowSections(21,1)});
+  assert.equal(appended.details.receipt.total_count,21);
+  assert.equal(calls.filter(c=>c.options?.method==='POST').length,1);
+  assert.equal(calls.filter(c=>c.options?.method==='PATCH').length,1);
+});
+
+test('full saved-script confirmation sends only server-version intent, never a partial body or coverage assertion', async () => {
+  const calls=[];
+  const tools=windowTools(async(path,options)=>{
+    if(path.endsWith('/assistant/script-context'))return {task_id:'task',creation_intent:{kind:'goal_delegation'},draft:{sections:null,sections_loaded:false,sections_total_count:45,draft_complete:false}};
+    const body=JSON.parse(options.body);calls.push({path,body});
+    return {task_id:'task',script_id:'script',request_id:body.request_id,status:'confirmed',updated_at:windowRevision(4),total_count:45};
+  });
+  const result=await tools.confirm_saved_script.execute('confirm',{script_id:'script',expected_updated_at:windowRevision(3)});
+  assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/creation-tasks/task/scripts/script/confirm-saved');
+  assert.deepEqual(Object.keys(calls[0].body).sort(),['adoption_kind','assistant_turn_id','expected_updated_at','request_id']);
+  assert.equal(calls[0].body.adoption_kind,'delegated_system');
+  assert.equal(result.details.receipt.status,'confirmed');assert.equal(result.details.receipt.total_count,45);
+  assert.equal(tools.confirm_saved_script.parameters.additionalProperties,false);
+  assert.equal('sections' in tools.confirm_saved_script.parameters.properties,false);
+});
+
+test('definite window validation rejection permits a corrected request without claiming adoption', async () => {
+  const calls=[];
+  const tools=windowTools(async(path,options)=>{
+    const body=JSON.parse(options.body);calls.push(body);
+    if(calls.length===1)throw new (await import('../diary/transport.ts')).BusinessRequestError('invalid',422);
+    return {task_id:'task',script_id:'script',request_id:body.request_id,status:'saved',updated_at:windowRevision(1),total_count:1,affected_section_ids:['section-1']};
+  });
+  const first=await tools.start_script_window.execute('invalid',{title:'目标',sections:windowSections(1,1)});
+  assert.equal(first.isError,true);
+  const second=await tools.start_script_window.execute('corrected',{title:'完整目标',sections:windowSections(1,1)});
+  assert.equal(second.details.receipt.script_id,'script');assert.equal(calls.length,2);
+  assert.notEqual(calls[0].request_id,calls[1].request_id);assert.equal('adopted' in second.details,false);
+});
+
 test('legacy replacement rejects a partial payload for a larger or unknown existing body before POST', async () => {
   for (const count of [45, undefined, 17]) {
     const state = rejectedTool({}, {}, {draft:{id:'original',updated_at:'v1',sections:null,

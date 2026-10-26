@@ -46,6 +46,10 @@ class NarrationGenerator:
         self.output_root = Path(output_root).expanduser()
         self.provider = provider
 
+    def task_output_directory(self, workspace_id: str, task_id: str) -> Path:
+        """Return the task-scoped output path without creating or executing work."""
+        return self.output_root / "creation-tasks" / _safe_component(workspace_id) / _safe_component(task_id)
+
     def generate(
         self,
         *,
@@ -344,10 +348,7 @@ class NarrationGenerator:
             language=resolved_language,
         )
         output_path = (
-            self.output_root
-            / "creation-tasks"
-            / _safe_component(workspace_id)
-            / _safe_component(task_id)
+            self.task_output_directory(workspace_id, task_id)
             / (
                 f"segment_{_safe_component(segment_id)}_{cache_key[:12]}.wav"
                 if segment_id
@@ -438,10 +439,7 @@ class NarrationGenerator:
             "\n".join(item.cache_key for item in segments).encode("utf-8")
         ).hexdigest()
         output_path = (
-            self.output_root
-            / "creation-tasks"
-            / _safe_component(workspace_id)
-            / _safe_component(task_id)
+            self.task_output_directory(workspace_id, task_id)
             / f"narration_{cache_key[:12]}.wav"
         ).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
