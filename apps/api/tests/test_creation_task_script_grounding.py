@@ -608,7 +608,7 @@ def _script_domain_state(tmp_path, monkeypatch):
         model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint='isolated')
     task = CreationTask(id='task', workspace_id='local', plan_id=plan.id, name=plan.name, scenario=GOAL)
     plan, task = repository.confirm_creation_plan(plan, task, verified_owner_user_id=owner.member_id)
-    _, input_refs, _ = main._creation_task_topic_inputs('local', task, plan, cloud_egress=True)
+    _, input_refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     run = TopicGenerationRun(id='topic-run', workspace_id='local', task_id=task.id, plan_id=plan.id,
         status='running', route_snapshot={}, prompt_schema_version='isolated', input_references=input_refs)
     repository.start_topic_generation(run)
@@ -647,7 +647,7 @@ def set_api_provider(monkeypatch, document, review, calls):
 
 
 def generate_with_provider(state):
-    case=ScriptGenerationUseCase(repository=state.repository,source_inputs=main._creation_task_topic_inputs,
+    case=ScriptGenerationUseCase(repository=state.repository,source_inputs=main._source_inputs_use_case().prepare,
         route_snapshot=main._topic_route_snapshot('local'),
         generate=lambda inputs:main._creation_task_script_generator_for(state.settings).generate(inputs),
         record_service=lambda **facts:main.record_llm_service_verification(state.settings,workspace_id='local',**facts))

@@ -3455,7 +3455,7 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
     )
     task = production.get_creation_task("workspace_a", license_task)
     plan = production.get_creation_plan("workspace_a", task.plan_id)
-    prepared, references, _ = main_module._creation_task_topic_inputs(
+    prepared, references, _ = main_module._source_inputs_use_case().prepare(
         "workspace_a", task, plan, cloud_egress=True,
     )
     assert any(item.reference_id == "source:source-workspace_a" for item in prepared)

@@ -53,7 +53,7 @@ def generation_state(script_domain_state, monkeypatch):  # noqa: F811
         repo,
         ConversationRepository(repo.database_path),
         verify_identity=identity,
-        source_inputs=main._creation_task_topic_inputs,
+        source_inputs=main._source_inputs_use_case().prepare,
         route_snapshot={"provider": "custom", "execution_location": "cloud"},
     )
     request_id = str(uuid4())

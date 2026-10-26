@@ -96,7 +96,7 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
             reason="knowledge_reference_stale", impact="来源版本已变化，未调用模型。",
             repair_action="重新确认来源。", retryable=True,
         )
-    monkeypatch.setattr(main_module, "_creation_task_topic_inputs", stale_sources)
+    monkeypatch.setattr(main_module.CreationSourceInputs, "prepare", stale_sources)
     monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
                         (_ for _ in ()).throw(AssertionError("Pi must not be called")))
     response = TestClient(main_module.app).post(

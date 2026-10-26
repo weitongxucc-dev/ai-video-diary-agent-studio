@@ -146,6 +146,8 @@ def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_st
     def model(settings, **kwargs):
         origin = c.conversations.task_turn_source(kwargs["turn_id"], "request-test", c.member.member_id, kwargs["task_id"])
         assert origin["raw_command"] == message
+        assert isinstance(kwargs["business_handler"], main.TaskBusinessAdapter)
+        assert kwargs["business_handler"].business is business
         model_calls.append(kwargs)
         return "已读取任务，未执行模型或媒体。", None
     monkeypatch.setattr(main, "run_task_turn", model)
@@ -154,12 +156,13 @@ def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_st
     monkeypatch.setattr(main, "_assistant_input_delivery", lambda *args: None)
     # This metadata-only plan fixture has no imported sources. Content and
     # provider behavior are covered separately; here verify the actual runner.
-    monkeypatch.setattr(main, "_creation_task_topic_inputs", lambda *args, **kwargs: ((), [], {}))
+    monkeypatch.setattr(main.CreationSourceInputs, "prepare", lambda *args, **kwargs: ((), [], {}))
     monkeypatch.setattr(main, "_wake_assistant_continuations", Mock())
     request = Request({"type": "http", "headers": [(key.lower().encode(), value.encode()) for key, value in c.alice.items()]})
+    business = main._task_business()
     continuation = GoalContinuationService(c.conversations, verify_current_goal=lambda goal, event: {
         "status": "ready", "task_version": {"timeline_version_id": None, "timeline_sequence": 0},
-        "facts": {}, "request": request}, run_goal_turn=main._run_goal_turn)
+        "facts": {}, "request": request, "business": business}, run_goal_turn=main._run_goal_turn)
     continuation.register_creation_request(source["id"], "request-test", c.member.member_id, saved)
     assert continuation.reconcile() == 1
     assert len(model_calls) == 1 and model_calls[0]["stage"] == "script"

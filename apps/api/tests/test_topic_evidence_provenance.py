@@ -53,7 +53,7 @@ def evidence_context(tmp_path, monkeypatch):
 
 def start_topic(context):
     _, production, plan, task = context
-    texts, inputs, evidence = main._creation_task_topic_inputs("qa", task, plan, cloud_egress=True)
+    texts, inputs, evidence = main._source_inputs_use_case().prepare("qa", task, plan, cloud_egress=True)
     assert texts[0].text == "第一版事实正文。"
     run = TopicGenerationRun(
         id="topic-run", workspace_id="qa", task_id=task.id, plan_id=plan.id,
@@ -140,7 +140,7 @@ def test_empty_provenance_does_not_bypass_reference_preflight(evidence_context, 
     else:
         task = replace(task, owner_user_id="another-member")
     with pytest.raises(main._CreationTaskTopicPreflightError):
-        main._creation_task_topic_inputs("qa", task, plan, cloud_egress=True)
+        main._source_inputs_use_case().prepare("qa", task, plan, cloud_egress=True)
 
 
 @pytest.mark.parametrize("change", [
@@ -161,3 +161,20 @@ def test_empty_provenance_keeps_topic_score_hard_limit(evidence_context):
     with pytest.raises(ValueError, match="选题候选"):
         production.complete_topic_generation(run.id, [replace(candidate, score=101)], references)
     assert production.list_topic_candidates("qa", "task") == []
+
+
+def test_source_inputs_keep_owner_reads_separate_from_current_reader_authority(evidence_context):
+    from app.creation.source_inputs_use_case import CreationSourceInputs
+    from app.creation.source_errors import SourcePreflightError
+
+    sources, _, plan, task = evidence_context
+    case = CreationSourceInputs(sources)
+    prepared, references, evidence = case.prepare('qa', task, plan, cloud_egress=True)
+    assert prepared[0].text == "第一版事实正文。"
+    assert evidence['knowledge:knowledge:1']['version_or_identity'] == '1'
+    assert case.validate_current('qa', plan, references, 'owner') == ('owner', False)
+    with pytest.raises(SourcePreflightError) as rejected:
+        case.validate_current('qa', plan, references, 'another-member')
+    assert rejected.value.reason == 'assistant_reply_source_changed'
+    # The task owner's readable snapshot does not grant the caller access.
+    assert task.owner_user_id == 'owner'

@@ -18,7 +18,7 @@ def generation(script_domain_state):
     state = script_domain_state
     conversations = ConversationRepository(state.repository.database_path)
     case = ScriptGenerationIntent(state.repository, conversations,
-        source_inputs=main._creation_task_topic_inputs,
+        source_inputs=main._source_inputs_use_case().prepare,
         route_snapshot={"execution_location": "cloud", "availability": "unverified"},
         verify_identity=lambda actor: "ready")
     actor = CreationExecutionActor("local", state.owner.member_id)

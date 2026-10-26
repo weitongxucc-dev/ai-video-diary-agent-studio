@@ -245,7 +245,7 @@ def test_main_consumers_read_original_space_and_recheck_fixed_reference_grants(t
     task = CreationTask(id="fixed-task", workspace_id=target_space, plan_id=plan.id,
                         name="固定引用", scenario="knowledge_explanation", owner_user_id=ctx["reader"].member_id)
     # Read-only input assembly: no model, worker or production write.
-    provider_sources, references, _ = main._creation_task_topic_inputs(target_space, task, plan, cloud_egress=False)
+    provider_sources, references, _ = main._source_inputs_use_case().prepare(target_space, task, plan, cloud_egress=False)
     assert provider_sources[0].text == "第一版原文"
     assert references[0]["version_or_identity"] == "1"
     facts = ScriptLibrarySource(reference_id=f"knowledge:{item.id}:1", status="readable")
@@ -257,7 +257,7 @@ def test_main_consumers_read_original_space_and_recheck_fixed_reference_grants(t
     assert client.get(f"/api/knowledge-items/{item.id}", headers=headers).status_code == 404
     assert client.post("/api/creation-plans/preview", headers=headers, json=payload).json()["knowledge_references"] == []
     with pytest.raises(main._CreationTaskTopicPreflightError) as blocked:
-        main._creation_task_topic_inputs(target_space, task, plan, cloud_egress=False)
+        main._source_inputs_use_case().prepare(target_space, task, plan, cloud_egress=False)
     assert blocked.value.reason == "knowledge_reference_missing"
     client.close()
     assert repo.get_knowledge_item(source_space, item.id).owner_user_id == ctx["uploader"].member_id

@@ -240,7 +240,7 @@ def test_exact_historical_version_survives_head_update_and_does_not_replace_exis
     assert response.json()['added_references'][0]['version'] == '1'
     plan = state.repository.get_creation_plan('local', 'plan')
     task = state.repository.get_creation_task('local', 'task')
-    sources, refs, _ = main._creation_task_topic_inputs('local', task, plan, cloud_egress=True)
+    sources, refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     assert any(ref['object_id'] == first.id and ref['version_or_identity'] == '1' for ref in refs)
     assert any('1200' in source.text and '1600' not in source.text for source in sources)
     before = rows(state)
@@ -276,7 +276,7 @@ def test_reply_transfer_after_adoption_keeps_historical_script_immutable(state, 
     assert adopt(state, command(state, knowledge(state))).status_code == 200
     plan = state.repository.get_creation_plan('local', 'plan')
     task = state.repository.get_creation_task('local', 'task')
-    _, refs, _ = main._creation_task_topic_inputs('local', task, plan, cloud_egress=True)
+    _, refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     text = '基于新增资料的明确回复。'
     kwargs = dict(request_id=str(uuid4()), reply_text=text,
         reply_reference={'conversation_id': 'conversation', 'turn_id': 'turn',
