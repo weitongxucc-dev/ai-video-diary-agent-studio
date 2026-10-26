@@ -1769,8 +1769,13 @@ def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command
         raise GrantedCommandTimeout("渲染阶段已超出总时限")
     timeout_seconds = min(timeout_seconds, remaining) if timeout_seconds is not None else remaining
 
+    resources = scheduler._get(grant.request_id).resources
+    if resources.get('kind') == 'creation_packet_copy':
+        stdout_bytes, stderr_bytes = resources['max_stdout_bytes'], resources['max_stderr_bytes']
+    else:
+        stdout_bytes, stderr_bytes = 64 * 1024, 256 * 1024
     result = run_granted_command(scheduler, grant, command, timeout_seconds=timeout_seconds,
-                                 max_stdout_bytes=64 * 1024, max_stderr_bytes=256 * 1024,
+                                 max_stdout_bytes=stdout_bytes, max_stderr_bytes=stderr_bytes,
                                  cancel_event=cancel_event, output_paths=output_paths,
                                  max_output_file_bytes=max_output_file_bytes)
     if result.returncode:
@@ -1928,6 +1933,112 @@ def _plan_from_payload(data: dict[str, object]) -> MontagePlan:
         cues=[NarrationCue(**item) for item in cue_payloads if isinstance(item, dict)],
         clips=[MontageClip(**item) for item in clip_payloads if isinstance(item, dict)],
     )
+
+
+def _picture_window_input(window, source: Path, context):
+    window.validate()
+    context.check()
+    clip = window.clip
+    width, height = canvas_size(window.aspect_ratio)
+    if clip_video_filters(clip, width=width, height=height) != window.filter_recipe:
+        raise ValueError('画面窗口滤镜契约已变化，不能复用旧片段')
+    source = source.expanduser().resolve()
+    if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+        raise ValueError('画面窗口来源不存在或格式不支持')
+    # Decode from the cut origin so fps conversion and fades have the same state
+    # as the unsplit cut. The input declaration must include this decode prefix.
+    filters = window.filter_recipe + (f',trim=start_frame={window.first_frame_in_clip}'
+        f':end_frame={window.last_frame_in_clip},setpts=PTS-STARTPTS')
+    return (['ffmpeg', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
+        '-filter_threads', str(context.threads), '-filter_complex_threads', str(context.threads),
+        '-ss', f'{clip.source_start_seconds:.10f}', '-t', f'{clip.source_end_seconds-clip.source_start_seconds:.10f}',
+        '-threads', str(context.threads), '-i', str(source), '-vf', filters, '-an'], (width, height))
+
+
+def render_granted_picture_window(window, source: Path, output: Path, context):
+    """Select a lossless diagnostic window on the original clip's filter clock."""
+    command, (width, height) = _picture_window_input(window, source, context)
+    command += ['-c:v', 'ffv1', '-level', '3', '-coder', '0', '-context', '0', '-g', '1',
+        '-slices', '4', '-slicecrc', '1', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
+        '-threads:v', str(context.threads), '-fs', str(context.max_output_bytes), '-f', 'nut', str(output)]
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic,
+        output_paths=(output,), max_output_file_bytes=context.max_output_bytes)
+    _probe_serial_picture_input(output, context, expected_size=(width, height), expected_frames=window.frame_count)
+    context.check()
+    return output
+
+
+PICTURE_FRAGMENT_CONTRACT = 'h264-crf20-b0-fmp4/v1'
+_PICTURE_FRAGMENT_FLAGS = '+empty_moov+frag_keyframe+default_base_moof+negative_cts_offsets+skip_trailer+skip_sidx'
+
+
+def render_granted_picture_fragment(window, source: Path, output: Path, context):
+    """Encode each selected frame once; fragments use a fixed 90 kHz packet clock."""
+    command, size = _picture_window_input(window, source, context)
+    command += ['-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+        '-bf', '0', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
+        '-threads:v', str(context.threads), '-video_track_timescale', '90000',
+        '-movflags', _PICTURE_FRAGMENT_FLAGS, '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic,
+        output_paths=(output,), max_output_file_bytes=context.max_output_bytes)
+    probe_granted_picture_fragment(output, context, expected_size=size, expected_frames=window.frame_count,
+        max_bytes=context.max_output_bytes)
+    context.check()
+    return output
+
+
+def probe_granted_picture_fragment(path: Path, context, *, expected_size, expected_frames, max_bytes=None):
+    context.check()
+    command = ['ffprobe', '-v', 'error', '-count_packets', '-show_entries',
+        'stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,time_base,start_pts,duration_ts,nb_read_packets,has_b_frames',
+        '-of', 'json', str(path)]
+    completed = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic)
+    streams = json.loads(completed.stdout).get('streams', [])
+    if (len(streams) != 1 or streams[0].get('codec_type') != 'video'
+            or streams[0].get('codec_name') != 'h264' or streams[0].get('pix_fmt') != 'yuv420p'
+            or (streams[0].get('width'), streams[0].get('height')) != expected_size
+            or streams[0].get('avg_frame_rate') != '30/1' or streams[0].get('time_base') != '1/90000'
+            or streams[0].get('start_pts') != 0 or streams[0].get('has_b_frames') != 0
+            or streams[0].get('duration_ts') != expected_frames * 3000
+            or streams[0].get('nb_read_packets') != str(expected_frames)):
+        raise ValueError(f'画面片段的编码、静音范围、画幅或完整30fps包时钟不符合请求（期望{expected_frames}帧）：{streams}')
+    if not path.is_file() or path.stat().st_size <= 0 or max_bytes is not None and path.stat().st_size > max_bytes:
+        raise ValueError('画面片段文件不存在、为空或超出本单元实际许可输出上限')
+    return streams[0]
+
+
+def concatenate_granted_picture_fragments(inputs, output: Path, context, *, expected_size):
+    """Use FFmpeg packet copy; every actual parent remains a declared input."""
+    context.check()
+    request = context.scheduler._get(context.grant.request_id)
+    if not inputs or len(inputs) != request.resources.get('input_count'):
+        raise ValueError('画面归约必须声明全部真实父片段，不能用manifest冒充一个媒体输入')
+    frames = 0
+    lines = ['ffconcat version 1.0']
+    for path, count in inputs:
+        path = Path(path).resolve()
+        if type(count) is not int or count <= 0 or '\n' in str(path) or '\r' in str(path):
+            raise ValueError('画面父片段路径或完整帧计数无效')
+        probe_granted_picture_fragment(path, context, expected_size=expected_size, expected_frames=count)
+        escaped = str(path).replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+        frames += count
+    manifest = output.with_suffix('.ffconcat')
+    manifest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    command = ['ffmpeg', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe', '-f', 'concat',
+        '-safe', '0', '-i', str(manifest), '-map', '0:v:0', '-map_metadata', '-1', '-an', '-c:v', 'copy',
+        '-video_track_timescale', '90000', '-movflags', _PICTURE_FRAGMENT_FLAGS,
+        '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic,
+        output_paths=(output,), max_output_file_bytes=context.max_output_bytes)
+    probe_granted_picture_fragment(output, context, expected_size=expected_size, expected_frames=frames,
+        max_bytes=context.max_output_bytes)
+    context.check()
+    return output
 
 
 def _probe_serial_picture_input(path: Path, context, *, expected_size, expected_frames):

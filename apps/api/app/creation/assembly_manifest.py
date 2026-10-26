@@ -163,3 +163,76 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
     digest = _digest({**instance_scope, 'version': AUDIO_ASSEMBLY_VERSION, 'duration_ms': duration_ms,
         'sources': frozen_hashes, 'units': [unit.id for unit in units]})
     return AudioAssemblyManifest(digest, duration_ms, frozen_hashes, tuple(units), workspace_id, task_id, producer_job_id, recipe_digest)
+
+
+PICTURE_ASSEMBLY_VERSION = 'hardcut-picture-windows/v1'
+
+
+@dataclass(frozen=True)
+class PictureAssemblyWindow:
+    id: str
+    clip_json: str
+    source_identity_json: str
+    aspect_ratio: str
+    first_frame_in_clip: int
+    last_frame_in_clip: int
+    timeline_start_frame: int
+    timeline_end_frame: int
+    filter_recipe: str
+
+    @property
+    def frame_count(self):
+        return self.last_frame_in_clip - self.first_frame_in_clip
+
+    @property
+    def clip(self):
+        from app.montage import MontageClip
+        return MontageClip(**json.loads(self.clip_json))
+
+    def validate(self):
+        from dataclasses import asdict
+        identity = asdict(self)
+        identity.pop('id')
+        if (_digest({'version': PICTURE_ASSEMBLY_VERSION, **identity}) != self.id
+                or type(self.first_frame_in_clip) is not int or type(self.last_frame_in_clip) is not int
+                or self.first_frame_in_clip < 0 or self.frame_count <= 0
+                or self.timeline_end_frame - self.timeline_start_frame != self.frame_count):
+            raise ValueError('画面窗口时钟或封存摘要无效')
+
+
+def iter_picture_windows(plan, *, source_identities: dict[str, object], max_frames_per_unit: int):
+    """Partition the existing output frame clock; never restart a cut's fade clock."""
+    from dataclasses import asdict
+    from fractions import Fraction
+    from app.canvas import canvas_size
+    from app.visual_effects import clip_video_filters
+    if type(max_frames_per_unit) is not int or max_frames_per_unit <= 0:
+        raise ValueError('画面窗口需要实际有限的输出帧上界')
+    if not plan.clips:
+        raise ValueError('画面组装缺少已确认镜头')
+    expected = 0
+    for clip in plan.clips:
+        first = round(Fraction(str(clip.timeline_start_seconds)) * 30)
+        last = round(Fraction(str(clip.timeline_end_seconds)) * 30)
+        if clip.needs_confirmation or first != expected or last <= first:
+            raise ValueError('硬切画面必须已确认且帧区间连续、无洞无重叠')
+        if clip.transition_in_seconds:
+            raise ValueError('非硬切转场需要相邻片段状态，不能静默改为独立窗口')
+        if clip.source_path not in source_identities:
+            raise ValueError('画面窗口缺少原来源身份事实')
+        if Fraction(str(clip.source_start_seconds)) < 0 or Fraction(str(clip.source_end_seconds)) <= Fraction(str(clip.source_start_seconds)):
+            raise ValueError('画面窗口原来源区间无效')
+        expected = last
+    if expected != round(Fraction(str(plan.duration_seconds)) * 30):
+        raise ValueError('画面窗口未覆盖完整目标帧时钟')
+    width, height = canvas_size(plan.aspect_ratio)
+    for clip in plan.clips:
+        first = round(Fraction(str(clip.timeline_start_seconds)) * 30)
+        last = round(Fraction(str(clip.timeline_end_seconds)) * 30)
+        recipe = clip_video_filters(clip, width=width, height=height)
+        for offset in range(0, last - first, max_frames_per_unit):
+            end = min(last - first, offset + max_frames_per_unit)
+            data = {'clip_json': _json(asdict(clip)), 'source_identity_json': _json(source_identities[clip.source_path]),
+                'aspect_ratio': plan.aspect_ratio, 'first_frame_in_clip': offset, 'last_frame_in_clip': end,
+                'timeline_start_frame': first + offset, 'timeline_end_frame': first + end, 'filter_recipe': recipe}
+            yield PictureAssemblyWindow(_digest({'version': PICTURE_ASSEMBLY_VERSION, **data}), **data)

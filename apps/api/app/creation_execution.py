@@ -748,7 +748,7 @@ class CreationJobOwnerVerifier:
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
                  presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
-                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None, source_verifier=None, audio_assembly=None, narration_runtime_facts=None) -> None:
+                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None, source_verifier=None, audio_assembly=None, narration_runtime_facts=None, packet_copy_assembly=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
@@ -764,6 +764,7 @@ class CreationJobOwnerVerifier:
         self.graphic_source_facts = graphic_source_facts
         self.audio_mix_facts = audio_mix_facts
         self.audio_assembly = audio_assembly
+        self.packet_copy_assembly = packet_copy_assembly
         self.cover = cover
         self.task_authorizations = task_authorizations
         self.segments = segments
@@ -854,6 +855,12 @@ class CreationJobOwnerVerifier:
         return changed
 
     def render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
+        if self.packet_copy_assembly is not None and job is None and request is not None:
+            job = self.repository.get_job_run(task.workspace_id, request.owner_id, connection=conn)
+        if self.packet_copy_assembly is not None and job is not None:
+            pending = self.packet_copy_assembly.next_unit(job, request=request, connection=conn, prepare=prepare_assembly)
+            if pending is not None:
+                return pending
         # Person composition never inherits the pure-material caps.
         limits = self.presenter_cpu_render_limits if plan.presenter_share_target else self.cpu_render_limits
         if limits is None:
@@ -1920,9 +1927,10 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
 class CreationJobUnitExecutor:
     """Execute one granted creation stage and checkpoint it with the same permit."""
 
-    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None, on_render_completed=None, segments=None, native_case=None, source_verifier=None, audio_assembly=None) -> None:
+    def __init__(self, repository, *, render_action: Callable[[str, str, CpuRenderGrantContext], object], render_is_valid: Callable[[str, str, CpuRenderGrantContext], bool], montage_stage=None, task_media=None, narration_stage=None, person_stage=None, cover=None, on_render_completed=None, segments=None, native_case=None, source_verifier=None, audio_assembly=None, packet_copy_assembly=None) -> None:
         self.repository = repository
         self.audio_assembly = audio_assembly
+        self.packet_copy_assembly = packet_copy_assembly
         self.render_action = render_action
         self.render_is_valid = render_is_valid
         self.on_render_completed = on_render_completed
@@ -2883,11 +2891,13 @@ class CreationJobUnitExecutor:
             if not self._pause_for_quit(grant, scheduler):
                 raise
 
-    def _execute_audio_assembly(self, grant, scheduler):
+    def _execute_media_assembly(self, grant, scheduler):
         from app.creation.execution_budget_scope import ExecutionBudgetScopes
         from app.granted_subprocess import GrantedCommandCancelled
-        if self.audio_assembly is None:
-            raise PermissionError('本机音频组装端口未装配')
+        packet_copy = grant.unit_key.startswith('render:packet-copy:v1:')
+        assembly = self.packet_copy_assembly if packet_copy else self.audio_assembly
+        if assembly is None:
+            raise PermissionError('本机媒体组装端口未装配')
         scheduler.assert_grant(grant)
         owner = scheduler.owners
         if hasattr(owner, 'registrations'):
@@ -2908,13 +2918,17 @@ class CreationJobUnitExecutor:
                 (job.workspace_id, job.id)).fetchone()
             if unknown is not None:
                 raise RecoveryBlocked('原组装单元消耗未知，须先核对原回执，不能新许可清账')
+            if packet_copy and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
+                raise PermissionError('画面归约在启动前已撤权或父事实变化')
             job = self.repository.claim_job_run(job.workspace_id, job.id, connection=conn)
-            started_id = f'event_{job.id}_audio_assembly_started_{grant.generation}'
-            receipt_id = f'event_{job.id}_audio_assembly_settled_{grant.generation}'
+            family = 'picture_packet' if packet_copy else 'audio_assembly'
+            started_id = f'event_{job.id}_{family}_started_{grant.generation}'
+            receipt_id = (f'event_{job.id}_picture_packet_usage_{grant.generation}' if packet_copy else
+                f'event_{job.id}_audio_assembly_settled_{grant.generation}')
             self.repository.append_task_event(TaskEvent(started_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_started', {'usage_id': f'{grant.request_id}:{grant.generation}',
                     'request_id': grant.request_id, 'permit_generation': grant.generation,
-                    'unit_key': grant.unit_key, 'phase': 'audio_assembly'}), connection=conn)
+                    'unit_key': grant.unit_key, 'phase': 'picture_packet_copy' if packet_copy else 'audio_assembly'}), connection=conn)
             scopes = ExecutionBudgetScopes(self.repository)
             try:
                 binding = scopes.binding(conn, job.workspace_id, job.id)
@@ -2925,7 +2939,8 @@ class CreationJobUnitExecutor:
                 scopes.reserve(conn, job.workspace_id, job.id, actor, request_id=grant.request_id,
                     permit_generation=grant.generation, started_event_id=started_id, receipt_id=receipt_id,
                     authorization_revision=policy.payload['revision'], maximum={
-                        'execution_seconds': resources['timeout_seconds'], 'generated_bytes': resources['max_output_bytes']})
+                        'execution_seconds': resources['timeout_seconds'], 'generated_bytes': (sum(resources['write_allocations'].values())
+                            if packet_copy else resources['max_output_bytes'])})
         started = time.monotonic() - max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation = threading.Event()
         self.register_cancellation(grant.request_id, cancellation)
@@ -2935,34 +2950,55 @@ class CreationJobUnitExecutor:
         def settle(conn, current):
             try:
                 measured = self.repository.get_task_event(job.workspace_id,
-                    f'event_{job.id}_audio_assembly_measured_{grant.generation}', connection=conn)
+                    (f'event_{grant.request_id}_{grant.generation}_picture_output' if packet_copy else
+                     f'event_{job.id}_audio_assembly_measured_{grant.generation}'), connection=conn)
             except KeyError:
                 if rendering[0]:
                     raise RecoveryBlocked('音频组装真实输出计量未知，保留原预留与started')
                 generated = 0  # No renderer was entered, so no output could be created.
             else:
-                if measured.payload['usage_id'] != f'{current.request_id}:{current.generation}':
+                matches = ((measured.payload['request_id'], measured.payload['permit_generation']) ==
+                    (current.request_id, current.generation)) if packet_copy else measured.payload['usage_id'] == f'{current.request_id}:{current.generation}'
+                if not matches:
                     raise RecoveryBlocked('音频组装原输出计量与许可不一致')
-                generated = measured.payload['generated_bytes']
+                if packet_copy and not measured.payload['consumption_known']:
+                    raise RecoveryBlocked('画面归约真实新文件字节未知，保留原预留与started')
+                generated = measured.payload['output_bytes'] if packet_copy else measured.payload['generated_bytes']
             self.repository.append_task_event(TaskEvent(receipt_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_settled', {'usage_id': f'{current.request_id}:{current.generation}',
                     'request_id': current.request_id, 'permit_generation': current.generation, 'unit_key': current.unit_key,
                     'elapsed_seconds': max(0, time.monotonic() - started), 'output_bytes': generated,
-                    'usage_source': 'audio_assembly_worker_output_measurement'}), connection=conn)
+                    'usage_source': ('picture_packet_worker_output_measurement' if packet_copy else
+                                     'audio_assembly_worker_output_measurement')}), connection=conn)
             if binding is not None:
                 scopes.settle(conn, job.workspace_id, job.id, request_id=current.request_id,
                     permit_generation=current.generation, receipt_id=receipt_id)
         def next_unit(conn, current):
             latest = self.repository.get_job_run(job.workspace_id, job.id, connection=conn)
-            intent = next_creation_intent(self.repository, scheduler, latest, connection=conn)
+            if packet_copy:
+                pending = assembly.next_unit(latest, connection=conn, prepare=True)
+                if pending is None:
+                    return None
+                intent = SubmissionIntent(latest.workspace_id, DEVICE_OWNER_TYPE, latest.id, latest.input_digest,
+                    pending[0], SchedulePolicy())
+            else:
+                intent = next_creation_intent(self.repository, scheduler, latest, connection=conn)
             return (intent, owner.verify_submission(intent, actor, connection=conn)) if intent is not None else None
         try:
             context.check()
-            montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id))
-            manifest = self.audio_assembly.render_assembly(job, montage, actor=actor, budget=owner.narration_audio_budget)
-            record = self.audio_assembly.execute_assembly_unit(job.workspace_id, job.task_id, manifest,
-                resources['assembly_unit_id'], actor=actor, budget=owner.narration_audio_budget, context=context,
-                on_render_started=lambda: rendering.__setitem__(0, True))
+            if packet_copy:
+                def publication_guard(conn):
+                    current = scheduler._get(grant.request_id)
+                    if owner.check_current(current, conn) != 'ready':
+                        raise PermissionError('画面归约原许可、来源或授权在发布前已变化')
+                rendering[0] = True
+                record = assembly.execute(job, actor=actor, context=context, publication_guard=publication_guard)
+            else:
+                montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id))
+                manifest = assembly.render_assembly(job, montage, actor=actor, budget=owner.narration_audio_budget)
+                record = assembly.execute_assembly_unit(job.workspace_id, job.task_id, manifest,
+                    resources['assembly_unit_id'], actor=actor, budget=owner.narration_audio_budget, context=context,
+                    on_render_started=lambda: rendering.__setitem__(0, True))
             context.check()
             def commit(conn, current):
                 settle(conn, current)
@@ -2988,14 +3024,14 @@ class CreationJobUnitExecutor:
                 def failed(conn, current):
                     settle(conn, current)
                     return self._checkpoint(conn, current, status='failed', reason=str(exc))
-                scheduler.fail_unit(grant, reason='audio_assembly_failed', failure_write=failed)
+                scheduler.fail_unit(grant, reason='picture_packet_copy_failed' if packet_copy else 'audio_assembly_failed', failure_write=failed)
         finally:
             with self._cancellation_lock:
                 self._cancellations.pop(grant.request_id, None)
 
     def _execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
-        if grant.unit_key.startswith('render:audio-assembly:'):
-            return self._execute_audio_assembly(grant, scheduler)
+        if grant.unit_key.startswith(('render:audio-assembly:', 'render:packet-copy:v1:')):
+            return self._execute_media_assembly(grant, scheduler)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
             return self._execute_narration_unit(grant, scheduler)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith("cover:") and self.cover is not None:
