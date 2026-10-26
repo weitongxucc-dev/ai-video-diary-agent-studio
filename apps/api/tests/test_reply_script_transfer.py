@@ -585,7 +585,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         section = json.loads(payload["messages"][1]["content"])["script"]["sections"][0]
         response = {"sections": [{"index": 1,
             "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
-                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}]}
+                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}]}]}
         return _review_tool_response(response)
     checker = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "controlled-review",
         transport=httpx.MockTransport(review))
@@ -614,7 +614,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
 
     edited = main_module.save_assistant_script_draft(task.id, request,
         main_module.CreationTaskScriptDraftRequest(
-            title=draft.title, expected_updated_at=draft.updated_at,
+            edit_mode="replace_all", title=draft.title, expected_updated_at=draft.updated_at,
             sections=[{
                 "id": draft.sections[0].id, "title": draft.sections[0].title,
                 "content": draft.sections[0].content, "visual_prompt": "展示本次资料中的核心功能。",
@@ -631,13 +631,16 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
             sections=[section.model_dump() for section in edited.sections],
         ))
     assert confirmed.task.confirmed_script_id == draft.id
-    entry = main_module.save_script_library(request,
-        main_module.ScriptLibrarySaveRequest(
+    from app.schemas import ScriptLibrarySaveRequest
+    entry = main_module._script_library_use_case(request).save_entry(WORKSPACE,
+        ScriptLibrarySaveRequest(
+            request_id=UUID("66666666-6666-4666-8666-666666666666"),
+            expected_source_updated_at=repo.script_records.read_creation_task_script_header(WORKSPACE, draft.id)['updated_at'],
             source_script_id=draft.id, name="已确认的对话回复文案", category="产品介绍",
         ))
-    read_back = repo.get_script_library_entry(WORKSPACE, entry.id)
+    read_back = repo.get_script_library_entry(WORKSPACE, entry['entry_id'])
     assert read_back.source_task_id == task.id and read_back.source_script_id == draft.id
-    assert read_back.version == entry.version
+    assert read_back.version == entry['version']
 
     prior_events = repo.list_task_events(WORKSPACE, task.id)
     turn["result"] = {"response": {"reply": "被篡改的正文"}}

@@ -6494,228 +6494,26 @@ def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
     return _creation_plan_response(plan, task)
 
 
-def _script_library_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
-    """读文案库引用的来源任务：可见范围按可信身份判，读不到按不存在处理。"""
-    try:
-        task = production_repo.get_creation_task(workspace_id, task_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="文案来源任务不可读") from exc
-    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
-        raise HTTPException(status_code=404, detail="文案来源任务不可读")
-    return task
+def _bind_script_library_use_case(draft_use_case, reader):
+    case = ScriptLibraryUseCase(production_repo, source_repository,
+        reader=reader, draft_use_case=draft_use_case)
+    draft_use_case.read_script_header = case.read_script_header
+    draft_use_case.read_library_header = case.read_header
+    return case
 
 
-def _attach_cited_version_facts(
-    state: ScriptLibrarySourceResponse,
-    source_repository: SourceRepository,
-    workspace_id: str,
-    item_id: str,
-    version: str,
-) -> None:
-    """回填引用绑定那一版的真实快照事实，供前端回查当时内容。
-
-    只读版本快照里已经存下的来源链接、抓取时刻和指纹；引用本身只记到条目与
-    版本，没有段落定位，所以 `locator` 留空，不拿第一段冒充引用定位。
-    """
-    try:
-        versions = source_repository.list_knowledge_item_versions(workspace_id, item_id)
-    except KeyError:
-        return
-    snapshot = next(
-        (value for value in versions if value.version == version),
-        None,
-    )
-    if snapshot is None:
-        return
-    state.cited_version = snapshot.version
-    state.cited_source_url = snapshot.source_url
-    state.cited_fetched_at = snapshot.fetched_at
-    state.cited_content_hash = snapshot.content_hash
-
-
-def _script_library_sources(
-    workspace_id: str, entry: dict, *, reader: tuple[str | None, bool],
-) -> tuple[list[ScriptLibrarySourceResponse], list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
-    task = production_repo.get_creation_task(workspace_id, entry['source_task_id'])
-    user_id, local_diagnostic = reader
-    if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
-                            visibility=task.visibility, owner_user_id=task.owner_user_id):
-        raise KeyError(entry['id'])
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    knowledge = {reference.id: reference for reference in plan.knowledge_references}
-    sources = {reference.id: reference for reference in plan.source_references}
-    resolved_knowledge: list[CreationPlanKnowledgeReference] = []
-    resolved_sources: list[CreationPlanSourceReference] = []
-    result: list[ScriptLibrarySourceResponse] = []
-    references = production_repo.script_records.script_library_reference_ids(workspace_id, entry['id'])
-    for ref in references:
-        state = ScriptLibrarySourceResponse(reference_id=ref, status="missing")
-        if ref.startswith("knowledge:"):
-            parts = ref.removeprefix("knowledge:").rsplit(":", 1)
-            if len(parts) == 2:
-                item_id, version = parts
-                try:
-                    # 与知识域读取同一个判据：私有只对上传者本人，读不到当不存在。
-                    item = source_repository.get_knowledge_item_readable_by(
-                        workspace_id, item_id,
-                        user_id=user_id, local_diagnostic=local_diagnostic,
-                    )
-                except (KeyError, ValueError):
-                    item = None
-                original = knowledge.get(item_id)
-                if item is not None and original is not None:
-                    # 有权读到这一版（无论是当前版还是历史版）才回填快照事实；
-                    # 读不到就不给来源链接、抓取时刻和指纹。
-                    _attach_cited_version_facts(
-                        state, source_repository, item.workspace_id, item_id, version
-                    )
-                    if (item.version != version or item.version != original.version
-                            or not content_allows_use(item.use_state, "reference")):
-                        state.status = "version_changed"
-                    else:
-                        state.status = "readable"
-                        state.title = item.title
-                        state.version_or_identity = item.version
-                        resolved_knowledge.append(original)
-        elif ref.startswith("source:"):
-            item_id = ref.removeprefix("source:")
-            try:
-                item = source_repository.get_source_item(workspace_id, item_id)
-            except KeyError:
-                item = None
-            original = sources.get(item_id)
-            if item is not None and original is not None:
-                if (not original.identity or source_item_identity(item) != original.identity
-                        or item.connector_id != original.connector_id or item.license != original.license):
-                    state.status = "version_changed"
-                elif content_allows_use(item.use_state, "reference"):
-                    state.status = "readable"
-                    state.title = item.title
-                    state.source_url = item.source_url
-                    state.version_or_identity = original.identity
-                    resolved_sources.append(original)
-        result.append(state)
-    return result, resolved_knowledge, resolved_sources
-
-
-def _readable_script_library_entry(request: Request, workspace_id: str, entry_id: str):
-    try:
-        entry = _library_header_for_reader(workspace_id, entry_id, _content_reader(request, workspace_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
-    states, knowledge, sources = _script_library_sources(workspace_id, entry, reader=_content_reader(request, workspace_id))
-    if any(source.status != "readable" for source in states):
-        raise HTTPException(status_code=409, detail="文案引用的来源已不可读或版本已变化，请核对原任务来源")
-    return entry, knowledge, sources
-
-
-def _library_header_for_reader(workspace_id, entry_id, reader):
-    header = production_repo.script_records.read_script_library_entry_header(workspace_id, entry_id)
-    task = production_repo.get_creation_task(workspace_id, header['source_task_id'])
-    if not content_readable(user_id=reader[0], local_diagnostic=reader[1],
-                            visibility=task.visibility, owner_user_id=task.owner_user_id):
-        raise KeyError(entry_id)
-    return header
-
-
-def _script_header_for_reader(workspace_id, script_id, reader):
-    header = production_repo.script_records.read_creation_task_script_header(workspace_id, script_id)
-    task = production_repo.get_creation_task(workspace_id, header['task_id'])
-    if not content_readable(user_id=reader[0], local_diagnostic=reader[1],
-                            visibility=task.visibility, owner_user_id=task.owner_user_id):
-        raise KeyError(script_id)
-    return header
-
-
-def _library_request_case(request):
+def _script_library_use_case(request: Request):
     workspace_id = current_workspace_id(request)
-    return _script_draft_use_case(workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
-        content_reader=lambda ws: _content_reader(request, ws))
-
-
-def save_script_library(request, payload):
-    workspace_id = current_workspace_id(request)
-    return _library_request_case(request).save_library_entry(workspace_id, payload,
-        member_id=_content_reader(request, workspace_id)[0])
-
-
-def _read_library_request(request, request_id, operation):
-    workspace_id = current_workspace_id(request)
-    case = _library_request_case(request)
-    read = case.library_save_request_result if operation == 'save' else case.library_reuse_request_result
-    return read(workspace_id, request_id, member_id=_content_reader(request, workspace_id)[0])
-
-
-def _list_script_library_headers(request, **window):
-    workspace_id = current_workspace_id(request)
-    page = production_repo.script_records.list_script_library_entry_headers(workspace_id, **window)
-    items = []
-    for entry in page['items']:
-        try:
-            _script_library_task_access(request, workspace_id, entry['source_task_id'])
-        except HTTPException as exc:
-            if exc.status_code != 404:
-                raise
-            continue
-        items.append(entry)
-    return {**page, 'items': items, 'total_count': None}
-
-
-def _read_script_library_header(request, entry_id):
-    workspace_id = current_workspace_id(request)
-    header = production_repo.script_records.read_script_library_entry_header(workspace_id, entry_id)
-    _script_library_task_access(request, workspace_id, header['source_task_id'])
-    return header
-
-
-def _read_script_library_sections(request, entry_id, **window):
-    workspace_id = current_workspace_id(request)
-    _read_script_library_header(request, entry_id)
-    return production_repo.script_records.read_script_library_sections(workspace_id, entry_id, **window)
-
-
-@app.get("/api/production/script-library/{entry_id}/sources", response_model=list[ScriptLibrarySourceResponse])
-def script_library_sources(entry_id: str, request: Request) -> list[ScriptLibrarySourceResponse]:
-    workspace_id = current_workspace_id(request)
-    try:
-        entry = _read_script_library_header(request, entry_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
-    states, _, _ = _script_library_sources(workspace_id, entry, reader=_content_reader(request, workspace_id))
-    return states
-
-
-def reuse_script_library(entry_id, request, payload):
-    workspace_id = current_workspace_id(request)
-    if not payload.requirements_confirmed:
-        raise HTTPException(status_code=409, detail="请明确确认新任务要求")
-    entry, knowledge, sources = _readable_script_library_entry(request, workspace_id, entry_id)
-    plan = CreationPlan(
-        id=f"plan_{uuid4().hex[:12]}", workspace_id=workspace_id,
-        name=payload.name.strip(), goal=f"复用文案：{entry['name']}（版本{entry['version']}），待重新确认正文",
-        target_count=1, language=entry['language'], aspect_ratio=payload.aspect_ratio,
-        duration_target_seconds=payload.duration_target_seconds,
-        knowledge_references=knowledge, source_references=sources,
-        selected_voice=None, pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
-        material_rule_summary="复用稿尚未选材，确认正文后沿当前任务继续", model_snapshot=[],
-        confirmation_points=[], blockers=[], preflight_fingerprint=f"script-library:{entry['id']}",
-    )
-    if not plan.name:
-        raise HTTPException(status_code=422, detail="请输入新任务名称")
-    def guard(conn):
-        current, current_knowledge, current_sources = _readable_script_library_entry(request, workspace_id, entry_id)
-        if (current, current_knowledge, current_sources) != (entry, knowledge, sources):
-            raise ScriptDraftRejected(status_code=409, detail="文案库来源或许可已变化，没有创建新任务")
-    return _library_request_case(request).reuse_library_entry(workspace_id, entry_id, payload,
-        member_id=_content_reader(request, workspace_id)[0], plan=plan, write_guard=guard)
+    reader = lambda ws: _content_reader(request, ws)
+    draft_use_case = _script_draft_use_case(workspace_id,
+        validate_inputs=lambda ws, plan, refs: _validate_script_input_sources(ws, plan, refs, *reader(ws)))
+    return _bind_script_library_use_case(draft_use_case, reader)
 
 
 from app.creation.script_library_routes import build_script_library_router
+from app.creation.script_library_use_case import ScriptLibraryUseCase
 app.include_router(build_script_library_router(
-    list_headers=_list_script_library_headers, read_header=_read_script_library_header,
-    read_sections=_read_script_library_sections, save_entry=save_script_library,
-    reuse_entry=reuse_script_library, read_request=_read_library_request))
+    use_case=_script_library_use_case, workspace_id=lambda request: current_workspace_id(request)))
 
 
 @app.get("/api/creation-tasks", response_model=CreationTasksResponse)
@@ -7218,8 +7016,7 @@ def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None
     case.topic_generator=lambda inputs:_creation_task_topic_generator_for(_workspace_settings_for(workspace_id)).generate(inputs)
     case.topic_response=_creation_task_topic_response
     if content_reader is not None:
-        case.read_script_header=lambda ws, script_id: _script_header_for_reader(ws, script_id, content_reader(ws))
-        case.read_library_header=lambda ws, entry_id: _library_header_for_reader(ws, entry_id, content_reader(ws))
+        _bind_script_library_use_case(case, content_reader)
     return case
 
 
@@ -8389,7 +8186,12 @@ def confirm_creation_task_script(
     if current_script.task_id != task.id:
         raise HTTPException(status_code=404, detail="creation task script not found")
     if current_script.reused_from_entry_id:
-        _readable_script_library_entry(request, workspace_id, current_script.reused_from_entry_id)
+        try:
+            _script_library_use_case(request).read_reusable_entry(workspace_id, current_script.reused_from_entry_id)
+        except ScriptDraftRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
     elif current_script.run_id:
         try:
             generation_run = production_repo.get_script_generation_run(workspace_id, current_script.run_id)

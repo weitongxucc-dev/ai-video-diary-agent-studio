@@ -55,6 +55,17 @@ def test_library_write_requests_replay_original_receipts_without_full_bodies(lib
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 2
         assert conn.execute('SELECT count(*) FROM script_library_entries').fetchone()[0] == 1
+    # Source permission may change after a successful write. Original request
+    # replay must recover the saved task, while a fresh request remains blocked.
+    sources.set_knowledge_item_use_state('local', 'knowledge_own', 'excluded')
+    assert client.post(url, json=reuse_input).json() == result
+    assert client.post(url, json={**reuse_input, 'name': '撤权后换要求'}).status_code == 409
+    assert client.post(url, json={**reuse_input, 'request_id': str(uuid4())}).status_code == 409
+    repo.set_creation_task_visibility('local', 'task_original', 'private')
+    assert client.post(url, json=reuse_input).json() == result
+    assert client.get(f"/api/production/script-library-requests/{reuse_input['request_id']}?operation=reuse").json() == result
+    with repo._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 2
     monkeypatch.setattr(main, '_content_reader', lambda *a: ('other-member', False))
     assert client.get(query).status_code == 404
     assert client.get(f"/api/production/script-library-requests/{reuse_input['request_id']}?operation=reuse").status_code == 404

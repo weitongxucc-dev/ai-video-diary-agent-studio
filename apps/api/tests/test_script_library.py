@@ -199,7 +199,7 @@ def test_library_rechecks_reference_without_legacy_rights_proof_fields(library):
     assert reuse(client, entry["id"]).status_code == 200
 
 
-def test_citation_reports_the_cited_version_facts_after_the_current_version_moved(library):
+def test_citation_reports_the_cited_version_facts_after_the_current_version_moved(library, monkeypatch):
     """引用回查必须给引用绑定那一版的真实快照事实，而不是当前版。"""
     client, repo, sources = library
     entry = save(client,repo)
@@ -268,6 +268,17 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     assert states[0]["cited_source_url"] == "https://example.test/v1"
     # 引用只记到条目与版本，没有段落定位：不猜第一段。
     assert states[0]["locator"] is None
+    # A shared task does not disclose a privately owned source's old snapshot.
+    repo.set_creation_task_visibility("local", "task_original", "shared")
+    sources.set_knowledge_item_visibility("local", versioned.id, "private")
+    monkeypatch.setattr(main, "_content_reader", lambda *_: ("another-member", False))
+    hidden = client.get(f"/api/production/script-library/{entry['id']}/sources")
+    assert hidden.status_code == 200, hidden.text
+    hidden_state = hidden.json()[0]
+    assert hidden_state["status"] == "missing"
+    assert all(hidden_state[field] is None for field in (
+        "title", "source_url", "version_or_identity", "cited_version",
+        "cited_source_url", "cited_fetched_at", "cited_content_hash", "locator"))
 
 
 def test_cross_workspace_cannot_search_or_reuse(library, monkeypatch):
@@ -292,3 +303,46 @@ def test_owned_script_without_external_references_can_save_and_reuse(library):
     response = reuse(client, entry["id"])
     assert response.status_code == 200, response.text
     assert repo.get_creation_task_script("local",response.json()["script_id"]).selection_status=="draft"
+
+
+def test_library_use_case_reuse_rolls_back_receipt_failure_and_retries_original_request(library):
+    """The business case can run directly; one transaction owns all reuse writes."""
+    import sqlite3
+    from app.creation.script_draft_use_case import ScriptDraftUseCase
+    from app.creation.script_library_use_case import ScriptLibraryUseCase
+    from app.creation.script_windows import ScriptWindowConflict
+    from app.schemas import ScriptLibrarySaveRequest, ScriptLibraryReuseRequest
+
+    _, repo, sources = library
+    member_id = repo.get_creation_task('local', 'task_original').owner_user_id
+    draft = ScriptDraftUseCase(repo, read_inputs=None, validate_inputs=None,
+        script_goal=None, topic_origin=None, check_draft=None, record_service=None,
+        route_snapshot=None, record_adoption=None)
+    case = ScriptLibraryUseCase(repo, sources, reader=lambda _: (member_id, False), draft_use_case=draft)
+    draft.read_script_header, draft.read_library_header = case.read_script_header, case.read_header
+    header = case.read_script_header('local', 'script_original')
+    saved = case.save_entry('local', ScriptLibrarySaveRequest(request_id=uuid4(),
+        expected_source_updated_at=header['updated_at'], source_script_id=header['id'], name='独立用例'))
+    payload = ScriptLibraryReuseRequest(request_id=uuid4(), name='原请求复用',
+        expected_entry_updated_at=saved['entry']['updated_at'], requirements_confirmed=True)
+    with pytest.raises(ScriptWindowConflict):
+        case.reuse_entry('local', saved['entry_id'], payload.model_copy(update={
+            'expected_entry_updated_at': datetime(2000, 1, 1, tzinfo=UTC)}))
+    with repo._connect() as conn:
+        conn.execute("CREATE TRIGGER fail_reuse_receipt BEFORE INSERT ON task_events "
+            "WHEN NEW.event_type='script_library_reused' BEGIN SELECT RAISE(ABORT,'receipt failure'); END")
+        tables = ('creation_tasks', 'creation_plans', 'creation_task_scripts',
+                  'creation_task_script_sections', 'task_events')
+        before = {table: conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in tables}
+    with pytest.raises(ValueError) as failure:
+        case.reuse_entry('local', saved['entry_id'], payload)
+    assert isinstance(failure.value.__cause__, sqlite3.IntegrityError)
+    assert str(failure.value.__cause__) == 'receipt failure'
+    with repo._connect() as conn:
+        assert {table: conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in tables} == before
+        conn.execute('DROP TRIGGER fail_reuse_receipt')
+    assert repo.script_records.library_reuse_request_result('local', str(payload.request_id), member_id) is None
+    result = case.reuse_entry('local', saved['entry_id'], payload)
+    assert case.reuse_entry('local', saved['entry_id'], payload) == result
+    assert case.read_request('local', str(payload.request_id), 'reuse') == result
+    assert repo.get_creation_task('local', result['task_id']).confirmed_script_id is None

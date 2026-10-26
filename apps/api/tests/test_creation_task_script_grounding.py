@@ -2177,9 +2177,7 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
     state = api_state
     from app.creation.script_library_routes import build_script_library_router
     state.client.app.include_router(build_script_library_router(
-        list_headers=main._list_script_library_headers,read_header=main._read_script_library_header,
-        read_sections=main._read_script_library_sections,save_entry=main.save_script_library,
-        reuse_entry=main.reuse_script_library,read_request=main._read_library_request))
+        use_case=main._script_library_use_case, workspace_id=main.current_workspace_id))
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',main.confirm_creation_task_script,methods=['POST'])
     original_calls = []
     set_api_provider(monkeypatch, draft(), reviewed(draft()), original_calls)
