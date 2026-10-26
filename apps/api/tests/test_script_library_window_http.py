@@ -11,11 +11,14 @@ def _bind_library_member(library, monkeypatch):
     from app.local_members import LocalMemberService
     client, repo, sources = library
     members = LocalMemberService(repo.database_path)
-    member, token = members.whoami(None)
+    # The request holder must differ from the source owner: making a task
+    # private revokes a shared reader, while its owner remains entitled to read.
+    member, token = members.join(members.create_invite_code(), '文案库使用者')
+    assert member.member_id != repo.get_creation_task('local', 'task_original').owner_user_id
     monkeypatch.setattr(main, 'local_members_service', members)
     client.headers['X-Local-Member-Token'] = token
     repo.set_creation_task_visibility('local', 'task_original', 'shared')
-    sources.set_knowledge_item_owner('local', 'knowledge_own', member.member_id)
+    sources.set_knowledge_item_visibility('local', 'knowledge_own', 'shared')
     return client, repo, sources
 
 
@@ -65,7 +68,9 @@ def test_library_reuse_rechecks_source_permission_at_commit_without_losing_saved
     assert saved.status_code == 200, saved.text
     receipt = saved.json()
     original = repo.script_records.reuse_library_rows
+    commit_attempted = []
     def revoke_then_commit(*args, **kwargs):
+        commit_attempted.append(True)
         sources.set_knowledge_item_use_state('local', 'knowledge_own', 'excluded')
         return original(*args, **kwargs)
     monkeypatch.setattr(repo.script_records, 'reuse_library_rows', revoke_then_commit)
@@ -73,6 +78,7 @@ def test_library_reuse_rechecks_source_permission_at_commit_without_losing_saved
         request_id=str(uuid4()), expected_entry_updated_at=receipt['entry']['updated_at'],
         name='不得生成的新任务', requirements_confirmed=True))
     assert response.status_code == 409, response.text
+    assert commit_attempted == [True]
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 1
     # Read permission and permission to reuse cited sources are separate.
