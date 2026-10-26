@@ -435,7 +435,8 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
         'turn_id':turn['id'],'input_id':None,'goal_revision':0,
         'task_version':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}}
     def call(operation,arguments):
-        return business(operation,arguments,call_id='fixture',tool_call_id='fixture',source_binding=binding,
+        from app.assistant.task_business_adapter import TaskBusinessAdapter
+        return TaskBusinessAdapter(business)(operation,arguments,call_id='fixture',tool_call_id='fixture',source_binding=binding,
             cancel_event=Event(),deadline_monotonic=float('inf'))
     request_id=str(uuid4())
     saved=call('apply_task_edit',{'payload':{'operation_type':'ChangeCrop','clip_id':'clip','fit_mode':'fit','crop_x':0.3,'crop_y':0.7,
@@ -528,7 +529,8 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     binding={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'conversation_id':chat['id'],
         'turn_id':turn['id'],'input_id':None,'goal_revision':0,
         'task_version':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}}
-    result=business('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},
+    from app.assistant.task_business_adapter import TaskBusinessAdapter
+    result=TaskBusinessAdapter(business)('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},
         call_id='read-http',tool_call_id='read-http',source_binding=binding,cancel_event=Event(),deadline_monotonic=float('inf'))
     assert result['ok'] and result['value']['result']==submitted.json(),result
     from app.assistant_goal_continuation import GoalResultProjection

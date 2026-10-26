@@ -34,22 +34,22 @@ def test_script_window_business_dispatch_uses_only_the_window_callback():
 def test_script_window_business_preserves_conflict_missing_and_invalid_errors():
     import pytest
     from types import SimpleNamespace
-    from fastapi import HTTPException
+    from app.assistant.task_business_errors import TaskOperationRejected
     from app.assistant.task_business import TaskBusiness, TaskBusinessRejected
     from app.creation.script_windows import ScriptWindowConflict
     business = object.__new__(TaskBusiness)
     task = SimpleNamespace(workspace_id='workspace',id='task')
-    for error, status in [(ScriptWindowConflict('stale'),409),(KeyError('missing'),404),(ValueError('cursor'),422)]:
+    for error, status in [(ScriptWindowConflict('stale'),'conflict'),(KeyError('missing'),'not_found'),(ValueError('cursor'),'invalid_input')]:
         def read(*args, **kwargs):
             raise error
         business.read_script_sections = read
-        with pytest.raises(HTTPException) as failed:
+        with pytest.raises(TaskOperationRejected) as failed:
             business.execute('read_script_sections',{'script_id':'script','after_ordinal':20,'expected_updated_at':'v1'},None,task,None,None,None,None)
-        assert failed.value.status_code == status
+        assert failed.value.kind == status
     business.read_script_sections = None
     with pytest.raises(TaskBusinessRejected) as failed:
         business.execute('read_script_sections',{'script_id':'script'},None,task,None,None,None,None)
-    assert failed.value.status_code == 503
+    assert failed.value.kind == 'unavailable'
 
 
 def test_device_preparation_uses_original_account_actor_and_only_public_facts():
@@ -110,25 +110,25 @@ def test_device_preparation_status_reuses_pure_application_without_starting_runt
 def test_device_preparation_preserves_parameter_conflict_missing_and_unassembled_errors():
     import pytest
     from types import SimpleNamespace
-    from fastapi import HTTPException
+    from app.assistant.task_business_errors import TaskOperationRejected
     from app.assistant.task_business import TaskBusiness,TaskBusinessRejected
     from app.device_preparation_application import DevicePreparationConflict
     business = object.__new__(TaskBusiness)
     task = SimpleNamespace(workspace_id='workspace',id='task')
-    for error,status in [(DevicePreparationConflict('busy'),409),(KeyError('missing'),404),(RuntimeError('unavailable'),503)]:
+    for error,status in [(DevicePreparationConflict('busy'),'conflict'),(KeyError('missing'),'not_found'),(RuntimeError('unavailable'),'unavailable')]:
         def dispatch(*args,**kwargs):
             raise error
         business.device_preparation = dispatch
-        with pytest.raises(HTTPException) as failure:
+        with pytest.raises(TaskOperationRejected) as failure:
             business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
-        assert failure.value.status_code==status
-    with pytest.raises(HTTPException) as failure:
+        assert failure.value.kind==status
+    with pytest.raises(TaskOperationRejected) as failure:
         business.execute('prepare_device_resources',{'payload':{'request_id':'invalid','shape':{}}},None,task,None,None,None,None)
-    assert failure.value.status_code==422
+    assert failure.value.kind=='invalid_input'
     business.device_preparation = None
     with pytest.raises(TaskBusinessRejected) as failure:
         business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
-    assert failure.value.status_code==503
+    assert failure.value.kind=='unavailable'
 
 
 def test_script_window_operations_reuse_actor_bound_case_and_do_not_write_repository_directly():
@@ -209,4 +209,4 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
     goal['source_input_id']='appended-input'
     with pytest.raises(TaskBusinessRejected) as failure:
         business.finish({'turn_id':turn,'goal':dict(goal)},'旧回执',script_window_request=value)
-    assert failure.value.status_code==409 and len(saved)==1
+    assert failure.value.kind=='conflict' and len(saved)==1
