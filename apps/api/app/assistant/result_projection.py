@@ -9,6 +9,24 @@ from app.assistant.failures import _fail, _classify_output, FAILURE_UNKNOWN, FAI
 
 
 
+def quality_continuation_message(value: dict) -> str:
+    return {'recorded': '已回读原质检续作回执；请读取实际质检结果，回执不表示检查通过。',
+        'rejected': '原质检续作被拒绝；原失败阶段保留，请处理具体原因。',
+        'not_submitted': '原质检续作未提交；请核对阻断原因。'}.get(value.get('status'),
+        '原质检续作结果尚未知；只查询原Job和失败前驱，不重复提交或另建检查。')
+
+
+def resolve_quality_continuation(details: dict, *, task_id: str, invocation_input_id: str, read_original) -> dict:
+    if (details.get('kind') != 'quality_continuation' or details.get('task_id') != task_id
+            or details.get('invocation_input_id') != invocation_input_id):
+        raise ValueError('质检回执不属于当前任务输入')
+    pair = [details.get(key) for key in ('job_id', 'failed_request_id')]
+    if any(not isinstance(value, str) or not value for value in pair):
+        raise ValueError('质检回执缺少原Job或失败前驱')
+    # Only locators are consumed; status and successor come from the owner.
+    return read_original(*pair)
+
+
 def storyboard_regeneration_message(value: dict) -> str:
     kind = value["kind"]
     if kind == "storyboard_regeneration_unknown":
@@ -171,6 +189,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     }
     orchestration_failed = False
     unresolved_syntax_error = False
+    quality_continuation = None
     edit_request_status = None
     edit_applied = None
     script_tool_result = None
@@ -191,6 +210,12 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
+        if event.get('type') == 'tool_execution_end' and event.get('toolName') in {
+                'continue_task_quality_check', 'read_task_quality_continuation'}:
+            details = (event.get('result') or {}).get('details') or {}
+            if (details.get('kind') == 'quality_continuation' and details.get('job_id')
+                    and details.get('failed_request_id')):
+                quality_continuation = details
         if event.get('type')=='tool_execution_end' and event.get('toolName') in SCRIPT_WINDOW_TOOL_OPERATIONS:
             script_window_attempted=True
             operation=SCRIPT_WINDOW_TOOL_OPERATIONS[event['toolName']]
@@ -381,6 +406,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         return message, script_tool_result
     if segment_result is not None:
         return segment_revision_message(segment_result), segment_result
+    if quality_continuation is not None:
+        return quality_continuation_message(quality_continuation), quality_continuation
     if edit_request_status is not None and preview is None:
         if media_job is not None:
             edit_request_status = {**edit_request_status, "related_media_job": media_job}

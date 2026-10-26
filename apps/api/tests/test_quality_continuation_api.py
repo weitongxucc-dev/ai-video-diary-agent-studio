@@ -51,6 +51,11 @@ def test_continue_http_preserves_original_check_and_uses_registered_service(syst
     monkeypatch.setattr(runtime, 'start', lambda: starts.append('start'))  # No background/media work.
     url = '/api/creation-tasks/task/quality-check/continue'
     payload = {'job_id': job_id, 'failed_request_id': original['id']}
+    query = '/api/creation-tasks/task/quality-check/continuation'
+    unknown = client.get(query, headers=headers, params=payload)
+    assert unknown.status_code == 200 and unknown.json() == {**payload, 'status': 'unknown', 'receipt': None}
+    assert starts == []
+    assert client.get(query, headers={'X-Local-Member-Token': other_token}, params=payload).status_code == 404
     assert client.post(url, headers=headers, json={**payload, 'max_timeout_seconds': 99}).status_code == 422
     assert client.post(url, headers={'X-Local-Member-Token': other_token}, json=payload).status_code == 404
     assert client.post(url.replace('/task/', '/missing/'), headers=headers, json=payload).status_code == 404
@@ -58,6 +63,7 @@ def test_continue_http_preserves_original_check_and_uses_registered_service(syst
     assert response.status_code == 200, response.text
     assert response.json()['check_id'] == check_id and response.json()['job_id'] == job_id
     assert response.json()['request_id'] != original['id']
+    assert client.get(query, headers=headers, params=payload).json() == {**payload, 'status': 'recorded', 'receipt': response.json()}
     assert client.post(url, headers=headers, json=payload).json() == response.json()
     for _ in QUALITY_PHASES[1:]:
         assert runtime.run_once()
@@ -77,6 +83,7 @@ def test_continue_http_preserves_original_check_and_uses_registered_service(syst
         restarted.setattr(service, 'current_policy', lambda:
                           (_ for _ in ()).throw(AssertionError('completed replay must not inspect current budget')))
         assert client.post(url, headers=headers, json=payload).json() == response.json()
+        assert client.get(query, headers=headers, params=payload).json()['receipt'] == response.json()
     with repo._connect() as connection:
         assert dict(connection.execute('SELECT * FROM device_work_requests WHERE id=?',
                                         (original['id'],)).fetchone()) == original

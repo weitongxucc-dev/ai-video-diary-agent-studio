@@ -223,6 +223,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
         ...(query.has('expected_updated_at') ? {expected_updated_at:query.get('expected_updated_at')} : {}),
       });
     }
+    if (suffix === '/quality-check/continuation' && only('job_id', 'failed_request_id')
+        && query.has('job_id') && query.has('failed_request_id'))
+      return result('read_task_quality_continuation', {...args,
+        job_id: query.get('job_id'), failed_request_id: query.get('failed_request_id')});
     const reads: Record<string, string> = {
       '/execution/preview': 'read_creation_execution_preview',
       '/assistant/script-context': 'read_assistant_script_context',
@@ -230,6 +234,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       '/assistant/execution-capabilities': 'read_execution_capabilities',
       '/assistant/media-script-capabilities': 'read_media_script_capabilities',
       '/observations': 'read_task_observations',
+      '/quality-check': 'read_task_quality_check',
     };
     if (reads[suffix] && !search) return result(reads[suffix], args);
     const segmentContext=suffix.match(/^\/segments\/([^/]+)\/context$/);
@@ -275,6 +280,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     '/execution/cancel': 'cancel_creation_execution',
     '/topics/generate': 'generate_creation_task_topics',
     '/observations': 'observe_task_output',
+    '/quality-check/continue': 'continue_task_quality_check',
     '/edits/exact': 'apply_task_edit',
     '/narration/voice': 'select_narration_voice',
   };
@@ -335,7 +341,9 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     const targetedRestore = (path === `${taskRoot}/timeline/undo` || path === `${taskRoot}/timeline/redo`)
       && typeof requestBody?.target_operation_id === 'string' && requestBody.target_operation_id.length > 0;
     // The section owner checks the original section and dependency digest.
-    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && path.startsWith(`${taskRoot}/`)) {
+    // The quality application reads an existing successor before checking HEAD for a new continuation.
+    const qualityContinuation = path === `${taskRoot}/quality-check/continue`;
+    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && !qualityContinuation && path.startsWith(`${taskRoot}/`)) {
       try {
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`, undefined, false);
         verifyTaskVersion(current);

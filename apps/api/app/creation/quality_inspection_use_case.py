@@ -118,7 +118,7 @@ class QualityInspectionUseCase:
         """
         return self._read_failed_phase_link(workspace_id, job_id, failed_request_id, actor)[-1]
 
-    def continue_failed_phase(self, scheduler, workspace_id, job_id, failed_request_id, actor):
+    def continue_failed_phase(self, scheduler, workspace_id, job_id, failed_request_id, actor, *, write_guard=None):
         """Explicit finite preparation under the original check/Job and prefix.
 
         Policy is read from the trusted bound runtime, never from tool/HTTP caps.
@@ -160,6 +160,8 @@ class QualityInspectionUseCase:
         source = sealed["source"]
         generation = scheduler.reconcile_released()
         def write(conn, old_request, new_request_id):
+            if write_guard is not None:
+                write_guard(conn)
             current_job, _, current_record, current_sealed = self.read(workspace_id, job_id, connection=conn)
             current_access = conn.execute("SELECT json_extract(payload,'$.owner_user_id'),"
                 "json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?",

@@ -7456,6 +7456,7 @@ def _creation_task_assistant_turn(
             turn_status="stopped",
             draft_version=payload.expected_draft_version + 1,
             script_window_request=((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'),
+            quality_continuation=((saved or {}).get('result') or {}).get('response', {}).get('quality_continuation'),
         )
         conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "task_turn", "response": response.model_dump(mode="json")})
         return response
@@ -7551,12 +7552,26 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     topic_candidates = None
     storyboard_regeneration = None
     script_window_request = None
+    quality_continuation = None
     timeline_action = None
     media_job, edit_request, script_tool, segment_revision, timeline_restore = None, None, None, None, None
     if isinstance(preview, dict) and preview.get("kind") in {"execution_action", "execution_result"} and preview.get("applied_edit") is not None:
         edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview["applied_edit"])
         timeline_action = "apply"
-    if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
+    if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
+        from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
+        origin = conversation_repo.task_turn_source(str(turn_id), workspace_id,
+            _assistant_member_id(request, workspace_id), task_id)
+        try:
+            quality_continuation = resolve_quality_continuation(preview, task_id=task_id,
+                invocation_input_id=origin.get('input_id') or str(turn_id),
+                read_original=lambda job_id, failed_request_id: _read_creation_quality_continuation(
+                    request, task_id, job_id, failed_request_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        reply = quality_continuation_message(quality_continuation)
+        edit_preview = None
+    elif isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
         from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
         origin = conversation_repo.task_turn_source(str(turn_id), workspace_id,
             _assistant_member_id(request, workspace_id), task_id)
@@ -7700,6 +7715,7 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         if readiness_message:
             reply+=' '+readiness_message
     response = CreationTaskAssistantTurnResponse(
+        quality_continuation=quality_continuation,
         script_window_request=script_window_request,
         storyboard_regeneration=storyboard_regeneration,
         segment_revision=segment_revision,
@@ -9866,22 +9882,12 @@ def _start_creation_task_quality_check(workspace_id: str, task_id: str, *,
 def get_creation_task_quality_check(task_id: str, request: Request) -> CreationTaskQualityCheckResponse:
     workspace_id = current_workspace_id(request)
     _quality_check_task_access(request, workspace_id, task_id)
-    result = _creation_task_quality_check_response(workspace_id, task_id)
-    if result.check_state != "failed":
-        return result
-    runtime = device_runtime
-    registration = runtime.registrations.get(QUALITY_KIND) if runtime is not None else None
-    service = registration.owner.service if registration is not None else _quality_inspection_use_case()
     try:
         actor = _request_permit_actor(request, workspace_id)
     except (HTTPException, DeviceAccountError):
-        # Content visibility was already verified. Missing execution credentials
-        # cannot prevent reading stored results or supply a substitute actor.
         actor = None
-    continuation = service.continuation_projection(workspace_id, task_id,
-        actor, runtime_available=registration is not None)
-    result.continuation = QualityContinuationResponse.model_validate(continuation) if continuation is not None else None
-    return result
+    return CreationTaskQualityCheckResponse.model_validate(_quality_application().read(
+        workspace_id, task_id, _content_reader(request, workspace_id)[0], actor=actor))
 
 
 def recover_interrupted_quality_checks(runtime) -> None:
@@ -9898,39 +9904,40 @@ def check_creation_task_quality(task_id: str, request: Request,
     return _creation_task_quality_check_response(workspace_id, task_id)
 
 
+from app.creation.quality_application import QualityApplication
+
+
+def _bind_quality_runtime():
+    if device_runtime is None and not _start_device_runtime(start=False):
+        raise RuntimeUnavailable("当前设备策略尚未装配，无法接续质检")
+    return device_runtime
+
+
+def _quality_application():
+    return QualityApplication(production_repo,
+        offline_reader=lambda: _quality_inspection_use_case(budget=None),
+        current_runtime=lambda: device_runtime, bind_runtime=_bind_quality_runtime,
+        lifecycle_lock=_runtime_reload_lock)
+
+
+def _read_creation_quality_continuation(request, task_id, job_id, failed_request_id):
+    workspace_id = current_workspace_id(request)
+    _quality_check_task_access(request, workspace_id, task_id)
+    actor = _require_permit_actor(request, workspace_id)
+    return _quality_application().read_continuation(workspace_id, task_id, job_id, failed_request_id, actor)
+
+
 def _continue_creation_quality_check(request, task_id, payload):
     workspace_id = current_workspace_id(request)
     _quality_check_task_access(request, workspace_id, task_id)
     actor = _require_permit_actor(request, workspace_id)
-    job = production_repo.get_job_run(workspace_id, payload.job_id)
-    if job.task_id != task_id or job.kind != QUALITY_KIND:
-        raise KeyError(payload.job_id)
-    if job.status in {"succeeded", "failed", "cancelled"}:
-        registration = device_runtime.registrations.get(QUALITY_KIND) if device_runtime is not None else None
-        reader = registration.owner.service if registration is not None else _quality_inspection_use_case(budget=None)
-        receipt = reader.continued_phase_receipt(workspace_id, payload.job_id, payload.failed_request_id, actor)
-        if receipt is not None:
-            return receipt
-    with _runtime_reload_lock:
-        if device_runtime is None and not _start_device_runtime(start=False):
-            raise RuntimeUnavailable("当前设备策略尚未装配，无法接续质检")
-        runtime = device_runtime
-        registration = runtime.registrations.get(QUALITY_KIND) if runtime is not None else None
-        if registration is None:
-            raise RuntimeUnavailable("当前设备正处于能力准备阶段，请先收束原准备请求")
-        service = registration.owner.service
-        successor = service.continue_failed_phase(runtime.scheduler, workspace_id, payload.job_id,
-                                                  payload.failed_request_id, actor)
-        current_job, _, record, _ = service.read(workspace_id, payload.job_id)
-        if current_job.status in {"queued", "running"}:
-            if not runtime.running:
-                runtime.start()
-            runtime.wake()
-        return {"check_id": record["check_id"], "job_id": payload.job_id, "request_id": successor}
+    return _quality_application().continue_failed(workspace_id, task_id,
+        payload.job_id, payload.failed_request_id, actor)
 
 
 from app.creation.quality_routes import build_quality_continuation_router
-app.include_router(build_quality_continuation_router(continue_check=_continue_creation_quality_check))
+app.include_router(build_quality_continuation_router(continue_check=_continue_creation_quality_check,
+    read_continuation=_read_creation_quality_continuation))
 
 
 @app.get("/api/creation-tasks/{task_id}/output")
@@ -13884,7 +13891,7 @@ def _task_business(*, generation_case=None):
         native_case=None if generation_case is not None else _native_task_operations_case(),
         timeline_restores=None if generation_case is not None else _timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
-        device_preparation=_dispatch_device_preparation,
+        device_preparation=_dispatch_device_preparation, quality=_quality_application(),
         generation_case=generation_case, creator_memory=_creator_memory_facts,
         execution_status=_creation_execution_summary,
         read_script_sections=lambda task, script_id, **values:
@@ -14102,6 +14109,8 @@ def _finish_goal_business_turn(business,claim,reply,preview):
     message = _assistant_text_without_credentials(reply,claim['goal']['workspace_id'])
     if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
         return business.finish(claim, message, script_window_request=preview)
+    if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
+        return business.finish(claim, message, quality_continuation=preview)
     return business.finish(claim, message)
 
 

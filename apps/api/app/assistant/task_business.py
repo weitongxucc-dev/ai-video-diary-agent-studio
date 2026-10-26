@@ -52,7 +52,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -70,6 +70,7 @@ class TaskBusiness:
         self.media_jobs_list=media_jobs_list
         self.execution_capabilities=execution_capabilities
         self.read_script_sections=read_script_sections
+        self.quality=quality
         self.device_preparation=device_preparation
         self.generation_case,self.creator_memory=generation_case,creator_memory
         self.execution_status=execution_status
@@ -228,7 +229,7 @@ class TaskBusiness:
         binding=dict(source_binding)
         if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
             raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
-        reconcile_original=(operation in {'read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+        reconcile_original=(operation in {'read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
             or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
         # Section owners validate the frozen target and dependency digest at
         # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -253,7 +254,8 @@ class TaskBusiness:
                 raise TaskBusinessRejected('局部修改不能切换原输入')
         if operation in {'save_assistant_script_draft','start_script_window','patch_script_sections','confirm_saved_script','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
             arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
-        guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,check_version=check_version)
+        guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,
+            check_version=check_version or operation=='continue_task_quality_check')
         invocation.owner_entered=True
         value=self.execute(operation,arguments,actor,task,goal,{**origin,'assistant_turn_id':binding['turn_id']},sealed,guard)
         if is_script_generation(binding):
@@ -367,7 +369,7 @@ class TaskBusiness:
             **{key:sealed.get(key) if frozen.get(key) else None for key in ('profile_reference','knowledge_reference')}}
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
-    def finish(self, claim, reply, *, script_window_request=None):
+    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
@@ -379,6 +381,17 @@ class TaskBusiness:
         events=self.production.list_task_events(ws,task_id)
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
+        if quality_continuation is not None:
+            from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
+            try:
+                actual = resolve_quality_continuation(quality_continuation, task_id=task_id,
+                    invocation_input_id=goal.get('source_input_id') or claim['turn_id'],
+                    read_original=lambda job_id, failed_request_id: self.quality.read_continuation(
+                        ws, task_id, job_id, failed_request_id, actor))
+            except ValueError as exc:
+                raise TaskBusinessRejected(str(exc), kind='conflict') from exc
+            reply = quality_continuation_message(actual)
+            response.update(reply=reply, quality_continuation=actual)
         if script_window_request is not None:
             from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
             if script_window_request.get('input_id')!=goal.get('source_input_id'):
@@ -645,6 +658,25 @@ class TaskBusiness:
             return self.topic_facts(ws,task)
         if operation in {'start_creation_execution','resume_creation_execution','cancel_creation_execution'}:
             return self.execute_creation(operation,args,actor,task,goal,origin,guard)
+        if operation in {'read_task_quality_check','read_task_quality_continuation','continue_task_quality_check'}:
+            from app.schemas import QualityContinuationRequest
+            from app.device_scheduler import RecoveryBlocked
+            from app.device_runtime import RuntimeUnavailable
+            if self.quality is None:
+                raise TaskBusinessRejected('原质检应用尚未装配',kind='unavailable')
+            try:
+                if operation=='read_task_quality_check':
+                    return self.quality.read(ws,task_id,actor.user_id or actor.member_id,actor=actor)
+                payload=QualityContinuationRequest.model_validate(args['payload'] if operation=='continue_task_quality_check'
+                    else {key:value for key,value in args.items() if key!='task_id'})
+                if operation=='read_task_quality_continuation':
+                    return self.quality.read_continuation(ws,task_id,payload.job_id,payload.failed_request_id,actor)
+                return self.quality.continue_failed(ws,task_id,payload.job_id,payload.failed_request_id,actor,
+                    write_guard=guard)
+            except RecoveryBlocked as exc:
+                raise TaskBusinessRejected(str(exc),kind='conflict') from exc
+            except RuntimeUnavailable as exc:
+                raise TaskBusinessRejected(str(exc),kind='unavailable') from exc
         if operation=='read_task_observations': return self.observation_facts(task,actor)
         if operation=='observe_task_output': return self.observe_output(task,actor,args['payload'],origin,guard)
         if operation=='read_task_observation_request': return self.request_result(task,actor,args['request_id'],'observation')

@@ -1776,6 +1776,14 @@ class QualityContinuationReceipt(BaseModel):
     request_id: str
 
 
+class QualityContinuationReadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    failed_request_id: str
+    status: Literal["recorded", "unknown"]
+    receipt: QualityContinuationReceipt | None
+
+
 class CreationTaskQualityCheckResponse(BaseModel):
     check_state: Literal["none", "checking", "failed", "done"]
     result_status: Literal["clean", "issues_found", "unavailable"] | None
@@ -2710,6 +2718,7 @@ class AssistantScriptWindowRequestResponse(BaseModel):
 
 
 class CreationTaskAssistantTurnResponse(BaseModel):
+    quality_continuation: QualityContinuationReadResponse | None = None
     script_window_request: AssistantScriptWindowRequestResponse | None = None
     timeline_restore: AssistantTimelineRestoreResponse | None = None
     segment_revision: AssistantSegmentRevisionResponse | None = None
