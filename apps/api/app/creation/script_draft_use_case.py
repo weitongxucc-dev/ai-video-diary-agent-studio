@@ -4,7 +4,8 @@ from dataclasses import asdict
 from uuid import NAMESPACE_URL, uuid4, uuid5
 import hashlib
 import json
-from app.production import CreationTaskScriptSection, CreationTaskScript, ScriptGenerationRun, TopicGenerationRun, TopicEvidenceReference, TopicCandidate as CreationTaskTopicCandidate
+from app.creation.script_contracts import CreationTaskScriptSection, CreationTaskScript, ScriptGenerationRun
+from app.production import TopicGenerationRun, TopicEvidenceReference, TopicCandidate as CreationTaskTopicCandidate
 from app.topics import CreationTaskScriptInput, CreationTaskGeneratedScript, CreationTaskScriptGenerationError, CreationTaskTopicInput, CreationTaskTopicSource, CreationTaskTopicGenerationError
 
 
@@ -22,6 +23,7 @@ class ScriptDraftUseCase:
     def __init__(self, repository, *, read_inputs, validate_inputs, script_goal, topic_origin,
                  check_draft, record_service, route_snapshot, record_adoption):
         self.repository=repository
+        self.scripts=repository.script_records
         self.read_inputs,self.validate_inputs=read_inputs,validate_inputs
         self.script_goal,self.topic_origin=script_goal,topic_origin
         self.check_draft,self.record_service=check_draft,record_service
@@ -30,13 +32,13 @@ class ScriptDraftUseCase:
     def confirm(self, workspace_id, task_id, script_id, payload, *, member_id, origin=None, write_guard=None, reread_origin=None):
         task=self.repository.get_creation_task(workspace_id,task_id)
         plan=self.repository.get_creation_plan(workspace_id,task.plan_id)
-        script=self.repository.get_creation_task_script(workspace_id,script_id)
+        script=self.scripts.get_creation_task_script(workspace_id,script_id)
         if script.task_id!=task.id:
             raise ScriptDraftRejected(status_code=404,detail="文案不属于当前任务")
         run=None
         binding=None
         if script.run_id and not script.reused_from_entry_id:
-            run=self.repository.get_script_generation_run(workspace_id,script.run_id)
+            run=self.scripts.get_script_generation_run(workspace_id,script.run_id)
             self.validate_inputs(workspace_id,plan,run.input_references)
         sections = [CreationTaskScriptSection(**section.model_dump()) for section in payload.sections]
         if not script.draft_complete:
@@ -72,7 +74,7 @@ class ScriptDraftUseCase:
                         raise ScriptDraftRejected(status_code=409,detail="提交时原输入已变化，原确认稿保持不变。")
                 elif write_guard is None:
                     raise ScriptDraftRejected(status_code=409,detail="采用缺少当前原输入的事务校验，没有沿旧输入确认文案。")
-        task,script=self.repository.confirm_creation_task_script(workspace_id,task_id,script_id,title=payload.title,
+        task,script=self.scripts.confirm_creation_task_script(workspace_id,task_id,script_id,title=payload.title,
             sections=sections,
             expected_updated_at=payload.expected_updated_at,adoption_kind=payload.adoption_kind,
             verified_owner_user_id=member_id,write_guard=commit_guard)
@@ -85,7 +87,7 @@ class ScriptDraftUseCase:
             return (*self.read_inputs(workspace_id, task_id), None)
         task = self.repository.get_creation_task(workspace_id, task_id)
         plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
-        entry = self.repository.get_script_library_entry(workspace_id, script.reused_from_entry_id)
+        entry = self.scripts.get_script_library_entry(workspace_id, script.reused_from_entry_id)
         if entry.language != script.language or plan.language != entry.language:
             raise ScriptDraftRejected(status_code=409, detail="复用文案的来源语言与当前任务不一致，请重新读取文案库来源。")
         try:
@@ -153,7 +155,7 @@ class ScriptDraftUseCase:
     def _claimed_window_operation(self, operation, workspace_id, task_id, script_id, payload, member_id, callback, write_guard):
         request_id=str(payload.request_id)
         digest=hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
-        claimed=self.repository.claim_script_window_request(workspace_id,task_id,script_id,operation,request_id,member_id,digest,submitted_input=payload.model_dump(mode='json'),write_guard=write_guard)
+        claimed=self.scripts.claim_script_window_request(workspace_id,task_id,script_id,operation,request_id,member_id,digest,submitted_input=payload.model_dump(mode='json'),write_guard=write_guard)
         if not claimed:
             result=self.window_request_result(workspace_id,task_id,request_id,member_id=member_id,operation=operation,script_id=script_id)
             if result['status'] in {'saved','confirmed'}:
@@ -164,7 +166,7 @@ class ScriptDraftUseCase:
         except Exception as exc:
             # Persist only the bounded business error, never arbitrary provider/driver exceptions.
             detail=exc.detail if isinstance(exc,ScriptDraftRejected) else None
-            self.repository.end_script_window_request_with_error(workspace_id,task_id,script_id,operation,request_id,member_id,error_detail=detail)
+            self.scripts.end_script_window_request_with_error(workspace_id,task_id,script_id,operation,request_id,member_id,error_detail=detail)
             raise
 
     def patch(self, workspace_id, task_id, script_id, payload, *, member_id, instruction_origin=None, reread_origin=None, write_guard=None):
@@ -190,12 +192,12 @@ class ScriptDraftUseCase:
         request_id = str(payload.request_id)
         after = payload.insert_after_section_id
         digest = script_patch_digest([asdict(part) for part in sections], payload.expected_updated_at, after)
-        previous = self.repository.script_patch_request_result(workspace_id,task_id,script_id,request_id,member_id)
+        previous = self.scripts.script_patch_request_result(workspace_id,task_id,script_id,request_id,member_id)
         if previous is not None:
             if previous['request_digest'] != digest:
                 raise ScriptDraftRejected(status_code=409, detail="同一文案请求不能更换输入；请读取原结果。")
             return previous['result']
-        context = self.repository.script_section_patch_context(workspace_id,task_id,script_id,sections,
+        context = self.scripts.script_section_patch_context(workspace_id,task_id,script_id,sections,
             payload.expected_updated_at, insert_after_section_id=after)
         metadata = context['metadata']
         # The current patch contract edits a generated draft; library copies keep
@@ -207,7 +209,7 @@ class ScriptDraftUseCase:
         binding = (asdict(plan),asdict(topic),tuple(sources),refs,reader)
         window = CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in sections),context['total_count'])
         review_binding = self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],sections,instruction_origin,
-            review_window=window, reuse_review=lambda key:self.repository.script_sections_have_review(workspace_id,task_id,script_id,sections,
+            review_window=window, reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,sections,
                 binding_digest=key,layout_digest=context['layout_digest']))
         _,new_plan,new_topic,new_sources,new_refs = self.read_inputs(workspace_id,task_id)
         new_reader = self.validate_inputs(workspace_id,new_plan,new_refs)
@@ -216,21 +218,21 @@ class ScriptDraftUseCase:
         if instruction_origin is not None and (reread_origin is None or instruction_origin != reread_origin(True)):
             raise ScriptDraftRejected(status_code=409, detail="本轮要求已变化，窗口未保存。")
         commit_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=True)
-        return self.repository.patch_assistant_script_sections(workspace_id,task_id,script_id,sections=sections,
+        return self.scripts.patch_assistant_script_sections(workspace_id,task_id,script_id,sections=sections,
             expected_updated_at=payload.expected_updated_at,request_id=request_id,member_id=member_id,
             insert_after_section_id=after,write_guard=commit_guard,review_binding=review_binding)
 
     def window_request_result(self, workspace_id, task_id, request_id, *, member_id, operation, script_id=None, include_input=False):
         if operation == 'start':
-            record=self.repository.script_window_start_result(workspace_id,task_id,str(request_id),member_id)
+            record=self.scripts.script_window_start_result(workspace_id,task_id,str(request_id),member_id)
         elif operation == 'patch' and script_id is not None:
-            record=self.repository.script_patch_request_result(workspace_id,task_id,script_id,str(request_id),member_id)
+            record=self.scripts.script_patch_request_result(workspace_id,task_id,script_id,str(request_id),member_id)
         elif operation == 'confirm' and script_id is not None:
-            record=self.repository.script_confirm_saved_result(workspace_id,task_id,script_id,str(request_id),member_id)
+            record=self.scripts.script_confirm_saved_result(workspace_id,task_id,script_id,str(request_id),member_id)
         else:
             raise ValueError('文案请求类型或稿件定位无效')
         if record is None:
-            pending=self.repository.pending_script_window_request(workspace_id,task_id,script_id,operation,str(request_id),member_id,include_input=include_input)
+            pending=self.scripts.pending_script_window_request(workspace_id,task_id,script_id,operation,str(request_id),member_id,include_input=include_input)
             if pending is None: raise KeyError(str(request_id))
             return pending
         return record['result']
@@ -239,7 +241,7 @@ class ScriptDraftUseCase:
         if instruction_origin is None: return
         actual_task=self.repository.get_creation_task(workspace_id,task_id)
         actual_plan=self.repository.get_creation_plan(workspace_id,actual_task.plan_id)
-        facts=self.repository.confirmed_script_adoption_facts(workspace_id,task_id,script_id,result['updated_at'])
+        facts=self.scripts.confirmed_script_adoption_facts(workspace_id,task_id,script_id,result['updated_at'])
         self.record_adoption(str(payload.assistant_turn_id),workspace_id,member_id,actual_task,actual_plan,facts,instruction_origin,
                              verified_body_digest=facts.body_digest)
 
@@ -249,13 +251,13 @@ class ScriptDraftUseCase:
         from app.topics import CreationTaskScriptReviewWindow
         request_id=str(payload.request_id)
         digest=script_confirmation_digest(payload.expected_updated_at,payload.adoption_kind)
-        prior=self.repository.script_confirm_saved_result(workspace_id,task_id,script_id,request_id,member_id)
+        prior=self.scripts.script_confirm_saved_result(workspace_id,task_id,script_id,request_id,member_id)
         if prior is not None:
             if prior['request_digest']!=digest:
                 raise ScriptDraftRejected(status_code=409,detail="原确认请求不能更换输入，请读取原结果。")
             self._record_confirmed_origin(workspace_id,task_id,script_id,prior['result'],payload,member_id,instruction_origin)
             return prior['result']
-        context=self.repository.saved_script_review_context(workspace_id,task_id,script_id,payload.expected_updated_at)
+        context=self.scripts.saved_script_review_context(workspace_id,task_id,script_id,payload.expected_updated_at)
         metadata=context['metadata']
         if metadata.get('reused_from_entry_id'):
             raise ScriptDraftRejected(status_code=409,detail="复用稿完整确认需要文案库来源窗口，请沿现有来源确认入口，不伪造选题。")
@@ -275,17 +277,17 @@ class ScriptDraftUseCase:
                 raise ScriptDraftRejected(status_code=409,detail="原制作授权已变化，不能采用。")
         cursor,review_binding=0,None
         while cursor is not None:
-            page=self.repository.read_creation_task_script_sections(workspace_id,task_id,script_id,
+            page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
                 expected_updated_at=payload.expected_updated_at,after_ordinal=cursor)
             parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
             window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
             review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,
-                review_window=window,reuse_review=lambda key:self.repository.script_sections_have_review(workspace_id,task_id,script_id,parts,
+                review_window=window,reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,parts,
                     binding_digest=key,layout_digest=context['layout_digest']))
-            self.repository.record_saved_script_section_review(workspace_id,task_id,script_id,parts,payload.expected_updated_at,
+            self.scripts.record_saved_script_section_review(workspace_id,task_id,script_id,parts,payload.expected_updated_at,
                 binding_digest=review_binding,layout_digest=context['layout_digest'],write_guard=current_guard)
             cursor=page['next_after_ordinal']
-        result=self.repository.confirm_reviewed_script(workspace_id,task_id,script_id,expected_updated_at=payload.expected_updated_at,
+        result=self.scripts.confirm_reviewed_script(workspace_id,task_id,script_id,expected_updated_at=payload.expected_updated_at,
             request_id=request_id,member_id=member_id,binding_digest=review_binding,layout_digest=context['layout_digest'],
             adoption_kind=payload.adoption_kind,write_guard=current_guard)
         self._record_confirmed_origin(workspace_id,task_id,script_id,result,payload,member_id,instruction_origin)
@@ -295,17 +297,17 @@ class ScriptDraftUseCase:
         from app.topics import CreationTaskScriptReviewWindow
         request_id = str(payload.request_id)
         request_digest = hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
-        prior = self.repository.script_window_start_result(workspace_id,task_id,request_id,member_id)
+        prior = self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)
         if prior is not None:
             if prior['request_digest'] != request_digest:
                 raise ScriptDraftRejected(status_code=409, detail="首窗原请求不能更换输入，请读取原结果。")
             return prior['result']
-        if self.repository.active_creation_task_script_headers(workspace_id,task_id):
+        if self.scripts.active_creation_task_script_headers(workspace_id,task_id):
             raise ScriptDraftRejected(status_code=409, detail="当前已有稿件，请用稳定段落ID窗口修改或明确整稿替换，不重新创建稿件。")
         identity = uuid5(NAMESPACE_URL, json.dumps([workspace_id,task_id,member_id,request_id])).hex
         script_id, run_id = 'script_'+identity, 'script_run_'+identity
         try:
-            self.repository.get_script_generation_run(workspace_id,run_id)
+            self.scripts.get_script_generation_run(workspace_id,run_id)
         except KeyError:
             pass
         else:
@@ -314,7 +316,7 @@ class ScriptDraftUseCase:
         self.save(workspace_id,task_id,payload,instruction_origin=instruction_origin,reread_origin=reread_origin,
             write_guard=write_guard,window_start={'script_id':script_id,'run_id':run_id,'request_id':request_id,
                 'member_id':member_id,'request_digest':request_digest,'review_window':window})
-        return self.repository.script_window_start_result(workspace_id,task_id,request_id,member_id)['result']
+        return self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)['result']
 
     def _source_commit_guard(self, workspace_id, task_id, snapshot, write_guard, instruction_origin, reread_origin, *, draft_only):
         def guard(conn):
@@ -336,8 +338,8 @@ class ScriptDraftUseCase:
                 if event.event_type=='assistant_script_saved' and event.payload['source']==source_binding
                 and event.payload['request_digest']==request_digest]
             if previous:
-                return self.repository.get_creation_task_script(workspace_id,previous[-1].payload['script_id'])
-            result_write=lambda conn,script:self.repository.record_assistant_script_save(script,source_binding,request_digest,connection=conn)
+                return self.scripts.get_creation_task_script(workspace_id,previous[-1].payload['script_id'])
+            result_write=lambda conn,script:self.scripts.record_assistant_script_save(script,source_binding,request_digest,connection=conn)
         _assistant_script_inputs=self.read_inputs
         _require_current_script_inputs=self.validate_inputs
         _topic_route_snapshot=self.route_snapshot
@@ -351,7 +353,7 @@ class ScriptDraftUseCase:
         if any(not set(section.evidence_reference_ids).issubset(allowed) for section in sections):
             raise ScriptDraftRejected(status_code=422, detail="文案引用了本次任务以外的资料")
         from app.creation.script_windows import script_revision
-        headers = self.repository.active_creation_task_script_headers(workspace_id,task_id)
+        headers = self.scripts.active_creation_task_script_headers(workspace_id,task_id)
         revising_confirmed = bool(task.confirmed_script_id and task.can_revise_script)
         latest = next((item for item in headers if item['id']==task.confirmed_script_id), None) if revising_confirmed else (headers[0] if headers else None)
         updating = bool(latest and latest['selection_status']=="draft" and task.stage_status=="waiting_for_user")
@@ -368,7 +370,7 @@ class ScriptDraftUseCase:
         review_binding = self._review_candidate(workspace_id, task, plan, topic, sources, reader, payload.title, sections, instruction_origin,
             review_window=window_start['review_window'] if window_start else None)
         if window_start:
-            result_write = lambda conn,script:self.repository.record_script_window_start(script,window_start['request_id'],
+            result_write = lambda conn,script:self.scripts.record_script_window_start(script,window_start['request_id'],
                 window_start['member_id'],window_start['request_digest'],review_binding,connection=conn)
         # The model call can outlive source permissions or the current plan/topic.
         # Re-read those bindings; the repository still owns the final draft CAS.
@@ -386,7 +388,7 @@ class ScriptDraftUseCase:
                 reread_origin(False)
             delegated = bool(instruction_origin and plan.creation_intent and plan.creation_intent["kind"] == "goal_delegation")
             try:
-                task, draft = self.repository.confirm_creation_task_script(workspace_id, task_id, latest['id'],
+                task, draft = self.scripts.confirm_creation_task_script(workspace_id, task_id, latest['id'],
                     title=payload.title, sections=sections, expected_updated_at=payload.expected_updated_at, write_guard=commit_guard,result_write=result_write,
                     adoption_kind="delegated_system" if delegated else "manual", verified_owner_user_id=reader[0])
             except (KeyError, ValueError) as exc:
@@ -396,7 +398,7 @@ class ScriptDraftUseCase:
                     task, plan, draft, instruction_origin)
         elif updating:
             try:
-                draft = self.repository.update_assistant_script_draft(
+                draft = self.scripts.update_assistant_script_draft(
                     workspace_id, task_id, latest['id'], title=payload.title, sections=sections,
                     expected_updated_at=payload.expected_updated_at, write_guard=commit_guard,result_write=result_write,
                 )
@@ -416,7 +418,7 @@ class ScriptDraftUseCase:
                 title=payload.title, language=plan.language, sections=sections, draft_complete=window_start is None,
             )
             try:
-                _, _, draft = self.repository.save_reviewed_script_generation(run,draft,write_guard=commit_guard,result_write=result_write)
+                _, _, draft = self.scripts.save_reviewed_script_generation(run,draft,write_guard=commit_guard,result_write=result_write)
             except (KeyError,ValueError) as exc:
                 raise ScriptDraftRejected(status_code=409,detail=str(exc)) from exc
         return draft

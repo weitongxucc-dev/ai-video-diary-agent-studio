@@ -2408,9 +2408,9 @@ def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_
     from app.schemas import CreationTaskScriptConfirmSavedRequest
     confirmation=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=last['updated_at'])
     with monkeypatch.context() as bounded:
-        bounded.setattr(state.repository,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('confirm-saved must not hydrate complete script'))
-        bounded.setattr(state.repository,'list_creation_task_scripts',lambda *a,**k:pytest.fail('confirm-saved must not list full scripts'))
-        bounded.setattr(state.repository,'get_creation_task_script',lambda *a,**k:pytest.fail('confirm-saved must not fetch complete script'))
+        bounded.setattr(state.repository.script_records,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('confirm-saved must not hydrate complete script'))
+        bounded.setattr(state.repository.script_records,'list_creation_task_scripts',lambda *a,**k:pytest.fail('confirm-saved must not list full scripts'))
+        bounded.setattr(state.repository.script_records,'get_creation_task_script',lambda *a,**k:pytest.fail('confirm-saved must not fetch complete script'))
         result=case.confirm_saved('local','task',first['script_id'],confirmation,member_id=state.owner.member_id)
         assert result['status']=='confirmed' and result['total_count']==45
         assert case.confirm_saved('local','task',first['script_id'],confirmation,member_id=state.owner.member_id)==result
@@ -2575,8 +2575,8 @@ def test_delegated_saved_adoption_records_real_goal_journal_without_full_script(
     confirmation=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],
         adoption_kind='delegated_system',assistant_turn_id=turn['id'])
     with monkeypatch.context() as bounded:
-        bounded.setattr(state.repository,'get_creation_task_script',lambda *a,**k:pytest.fail('journal must use actual streamed adoption facts'))
-        bounded.setattr(state.repository,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('journal must not reconstruct full body'))
+        bounded.setattr(state.repository.script_records,'get_creation_task_script',lambda *a,**k:pytest.fail('journal must use actual streamed adoption facts'))
+        bounded.setattr(state.repository.script_records,'_creation_task_script_from_payload',lambda *a,**k:pytest.fail('journal must not reconstruct full body'))
         result=case.confirm_saved('local','task',saved['script_id'],confirmation,member_id=member,
             instruction_origin=source,reread_origin=lambda draft_only:conversations.task_turn_source(turn['id'],'local',member,'task'))
         assert result['status']=='confirmed'
@@ -2610,11 +2610,11 @@ def test_patch_rechecks_revoked_source_after_preflight_inside_writer_transaction
     saved=case.start_window('local','task',CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
         'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]),member_id=state.owner.member_id)
     before=state.repository.get_creation_task_script('local',saved['script_id'])
-    writer=state.repository.patch_assistant_script_sections
+    writer=state.repository.script_records.patch_assistant_script_sections
     def revoke_before_begin(*args,**kwargs):
         state.sources.set_knowledge_item_use_state('local','fixture','excluded')
         return writer(*args,**kwargs)
-    monkeypatch.setattr(state.repository,'patch_assistant_script_sections',revoke_before_begin)
+    monkeypatch.setattr(state.repository.script_records,'patch_assistant_script_sections',revoke_before_begin)
     with pytest.raises((ScriptDraftRejected,HTTPException)) as error:
         case.patch('local','task',saved['script_id'],CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],sections=[{
             'id':'first','title':'用途','content':FACT,'visual_prompt':'另一种计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]),member_id=state.owner.member_id)
@@ -2630,7 +2630,7 @@ def test_first_window_receipt_failure_rolls_back_original_task_run_and_body_toge
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     before=state.repository.get_creation_task('local','task')
     def deny(*a,**k): raise RuntimeError('synthetic receipt failure')
-    monkeypatch.setattr(state.repository,'record_script_window_start',deny)
+    monkeypatch.setattr(state.repository.script_records,'record_script_window_start',deny)
     request=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
         'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
     with pytest.raises(RuntimeError,match='synthetic receipt failure'):
@@ -2653,11 +2653,11 @@ def test_legacy_changed_confirmation_checks_revocation_at_its_commit_boundary(ap
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     before=case.save('local','task',CreationTaskScriptDraftRequest(title='有据稿',sections=[{
         'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]))
-    writer=state.repository.confirm_creation_task_script
+    writer=state.repository.script_records.confirm_creation_task_script
     def revoke_before_begin(*args,**kwargs):
         state.sources.set_knowledge_item_use_state('local','fixture','excluded')
         return writer(*args,**kwargs)
-    monkeypatch.setattr(state.repository,'confirm_creation_task_script',revoke_before_begin)
+    monkeypatch.setattr(state.repository.script_records,'confirm_creation_task_script',revoke_before_begin)
     request=CreationTaskScriptConfirmRequest(title=before.title,expected_updated_at=before.updated_at,edit_mode='replace_all',sections=[{
         'id':'first','title':'用途','content':FACT,'visual_prompt':'另一种计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
     with pytest.raises((ScriptDraftRejected,HTTPException)) as error:
@@ -2665,3 +2665,25 @@ def test_legacy_changed_confirmation_checks_revocation_at_its_commit_boundary(ap
     assert error.value.status_code==409 and len(calls)==2
     assert state.repository.get_creation_task_script('local',before.id)==before
     assert state.repository.get_creation_task('local','task').confirmed_script_id is None
+
+
+def test_script_owner_task_port_failure_rolls_back_same_transaction(api_state, monkeypatch):
+    from uuid import uuid4
+    from app.schemas import CreationTaskScriptWindowStartRequest
+    state=api_state;calls=[]
+    set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
+    case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    before=state.repository.get_creation_task('local','task')
+    transition=state.repository.script_records._transition_task
+    def fail_saved(conn,task,event,now,**kwargs):
+        if event=='saved': raise RuntimeError('synthetic task-owner failure')
+        return transition(conn,task,event,now,**kwargs)
+    monkeypatch.setattr(state.repository.script_records,'_transition_task',fail_saved)
+    request=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
+        'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
+    with pytest.raises(RuntimeError,match='synthetic task-owner failure'):
+        case.start_window('local','task',request,member_id=state.owner.member_id)
+    assert len(calls)==1 and state.repository.get_creation_task('local','task')==before
+    with state.repository._connect() as conn:
+        for table in ('creation_task_scripts','script_generation_runs','creation_task_script_sections'):
+            assert conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]==0
