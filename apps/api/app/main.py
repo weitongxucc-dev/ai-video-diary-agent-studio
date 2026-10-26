@@ -3327,6 +3327,14 @@ def _creation_task_topic_generator_for(settings_for_workspace: Settings) -> Open
 
 
 def _creation_task_script_generator_for(settings_for_workspace: Settings) -> OpenAICompatibleCreationTaskScriptGenerator:
+    if not settings_for_workspace.llm_configured:
+        raise CreationTaskScriptGenerationError(
+            code="route_configuration_invalid",
+            reason="当前工作区尚未配置完整的文字模型连接。",
+            impact="未调用文字模型，未生成或核查文案。",
+            repair_action="请在当前工作区设置中连接文字模型，再继续核查文案。",
+            retryable=False,
+        )
     return OpenAICompatibleCreationTaskScriptGenerator(
         base_url=settings_for_workspace.effective_llm_base_url,
         model=settings_for_workspace.effective_llm_model,

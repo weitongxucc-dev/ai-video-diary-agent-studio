@@ -247,7 +247,8 @@ class ScriptDraftUseCase:
                     repair_action="" if reachable else exc.repair_action, workspace_id=workspace_id)
             raise script_failure(status_code=422 if content_failure or prevalidation else 502,
                 error=exc.code, reason=exc.reason, impact="本轮修订未保存，原有草稿和任务保持原样。",
-                repair_action=("请核对文案段落、资料引用和方案时长，修改后再提交。" if prevalidation else exc.repair_action),
+                repair_action=("请核对文案段落、资料引用和方案时长，修改后再提交。"
+                    if prevalidation and exc.code != "route_configuration_invalid" else exc.repair_action),
                 retryable=exc.retryable, reason_code=exc.reason_code, section_index=exc.section_index,
                 candidate_section_index=exc.candidate_section_index, candidate_field=exc.candidate_field,
                 candidate_fragment_index=exc.candidate_fragment_index,

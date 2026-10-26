@@ -94,6 +94,54 @@ def reuse(client, entry_id, confirmed=True, *, expected_entry_updated_at=None):
     })
 
 
+def test_library_patch_without_configured_model_keeps_original_and_recoverable_refusal(library, monkeypatch):
+    from app.config import Settings
+
+    client, repo, _ = library
+    created = reuse(client, save(client, repo)["id"]).json()
+    task_id, script_id = created["task_id"], created["script_id"]
+    before = repo.get_creation_task_script("local", script_id)
+    unconfigured = Settings(llm_provider="minimax", llm_api_key=None, deepseek_api_key=None,
+        llm_base_url="https://api.minimax.cn/v1", llm_model="review-model")
+    assert not unconfigured.llm_configured
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _: unconfigured)
+    def no_provider_or_health_write(*args, **kwargs):
+        raise AssertionError("unconfigured review must not construct a provider or record connection health")
+    monkeypatch.setattr(main, "OpenAICompatibleCreationTaskScriptGenerator", no_provider_or_health_write)
+    monkeypatch.setattr(main, "record_llm_service_verification", no_provider_or_health_write)
+    section = asdict(before.sections[0])
+    section["content"] += "请核对这一处修改。"
+    request_id = str(uuid4())
+    response = client.patch(f"/api/creation-tasks/{task_id}/scripts/{script_id}/sections", json={
+        "request_id": request_id, "expected_updated_at": before.updated_at.isoformat(), "sections": [section],
+    })
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["error"] == "route_configuration_invalid"
+    assert "设置" in response.json()["detail"]["repair_action"]
+    assert repo.get_creation_task_script("local", script_id) == before
+    result = client.get(f"/api/creation-tasks/{task_id}/script-window-requests/{request_id}",
+        params={"operation": "patch", "script_id": script_id, "include_input": "true"})
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "failed"
+    assert result.json()["submitted_input"]["sections"][0]["content"] == section["content"]
+
+
+@pytest.mark.parametrize("provider", ["custom", "ollama"])
+def test_script_generator_keeps_configured_keyless_routes(provider, monkeypatch):
+    from app.config import Settings
+
+    configured = Settings(llm_provider=provider, llm_base_url="http://127.0.0.1:9/v1",
+        llm_model="local-review", llm_api_key=None, deepseek_api_key=None)
+    calls = []
+    marker = object()
+    def construct(**kwargs):
+        calls.append(kwargs)
+        return marker
+    monkeypatch.setattr(main, "OpenAICompatibleCreationTaskScriptGenerator", construct)
+    assert main._creation_task_script_generator_for(configured) is marker
+    assert calls == [{"base_url": "http://127.0.0.1:9/v1", "model": "local-review", "api_key": None}]
+
+
 def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original(library):
     client, repo, _ = library
     with repo._connect() as conn:
