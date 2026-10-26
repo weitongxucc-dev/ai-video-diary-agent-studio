@@ -270,8 +270,7 @@ class CreationExecutionControl:
         try:
             owner = runtime.registrations["creation_job"].owner
             if owner.task_authorizations is not None:
-                task = self.repository.get_creation_task(workspace_id, task_id)
-                self.execution.validate_input(workspace_id, task, script_id, digest)
+                task = self.execution.validate_input_snapshot(workspace_id, task_id, script_id, digest).task
                 owner.task_authorizations.ensure(task, actor, interactive=write_guard is None)
             job = self.execution.start(workspace_id, task_id, script_id, digest,
                                            actor=actor,write_guard=write_guard,execution_source=execution_source)
@@ -674,7 +673,7 @@ class CreationExecutionControl:
                 inputs['voice_profile_id'], inputs['voice_version'], viewer_user_id=inputs['member_id'])
             from app.creation.narration_pcm import prepare_narration_source
             source_preparation = stack.enter_context(prepare_narration_source(self.repository, task,
-                replace(plan, selected_voice=selected_voice), actor))
+                plan, actor, selected_voice=selected_voice))
             source_preparation['selected_voice'] = selected_voice
             if owner.task_authorizations is not None:
                 voice_authorization = owner.task_authorizations.prepare_voice_selection(task, actor,

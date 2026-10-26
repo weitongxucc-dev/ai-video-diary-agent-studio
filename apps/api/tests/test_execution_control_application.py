@@ -297,3 +297,48 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         if destination:Path(destination,'NORMAL_SUMMARY.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2,default=str)+'\n')
     finally:
         assert runtime.stop(1)
+
+
+@pytest.mark.parametrize('change', ['tail', 'authorization'])
+def test_bounded_narration_start_source_seal_rolls_back_preparation_race(tmp_path, monkeypatch, change):
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from app.creation.contracts import JobRun
+    from app.creation.narration_pcm import prepare_narration_source
+    from app.device_scheduler import RecoveryBlocked
+    from test_creation_execution import _bounded_narration_start_case
+    case = _bounded_narration_start_case(tmp_path, monkeypatch)
+    repo = case.repo
+    snapshot = repo.read_creation_execution_snapshot('local', case.task_id)
+    case.owner.task_authorizations.ensure(snapshot.task, case.actor)
+    original_seal = repo.seal_creation_narration_source
+    observed = []
+    def seal(job, prepared, **kwargs):
+        conn = kwargs['connection']
+        assert conn.in_transaction
+        assert conn.execute('SELECT 1 FROM job_runs WHERE id=?', (job.id,)).fetchone() is not None
+        observed.append(job.id)
+        return original_seal(job, prepared, **kwargs)
+    monkeypatch.setattr(repo, 'seal_creation_narration_source', seal)
+    with prepare_narration_source(repo, snapshot.task, snapshot.plan, case.actor) as prepared:
+        assert prepared['adoption_revision_digest'] == case.digest
+        with repo._connect() as writer:
+            if change == 'tail':
+                row = writer.execute('SELECT section_json FROM creation_task_script_sections WHERE section_id=?', ('section_45',)).fetchone()
+                value = json.loads(row['section_json']); value['content'] = '准备期间尾段发生变化'
+                writer.execute('UPDATE creation_task_script_sections SET section_json=? WHERE section_id=?',
+                    (json.dumps(value), 'section_45'))
+            else:
+                authorization = repo.get_task_authorization('local', case.task_id, connection=writer)
+                repo.save_task_authorization(replace(authorization, revision=authorization.revision+1,
+                    revoked_at=datetime.now(timezone.utc)), expected_revision=authorization.revision, connection=writer)
+        with pytest.raises((ValueError, RecoveryBlocked), match='变化'):
+            repo.create_creation_execution_job(JobRun('race-job', 'local', case.task_id, 'creation_task_execution',
+                'race-job-key', case.digest), start_payload={'script_id': case.script_id, 'plan_id': snapshot.plan.id,
+                    'input_digest': case.digest, **case.actor.identity_payload()}, source_preparation=prepared)
+    assert observed == ['race-job']
+    with repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type IN "
+            "('creation_execution_started','creation_narration_source_bound')").fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 0

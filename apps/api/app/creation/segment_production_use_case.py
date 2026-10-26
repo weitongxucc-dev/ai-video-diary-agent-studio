@@ -738,35 +738,46 @@ class SegmentProductionUseCase:
             return 'dependency'
 
     def next_initial(self, job, owner, *, connection=None):
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=connection)
-        script = self.repository.effective_creation_script(job.workspace_id, job.task_id, connection=connection)
-        rows = self.repository.list_narration_segments(job.workspace_id, job.task_id, script.id, connection=connection)
-        by_section = {item.source_section_id: item for item in rows}
-        event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=connection).payload
-        for section in script.sections:
-            audio = by_section.get(section.id)
-            if audio is None or audio.status != 'ready':
+        candidate = None
+        decided = False
+        with self.repository.creation_execution_read(connection) as conn:
+            snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
+            task, script = snapshot.task, snapshot.script_header
+            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn).payload
+            for section, audio in self.repository.iter_creation_narration_sections(task, script, connection=conn):
+                # Finish the scan even after selecting a unit: a bad tail or
+                # orphan audio must not be hidden by an unfinished first section.
+                if audio is not None and audio.status == 'ready' and audio.id != self.narration_stage.segment_id(
+                        task.id, script.id, section.id):
+                    raise ValueError('现有配音片段不属于当前唯一文案段落')
+                state = self.repository.stage_segment_state(task.workspace_id, task.id, section.id, connection=conn)
+                if decided:
+                    continue
+                if audio is None or audio.status != 'ready':
+                    decided = True
+                elif state is None or state['narration_reference'] != audio.audio_reference:
+                    candidate = section, audio
+                    decided = True
+        if candidate is None:
+            return None
+        section, audio = candidate
+        try:
+            self.repository.get_task_event(job.workspace_id,self.video_preparation_id(job,section.id),connection=connection)
+        except KeyError:
+            if self.visual_decision(job,section.id,connection=connection) is not None:
                 return None
-            state = self.repository.stage_segment_state(job.workspace_id, job.task_id, section.id, connection=connection)
-            if state is None or state['narration_reference'] != audio.audio_reference:
-                try:
-                    self.repository.get_task_event(job.workspace_id,self.video_preparation_id(job,section.id),connection=connection)
-                except KeyError:
-                    if self.visual_decision(job,section.id,connection=connection) is not None:
-                        return None
-                    if connection is not None and connection.in_transaction:
-                        raise ValueError('段落视频输入须先在写事务外准备')
-                    record = self.repository.get_narration_artifact(job.workspace_id,audio.audio_reference.removeprefix('narration://artifact/'))
-                    prepared = self.prepare_video(job,event,task,section.id,record,owner,text=audio.text)
-                    conflict = self.planning_conflict(job, section.id)
-                    if conflict is not None:
-                        prepared = replace(prepared, payload={**prepared.payload, 'request_id': conflict.payload['request_id']})
-                    self.repository.save_segment_video_preparation(prepared)
-                    if prepared.event_type == 'segment_visual_decision_required':
-                        return None
-                key, _resources = self.video_facts(job, event, task, section.id, owner, connection=connection)
-                return SubmissionIntent(job.workspace_id, 'creation_job', job.id, job.input_digest, key, SchedulePolicy())
-        return None
+            if connection is not None and connection.in_transaction:
+                raise ValueError('段落视频输入须先在写事务外准备')
+            record = self.repository.get_narration_artifact(job.workspace_id,audio.audio_reference.removeprefix('narration://artifact/'))
+            prepared = self.prepare_video(job,event,task,section.id,record,owner,text=audio.text)
+            conflict = self.planning_conflict(job, section.id)
+            if conflict is not None:
+                prepared = replace(prepared, payload={**prepared.payload, 'request_id': conflict.payload['request_id']})
+            self.repository.save_segment_video_preparation(prepared)
+            if prepared.event_type == 'segment_visual_decision_required':
+                return None
+        key, _resources = self.video_facts(job, event, task, section.id, owner, connection=connection)
+        return SubmissionIntent(job.workspace_id, 'creation_job', job.id, job.input_digest, key, SchedulePolicy())
 
     def record_stopped(self, grant, scheduler, exc):
         from app.device_scheduler import RecoveryBlocked

@@ -22,6 +22,8 @@ class ExecutionScriptHeader:
     selection_status: str
     updated_at: datetime
     sections_total_count: int
+    workspace_id: str
+    language: str
 
 
 @dataclass(frozen=True)

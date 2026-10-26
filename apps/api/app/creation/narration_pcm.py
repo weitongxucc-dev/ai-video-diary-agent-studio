@@ -10,7 +10,7 @@ import struct
 import wave
 from contextlib import contextmanager, ExitStack
 import fcntl
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from app.device_scheduler import RecoveryBlocked
 
@@ -22,8 +22,26 @@ def _source_stat(info):
 
 
 @contextmanager
-def prepare_narration_source(repository, task, plan, actor, *, binding=None):
+def prepare_narration_source(repository, task, plan, actor, *, binding=None, selected_voice=None):
     """Host-owned full-byte evidence, held until the short adoption/recovery commit."""
+    from app.creation.execution_input import execution_input_digest, validate_execution_relationships
+    with repository.creation_execution_read() as conn:
+        snapshot = repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+        if (snapshot.task.confirmed_script_id != task.confirmed_script_id or snapshot.plan != plan):
+            raise ValueError('文案或方案在来源准备前变化，未封存新输入')
+        task, plan = snapshot.task, snapshot.plan
+        validate_execution_relationships(task, snapshot.script_header, plan)
+        revision = snapshot.input_digest
+        if selected_voice is not None:
+            # Existing voice replacement prepares a candidate before its guarded
+            # adoption; the caller seals the adopted plan in the write transaction.
+            plan = replace(plan, selected_voice=selected_voice)
+            _, fields = repository.script_records.read_execution_script_metadata(
+                conn, task.workspace_id, task.confirmed_script_id)
+            revision = execution_input_digest(fields, plan,
+                repository.script_records.iter_execution_script_sections(conn, task.workspace_id, task.confirmed_script_id))
+        authorization = repository.get_task_authorization(task.workspace_id, task.id, connection=conn)
+        goal_revision = repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=conn)
     if task.owner_user_id is not None and task.owner_user_id != (actor.user_id or actor.member_id):
         raise PermissionError('配音来源采用不属于原任务成员')
     inputs, reference, qualified = narration_reference_facts(repository, task, plan)
@@ -65,7 +83,7 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None):
             'sha256': digest.hexdigest(), 'size_bytes': before.st_size,
             'segment_id': reference.segment_id, 'start_seconds': reference.start_seconds,
             'end_seconds': reference.end_seconds,
-            'goal_revision': repository.task_authorization_goal_revision(task.workspace_id, task.id)}
+            'goal_revision': goal_revision}
         receipt = repository.voice_sampling.received_source_evidence(inputs.voice)
         if receipt is not None and (receipt['sha256'], receipt['size_bytes']) != (content['sha256'], content['size_bytes']):
             raise RecoveryBlocked('original_source_content_changed: 当前声音与原采样接收字节不一致')
@@ -75,9 +93,6 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None):
             if (binding['narration_reference']['profile'] != qualified['profile']
                     or binding['narration_reference']['source_asset_digest'] != qualified['source_asset_digest']):
                 raise RecoveryBlocked('原配音档案或来源依赖已变化')
-        authorization = repository.get_task_authorization(task.workspace_id, task.id)
-        from app.creation_execution import revision_digest
-        revision = revision_digest(repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id), plan)
         yield {'content': content, 'narration_reference': qualified, 'fd': fd,
             'authorization': authorization, 'sampling_receipt': receipt,
             'adoption_revision_digest': revision,

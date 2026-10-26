@@ -2832,7 +2832,7 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
 from app.voice_clone import Qwen3TTSSubprocessProvider
 
 
-def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True, local_policy=False, duration_seconds=30):
+def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True, local_policy=False, duration_seconds=30, start_job=True):
     from app.creation.narration_stage_use_case import NarrationStageUseCase
     from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
     from app.narration import NarrationArtifact
@@ -2864,7 +2864,7 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
             policy_kind='local_goal', authorization_guard=lambda conn: None)
         execution.budget_policy_for = TaskBudgetUseCase(repo, scope_for=lambda ws, tid, current:
             {'scope_id': 'isolated-local-goal', 'revision': 0}).local_start_policy
-    job = execution.start('local', task_id, script_id, revision_digest(script, plan), actor=actor)
+    job = execution.start('local', task_id, script_id, revision_digest(script, plan), actor=actor) if start_job else None
     budget = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
         input_scope='single_call_experiment_v1')
     audio = CpuAudioBudget(audio_input_count, 32*1024*1024, 30, 30, 48000, 2, 3*1024*1024, 1, 30, 1024, 16, .1, 2048, 1024)
@@ -5256,3 +5256,285 @@ def test_experiment_narration_env_cannot_forge_prepared_receipts():
     assert actual.preparation_backend_identity is actual.preparation_shape_digest is actual.preparation_receipt_sha256 is None
     with pytest.raises(HostBudgetUncalibrated, match='准备回执'):
         creation_stage_budgets_from_env({**env, 'DEVICE_NARRATION_INPUT_SCOPE': 'prepared'})
+
+
+def _bounded_narration_start_case(tmp_path, monkeypatch):
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation.execution_control import CreationExecutionControl
+    case = _narration_units_case(tmp_path, section_count=45, start_job=False)
+    repo = case.repo
+    with repo._connect() as conn:
+        conn.execute('PRAGMA journal_mode=WAL')
+    task = repo.get_creation_task('local', case.task_id)
+    case.digest = revision_digest(repo.get_creation_task_script('local', case.script_id),
+        repo.get_creation_plan('local', task.plan_id))
+    case.owner.task_authorizations = TaskAuthorizationUseCase(repo, lambda identity: 'ready')
+    case.owner.segments = SegmentProductionUseCase(repo, narration_stage=case.stage,
+        renderer=None, artifact_store=None, output_root=tmp_path/'unused-output')
+    case.control = CreationExecutionControl(repo, case.execution, SimpleNamespace(valid=lambda *a, **k: False),
+        lambda actor: 'ready', segments=case.owner.segments)
+    case.runtime = SimpleNamespace(registrations={'creation_job': SimpleNamespace(owner=case.owner, executor=case.executor)},
+        scheduler=case.scheduler, wake=lambda: None)
+    def no_full(*args, **kwargs):
+        raise AssertionError('pending narration admission must not hydrate or collect complete script/audio text')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments'):
+        monkeypatch.setattr(repo, name, no_full)
+    monkeypatch.setattr(case.execution, 'validate_input', no_full)
+    return case
+
+
+def test_bounded_narration_start_reenters_original_unit_and_checks_current(tmp_path, monkeypatch):
+    case = _bounded_narration_start_case(tmp_path, monkeypatch)
+    seen = []
+    original = case.repo.iter_creation_narration_sections
+    def scanned(*args, **kwargs):
+        for section, segment in original(*args, **kwargs):
+            seen.append(section.id)
+            yield section, segment
+    monkeypatch.setattr(case.repo, 'iter_creation_narration_sections', scanned)
+    def start():
+        return case.control.start('local', case.task_id, case.script_id, case.digest,
+            case.actor, case.runtime, verify_media=False)
+    first = start()
+    job = case.repo.get_job_run('local', first['job']['id'])
+    states = case.repo.list_creation_job_request_states('local', job.id)
+    request = case.scheduler._get(states[0]['id'])
+    assert request.unit_key.startswith('narration:segment:v1:section_1:')
+    assert request.resources['section_count'] == 1 and request.resources['text_chars'] >= 260
+    assert 'section_45' in seen
+    assert start()['job']['id'] == job.id
+    assert [row['id'] for row in case.repo.list_creation_job_request_states('local', job.id)] == [request.id]
+    with case.repo.creation_execution_read() as conn:
+        assert case.owner.check_current(request, conn) == 'ready'
+        assert conn.in_transaction
+        local = case.owner.capture_local(request, conn)
+        assert local(conn) == 'ready'
+    with case.scheduler._connect() as idle:
+        assert case.owner.check_current(request, idle) == 'ready'
+        assert not idle.in_transaction
+        assert idle.execute('SELECT 1').fetchone()[0] == 1
+    with case.repo._connect() as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        row = writer.execute('SELECT section_json FROM creation_task_script_sections WHERE section_id=?', ('section_45',)).fetchone()
+        changed = json.loads(row['section_json']); changed['content'] = '事务内未提交尾段'
+        writer.execute('UPDATE creation_task_script_sections SET section_json=? WHERE section_id=?',
+            (json.dumps(changed), 'section_45'))
+        assert case.owner.check_current(request, writer) == 'stale'
+        from app.device_scheduler import SubmissionIntent
+        with pytest.raises(PermissionError, match='stale'):
+            case.owner.verify_submission(SubmissionIntent('local', 'creation_job', job.id, case.digest,
+                request.unit_key, request.policy), case.actor, connection=writer)
+        assert writer.in_transaction
+        writer.rollback()
+        assert case.owner.check_current(request, writer) == 'ready'
+    assert case.generated == [] and case.merged == []
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    assert case.repo.creation_narration_source_binding('local', job.id).payload['business_input_digest'] == case.digest
+
+
+def test_bounded_narration_start_unknown_and_other_member_keep_original(tmp_path, monkeypatch):
+    from app.creation.contracts import TaskEvent
+    from app.creation.execution_control import ExecutionControlRejected
+    from app.device_scheduler import RecoveryBlocked
+    case = _bounded_narration_start_case(tmp_path, monkeypatch)
+    result = case.control.start('local', case.task_id, case.script_id, case.digest,
+        case.actor, case.runtime, verify_media=False)
+    job = case.repo.get_job_run('local', result['job']['id'])
+    original_requests = case.repo.list_creation_job_request_states('local', job.id)
+    with pytest.raises(ExecutionControlRejected) as refused:
+        case.control.start('local', case.task_id, case.script_id, case.digest,
+            CreationExecutionActor('local', 'other-member'), case.runtime, verify_media=False)
+    assert refused.value.status_code == 403
+    pending = case.scheduler._get(original_requests[0]['id'])
+    case.repo.append_task_event(TaskEvent('unsettled-original', 'local', case.task_id, job.id,
+        'creation_narration_unit_started', {'usage_id': f'{pending.id}:9', 'request_id': pending.id,
+            'permit_generation': 9, 'unit_key': pending.unit_key, 'segment_id': pending.resources['segment_id'],
+            'section_id': pending.resources['section_id'], 'ordinal': 1, 'phase': 'segment',
+            'remaining_seconds': 300, 'remaining_output_bytes': 3*1024*1024}))
+    case.repo.append_task_event(TaskEvent(f'event_{job.id}_narration_budget', 'local', case.task_id, job.id,
+        'creation_narration_budget', {'active_event_id': 'unsettled-original', 'settled_event_id': None,
+            'parent_timeout_seconds': 300, 'parent_max_output_bytes': 3*1024*1024,
+            'script_id': case.script_id, 'input_contract': 'narration_units_v1'}))
+    with pytest.raises(RecoveryBlocked, match='未知'):
+        submit_creation_stage(case.execution, case.scheduler, job, case.actor)
+    request = case.scheduler._get(original_requests[0]['id'])
+    with case.repo.creation_execution_read() as conn:
+        assert case.owner.check_current(request, conn) == 'dependency'
+    assert case.control.status('local', case.task_id, verify_media=False, actor=case.actor)['job']['id'] == job.id
+    assert case.scheduler.pick_and_grant() is None
+    assert case.scheduler._get(request.id).last_grant_generation is None
+    assert [row['id'] for row in case.repo.list_creation_job_request_states('local', job.id)] == [request.id]
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    assert case.generated == [] and case.merged == []
+
+
+def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked(tmp_path, monkeypatch):
+    from app.creation.contracts import NarrationSegment, TaskEvent
+    from app.creation_execution import next_creation_intent
+    case = _bounded_narration_start_case(tmp_path, monkeypatch)
+    repo = case.repo
+    with repo._connect() as conn:
+        repo.append_task_event(TaskEvent('adopted-text', 'local', case.task_id, None, 'segment_publication',
+            {'script_id': case.script_id, 'text': '采用后的正文', 'narration_reference': 'narration://artifact/prior'}), connection=conn)
+        task = repo.get_creation_task('local', case.task_id, connection=conn)
+        version = TimelineVersion(id='effective-text-version', workspace_id='local', task_id=case.task_id,
+            parent_version_id=None, sequence=1, created_by_operation_id=None,
+            snapshot={'stage_segments': {'section_1': 'adopted-text'}})
+        repo.create_timeline_version(version, connection=conn)
+        task.current_timeline_version_id = version.id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
+    result = case.control.start('local', case.task_id, case.script_id, case.digest,
+        case.actor, case.runtime, verify_media=False)
+    job = repo.get_job_run('local', result['job']['id'])
+    request = case.scheduler._get(repo.list_creation_job_request_states('local', job.id)[0]['id'])
+    inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id,
+        voice_profile_id=request.resources['voice_profile_id'], voice_version=request.resources['voice_version'])
+    assert request.resources['text_chars'] == len('采用后的正文') + len(inputs.voice.reference_text)
+    # Existing fixture reference bytes stand in for an already recorded artifact; no worker runs.
+    record = NarrationArtifactRecord(id='tail-audio', workspace_id='local', task_id=case.task_id,
+        script_id=case.script_id, voice_profile_id=request.resources['voice_profile_id'], cache_key='tail-cache',
+        audio_path=request.resources['narration_reference']['reference']['source_path'],
+        duration_seconds=1, sample_rate=24000, model_id='test',
+        pronunciation_version=request.resources['pronunciation_version'])
+    repo.save_narration_artifact(record)
+    segment = NarrationSegment(id=case.stage.segment_id(case.task_id, case.script_id, 'section_45'),
+        workspace_id='local', task_id=case.task_id, script_id=case.script_id, source_section_id='section_45',
+        text='原文'*130, audio_reference=repo.narration_artifact_reference(record.cache_key), duration_seconds=1,
+        sample_rate=24000, model_id='test', voice_profile_id=request.resources['voice_profile_id'],
+        voice_version=request.resources['voice_version'], language='zh',
+        pronunciation_version=request.resources['pronunciation_version'], status='ready')
+    with repo._connect() as conn:
+        values = asdict(segment)
+        values['created_at'] = segment.created_at.isoformat()
+        values['updated_at'] = segment.updated_at.isoformat()
+        conn.execute('INSERT INTO narration_segments (' + ','.join(values) + ') VALUES ('
+            + ','.join('?' for _ in values) + ')', tuple(values.values()))
+    assert next_creation_intent(repo, case.scheduler, job).unit_key == request.unit_key
+    for field, value in [('text', '错误尾段正文'), ('voice_version', 'wrong-voice'),
+                         ('pronunciation_version', 'wrong-dictionary')]:
+        with repo._connect() as conn:
+            conn.execute(f'UPDATE narration_segments SET {field}=? WHERE id=?', (value, segment.id))
+        with pytest.raises(ValueError, match='配音片段'):
+            next_creation_intent(repo, case.scheduler, job)
+        with repo.creation_execution_read() as conn:
+            assert case.owner.check_current(request, conn) == 'dependency'
+        with repo._connect() as conn:
+            conn.execute(f'UPDATE narration_segments SET {field}=? WHERE id=?', (getattr(segment, field), segment.id))
+    # Identity is immutable: construct an extra orphan row, without disabling its trigger.
+    with repo._connect() as conn:
+        orphan = {**values, 'id': 'orphan-audio', 'source_section_id': 'foreign-section'}
+        conn.execute('INSERT INTO narration_segments (' + ','.join(orphan) + ') VALUES ('
+            + ','.join('?' for _ in orphan) + ')', tuple(orphan.values()))
+    with pytest.raises(ValueError, match='配音片段集'):
+        next_creation_intent(repo, case.scheduler, job)
+    with repo.creation_execution_read() as conn:
+        assert case.owner.check_current(request, conn) == 'dependency'
+    with repo._connect() as conn:
+        conn.execute('DELETE FROM narration_segments WHERE id=?', ('orphan-audio',))
+        prefix = {**values, 'id': case.stage.segment_id(case.task_id, case.script_id, 'section_1'),
+            'source_section_id': 'section_1', 'text': '采用后的正文'}
+        conn.execute('INSERT INTO narration_segments (' + ','.join(prefix) + ') VALUES ('
+            + ','.join('?' for _ in prefix) + ')', tuple(prefix.values()))
+        repo.append_task_event(TaskEvent(case.owner.segments.visual_decision_id(job, 'section_1'),
+            'local', case.task_id, job.id, 'segment_visual_decision_required', {'section_id': 'section_1'}), connection=conn)
+    assert next_creation_intent(repo, case.scheduler, job) is None  # Do not skip an earlier confirmation gate.
+    repo.append_task_event(TaskEvent(case.owner.segments.video_preparation_id(job, 'section_1'),
+        'local', case.task_id, job.id, 'segment_video_prepared', {'section_id': 'section_1'}))
+    def video_facts(current_job, event, task, section_id, owner, **kwargs):
+        assert current_job.id == job.id and section_id == 'section_1'
+        return 'segment_video:section_1:prepared', {}
+    monkeypatch.setattr(case.owner.segments, 'video_facts', video_facts)
+    assert next_creation_intent(repo, case.scheduler, job).unit_key == 'segment_video:section_1:prepared'
+    assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
+    assert len(repo.list_creation_job_request_states('local', job.id)) == 1
+    assert case.generated == [] and case.merged == []
+
+
+def test_owner_idle_observation_survives_reader_close_and_borrows_writer(tmp_path):
+    case = _queued_narration_voice_selection_case(tmp_path)
+    request = case.scheduler._get(case.request_id)
+    with case.repo._connect() as idle:
+        observed = case.owner.capture_local(request, idle)
+        assert case.owner.owns_task_stage(idle, 'local', case.job.id, 'narration')
+        assert not idle.in_transaction
+        assert idle.execute('SELECT 1').fetchone()[0] == 1
+    # capture_local has closed its own snapshot; the returned observer must use
+    # the caller's later transaction and see its uncommitted owner changes.
+    with case.repo._connect() as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        assert observed(writer) == 'ready'
+        writer.execute("UPDATE job_runs SET status='cancelled' WHERE id=?", (case.job.id,))
+        assert observed(writer) == 'stale'
+        assert not case.owner.owns_task_stage(writer, 'local', case.job.id, 'narration')
+        assert writer.in_transaction
+        writer.rollback()
+        assert observed(writer) == 'ready'
+    assert case.generated == [] and case.merged == []
+    assert case.repo.get_job_run('local', case.job.id) == case.job
+    case.scheduler.close()
+
+
+def test_owner_first_authorization_precedes_submission_snapshot(tmp_path):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import next_creation_intent
+    case = _narration_units_case(tmp_path)
+    with case.repo._connect() as conn:
+        conn.execute('PRAGMA journal_mode=WAL')
+    case.owner.task_authorizations = TaskAuthorizationUseCase(case.repo, lambda identity: 'ready')
+    assert case.repo.get_task_authorization('local', case.task_id) is None
+    intent = next_creation_intent(case.repo, case.scheduler, case.job)
+    with pytest.raises(PermissionError, match='输入摘要'):
+        case.owner.verify_submission(replace(intent, input_digest='different-input'), case.actor)
+    with pytest.raises(PermissionError, match='原身份'):
+        case.owner.verify_submission(intent, CreationExecutionActor('local', 'other-member'))
+    assert case.repo.get_task_authorization('local', case.task_id) is None
+    verified = case.owner.verify_submission(intent, case.actor)
+    assert verified.owner_id == case.job.id and verified.input_digest == case.job.input_digest
+    assert case.repo.get_task_authorization('local', case.task_id) is not None
+    assert case.generated == [] and case.merged == []
+    case.scheduler.close()
+
+
+@pytest.mark.parametrize('change_during_authorization', [False, True])
+def test_owner_submission_rechecks_after_authorization_and_borrows_transaction(tmp_path, monkeypatch,
+        change_during_authorization):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import next_creation_intent
+    case = _narration_units_case(tmp_path)
+    intent = next_creation_intent(case.repo, case.scheduler, case.job)
+    def verify(identity):
+        assert identity == TaskAuthorizationUseCase.identity(case.actor)
+        # External observation can write after preflight has closed its reader.
+        with case.repo._connect() as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            if change_during_authorization:
+                row = writer.execute('SELECT section_json FROM creation_task_script_sections WHERE section_id=?',
+                    ('section_2',)).fetchone()
+                value = json.loads(row['section_json']); value['content'] = '授权观察期间尾段变化'
+                writer.execute('UPDATE creation_task_script_sections SET section_json=? WHERE section_id=?',
+                    (json.dumps(value), 'section_2'))
+        return 'ready'
+    case.owner.task_authorizations = TaskAuthorizationUseCase(case.repo, verify)
+    if change_during_authorization:
+        with pytest.raises(PermissionError, match='stale'):
+            case.owner.verify_submission(intent, case.actor)
+    else:
+        verified = case.owner.verify_submission(intent, case.actor)
+        def no_external_authorization(*args, **kwargs):
+            raise AssertionError('borrowed transaction must only recheck current authorization')
+        monkeypatch.setattr(case.owner.task_authorizations, 'ensure', no_external_authorization)
+        with case.repo._connect() as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            assert case.owner.verify_submission(intent, case.actor, connection=writer) == verified
+            writer.execute("UPDATE job_runs SET status='cancelled' WHERE id=?", (case.job.id,))
+            with pytest.raises(PermissionError, match='stale'):
+                case.owner.verify_submission(intent, case.actor, connection=writer)
+            assert writer.in_transaction
+            writer.rollback()
+        assert case.repo.get_job_run('local', case.job.id) == case.job
+    assert case.repo.list_creation_job_request_states('local', case.job.id) == []
+    assert case.generated == [] and case.merged == []
+    case.scheduler.close()

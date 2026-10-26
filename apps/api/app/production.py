@@ -17,7 +17,7 @@ import re
 import sqlite3
 import subprocess
 import wave
-from contextlib import closing, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 from contextvars import ContextVar
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
@@ -4557,14 +4557,20 @@ class ProductionRepository:
             data["visibility"] = str(row["visibility"])
         return self._creation_plan_from_payload(data)
 
-    def read_creation_execution_snapshot(self, workspace_id, task_id, *, connection=None):
-        """Finish metadata, ordered body digest and count in one read transaction."""
-        from app.creation.execution_input import ExecutionInputSnapshot, execution_input_digest
+    @contextmanager
+    def creation_execution_read(self, connection=None):
+        """Own a read snapshot, or borrow an already active owner transaction."""
         with (nullcontext(connection) if connection is not None else closing(self._connect())) as conn:
             if connection is None:
                 conn.execute("BEGIN")
             elif not conn.in_transaction:
                 raise ValueError("执行输入读取必须复用已开启的事务")
+            yield conn
+
+    def read_creation_execution_snapshot(self, workspace_id, task_id, *, connection=None):
+        """Finish metadata, ordered body digest and count in one read transaction."""
+        from app.creation.execution_input import ExecutionInputSnapshot, execution_input_digest
+        with self.creation_execution_read(connection) as conn:
             task = self._require_creation_task(conn, workspace_id, task_id)
             if not task.confirmed_script_id:
                 raise ValueError("请先确认实际文案")
@@ -4573,6 +4579,40 @@ class ProductionRepository:
             digest = execution_input_digest(fields, plan,
                 self.script_records.iter_execution_script_sections(conn, workspace_id, header.id))
             return ExecutionInputSnapshot(task, plan, header, digest)
+
+    def iter_creation_narration_sections(self, task, script, *, connection):
+        """Effective text and its audio, one row at a time in the same snapshot.
+
+        This projection never changes the original script digest. Check orphan
+        audio even when the first section still needs narration.
+        """
+        if not connection.in_transaction:
+            raise ValueError("配音段落读取必须复用已开启的事务")
+        if (script.workspace_id, script.task_id, script.id) != (
+                task.workspace_id, task.id, task.confirmed_script_id):
+            raise ValueError('采用的段版本不属于当前确认文案')
+        orphan = connection.execute(
+            'SELECT 1 FROM narration_segments n WHERE n.workspace_id=? AND n.task_id=? AND n.script_id=? '
+            'AND NOT EXISTS (SELECT 1 FROM creation_task_script_sections s WHERE s.workspace_id=n.workspace_id '
+            'AND s.script_id=n.script_id AND s.section_id=n.source_section_id) LIMIT 1',
+            (task.workspace_id, task.id, script.id)).fetchone()
+        if orphan is not None:
+            raise ValueError('现有配音片段集不属于当前唯一文案段落')
+        for section in self.script_records.iter_execution_script_sections(connection, task.workspace_id, script.id):
+            state = self.stage_segment_state(task.workspace_id, task.id, section.id, connection=connection)
+            if state is not None:
+                if state['script_id'] != script.id:
+                    raise ValueError('采用的段版本不属于当前确认文案')
+                section = replace(section, content=state['text'])
+            rows = connection.execute(
+                'SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? '
+                'AND source_section_id=? LIMIT 2', (task.workspace_id, task.id, script.id, section.id)).fetchmany(2)
+            if len(rows) > 1:
+                raise ValueError('现有配音片段集不属于当前唯一文案段落')
+            segment = self._narration_segment_from_row(rows[0]) if rows else None
+            if segment is not None and segment.status == 'ready' and segment.text != section.content:
+                raise ValueError('已保存配音片段的文字与采用正文不匹配，须先核对原产物')
+            yield section, segment
 
     @staticmethod
     def _knowledge_adoption_event_id(workspace_id: str, member_id: str, request_id: str) -> str:
@@ -6129,17 +6169,11 @@ class ProductionRepository:
 
     def seal_creation_narration_source(self, job, prepared, *, input_digest, origin_event_id, connection):
         from app.creation.narration_pcm import verify_narration_source, source_binding_payload
-        from app.creation_execution import revision_digest
-        task = self._require_creation_task(connection, job.workspace_id, job.task_id)
-        plan_row = connection.execute('SELECT payload,visibility FROM creation_plans WHERE workspace_id=? AND id=?',
-            (job.workspace_id, task.plan_id)).fetchone()
-        plan_payload = json.loads(plan_row['payload'])
-        plan_payload['visibility'] = str(plan_row['visibility'])
-        plan = self._creation_plan_from_payload(plan_payload)
-        script = self._creation_task_script_from_payload(json.loads(connection.execute(
-            'SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?',
-            (job.workspace_id, task.confirmed_script_id)).fetchone()['payload']), connection=connection)
-        if revision_digest(script, plan) != prepared['adoption_revision_digest']:
+        from app.creation.execution_input import validate_execution_relationships
+        snapshot = self.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=connection)
+        task, plan = snapshot.task, snapshot.plan
+        validate_execution_relationships(task, snapshot.script_header, plan)
+        if snapshot.input_digest != prepared['adoption_revision_digest']:
             raise ValueError('文案或方案在来源准备后变化，未封存新输入')
         if job.kind == 'creation_task_execution' and input_digest != prepared['adoption_revision_digest']:
             raise ValueError('原制作输入摘要与采用来源不一致')

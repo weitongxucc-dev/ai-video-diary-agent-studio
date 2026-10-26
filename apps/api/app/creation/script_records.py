@@ -940,7 +940,7 @@ class ScriptRecordStore:
             (workspace_id, script_id),
         ).fetchone()[0]
         header = ExecutionScriptHeader(decoded.id, decoded.task_id, decoded.title,
-            decoded.selection_status, decoded.updated_at, count)
+            decoded.selection_status, decoded.updated_at, count, decoded.workspace_id, decoded.language)
         return header, fields
 
     def iter_execution_script_sections(self, connection, workspace_id, script_id):
