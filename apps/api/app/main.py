@@ -156,6 +156,7 @@ from app.member_permits import (
 from app.device_resource_configuration import resolve_device_resources
 from app.device_resource_profile import DeviceProfileUnavailable
 from app.device_runtime import RuntimeUnavailable
+from app.creation.quality_projection import bounded_quality_evidence, bounded_quality_findings
 
 _RESOURCE_BUDGET_UNSET = object()
 
@@ -374,6 +375,7 @@ from app.schemas import (
     CreationTaskMontageClipUpdateRequest,
     CreationTaskMontageRenderRequest,
     CreationTaskQualityCheckRequest,
+    QualityContinuationResponse,
     CreationTaskQualityCheckResponse,
     CreationTaskEditConfirmResponse,
     CreationTaskEditQueuedResponse,
@@ -3908,17 +3910,6 @@ def _output_observation_facts(workspace_id, task_id, arguments, actor):
     return case.seal_resources(source, budget, observation_budget)
 
 
-def _bounded_quality_evidence(record):
-    evidence = record["evidence"]
-    findings = evidence.get("findings", [])
-    return {"check_id": record["check_id"], "timeline_version_id": record["timeline_version_id"],
-        "render_ref": record["render_ref"], "check_state": record["check_state"],
-        "result_status": record["result_status"], "checked_at": record["checked_at"],
-        "error": record["error"], "validation_scope": "deterministic_media_errors_only",
-        "findings": findings[:20], "findings_total": len(findings),
-        "findings_truncated": len(findings) > 20, "unavailable": evidence.get("unavailable", [])}
-
-
 def _task_observation_facts(task_id, request):
     task,member_id=_exact_edit_access(task_id,request)
     return _task_observation_metadata(task,member_id)
@@ -3927,10 +3918,7 @@ def _task_observation_facts(task_id, request):
 def _task_observation_metadata(task,member_id):
     workspace_id,task_id=task.workspace_id,task.id
     current = _creation_task_quality_check_response(workspace_id, task_id).model_dump(mode="json")
-    findings = current["findings"]
-    current["findings_total"], current["findings_truncated"] = len(findings), len(findings) > 20
-    current["findings"] = findings[:20]
-    current.pop("clipping_summary", None)
+    current.update(bounded_quality_findings(current))
     with production_repo._connect() as conn:
         rows = conn.execute("""SELECT j.id, e.payload_json FROM job_runs j JOIN task_events e
             ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start'
@@ -3985,7 +3973,7 @@ def _task_observation_metadata(task,member_id):
     version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     return {"task_id": task_id, "timeline_version_id": task.current_timeline_version_id,
         "timeline_sequence": version.sequence if version else 0,
-        "quality_check": current, "quality_history": [_bounded_quality_evidence(item)
+        "quality_check": current, "quality_history": [bounded_quality_evidence(item)
             for item in quality_check_repo.history(workspace_id, task_id)],
         "observations": observations, "targets": targets, "targets_limit": 11,
         "media_policy": "local_measurements_and_text_only"}
@@ -10250,6 +10238,13 @@ def _quality_check_source(workspace_id: str, task_id: str):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+def _quality_preparation_policy():
+    profile = _device_resource_profile()
+    return {"budget": profile.budget.quality,
+            "profile": {"profile_id": profile.profile_id, "revision": profile.revision,
+                        "digest": profile.digest, "source_kind": profile.source_kind}}
+
+
 def _quality_inspection_use_case(repository=None, *, task_authorizations=None, budget=_RESOURCE_BUDGET_UNSET):
     error = None
     if budget is _RESOURCE_BUDGET_UNSET:
@@ -10263,6 +10258,7 @@ def _quality_inspection_use_case(repository=None, *, task_authorizations=None, b
     return QualityInspectionUseCase(repo, quality_check_repo, _output_observation_use_case(repo),
         budget=budget, budget_error=error, verify_identity=_verify_creation_identity,
         task_authorizations=task_authorizations,
+        current_policy=_quality_preparation_policy,
         temporary_root=settings.effective_temporary_root_path / "quality-checks")
 
 
@@ -10280,7 +10276,22 @@ def _start_creation_task_quality_check(workspace_id: str, task_id: str, *,
 def get_creation_task_quality_check(task_id: str, request: Request) -> CreationTaskQualityCheckResponse:
     workspace_id = current_workspace_id(request)
     _quality_check_task_access(request, workspace_id, task_id)
-    return _creation_task_quality_check_response(workspace_id, task_id)
+    result = _creation_task_quality_check_response(workspace_id, task_id)
+    if result.check_state != "failed":
+        return result
+    runtime = device_runtime
+    registration = runtime.registrations.get(QUALITY_KIND) if runtime is not None else None
+    service = registration.owner.service if registration is not None else _quality_inspection_use_case()
+    try:
+        actor = _request_permit_actor(request, workspace_id)
+    except (HTTPException, DeviceAccountError):
+        # Content visibility was already verified. Missing execution credentials
+        # cannot prevent reading stored results or supply a substitute actor.
+        actor = None
+    continuation = service.continuation_projection(workspace_id, task_id,
+        actor, runtime_available=registration is not None)
+    result.continuation = QualityContinuationResponse.model_validate(continuation) if continuation is not None else None
+    return result
 
 
 def recover_interrupted_quality_checks(runtime) -> None:
@@ -10295,6 +10306,41 @@ def check_creation_task_quality(task_id: str, request: Request,
     _start_creation_task_quality_check(workspace_id, task_id,
         actor=_require_permit_actor(request, workspace_id), force=True)
     return _creation_task_quality_check_response(workspace_id, task_id)
+
+
+def _continue_creation_quality_check(request, task_id, payload):
+    workspace_id = current_workspace_id(request)
+    _quality_check_task_access(request, workspace_id, task_id)
+    actor = _require_permit_actor(request, workspace_id)
+    job = production_repo.get_job_run(workspace_id, payload.job_id)
+    if job.task_id != task_id or job.kind != QUALITY_KIND:
+        raise KeyError(payload.job_id)
+    if job.status in {"succeeded", "failed", "cancelled"}:
+        registration = device_runtime.registrations.get(QUALITY_KIND) if device_runtime is not None else None
+        reader = registration.owner.service if registration is not None else _quality_inspection_use_case(budget=None)
+        receipt = reader.continued_phase_receipt(workspace_id, payload.job_id, payload.failed_request_id, actor)
+        if receipt is not None:
+            return receipt
+    with _runtime_reload_lock:
+        if device_runtime is None and not _start_device_runtime(start=False):
+            raise RuntimeUnavailable("当前设备策略尚未装配，无法接续质检")
+        runtime = device_runtime
+        registration = runtime.registrations.get(QUALITY_KIND) if runtime is not None else None
+        if registration is None:
+            raise RuntimeUnavailable("当前设备正处于能力准备阶段，请先收束原准备请求")
+        service = registration.owner.service
+        successor = service.continue_failed_phase(runtime.scheduler, workspace_id, payload.job_id,
+                                                  payload.failed_request_id, actor)
+        current_job, _, record, _ = service.read(workspace_id, payload.job_id)
+        if current_job.status in {"queued", "running"}:
+            if not runtime.running:
+                runtime.start()
+            runtime.wake()
+        return {"check_id": record["check_id"], "job_id": payload.job_id, "request_id": successor}
+
+
+from app.creation.quality_routes import build_quality_continuation_router
+app.include_router(build_quality_continuation_router(continue_check=_continue_creation_quality_check))
 
 
 @app.get("/api/creation-tasks/{task_id}/output")

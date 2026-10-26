@@ -6416,6 +6416,17 @@ class ProductionRepository:
         self.append_task_event(event, connection=connection)
         return self.get_job_run(run.workspace_id, run.id, connection=connection)
 
+    def reopen_failed_job_run(self, workspace_id, job_id, *, expected_updated_at, expected_attempt, connection):
+        if not connection.in_transaction:
+            raise ValueError('恢复失败作业必须属于原调度事务')
+        changed=connection.execute("""UPDATE job_runs SET status='queued',finished_at=NULL,updated_at=?
+            WHERE workspace_id=? AND id=? AND status='failed' AND updated_at=? AND attempt=?""",
+            (utc_now().isoformat(),workspace_id,job_id,_revision_value(expected_updated_at),expected_attempt)).rowcount
+        if changed!=1:
+            raise ValueError('失败作业状态、版本或尝试序号已变化，未恢复')
+        return self.get_job_run(workspace_id,job_id,connection=connection)
+
+
     def resume_creation_narration_job(self, workspace_id, job_id, *, connection):
         usage = self.creation_narration_usage(workspace_id, job_id, connection=connection)
         if usage['budget'] is None or usage['unsettled']:

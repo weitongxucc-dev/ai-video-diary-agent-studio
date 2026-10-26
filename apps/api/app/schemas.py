@@ -1638,7 +1638,7 @@ class AudioTimelineResponse(AudioTimeline):
 
 
 class CreationTaskQualityFindingResponse(BaseModel):
-    kind: Literal["black_frame", "truncation", "clipping", "timestamp_offset"]
+    kind: Literal["black_frame", "truncation", "clipping", "timestamp_offset", "delivery_duration"]
     start_seconds: float
     end_seconds: float
     duration_seconds: float
@@ -1673,6 +1673,46 @@ class CreationTaskClippingSummaryResponse(BaseModel):
     findings_truncated_count: int
 
 
+class CreationTaskBlackFrameSummaryResponse(BaseModel):
+    event_count: int
+    total_black_seconds: float
+    first_start_seconds: float
+    last_end_seconds: float
+    event_list_limit: int
+    events: list[CreationTaskClippingEventResponse]
+    events_truncated: bool
+    truncated_event_count: int
+    findings_event_limit: int
+    findings_truncated: bool
+    findings_truncated_count: int
+
+
+class QualityContinuationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    failed_request_id: str | None
+    phase: str
+    completed_phases: list[str]
+    can_request: bool
+    reason_code: Literal["actor_unavailable", "runtime_unavailable", "original_actor_required",
+                         "source_changed", "policy_unavailable", "algorithm_changed",
+                         "failed_request_unavailable", "request_in_flight"] | None
+    release_check: Literal["on_submit"]
+
+
+class QualityContinuationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(min_length=1)
+    failed_request_id: str = Field(min_length=1)
+
+
+class QualityContinuationReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    check_id: str
+    job_id: str
+    request_id: str
+
+
 class CreationTaskQualityCheckResponse(BaseModel):
     check_state: Literal["none", "checking", "failed", "done"]
     result_status: Literal["clean", "issues_found", "unavailable"] | None
@@ -1685,6 +1725,8 @@ class CreationTaskQualityCheckResponse(BaseModel):
     findings: list[CreationTaskQualityFindingResponse]
     unavailable: list[CreationTaskQualityUnavailableResponse]
     clipping_summary: CreationTaskClippingSummaryResponse | None = None
+    black_frame_summary: CreationTaskBlackFrameSummaryResponse | None = None
+    continuation: QualityContinuationResponse | None = None
     validation_scope: Literal["deterministic_media_errors_only"]
 
 
