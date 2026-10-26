@@ -22,11 +22,58 @@ import type {
 
 import { AssistantConversationContext } from "./AssistantConversationContext";
 import { enqueueAssistantInput, withdrawAssistantInput } from "@/lib/api/assistant";
+import { getCreationTaskScriptWindowRequest } from "@/lib/api/creation-tasks";
+import { CreationPlanApiError } from "@/lib/api";
+import type { AssistantScriptWindowRequest } from "@/lib/types/assistant";
 
 export function assistantTaskTurnResult(turn: AssistantConversationTurn) {
   return turn.result?.kind === "task_turn" ? turn.result as AssistantTaskTurnResult : null;
 }
 
+export function assistantTurnScriptWindowRequest(turn: AssistantConversationTurn, expectedTaskId?: string) {
+  const response = assistantTaskTurnResult(turn)?.response;
+  const window = response?.script_window_request;
+  if (!window) return null;
+  const goal = turn.result?.goal_continuation;
+  const taskId = expectedTaskId ?? (goal && typeof goal === "object" && "task_id" in goal && typeof goal.task_id === "string" ? goal.task_id : undefined);
+  if (taskId && window.task_id !== taskId) return null;
+  if (response.input_id !== undefined && response.input_id !== (window.input_id ?? null)) return null;
+  if (response.input_turn_id !== undefined && response.input_turn_id !== (window.input_turn_id ?? null)) return null;
+  return window;
+}
+export function assistantScriptWindowReadKey(conversationId: string, turn: AssistantConversationTurn) {
+  const window = assistantTurnScriptWindowRequest(turn);
+  return JSON.stringify([conversationId, turn.id, window?.task_id, window?.operation, window?.request_id, window?.script_id, window?.input_id, window?.input_turn_id]);
+}
+function scriptWindowUnknown(window: AssistantScriptWindowRequest | null) {
+  if (!window || window.status === "saved" || window.status === "confirmed") return false;
+  return window.status === "unknown" || window.submission_effect === "unknown" || window.failure?.submission_effect === "unknown"
+    || window.status === "failed" && window.submission_effect !== "rejected" && window.submission_effect !== "not_submitted";
+}
+async function readScriptWindow(turn: AssistantConversationTurn): Promise<AssistantScriptWindowRequest> {
+  const window = assistantTurnScriptWindowRequest(turn)!;
+  if (window.operation !== "start" && !window.script_id) throw new Error("原窗口请求缺少稿件定位，保留原 UUID，未重复提交。");
+  const receipt = await getCreationTaskScriptWindowRequest(window.task_id, window.request_id,
+    window.operation === "start" ? { operation: "start" } : { operation: window.operation, script_id: window.script_id! });
+  if (receipt.task_id !== window.task_id || receipt.request_id !== window.request_id
+      || (window.script_id && receipt.script_id !== window.script_id)) throw new Error("窗口回执与原请求定位不符，原结果保留。");
+  if (receipt.status === "saved" || receipt.status === "confirmed") {
+    if (receipt.status !== (window.operation === "confirm" ? "confirmed" : "saved")) throw new Error("窗口回执与原操作不符，原结果保留。");
+    return { ...window, status: receipt.status, script_id: receipt.script_id, updated_at: receipt.updated_at,
+      total_count: receipt.total_count, affected_section_ids: receipt.status === "saved" ? receipt.affected_section_ids : undefined,
+      submission_effect: null, failure: null };
+  }
+  if (receipt.operation !== window.operation) throw new Error("窗口回执与原操作不符，原结果保留。");
+  if (receipt.status === "failed") {
+    const detail = receipt.error_detail;
+    const fields = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
+    return { ...window, status: receipt.status, submission_effect: receipt.submission_effect, failure: { ...window.failure,
+      reason: typeof detail === "string" ? detail : typeof fields.reason === "string" ? fields.reason : receipt.message,
+      ...(typeof fields.impact === "string" ? { impact: fields.impact } : {}),
+      ...(typeof fields.repair_action === "string" ? { repair_action: fields.repair_action } : {}), submission_effect: "unknown" } };
+  }
+  return { ...window, status: receipt.status, submission_effect: receipt.submission_effect };
+}
 const settledBusinessStatuses = new Set(["confirmed", "rejected", "cancelled", "failed", "stale", "stopped", "expired"]);
 const activeGoalStatuses = new Set(["running", "waiting_result", "waiting_adoption", "waiting_identity", "waiting_unknown"]);
 
@@ -75,8 +122,9 @@ export function assistantConversationGoal(conversation: AssistantConversation | 
   return {root, goal, turns};
 }
 
-export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) {
+export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn, taskId?: string) {
   const result = assistantTaskTurnResult(turn);
+  if (scriptWindowUnknown(assistantTurnScriptWindowRequest(turn, taskId))) return true;
   if (result?.response?.segment_revision?.failure?.submission_effect === 'unknown'
       || result?.response?.timeline_restore?.failure?.submission_effect === 'unknown'
       || result?.response?.timeline_restore?.receipt?.status === 'result_unknown') return true;
@@ -85,10 +133,10 @@ export function assistantTurnHasUnknownRequest(turn: AssistantConversationTurn) 
     || result?.response?.script_tool?.status === "unknown";
 }
 
-export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn) {
+export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn, taskId?: string) {
   if (turn.status === "stopped") return false;
   const original=assistantTaskTurnResult(turn)?.response;
-  if (assistantTurnHasUnknownRequest(turn) || original?.segment_revision?.revision
+  if (assistantTurnHasUnknownRequest(turn, taskId) || original?.segment_revision?.revision
       && ['queued','running','interrupted'].includes(original.segment_revision.revision.status)) return true;
   const goal = assistantTurnGoalRefreshState(turn);
   if (goal) return activeGoalStatuses.has(goal.status);
@@ -98,7 +146,7 @@ export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn)
   const continuation = result.continuation;
   if (continuation && settledBusinessStatuses.has(continuation.status)) return false;
   const response = result.response;
-  return assistantTurnHasUnknownRequest(turn) || continuation?.actionable === true
+  return assistantTurnHasUnknownRequest(turn, taskId) || continuation?.actionable === true
     || Boolean(response?.media_job && ["queued", "running"].includes(response.media_job.status))
     || Boolean(response?.execution_status?.job && ["queued", "running", "interrupted"].includes(response.execution_status.job.status))
     || Boolean(response?.segment_revision?.revision && ["queued", "running", "interrupted"].includes(response.segment_revision.revision.status))
@@ -107,18 +155,19 @@ export function assistantTurnNeedsResultRefresh(turn: AssistantConversationTurn)
 
 function assistantConversationRefreshTurns(conversation: AssistantConversation | null) {
   if (!conversation) return [];
+  const taskId = conversation.scope_kind === "task" ? conversation.scope_id : undefined;
   const latestUser = [...conversation.turns].reverse().find(turn => turn.user_message.trim() !== "");
   if (latestUser?.result?.goal_continuation) {
     const goal = assistantTurnGoalRefreshState(latestUser);
     if (!goal || goal.conversation_id !== conversation.id || goal.workspace_id !== conversation.workspace_id
-      || !assistantTurnNeedsResultRefresh(latestUser)) return [];
+      || !assistantTurnNeedsResultRefresh(latestUser, taskId)) return [];
     // A root may remain completed while the driver claims its next child.
     // Keep that root observable without reviving older goals in this history.
     return conversation.turns.filter(turn => turn.id === latestUser.id || turn.id === goal.current_turn_id)
-      .filter(assistantTurnNeedsResultRefresh);
+      .filter(turn => assistantTurnNeedsResultRefresh(turn, taskId));
   }
   const latest = conversation.turns.at(-1);
-  return latest && assistantTurnNeedsResultRefresh(latest) ? [latest] : [];
+  return latest && assistantTurnNeedsResultRefresh(latest, taskId) ? [latest] : [];
 }
 
 function localTurn(message: string): AssistantConversationTurn {
@@ -155,6 +204,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const draftValue = useRef("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [scriptWindowReadErrors, setScriptWindowReadErrors] = useState<Record<string, string>>({});
   const historyScrollPositions = useRef(new Map<string, number>());
   const historyExpandedDetails = useRef(new Map<string, Map<string, boolean>>());
   const historyFollowBottom = useRef(new Map<string, boolean>());
@@ -186,6 +236,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   }>());
 
   const replace = useCallback((next: AssistantConversation | null) => {
+    if (conversationRef.current?.id !== next?.id) setScriptWindowReadErrors({});
     conversationRef.current = next;
     setConversation(next);
   }, []);
@@ -233,6 +284,8 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
       || activeScopeKey.current !== scopeKey || draftValue.current !== "" || current.draft_text !== ""
       || recovery.navigationRevision !== navigationRevision.current
       || draftRevisionFor(draftRevisionByConversation.current, conversationId) !== recovery.draftRevision) return;
+    const original = current.turns.find(turn => turn.id === turnId);
+    if (original && assistantTurnHasUnknownRequest(original, current.scope_kind === "task" ? current.scope_id : undefined)) return;
     const restoredRevision = advanceDraftRevision(draftRevisionByConversation.current, conversationId);
     const stillOwnsDraft = () => activeScopeKey.current === scopeKey
       && conversationRef.current?.id === conversationId
@@ -300,7 +353,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     return result.items;
   }, [scopeKind, scopeId]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (windowTurnId?: string) => {
     const current = conversationRef.current;
     if (!current) return null;
     const read = ++readRevision.current;
@@ -313,11 +366,52 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     const reads = activeReads.current;
     reads.count += 1;
     try {
-      const fresh = await getAssistantConversation(current.id);
+      let fresh = await getAssistantConversation(current.id);
+      const windowTurns = (windowTurnId ? fresh.turns.filter(turn => turn.id === windowTurnId) : assistantConversationRefreshTurns(fresh))
+        .filter(turn => assistantTurnScriptWindowRequest(turn, fresh.scope_kind === "task" ? fresh.scope_id : undefined) !== null);
+      const windowErrors: Record<string, string | null> = {};
+      if (windowTurns.length && activeScopeKey.current === scopeKey && loadEpoch.current === epoch
+          && conversationRef.current?.id === fresh.id && matchesScope(fresh)) {
+        const bindings = new Map(windowTurns.map(turn => {
+          const live = conversationRef.current?.turns.find(item => item.id === turn.id);
+          return [turn.id, live ? assistantScriptWindowReadKey(fresh.id, live) : null];
+        }));
+        const receipts = await Promise.allSettled(windowTurns.map(turn => readScriptWindow(turn)));
+        if (activeScopeKey.current !== scopeKey || loadEpoch.current !== epoch || conversationRef.current?.id !== fresh.id || !matchesScope(fresh)) return null;
+        if (streamRevision.current !== observedStreamRevision) return conversationRef.current;
+        const updates = new Map<string, AssistantScriptWindowRequest>();
+        const preserved = new Map<string, AssistantConversationTurn>();
+        windowTurns.forEach((turn, index) => {
+          const key = assistantScriptWindowReadKey(fresh.id, turn);
+          const live = conversationRef.current?.turns.find(item => item.id === turn.id);
+          const liveWindow = live && assistantTurnScriptWindowRequest(live);
+          if (live && bindings.get(turn.id) !== assistantScriptWindowReadKey(fresh.id, live)) {
+            preserved.set(turn.id, live); return;
+          }
+          const receipt = receipts[index];
+          if (receipt.status === "fulfilled") { updates.set(turn.id, receipt.value); windowErrors[key] = null; }
+          else {
+            windowErrors[key] = receipt.reason instanceof CreationPlanApiError && receipt.reason.status === 404
+              ? "尚未查到原窗口回执，不代表请求未提交；原 UUID 和当前草稿仍保留。"
+              : receipt.reason instanceof Error ? receipt.reason.message : "原窗口回执未能读回，未重新提交。";
+            if (liveWindow && (liveWindow.status === "saved" || liveWindow.status === "confirmed")) updates.set(turn.id, liveWindow);
+          }
+        });
+        fresh = { ...fresh, turns: fresh.turns.map(turn => {
+          if (preserved.has(turn.id)) return preserved.get(turn.id)!;
+          const window = updates.get(turn.id), result = assistantTaskTurnResult(turn);
+          return window && result?.response ? { ...turn, result: { ...result, response: { ...result.response, script_window_request: window } } } : turn;
+        }) };
+      }
       if (activeScopeKey.current === scopeKey
         && readRevision.current === read && loadEpoch.current === epoch
         && conversationRef.current?.id === fresh.id && matchesScope(fresh)
         && streamRevision.current === observedStreamRevision) {
+        if (Object.keys(windowErrors).length) setScriptWindowReadErrors(previous => {
+          const next = { ...previous };
+          for (const [key, message] of Object.entries(windowErrors)) { if (message) next[key] = message; else delete next[key]; }
+          return next;
+        });
         const latestLocal = conversationRef.current;
         const freshTurnIds = new Set(fresh.turns.map((turn) => turn.id));
         const localPendingTurns = latestLocal?.turns.filter((turn) => {
@@ -766,7 +860,8 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     .map(turn => [turn.id, assistantTurnGoalRefreshState(turn)?.status,
       assistantTurnGoalRefreshState(turn)?.current_turn_id, assistantTaskTurnResult(turn)?.continuation?.status,
       assistantTaskTurnResult(turn)?.response?.media_job?.status, assistantTaskTurnResult(turn)?.response?.edit_request?.status,
-      assistantTaskTurnResult(turn)?.response?.execution_status?.job?.status]);
+      assistantTaskTurnResult(turn)?.response?.execution_status?.job?.status,
+      assistantTurnScriptWindowRequest(turn)?.request_id, assistantTurnScriptWindowRequest(turn)?.status]);
   const waitingInputs=conversation?.turns.flatMap(turn=>turn.events.filter(event=>event.type==="assistant_input" && ["accepted","consumed"].includes(event.status))) ?? [];
   const pendingKey = JSON.stringify([pendingResults,waitingInputs]);
   const hasPendingResults = pendingResults.length > 0 || waitingInputs.length > 0;
@@ -800,7 +895,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   return {
     conversation, conversations, draftText, setDraftText, loading, error, setError,
     beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn, sendInput, withdrawInput,
-    flushDraft, refresh, refreshAfterTaskAdoption, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
+    flushDraft, refresh, scriptWindowReadErrors, refreshAfterTaskAdoption, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
     businessRefreshPaused,
   };
 }

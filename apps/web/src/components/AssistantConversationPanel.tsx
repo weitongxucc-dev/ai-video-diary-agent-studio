@@ -16,9 +16,9 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure, ResourceAdmissionReceipt } from "@/lib/types";
-import type { AssistantInputReceipt, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest } from "@/lib/types/assistant";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
-import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal } from "./useAssistantConversation";
+import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey } from "./useAssistantConversation";
 
 const commandDescriptions: Record<string, { title: string; description: string; icon: typeof Plus }> = {
   "/new": { title: "新对话", description: "保留历史，开始新一段对话", icon: Plus },
@@ -316,6 +316,13 @@ function storyboardRegenerationSummary(outcome: AssistantStoryboardRegeneration 
   return `${outcome.action === "query" ? "原故事板重算请求：" : ""}${statusLabels[outcome.receipt.status]}`;
 }
 
+function scriptWindowSummary(receipt: AssistantScriptWindowRequest | null) {
+  if (!receipt) return null;
+  if (receipt.status === "saved") return receipt.operation === "start" ? "文案首窗已保存，可继续补全文案；尚未完整核查并采用。" : "文案窗口已保存，其他已存段保留；尚未完整核查并采用。";
+  if (receipt.status === "confirmed") return "已核查并采用完整文案。";
+  if (receipt.status === "unknown" || receipt.status === "failed" || receipt.submission_effect === "unknown") return "原文案窗口请求结果尚未确认；保留原 UUID，先查询回执，不重复提交。";
+  return receipt.status === "not_submitted" ? "本次文案窗口请求未提交，原稿保留。" : "本次文案窗口请求已被拒绝，原稿保留。";
+}
 function scriptToolSummary(receipt: AssistantScriptToolReceipt | null | undefined) {
   if (!receipt) return null;
   const action = {save: "保存", query: "查询", update: "更新", revoke: "停用"}[receipt.action];
@@ -365,7 +372,7 @@ function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputRecei
   </div>;
 }
 
-function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; outputRecovered?: boolean; productionRecovered?: boolean }) {
+function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
@@ -375,6 +382,9 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const job = taskResult?.response?.media_job;
   const request = taskResult?.response?.edit_request;
   const toolSummary = scriptToolSummary(taskResult?.response?.script_tool);
+  const scriptWindow = assistantTurnScriptWindowRequest(turn, taskScopeId);
+  const windowSummary = scriptWindowSummary(scriptWindow);
+  const windowInputMismatch = taskResult?.response?.script_window_request && !scriptWindow;
   const storyboard = taskResult?.response?.storyboard_regeneration;
   const storyboardSummary = storyboardRegenerationSummary(storyboard);
   const segment = taskResult?.response?.segment_revision;
@@ -396,8 +406,8 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const outcomeStatus = continuation?.status ?? job?.status;
   const mediaJobLabel = job && (job.status === "queued" || job.status === "cancelled")
     ? taskMediaJobLabel(job) : null;
-  const unknownRequest = assistantTurnHasUnknownRequest(turn);
-  const pendingResult = assistantTurnNeedsResultRefresh(turn);
+  const unknownRequest = assistantTurnHasUnknownRequest(turn, taskScopeId);
+  const pendingResult = assistantTurnNeedsResultRefresh(turn, taskScopeId);
   const graphicSourceReady = job?.result_kind === "graphic_source" && job.status === "succeeded"
     && job.result && "source_ref" in job.result && "artifact_id" in job.result;
   const graphicSourceSummary = "图片来源已生成，可以继续预览它在视频里的效果；尚未应用到草稿或生成成片。";
@@ -422,7 +432,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
     cancelled: "已取消", interrupted: "中断等待继续",
   };
-  const resultSummary = restoreSummary ?? segmentSummary ?? businessSummary ?? storyboardSummary ?? toolSummary ?? (result?.kind === "plan_preview"
+  const resultSummary = windowInputMismatch ? null : windowSummary ?? restoreSummary ?? segmentSummary ?? businessSummary ?? storyboardSummary ?? toolSummary ?? (result?.kind === "plan_preview"
     ? (result.plan_preview as Record<string, unknown> | undefined)?.confirmable === true
       ? "方案已检查，可查看页面中的方案卡后决定是否创建。"
       : "方案检查已返回阻断项；请按页面中的真实原因处理。"
@@ -443,12 +453,17 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     {turn.user_message.trim() ? <p className="assistant-user-message">{turn.user_message}</p> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     <TurnContent turn={turn} reading={reading} />
+    {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
     {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
     {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
       {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}
+      {scriptWindow ? <section aria-label="文案窗口回执"><p>回执状态：{{ saved: "窗口已保存", confirmed: "完整采用", unknown: "结果未知", failed: "请求失败，提交结果仍待核对", rejected: "已拒绝", not_submitted: "未提交" }[scriptWindow.status]}</p><p>窗口操作：{{ start: "首窗保存", patch: "分窗修改", confirm: "完整采用" }[scriptWindow.operation]}</p><p>原请求：{scriptWindow.request_id}</p>{scriptWindow.script_id ? <p>稿件：{scriptWindow.script_id}</p> : null}{(scriptWindow.status === "saved" || scriptWindow.status === "confirmed") && scriptWindow.total_count != null ? <p>{scriptWindow.status === "confirmed" ? "完整采用" : "当前已存"} {scriptWindow.total_count} 段。</p> : null}{scriptWindow.updated_at ? <p>稿件版本：{scriptWindow.updated_at}</p> : null}
+        {scriptWindow.failure?.reason ? <AssistantFailureMessage reading={reading} readingKey={`${turn.id}:script-window:diagnostic`} message={scriptWindow.failure.reason}/> : null}{scriptWindow.failure?.impact ? <p>{scriptWindow.failure.impact}</p> : null}{scriptWindow.failure?.repair_action ? <p>{scriptWindow.failure.repair_action}</p> : null}
+      </section> : null}
+      {windowReadError ? <p role="alert">{windowReadError}</p> : null}
       {segment?.revision?.adoption?.reason ? <p>{segmentAdoptionReason(segment.revision.adoption.reason)}</p> : null}
       {readinessMessage ? <p>{readinessMessage}</p> : null}
       {restore?.failure || restore?.receipt?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:restore:diagnostic`} message={restore.failure?.reason ?? restore.receipt?.failure?.reason ?? ''}/>{restore.failure?.repair_action || restore.receipt?.failure?.repair_action ? <p>{restore.failure?.repair_action ?? restore.receipt?.failure?.repair_action}</p> : null}</div> : null}
@@ -532,7 +547,7 @@ export function AssistantConversationPanel({
     setReadingResultTurn(turn.id);
     setError(null);
     try {
-      const fresh = await state.refresh();
+      const fresh = await (assistantTurnScriptWindowRequest(turn, conversation?.scope_kind === "task" ? conversation.scope_id : undefined) ? state.refresh(turn.id) : state.refresh());
       if (!fresh || fresh.id !== id || read !== resultReadRevision.current || !state.isCurrentConversation(id)) return;
       const updated = fresh.turns.find(item => item.id === turn.id);
       if (openProposal && updated && canOpenTurnProposal(updated)) onOpenEditProposal?.(updated);
@@ -570,6 +585,7 @@ export function AssistantConversationPanel({
     turn.events.length, assistantTaskTurnResult(turn)?.continuation, assistantTaskTurnResult(turn)?.response?.media_job?.status,
     assistantTaskTurnResult(turn)?.response?.media_job?.resource_wait,
     assistantTaskTurnResult(turn)?.response?.edit_request?.status, assistantTaskTurnResult(turn)?.response?.execution_status,
+    assistantTurnScriptWindowRequest(turn),
     turn.result?.goal_continuation]));
   const latestHistoryContent = useRef(historyContent);
   latestHistoryContent.current = historyContent;
@@ -761,7 +777,7 @@ export function AssistantConversationPanel({
         state.historyScrollPositions?.current.set(conversation.id, node.scrollTop);
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
-        {turns.map((turn) => <TurnView key={turn.id} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} refreshPaused={state.businessRefreshPaused}
+        {turns.map((turn) => <TurnView key={turn.id} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
           productionRecovered={Boolean(goalProgress?.goal.status === "production_completed" && goalProgress.goal.production_result?.status === "succeeded" && goalProgress.goal.production_result.video_ready && goalProgress.turns.some(item => item.id === turn.id))}
           outputRecovered={Boolean(goalProgress && completedGoalOutput(goalProgress) && goalProgress.turns.some(item => item.id === turn.id))}/>)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}

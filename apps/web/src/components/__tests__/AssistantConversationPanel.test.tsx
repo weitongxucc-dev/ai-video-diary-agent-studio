@@ -4,12 +4,15 @@ import { AssistantConversationPanel } from "../AssistantConversationPanel";
 import { ReferenceChips } from "../ui/reference-chips";
 import { referenceAssistantKnowledge, referenceAssistantMaterial, referenceAssistantProfile, referenceAssistantSelection } from "@/lib/assistant-reference";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
-import { useAssistantConversation } from "../useAssistantConversation";
+import { useAssistantConversation, assistantTaskTurnResult, assistantTurnHasUnknownRequest, assistantTurnNeedsResultRefresh } from "../useAssistantConversation";
+import { CreationPlanApiError } from "@/lib/api";
+import type { AssistantScriptWindowRequest } from "@/lib/types/assistant";
 import type { AssistantConversation, AssistantStreamEvent, ResourceAdmissionReceipt } from "@/lib/types";
 import type { AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 
 const api = vi.hoisted(() => ({
   enqueueAssistantInput: vi.fn(),
+  readWindow: vi.fn(),
   withdrawAssistantInput: vi.fn(),
   getAssistantCapabilities: vi.fn(),
   getCurrentAssistantConversation: vi.fn(),
@@ -26,6 +29,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api", async importOriginal => ({
   ...api,
+  CreationPlanApiError: (await importOriginal<typeof import("@/lib/api")>()).CreationPlanApiError,
   taskMediaJobLabel: (await importOriginal<typeof import("@/lib/api")>()).taskMediaJobLabel,
   taskMediaResourceCheckLabel: (await importOriginal<typeof import("@/lib/api")>()).taskMediaResourceCheckLabel,
   getAssistantCapabilities: api.getAssistantCapabilities.mockResolvedValue({
@@ -53,7 +57,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+vi.mock("@/lib/api/creation-tasks", async original => ({ ...await original<typeof import("@/lib/api/creation-tasks")>(), getCreationTaskScriptWindowRequest: api.readWindow }));
+
 beforeEach(() => {
+  api.readWindow.mockReset();
   api.referenceSaved.clear();
   api.getAssistantConversationReference.mockImplementation(async (id:string) => api.referenceSaved.get(id) ?? {selected_reference:null,reference_version:0,status:"ready",reason:null});
   api.saveAssistantConversationReference.mockImplementation(async (id:string,reference:import("@/lib/types").AssistantSavedReference|null,version:number) => {
@@ -2039,4 +2046,153 @@ it("keeps different source paragraphs and video ranges individually reachable fr
   fireEvent.keyDown(screen.getByRole("dialog"), { key:"Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   await waitFor(() => expect(summary).toHaveFocus());
+});
+
+function windowConversation(status:AssistantScriptWindowRequest['status']='unknown',inputId='window-input',requestId='00000000-0000-4000-8000-000000000001') {
+  const saved=conversation('task');
+  const receipt:AssistantScriptWindowRequest={kind:'script_window_request',operation:status==='confirmed'?'confirm':'patch',task_id:'task-one',script_id:'script-one',request_id:requestId,
+    status,input_id:inputId,input_turn_id:'turn-one',...(['unknown','failed'].includes(status)?{submission_effect:'unknown'}:status==='saved'||status==='confirmed'?{updated_at:'2026-10-25T00:00:00Z',total_count:45}:{})};
+  saved.turns=[{...saved.turns[0],events:[],assistant_text:'原窗口业务回执',result:{kind:'task_turn',continuation:{status:'confirmed'},response:{reply:'原窗口业务回执',provider:'local',model:'local',edit_preview:null,script_draft:null,execution_action:null,execution_status:null,topic_candidates:null,
+    input_id:inputId,input_turn_id:'turn-one',script_window_request:receipt}}}];
+  return saved;
+}
+
+it.each(['saved','confirmed','unknown','failed','rejected','not_submitted'] as const)('shows the structured chat window %s receipt without confusing saved drafts with adoption or blocking fresh messages',async(status)=>{
+  const saved=windowConversation(status);saved.turns[0].status='failed';
+  const refresh=vi.fn(async()=>saved),send=vi.fn();
+  render(<AssistantConversationPanel state={state({conversation:saved,refresh})} input="全新聊天草稿" onInput={vi.fn()} onSend={send} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByRole('region',{name:'文案窗口回执'})).toHaveTextContent('00000000-0000-4000-8000-000000000001');
+  if(status==='saved') expect(screen.getByText(/文案窗口已保存，其他已存段保留；尚未完整核查并采用/)).toBeInTheDocument();
+  if(status==='confirmed') expect(screen.getByText('完整采用 45 段。')).toBeInTheDocument();
+  if(status==='rejected') expect(screen.getByText('本次文案窗口请求已被拒绝，原稿保留。')).toBeInTheDocument();
+  if(status==='not_submitted') expect(screen.getByText('本次文案窗口请求未提交，原稿保留。')).toBeInTheDocument();
+  if(status==='unknown'||status==='failed') {
+    expect(assistantTurnHasUnknownRequest(saved.turns[0])).toBe(true);
+    expect(assistantTurnNeedsResultRefresh(saved.turns[0])).toBe(true);
+    expect(screen.queryByRole('button',{name:'继续编辑本条要求'})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'查询本轮结果'}));
+    await waitFor(()=>expect(refresh).toHaveBeenCalledWith('turn-one'));
+  }
+  await waitFor(()=>expect(screen.getByRole('button',{name:'发送'})).toBeEnabled());
+  expect(send).not.toHaveBeenCalled();
+});
+
+it('reconciles the original window UUID through GET, preserves a newer draft on 404, and still refreshes unrelated chat data',async()=>{
+  const initial=windowConversation();
+  api.getCurrentAssistantConversation.mockResolvedValue(initial);
+  api.listAssistantConversations.mockResolvedValue({items:[initial]});
+  api.getAssistantConversation.mockResolvedValue(initial);
+  api.readWindow.mockResolvedValue({task_id:'task-one',script_id:'script-one',request_id:'00000000-0000-4000-8000-000000000001',operation:'patch',status:'unknown',submission_effect:'unknown',message:'仍未完成',submitted_input_available:true});
+  const {result}=renderHook(()=>useAssistantConversation({scope_kind:'task',scope_id:'task-one'}));
+  await waitFor(()=>expect(result.current.loading).toBe(false));
+  act(()=>result.current.setDraftText('用户正在写的新草稿'));
+  await act(async()=>{await result.current.refresh('turn-one');});
+  expect(api.readWindow).toHaveBeenCalledWith('task-one','00000000-0000-4000-8000-000000000001',{operation:'patch',script_id:'script-one'});
+  expect(result.current.draftText).toBe('用户正在写的新草稿');
+  api.readWindow.mockRejectedValue(new CreationPlanApiError(404,null,'未找到原窗口请求'));
+  api.getAssistantConversation.mockResolvedValue({...initial,title:'其他聊天数据已更新'});
+  await act(async()=>{await result.current.refresh('turn-one');});
+  expect(result.current.conversation?.title).toBe('其他聊天数据已更新');
+  expect(result.current.draftText).toBe('用户正在写的新草稿');
+  expect(Object.values(result.current.scriptWindowReadErrors)).toContain('尚未查到原窗口回执，不代表请求未提交；原 UUID 和当前草稿仍保留。');
+  expect(assistantTurnHasUnknownRequest(result.current.conversation!.turns[0])).toBe(true);
+  api.readWindow.mockResolvedValue({task_id:'task-one',script_id:'script-one',request_id:'00000000-0000-4000-8000-000000000001',status:'saved',updated_at:'2026-10-25T00:01:00Z',total_count:45,affected_section_ids:['section-45']});
+  await act(async()=>{await result.current.refresh('turn-one');});
+  expect(assistantTaskTurnResult(result.current.conversation!.turns[0])?.response?.script_window_request).toMatchObject({status:'saved',total_count:45,input_id:'window-input',request_id:'00000000-0000-4000-8000-000000000001'});
+  expect(result.current.draftText).toBe('用户正在写的新草稿');
+  expect(assistantTurnHasUnknownRequest(result.current.conversation!.turns[0])).toBe(false);
+  expect(Object.values(result.current.scriptWindowReadErrors)).toHaveLength(0);
+  expect(api.restoreUnpersistedAssistantTurnDraft).not.toHaveBeenCalled();
+});
+
+it('does not apply an old window receipt to a newer input and request in the same chat turn',async()=>{
+  const old=windowConversation(),newer=windowConversation('unknown','new-input','00000000-0000-4000-8000-000000000002');
+  api.getCurrentAssistantConversation.mockResolvedValue(old);
+  api.listAssistantConversations.mockResolvedValue({items:[old]});
+  api.getAssistantConversation.mockResolvedValueOnce(old).mockResolvedValue(newer);
+  let finish!:(value:unknown)=>void;
+  api.readWindow.mockReturnValueOnce(new Promise(resolve=>{finish=resolve;})).mockResolvedValue({task_id:'task-one',script_id:'script-one',request_id:'00000000-0000-4000-8000-000000000002',operation:'patch',status:'unknown',submission_effect:'unknown',message:'新请求尚未完成',submitted_input_available:true});
+  const {result}=renderHook(()=>useAssistantConversation({scope_kind:'task',scope_id:'task-one'}));
+  await waitFor(()=>expect(result.current.loading).toBe(false));
+  let oldRead!:Promise<unknown>;
+  act(()=>{oldRead=result.current.refresh('turn-one');});
+  await waitFor(()=>expect(finish).toBeDefined());
+  await act(async()=>{await result.current.refresh('turn-one');});
+  await act(async()=>{finish({task_id:'task-one',script_id:'script-one',request_id:'00000000-0000-4000-8000-000000000001',status:'saved',updated_at:'2026-10-25T00:01:00Z',total_count:45,affected_section_ids:[]});await oldRead;});
+  expect(assistantTaskTurnResult(result.current.conversation!.turns[0])?.response?.script_window_request).toMatchObject({request_id:'00000000-0000-4000-8000-000000000002',input_id:'new-input',status:'unknown'});
+});
+
+it('does not let a historical window from another input block the current input or fresh messages',()=>{
+  const saved=windowConversation();
+  assistantTaskTurnResult(saved.turns[0])!.response!.input_id='current-input';
+  expect(assistantTurnHasUnknownRequest(saved.turns[0])).toBe(false);
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="另一条新消息" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByRole('alert')).toHaveTextContent('窗口回执与本轮任务或输入不符');
+  expect(screen.getByRole('button',{name:'发送'})).toBeEnabled();
+});
+
+it('does not automatically restore the original unknown window instruction but still allows a new local chat turn',async()=>{
+  const initial={...conversation('task'),turns:[]};
+  api.getCurrentAssistantConversation.mockResolvedValue(initial);
+  api.listAssistantConversations.mockResolvedValue({items:[initial]});
+  const failed=windowConversation();failed.turns[0].status='failed';failed.turns[0].user_message='原窗口请求';
+  api.getAssistantConversation.mockResolvedValue(failed);
+  api.readWindow.mockResolvedValue({task_id:'task-one',script_id:'script-one',request_id:'00000000-0000-4000-8000-000000000001',operation:'patch',status:'unknown',submission_effect:'unknown',message:'原请求结果未知',submitted_input_available:true});
+  const {result}=renderHook(()=>useAssistantConversation({scope_kind:'task',scope_id:'task-one'}));
+  await waitFor(()=>expect(result.current.loading).toBe(false));
+  let pending!:ReturnType<typeof result.current.beginTurn>;
+  await act(async()=>{pending=result.current.beginTurn('原窗口请求');await pending.draftCheckpoint;});
+  act(()=>{result.current.bindTurnEvents(initial.id,pending.localTurnId)({type:'turn_started',turn_id:'turn-one',turn_state:'running'});});
+  api.updateAssistantConversation.mockClear();
+  await act(async()=>{await result.current.refresh('turn-one');});
+  expect(result.current.draftText).toBe('');
+  expect(api.updateAssistantConversation).not.toHaveBeenCalledWith(initial.id,expect.objectContaining({draft_text:'原窗口请求'}));
+  let next!:ReturnType<typeof result.current.beginTurn>;
+  await act(async()=>{next=result.current.beginTurn('完全不同的新要求');await next.draftCheckpoint;});
+  expect(result.current.conversation?.turns.at(-1)?.user_message).toBe('完全不同的新要求');
+});
+
+it('does not query or lock the current task for an unrelated task window receipt',async()=>{
+  const saved=windowConversation();
+  assistantTaskTurnResult(saved.turns[0])!.response!.script_window_request!.task_id='another-task';
+  expect(assistantTurnHasUnknownRequest(saved.turns[0],'task-one')).toBe(false);
+  api.getCurrentAssistantConversation.mockResolvedValue(saved);
+  api.listAssistantConversations.mockResolvedValue({items:[saved]});
+  api.getAssistantConversation.mockResolvedValue(saved);
+  const {result}=renderHook(()=>useAssistantConversation({scope_kind:'task',scope_id:'task-one'}));
+  await waitFor(()=>expect(result.current.loading).toBe(false));
+  await act(async()=>{await result.current.refresh('turn-one');});
+  expect(api.readWindow).not.toHaveBeenCalled();
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="当前作品的新要求" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByRole('alert')).toHaveTextContent('窗口回执与本轮任务或输入不符');
+  await waitFor(()=>expect(screen.getByRole('button',{name:'发送'})).toBeEnabled());
+});
+
+it('shows a failed original window GET diagnostic without treating unknown submission as safely rejected',async()=>{
+  const saved=windowConversation();
+  api.getCurrentAssistantConversation.mockResolvedValue(saved);
+  api.listAssistantConversations.mockResolvedValue({items:[saved]});
+  api.getAssistantConversation.mockResolvedValue(saved);
+  api.readWindow.mockResolvedValue({task_id:'task-one',script_id:'script-one',request_id:'00000000-0000-4000-8000-000000000001',operation:'patch',status:'failed',submission_effect:'unknown',message:'原请求失败但无最终回执',submitted_input_available:true,error_detail:{reason:'原段事实核查未通过',impact:'未确认本次保存效果',repair_action:'先核对原窗口请求'}});
+  const {result}=renderHook(()=>useAssistantConversation({scope_kind:'task',scope_id:'task-one'}));
+  await waitFor(()=>expect(result.current.loading).toBe(false));
+  await act(async()=>{await result.current.refresh('turn-one');});
+  render(<AssistantConversationPanel state={result.current} input="当前新草稿" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByText('原段事实核查未通过')).toBeInTheDocument();
+  expect(screen.getByText('回执状态：请求失败，提交结果仍待核对')).toBeInTheDocument();
+  expect(assistantTurnHasUnknownRequest(result.current.conversation!.turns[0])).toBe(true);
+  await waitFor(()=>expect(screen.getByRole('button',{name:'发送'})).toBeEnabled());
+});
+
+it('does not bind an origin-less historical window receipt to a known current input',async()=>{
+  const saved=windowConversation();
+  assistantTaskTurnResult(saved.turns[0])!.response!.script_window_request!.input_id=null;
+  expect(assistantTurnHasUnknownRequest(saved.turns[0],'task-one')).toBe(false);
+  api.getCurrentAssistantConversation.mockResolvedValue(saved);
+  api.listAssistantConversations.mockResolvedValue({items:[saved]});
+  api.getAssistantConversation.mockResolvedValue(saved);
+  const {result}=renderHook(()=>useAssistantConversation({scope_kind:'task',scope_id:'task-one'}));
+  await waitFor(()=>expect(result.current.loading).toBe(false));
+  await act(async()=>{await result.current.refresh('turn-one');});
+  expect(api.readWindow).not.toHaveBeenCalled();
 });

@@ -68,7 +68,25 @@ export type AssistantStoryboardRegeneration = {
     query_url: string;
     failure: AssistantToolFailure & {repair_action: string};
 };
+export type AssistantScriptWindowRequest = {
+    kind: "script_window_request";
+    operation: "start" | "patch" | "confirm";
+    task_id: string;
+    request_id: string;
+    script_id?: string | null;
+    status: "saved" | "confirmed" | "unknown" | "failed" | "rejected" | "not_submitted";
+    updated_at?: string | null;
+    total_count?: number | null;
+    affected_section_ids?: string[] | null;
+    submission_effect?: "not_submitted" | "rejected" | "unknown" | null;
+    failure?: (Partial<AssistantToolFailure> & { submission_effect?: "not_submitted" | "rejected" | "unknown" }) | null;
+    input_id?: string | null;
+    input_turn_id?: string | null;
+};
 export type CreationTaskAssistantTurnResponse = {
+    script_window_request?: AssistantScriptWindowRequest | null;
+    input_id?: string | null;
+    input_turn_id?: string | null;
     reply: string;
     provider: string;
     model: string;
