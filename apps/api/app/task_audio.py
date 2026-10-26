@@ -197,6 +197,59 @@ class TaskAudio:
             raise ValueError('原音轨输入已变化，不能重用旧master')
         return manifest, record
 
+    def prepared_master_facts(self, job, montage, *, actor, connection=None):
+        """Read the sealed master and its original producer receipt, without mixing or media probes."""
+        from dataclasses import asdict
+        from app.creation.assembly_manifest import AudioAssemblyManifest
+        import stat
+        with self.repository._connect() if connection is None else nullcontext(connection) as conn:
+            event = self.repository.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=conn)
+            if (event.job_id != job.id or event.task_id != job.task_id
+                    or event.payload['input_digest'] != job.input_digest):
+                raise PermissionError('唯一音频master不属于原Job输入')
+            manifest = AudioAssemblyManifest.from_payload(event.payload['manifest'])
+            manifest.validate_scope(job.workspace_id, job.task_id, job.id)
+            unit = manifest.final
+            record = self.repository.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
+            transform = self.repository.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
+            if (not unit.master or record.task_id != job.task_id or record.producer_job_id != job.id
+                    or record.logical_ref != unit.output_ref(job.task_id) or transform.job_id != job.id
+                    or transform.task_id != job.task_id or transform.status != 'succeeded'
+                    or transform.input_digest != unit.id or transform.output_refs != [record.logical_ref]
+                    or transform.parameters['manifest_digest'] != manifest.digest
+                    or not transform.parameters['master'] or transform.parameters['sample_rate'] != 48000
+                    or transform.parameters['channels'] != 2
+                    or transform.parameters['duration_ms'] != manifest.duration_ms):
+                raise ValueError('唯一音频master缺少原成功变换与完整采样时钟')
+            producer = conn.execute("SELECT r.id,r.last_grant_generation FROM device_work_requests r "
+                "JOIN task_events e ON e.workspace_id=r.workspace_id AND e.job_id=r.owner_id "
+                "AND e.event_type='task_execution_unit_settled' "
+                "AND json_extract(e.payload_json,'$.usage_id')=r.id||':'||r.last_grant_generation "
+                "WHERE r.workspace_id=? AND r.owner_type='creation_job' AND r.owner_id=? AND r.input_digest=? "
+                "AND r.state='done' AND json_extract(r.resources_json,'$.assembly_unit_id')=? "
+                "AND json_extract(r.resources_json,'$.assembly_manifest_digest')=? "
+                "ORDER BY r.updated_at DESC,r.id DESC LIMIT 1",
+                (job.workspace_id, job.id, job.input_digest, unit.id, manifest.digest)).fetchone()
+            if producer is None:
+                raise ValueError('唯一音频master没有原请求与原generation的完成消耗回执')
+        self.validate_source_access(job.workspace_id, job.task_id, record.logical_ref, actor)
+        self.validate_material_use(job.workspace_id, job.task_id, record.logical_ref)
+        path = self.artifact_store.resolve_file(record.logical_ref)
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('唯一音频master不是普通文件')
+        identity = {'device': info.st_dev, 'inode': info.st_ino, 'size_bytes': info.st_size,
+            'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns}
+        if identity['size_bytes'] != record.size_bytes:
+            raise ValueError('唯一音频master大小已变化')
+        return {'parent': {'binding': {'artifact_id': record.id, 'sha256': record.sha256,
+            'size_bytes': record.size_bytes, 'producer_request_id': producer['id'],
+            'producer_generation': producer['last_grant_generation'], 'transform_id': transform.id,
+            'transform_digest': media_digest(asdict(transform))}, 'clock': {
+                'sample_count': manifest.duration_ms * 48, 'sample_rate': 48000,
+                'channels': 2, 'sample_format': 's16le'}}, 'path': str(path),
+            'logical_ref': record.logical_ref, 'file_identity': identity}
+
     def master_mix_facts(self, job, montage, *, actor, budget):
         from app.audio_timeline import TimelineAudioClip, TimelineAudioTrack
         prepared = self.prepared_master(job, montage, actor=actor, budget=budget)
