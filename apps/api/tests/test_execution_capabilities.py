@@ -168,3 +168,38 @@ def test_quality_stream_projection_matches_real_preparation_without_inventing_me
     public = json.dumps(projected)
     assert '/private/' not in public and quality.worker_sha256 not in public
     assert 'source-digest' not in public
+
+
+def test_packet_copy_configuration_requires_shared_registered_assembly_without_claiming_measurement():
+    from app.packet_copy_policy import PacketCopyBudget
+    budget, registrations = configured_runtime()
+    packet = PacketCopyBudget(backend_identity='c'*64, max_process_rss_bytes=268435456,
+        additional_memory_bytes=268435456, max_process_threads=16, threads=1, runtime_sample_seconds=.1,
+        max_stdout_bytes=65536, max_stderr_bytes=262144, max_manifest_bytes=65536, preparation_timeout_seconds=30)
+    budget = replace(budget, packet_copy=packet)
+    owner, executor = registrations['creation_job'].owner, registrations['creation_job'].executor
+    assembly = SimpleNamespace(next_unit=forbidden, execute=forbidden, private_path='/private/assembly')
+    incomplete = SimpleNamespace(next_unit=forbidden)
+    for registered, owned, executed, expected in (
+        ({}, None, None, 'not_installed'),
+        (registrations, assembly, SimpleNamespace(next_unit=forbidden, execute=forbidden), 'not_installed'),
+        (registrations, incomplete, incomplete, 'not_installed'),
+        (registrations, assembly, assembly, 'installed'),
+    ):
+        owner.packet_copy_assembly, executor.packet_copy_assembly = owned, executed
+        facts = execution_capability_facts(budget=budget, registrations=registered)
+        projected = by_purpose(facts, 'picture_packet_copy')
+        assert projected['configured'] and projected['implementation_status'] == expected
+        assert projected['execution_mode'] == 'ffmpeg_packet_copy'
+        assert projected['workload_provenance'] == {'mode':'bounded_preparation','throughput_verification':'unknown'}
+        assert projected['verification_status'] == 'unknown' and projected['evidence_ref'] is None
+        assert projected['verified_input_range'] is None
+        assert bool(projected['continuation']) is (expected == 'installed')
+        assert facts['admission'] == 'not_evaluated' and facts['whole_task_support'] == 'not_inferred'
+        limits = {limit['name']:limit for limit in projected['limits']}
+        assert limits['preparation_timeout_seconds']['scope'] == 'preparation_attempt'
+        assert limits['max_manifest_bytes']['subject'] == 'packet_copy_manifest'
+        assert limits['max_manifest_bytes']['value'] == packet.max_manifest_bytes
+        assert not {'max_duration_seconds','max_input_bytes','max_output_bytes','max_pixel_seconds'} & limits.keys()
+        public = json.dumps(projected)
+        assert '/private/' not in public and packet.backend_identity not in public

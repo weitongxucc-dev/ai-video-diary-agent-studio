@@ -103,6 +103,24 @@ def _quality_capability(budget, installed):
     return facts
 
 
+def _packet_copy_capability(budget, installed):
+    facts = _capability("picture_packet_copy", "ffmpeg_packet_copy", budget, installed,
+        continuation=["recover_original_unit"],
+        gaps=["Bounded preparation is not measured copy throughput or whole-task completion.",
+              "Every unit still needs actual parent bytes, a finite I/O deadline and write-volume admission."])
+    for name, unit, scope, subject in (
+        ("threads", "threads", "safety", "packet_copy_process"),
+        ("max_stdout_bytes", "bytes", "unit", "subprocess_stdout"),
+        ("max_manifest_bytes", "bytes", "unit", "packet_copy_manifest"),
+        ("preparation_timeout_seconds", "seconds", "preparation_attempt", "packet_copy_deadline"),
+    ):
+        value = getattr(budget, name, None)
+        if type(value) in (int, float):
+            facts["limits"].append({"name": name, "value": value, "unit": unit, "scope": scope, "subject": subject})
+    facts["workload_provenance"] = {"mode": "bounded_preparation", "throughput_verification": "unknown"}
+    return facts
+
+
 def execution_capability_facts(*, budget, registrations: Mapping) -> dict:
     """Project the current runtime's budgets and existing owner registrations.
 
@@ -121,6 +139,7 @@ def execution_capability_facts(*, budget, registrations: Mapping) -> dict:
     render = getattr(budget, "cpu_render", None)
     montage = getattr(budget, "montage", None)
     inspection = getattr(budget, "quality", None)
+    packet_copy = getattr(budget, "packet_copy", None)
     creation_installed = _methods(owner, "verify_submission") and _methods(executor, "execute")
     segment_installed = (creation_installed and _methods(segments, "next_initial")
                          and getattr(executor, "narration_stage", None) is not None)
@@ -129,6 +148,9 @@ def execution_capability_facts(*, budget, registrations: Mapping) -> dict:
     picture_installed = (creation_installed and _methods(owner, "render_facts")
                          and _methods(executor, "render_action"))
     mix_installed = picture_installed and _methods(owner, "audio_mix_facts")
+    packet_assembly = getattr(owner, "packet_copy_assembly", None)
+    packet_installed = (creation_installed and packet_assembly is getattr(executor, "packet_copy_assembly", None)
+                        and _methods(packet_assembly, "next_unit", "execute"))
     quality_installed = (_methods(quality_owner, "verify_submission")
                          and _methods(quality_executor, "execute"))
     return {
@@ -158,5 +180,6 @@ def execution_capability_facts(*, budget, registrations: Mapping) -> dict:
                         continuation=["serial_work_inside_one_grant"],
                         gaps=["Serial clip processing is not persistent cross-unit final composition."]),
             _quality_capability(inspection, quality_installed),
+            _packet_copy_capability(packet_copy, packet_installed),
         ],
     }
