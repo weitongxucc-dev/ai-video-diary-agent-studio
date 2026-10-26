@@ -618,6 +618,55 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     )
 
 
+def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
+    from app.creation.contracts import CoverAsset, SubtitleCue, SubtitleTrack
+
+    repo = _repository(tmp_path)
+    _save_creation_task(repo, workspace_id="workspace_a", task_id="task-a")
+    base = repo.create_timeline_version(TimelineVersion(
+        "base", "workspace_a", "task-a", None, 1, {}, None))
+    version = TimelineVersion("delivery", "workspace_a", "task-a", base.id, 2,
+        {"subtitle_track_ids": ["delivery-subtitles"], "cover_asset_id": "delivery-cover"}, None)
+    track = SubtitleTrack("delivery-subtitles", "workspace_a", "task-a", version.id,
+        "zh-CN", None, {}, [SubtitleCue("cue", None, "字幕", 0, 1)], "timeline", None,
+        "artifacts/subtitles.srt", "subtitle-transform", "valid")
+    cover = CoverAsset("delivery-cover", "workspace_a", "task-a", version.id,
+        "artifacts/video.mp4", 0, "封面", {}, {}, "video_frame", "fixture",
+        "artifacts/cover.png", "cover-transform", "valid")
+
+    with pytest.raises(ValueError, match="封面缺少"):
+        with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            repo.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
+            assert repo.create_subtitle_track(track, connection=conn) == track
+            repo.create_cover_asset(replace(cover, title=""), connection=conn)
+    assert repo.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
+    with pytest.raises(KeyError):
+        repo.get_timeline_version("workspace_a", version.id)
+    with pytest.raises(KeyError):
+        repo.get_subtitle_track("workspace_a", "task-a", track.id)
+    with pytest.raises(KeyError):
+        repo.get_cover_asset("workspace_a", "task-a", cover.id)
+
+    with repo._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        repo.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
+        assert repo.create_subtitle_track(track, connection=conn) == track
+        assert repo.create_cover_asset(cover, connection=conn) == cover
+        assert repo.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
+        with pytest.raises(KeyError):
+            repo.get_cover_asset("workspace_a", "task-a", cover.id)
+    assert repo.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version.id
+    assert repo.get_subtitle_track("workspace_a", "task-a", track.id) == track
+    assert repo.get_cover_asset("workspace_a", "task-a", cover.id) == cover
+    with repo._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        repo.create_timeline_version(base, connection=conn, expected_current_version_id=version.id)
+        assert repo.next_timeline_sequence("workspace_a", "task-a", connection=conn) == 3
+        with pytest.raises(KeyError):
+            repo.next_timeline_sequence("outside", "task-a", connection=conn)
+
+
 def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
     tmp_path,
 ):

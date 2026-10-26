@@ -4866,6 +4866,16 @@ class ProductionRepository:
             raise KeyError(version_id)
         return self._timeline_version_from_row(row)
 
+    def next_timeline_sequence(
+        self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection,
+    ) -> int:
+        self._require_creation_task(connection, workspace_id, task_id)
+        row = connection.execute(
+            "SELECT MAX(sequence) FROM timeline_versions WHERE workspace_id = ? AND task_id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        return (row[0] or 0) + 1
+
     def list_timeline_versions(
         self, workspace_id: str, task_id: str
     ) -> list[TimelineVersion]:
@@ -7151,9 +7161,11 @@ class ProductionRepository:
     def interrupt_running_person_renders(self, workspace_id: str | None = None) -> int:
         return self._person_renders.interrupt_running_person_renders(workspace_id)
 
-    def create_subtitle_track(self, track: SubtitleTrack) -> SubtitleTrack:
+    def create_subtitle_track(
+        self, track: SubtitleTrack, *, connection: sqlite3.Connection | None = None,
+    ) -> SubtitleTrack:
         _validate_subtitle_track(track)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, track.workspace_id, track.task_id)
             timeline = conn.execute(
                 """
@@ -7185,12 +7197,12 @@ class ProductionRepository:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValueError("同一时间线版本的字幕轨已存在") from exc
-        return self.get_subtitle_track(track.workspace_id, track.task_id, track.id)
+        return self.get_subtitle_track(track.workspace_id, track.task_id, track.id, connection=connection)
 
     def get_subtitle_track(
-        self, workspace_id: str, task_id: str, track_id: str
+        self, workspace_id: str, task_id: str, track_id: str, *, connection: sqlite3.Connection | None = None,
     ) -> SubtitleTrack:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
@@ -7233,9 +7245,11 @@ class ProductionRepository:
                 ).fetchall()
         return [self._subtitle_track_from_row(row) for row in rows]
 
-    def create_cover_asset(self, cover: CoverAsset) -> CoverAsset:
+    def create_cover_asset(
+        self, cover: CoverAsset, *, connection: sqlite3.Connection | None = None,
+    ) -> CoverAsset:
         _validate_cover_asset(cover)
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, cover.workspace_id, cover.task_id)
             timeline = conn.execute(
                 """
@@ -7266,12 +7280,12 @@ class ProductionRepository:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValueError("同一时间线版本的封面已存在") from exc
-        return self.get_cover_asset(cover.workspace_id, cover.task_id, cover.id)
+        return self.get_cover_asset(cover.workspace_id, cover.task_id, cover.id, connection=connection)
 
     def get_cover_asset(
-        self, workspace_id: str, task_id: str, cover_id: str
+        self, workspace_id: str, task_id: str, cover_id: str, *, connection: sqlite3.Connection | None = None,
     ) -> CoverAsset:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
