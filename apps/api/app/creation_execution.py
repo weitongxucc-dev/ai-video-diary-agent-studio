@@ -342,7 +342,51 @@ def narration_edit_digest(operation):
     return hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
 
 
-def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, reference_preparation=None, comparison_reference=None):
+def narration_scope_fields(budget, *, task, inputs, reference, language, max_output_bytes,
+                           runtime_facts=None, source_binding=None):
+    from app.host_resource_probes import narration_scope_basis
+    scope = budget.input_scope
+    if scope == 'single_call_experiment_v1':
+        return {'input_scope': scope, 'budget_basis': narration_scope_basis(scope)}
+    if scope != 'single_call_prepared_v1':
+        raise ValueError('普通配音需要已准备的单次资源档；准备许可不能充当作品执行许可')
+    if runtime_facts is None:
+        raise ValueError('正常配音尚未接入实际执行器身份与写入目录')
+    runtime = runtime_facts(task.workspace_id, task.id)
+    if (not isinstance(runtime, dict)
+            or runtime.get('backend_identity') != budget.preparation_backend_identity):
+        raise ValueError('实际配音后端与模型准备回执不一致，请重新准备')
+    paths = runtime.get('write_paths')
+    if (not isinstance(paths, dict) or set(paths) != {'database', 'temporary', 'model_cache', 'output'}
+            or any(not isinstance(value, str) or not Path(value).is_absolute() for value in paths.values())):
+        raise ValueError('正常配音缺少数据库、临时文件、模型缓存或实际成品目录')
+    if (not isinstance(source_binding, dict)
+            or (source_binding.get('workspace_id'), source_binding.get('task_id'),
+                source_binding.get('voice_id'), source_binding.get('voice_version')) !=
+               (task.workspace_id, task.id, inputs.voice.id, inputs.voice.version)
+            or source_binding.get('narration_reference', {}).get('reference') != asdict(reference)):
+        raise ValueError('正常配音形状缺少同一授权来源的完整字节封存')
+    from app.narration_resource_preparation import narration_preparation_shape_digest
+    from app.profiles.contracts import profile_cache_identity
+    from app.narration import _pronunciation_dictionary
+    dictionary = _pronunciation_dictionary(entries=inputs.pronunciation_entries,
+        workspace_id=task.workspace_id, person_profile_id=inputs.voice.person_profile_id, task_id=task.id)
+    actual_shape = narration_preparation_shape_digest(voice_identity=profile_cache_identity(inputs.voice),
+        reference=asdict(reference), reference_sha256=source_binding['sha256'],
+        reference_text=inputs.voice.reference_text, language=language,
+        pronunciation_dictionary=dictionary)
+    if actual_shape != budget.preparation_shape_digest:
+        raise ValueError('实际声音、来源、参考文案、语言或发音词典与已准备形状不一致，请按真实输入重新准备')
+    return {'input_scope': scope, 'budget_basis': narration_scope_basis(scope),
+        'preparation_backend_identity': runtime['backend_identity'],
+        'preparation_shape_digest': actual_shape,
+        'preparation_receipt_sha256': budget.preparation_receipt_sha256,
+        'write_volumes': {'paths': dict(paths), 'reservations': {
+            'database': 0, 'temporary': budget.additional_disk_bytes,
+            'model_cache': budget.additional_disk_bytes, 'output': max_output_bytes}}}
+
+
+def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, reference_preparation=None, comparison_reference=None, narration_runtime_facts=None, source_binding=None):
     """Seal one confirmed script segment; admission does not decode or generate."""
     if budget is None:
         raise ValueError("局部配音预算尚未标定，请配置 DEVICE_NARRATION_* 标定值")
@@ -403,6 +447,11 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
                  "duration_seconds": total_duration,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
+    if budget.input_scope == 'single_call_prepared_v1':
+        resources['duration_seconds'] = budget.max_duration_seconds
+        resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
+            language=segment.language, max_output_bytes=resources['max_output_bytes'],
+            runtime_facts=narration_runtime_facts, source_binding=source_binding))
     manifest = {"operation": operation, "script": asdict(script), "segment": asdict(segment),
                 "voice": asdict(inputs.voice), "reference_input": digest_reference['reference'],
                 "segments": [asdict(item) for item in segments], "source_audio": source_audio,
@@ -699,11 +748,12 @@ class CreationJobOwnerVerifier:
                  presenter_budget: PresenterBudget | None = None,
                  presenter_cpu_render_limits: CpuRenderLimits | None = None,
                  presenter_models: dict | None = None, resolve_presenter_output=None, task_media=None,
-                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None, source_verifier=None, audio_assembly=None) -> None:
+                 graphic_source_facts=None, audio_mix_facts=None, cover=None, task_authorizations=None, segments=None, native_case=None, source_verifier=None, audio_assembly=None, narration_runtime_facts=None) -> None:
         self.repository = repository
         self.cpu_render_limits = cpu_render_limits
         self.verify_identity = verify_identity
         self.narration_budget = narration_budget
+        self.narration_runtime_facts = narration_runtime_facts
         self.narration_audio_budget = narration_audio_budget
         self.montage_budget = montage_budget
         self.presenter_budget = presenter_budget
@@ -859,7 +909,7 @@ class CreationJobOwnerVerifier:
         if pcm_preparation is None and request is not None and request.resources.get('execution_mode')=='cpu_pcm_wav_assembly':
             pcm_preparation=self.persisted_pcm_sources(request,conn)
         budget = self.narration_budget
-        if budget is None or budget.input_scope != 'single_call_experiment_v1':
+        if budget is None or budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'}:
             raise ValueError('配音单次输入尚无明确执行范围；原总量374不能默认作为生产单段标定')
         if self.narration_audio_budget is None:
             raise ValueError('逐段配音缺少独立CPU音频合并预算，尚未调用声音模型')
@@ -935,13 +985,19 @@ class CreationJobOwnerVerifier:
             resources = {**common, 'kind': 'creation_narration', 'execution_mode': 'isolated_qwen3_tts',
                 'narration_phase': 'segment', 'section_id': section.id, 'ordinal': ordinal,
                 'segment_id': NarrationStageUseCase.segment_id(task.id, script.id, section.id),
-                'input_scope': budget.input_scope, 'budget_basis': 'controlled_experiment_unverified_legacy_cap',
                 'text_chars': len(section.content) + len(inputs.voice.reference_text), 'section_count': 1,
-                'reference_bytes': stat.st_size, 'duration_seconds': plan.duration_target_seconds,
+                'reference_bytes': stat.st_size, 'duration_seconds': (plan.duration_target_seconds
+                    if budget.input_scope == 'single_call_experiment_v1' else budget.max_duration_seconds),
                 'max_output_bytes': finite_unit_limit(budget.max_output_bytes,
                     remaining_bytes if usage.get('scope') is not None else limits['parent_max_output_bytes']), 'threads': budget.max_threads,
                 'timeout_seconds': finite_unit_limit(budget.max_timeout_seconds,
                     remaining_seconds if usage.get('scope') is not None else limits['parent_timeout_seconds'])}
+            resources.update(narration_scope_fields(budget, task=task, inputs=inputs,
+                reference=reference_input, language=language, max_output_bytes=resources['max_output_bytes'],
+                runtime_facts=self.narration_runtime_facts,
+                source_binding=(self.repository.creation_narration_source_binding(
+                    job.workspace_id, job.id, connection=conn).payload
+                    if budget.input_scope == 'single_call_prepared_v1' else None)))
             prefix = f'narration:segment:v1:{section.id}:'
         else:
             audio = self.narration_audio_budget
@@ -1162,8 +1218,12 @@ class CreationJobOwnerVerifier:
                     if reference is None and job.attempt == 0 and job.started_at is None:
                         self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
             key,resources = narration_edit_stage_facts(self.repository,task,proposal,plan,self.narration_budget,
-                reference_preparation=reference, comparison_reference=comparison_reference)
-            if self.narration_budget.input_scope != 'single_call_experiment_v1' or self.narration_audio_budget is None:
+                reference_preparation=reference, comparison_reference=comparison_reference,
+                narration_runtime_facts=self.narration_runtime_facts,
+                source_binding=(self.repository.creation_narration_source_binding(
+                    job.workspace_id, job.id, connection=conn).payload
+                    if self.narration_budget is not None and self.narration_budget.input_scope == 'single_call_prepared_v1' else None))
+            if self.narration_budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'} or self.narration_audio_budget is None:
                 raise ValueError('局部配音缺少明确单次范围或独立PCM预算')
             usage = self.repository.creation_narration_usage(job.workspace_id,job.id,connection=conn)
             if usage['unsettled'] and (request is None or len(usage['unsettled']) != 1
@@ -1708,7 +1768,7 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
     if hasattr(owner, 'registrations'):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
     if (job.kind not in {KIND, NARRATION_EDIT_KIND, 'creation_task_segment_revision'} or owner.narration_budget is None
-            or owner.narration_budget.input_scope != 'single_call_experiment_v1'):
+            or owner.narration_budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'}):
         return None
     if job.kind == KIND and owner.segments is not None and owner.segments.waiting_for_visual_decision(job):
         return None

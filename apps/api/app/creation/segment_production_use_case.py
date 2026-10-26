@@ -33,7 +33,7 @@ class SegmentProductionUseCase:
         from app.creation.section_change_use_case import SectionTimelineChange
         return SectionTimelineChange(self.repository,self.artifact_store)
 
-    def __init__(self, repository, *, narration_stage, renderer, artifact_store, output_root, source_repository=None, budget_policy_for=None):
+    def __init__(self, repository, *, narration_stage, renderer, artifact_store, output_root, source_repository=None, budget_policy_for=None, narration_runtime_facts=None):
         self.repository = repository
         self.narration_stage = narration_stage
         self.renderer = renderer
@@ -41,6 +41,7 @@ class SegmentProductionUseCase:
         self.output_root = Path(output_root)
         self.source_repository = source_repository
         self.budget_policy_for = budget_policy_for
+        self.narration_runtime_facts = narration_runtime_facts
 
     def require_actor(self, workspace_id, task_id, actor, *, connection=None):
         task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
@@ -688,13 +689,21 @@ class SegmentProductionUseCase:
             from app.creation.narration_pcm import narration_reference_facts
             inputs, reference, reference_preparation = narration_reference_facts(self.repository, task, plan, reference_preparation)
             budget = owner.narration_budget
-            if budget is None or budget.input_scope != 'single_call_experiment_v1':
+            if budget is None or budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'}:
                 raise ValueError('局部改写配音缺少原单次资源档')
             resources = {'kind': 'creation_narration', 'execution_mode': 'isolated_qwen3_tts', 'narration_reference': reference_preparation,
-                'input_scope':budget.input_scope,'budget_basis':'controlled_experiment_unverified_legacy_cap',
                 'text_chars': len(command.replacement_text)+len(inputs.voice.reference_text), 'section_count': 1,
                 'reference_bytes': Path(reference.source_path).stat().st_size, 'duration_seconds': budget.max_duration_seconds,
                 'max_output_bytes': budget.max_output_bytes, 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds}
+            from app.creation_execution import narration_scope_fields
+            script = self.repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+            language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
+            resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
+                language=language, max_output_bytes=resources['max_output_bytes'],
+                runtime_facts=self.narration_runtime_facts,
+                source_binding=(self.repository.creation_narration_source_binding(
+                    job.workspace_id, job.id, connection=connection).payload
+                    if budget.input_scope == 'single_call_prepared_v1' else None)))
             key = self.revision_key(job, reference)
         else:
             section_id = intent.unit_key.removeprefix('segment_video:').rpartition(':')[0]
