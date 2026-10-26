@@ -527,6 +527,22 @@ def test_observation_reads_and_enqueue_bind_actual_current_task_and_no_media(tmp
     assert UUID(post["body"]["request_id"]).version == 5
 
 
+def test_distinct_output_observations_are_not_limited_by_a_round_counter(tmp_path):
+    job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued"}
+    steps = [{"tool": "observe_task_output", "args": {
+        "target": {"kind": "final"}, "sample_times_seconds": [point],
+    }} for point in (1, 2, 3, 4)]
+    seen = invoke(tmp_path, observation_job=job, steps=[*steps, steps[-1]])
+    assert all(result["ok"] and not result["result"].get("isError") for result in seen["results"][:4])
+    duplicate = seen["results"][4]
+    assert not duplicate["ok"] or duplicate["result"]["isError"]
+    assert "相同观察" in json.dumps(duplicate, ensure_ascii=False)
+    posts = [call for call in seen["calls"] if call["method"] == "POST"]
+    assert len(posts) == 4
+    assert len({call["body"]["request_id"] for call in posts}) == 4
+    assert [call["body"]["sample_times_seconds"] for call in posts] == [[1], [2], [3], [4]]
+
+
 def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
     job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued"}
     request = {"tool": "observe_task_output", "args": {"target": {"kind": "final"}}}
@@ -536,7 +552,10 @@ def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
     assert result["status"] == "result_unknown" and result["phase"] == "observation"
     assert result["assistant_turn_id"] == "trusted-turn" and result["tool_call_id"] == "fixture"
     assert result["base_version_id"] == "version-current" and result["base_sequence"] == 4
-    assert not seen["results"][1]["ok"] and seen["results"][2]["result"]["details"]["media_job"] == job
+    blocked = seen["results"][1]
+    assert not blocked["ok"] or blocked["result"]["isError"]
+    assert "尚待核验" in json.dumps(blocked, ensure_ascii=False)
+    assert seen["results"][2]["result"]["details"]["media_job"] == job
     assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
 
 

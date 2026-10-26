@@ -32,8 +32,8 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
           params.target.kind === "media_job" ? params.target.job_id : null,
           params.target.kind === "media_job" ? params.target.artifact_id : null,
           params.sample_times_seconds?.length ? params.sample_times_seconds : null]);
-        if (observationBlocked || observationAttempts.has(signature) || observationAttempts.size >= 3)
-          throw new Error("本轮观察尚待核验、已提交相同观察或达到3次上限；请回读原请求与实际结果，不重复提交");
+        if (observationBlocked || observationAttempts.has(signature))
+          throw new Error("本轮观察尚待核验或已提交相同观察；请回读原请求与实际结果，不重复提交");
         const task = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}`);
         if (task.task?.id !== taskId) throw new Error("任务响应身份不一致");
         verifyTaskVersion(task);
