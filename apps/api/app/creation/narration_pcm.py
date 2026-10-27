@@ -56,6 +56,57 @@ def pcm_manifest_digest(fields, segments, *, resources=None):
     return digest.hexdigest()
 
 
+def narration_edit_manifest_chunks(fields, script_fields, sections, segments):
+    """Encode the original edit manifest, with independent ordered body streams.
+
+    Script sections use their original ordinal; narration rows use their saved
+    created_at/id order. These are the legacy default-ASCII JSON bytes, not the
+    execution digest encoding or the effective/adopted script projection.
+    """
+    if 'script' in fields or 'segments' in fields or 'sections' in script_fields:
+        raise ValueError('局部配音摘要 metadata 不能携带正文')
+
+    def encoded(value):
+        return json.dumps(value, sort_keys=True, default=str).encode()
+
+    def records(values):
+        yield b'['
+        for index, value in enumerate(values):
+            if index:
+                yield b', '
+            yield encoded(asdict(value))
+        yield b']'
+
+    yield b'{'
+    for index, name in enumerate(sorted((*fields, 'script', 'segments'))):
+        if index:
+            yield b', '
+        yield encoded(name) + b': '
+        if name == 'segments':
+            yield from records(segments)
+        elif name == 'script':
+            yield b'{'
+            for ordinal, field in enumerate(sorted((*script_fields, 'sections'))):
+                if ordinal:
+                    yield b', '
+                yield encoded(field) + b': '
+                if field == 'sections':
+                    yield from records(sections)
+                else:
+                    yield encoded(script_fields[field])
+            yield b'}'
+        else:
+            yield encoded(fields[name])
+    yield b'}'
+
+
+def narration_edit_manifest_digest(fields, script_fields, sections, segments):
+    digest = hashlib.sha256()
+    for chunk in narration_edit_manifest_chunks(fields, script_fields, sections, segments):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _source_stat(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 

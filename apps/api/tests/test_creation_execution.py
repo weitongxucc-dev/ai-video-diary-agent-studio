@@ -5636,6 +5636,260 @@ def _pcm_fixture_receipt(context, resources):
     return receipt
 
 
+def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
+    """Original edit control/owner with paid-source and sealed-receipt fixtures only."""
+    import wave
+    from datetime import timedelta
+    from functools import partial
+    from app.creation.contracts import NarrationSegment, EditIntent, EditProposal
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    from app.creation.execution_control import CreationExecutionControl
+    from app.conversation_repository import ConversationRepository
+    from app.narration import NarrationArtifact
+    case = _narration_units_case(tmp_path, section_count=3, audio_input_count=2, start_job=False)
+    repo = case.repo
+    task = repo.get_creation_task('local', case.task_id)
+    script = repo.get_creation_task_script('local', case.script_id)
+    rows = []
+    for index, section in enumerate(script.sections):
+        path = tmp_path / f'paid-source-{index}.wav'
+        with wave.open(str(path), 'wb') as stream:
+            stream.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+            stream.writeframes(b'\x01\x00' * 24000)
+        key = f'paid-{index}'
+        record = NarrationArtifactRecord(id=key, workspace_id='local', task_id=task.id, script_id=script.id,
+            voice_profile_id='voice_1', cache_key=key, audio_path=str(path), duration_seconds=1,
+            sample_rate=24000, model_id='test', language='zh', pronunciation_version='v1')
+        repo.save_narration_artifact(record)
+        rows.append(NarrationSegment(id=f'paid-row-{index}', workspace_id='local', task_id=task.id,
+            script_id=script.id, source_section_id=section.id, text=section.content,
+            audio_reference=repo.narration_artifact_reference(key), duration_seconds=1, sample_rate=24000,
+            model_id='test', voice_profile_id='voice_1', voice_version='v1', language='zh',
+            pronunciation_version='v1', status='ready', created_at=script.created_at-timedelta(seconds=index)))
+    repo.save_narration_segments('local', task.id, script.id, rows)
+    task.stage = 'montage'
+    task.narration_cache_key = 'paid-0'
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    path = tmp_path/'library'/'opaque-edit.mp4'
+    path.write_bytes(b'fixed metadata-only source')
+    asset = MaterialAsset(id='paid-material', workspace_id='local', file_name=path.name, path=str(path),
+        size_bytes=path.stat().st_size, modified_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
+        duration_seconds=10, analysis_status='ready', usage_role='b_roll', owner_user_id=case.actor.member_id,
+        segments=[MaterialSegment('paid-shot', 'paid-material', 0, 10, usage_role='b_roll')])
+    repo._save_asset(asset)
+    reference = repo.workspace_media_reference_for_asset('local', asset.id)
+    cues = [NarrationCue(f'paid-cue-{i}', row.source_section_id, row.text, 1, narration_segment_id=row.id)
+        for i, row in enumerate(rows)]
+    clips = [MontageClip(f'paid-clip-{i}', cue.id, asset.id, 'paid-shot', reference,
+        i, i+1, i, i+1, 1, [], False) for i, cue in enumerate(cues)]
+    montage = CreationTaskMontagePlan('paid-montage', 'local', task.id, script.id, 'fixture', 'ready',
+        cues, clips, 3, 0, narration_audio_path=repo.narration_artifact_reference('paid-0'))
+    payload = creation_task_montage_plan_to_payload(montage)
+    repo.save_creation_task_montage_plan('local', task.id, montage.id, payload)
+    base = repo.create_timeline_version(TimelineVersion('paid-base', 'local', task.id, None, 1,
+        {'montage': payload, 'narration_cache_key': 'paid-0', 'subtitle_track_ids': []}, None))
+    task = repo.get_creation_task('local', task.id)
+    case.stage.metadata = MetadataEditUseCase(repo, ArtifactStore(tmp_path/'outputs'),
+        output_root=tmp_path/'outputs', audio_service=None)
+    intent = repo.create_edit_intent(EditIntent('paid-intent', 'local', task.id, '重新配音', 'narration', [],
+        None, 'regenerate_narration', {}, {}, 1, 'interpreted'))
+    proposal = repo.create_edit_proposal(EditProposal('paid-proposal', 'local', task.id, intent.id, '局部配音',
+        ['narration:'+rows[0].id], {'operation_type': 'RegenerateNarrationSegment', 'payload': {
+            'base_version_id': base.id, 'narration_segment_id': rows[0].id,
+            'expected_audio_reference': rows[0].audio_reference}}, [], {}, []))
+    source = {'source_kind': 'interactive', 'workspace_id': 'local', 'task_id': task.id,
+        'member_id': case.actor.member_id, 'actor_identity': case.actor.identity_payload(),
+        'request_id': proposal.id, 'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence}
+    verifier = partial(validate_edit_origin, ConversationRepository(repo.database_path))
+    case.owner.source_verifier = case.executor.source_verifier = verifier
+    control = CreationExecutionControl(repo, case.execution, SimpleNamespace(valid=lambda *_: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={
+        'creation_job': SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
+    paid_path = tmp_path/'paid-replacement.wav'
+    with wave.open(str(paid_path), 'wb') as stream:
+        stream.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+        stream.writeframes(b'\x01\x00' * 48000)
+    paid = NarrationArtifact(task_id=task.id, script_id=script.id, audio_path=str(paid_path), duration_seconds=2,
+        sample_rate=24000, model_id='test', voice_profile_id='voice_1', cache_key='paid-replacement',
+        language='zh', pronunciation_version='v1')
+    def paid_result(**kwargs):
+        kwargs['grant_context'].check()
+        return paid
+    monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', paid_result)
+    def forbidden(*args, **kwargs):
+        pytest.fail('local edit must not hydrate full input DTOs or execute media')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments', '_upsert_narration_segments'):
+        monkeypatch.setattr(repo, name, forbidden)
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
+    from app.creation_execution import CreationStageGrantContext
+    monkeypatch.setattr(CreationStageGrantContext, 'run_pcm_assembly', _pcm_fixture_receipt)
+    return SimpleNamespace(**vars(case), task=task, base=base, rows=rows, control=control,
+        runtime=runtime, proposal=proposal, source=source)
+
+
+@pytest.mark.parametrize('outcome', ['normal', 'unknown', 'head', 'tail', 'revoked', 'source_blocked'])
+def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, monkeypatch, outcome):
+    from app.device_scheduler import RecoveryBlocked
+    case = _paid_narration_edit_stream_case(tmp_path, monkeypatch)
+    repo = case.repo
+    try:
+        job, request = case.control.submit_narration_edit('local', case.task, case.proposal,
+            case.actor, case.runtime, source=case.source)
+        same, queued = case.control.submit_narration_edit('local', case.task, case.proposal,
+            case.actor, case.runtime, source=case.source)
+        assert (same.id, queued.id, queued.resources) == (job.id, request.id, request.resources)
+        for _ in range(2):
+            grant = case.scheduler.pick_and_grant()
+            assert grant is not None
+            case.executor.execute(grant, case.scheduler)
+        checkpoint = repo.creation_narration_merge_checkpoint('local', job.id)
+        assert checkpoint['section_ids'] == ['section_1', 'section_2']
+        final = case.scheduler.pick_and_grant()
+        assert final is not None
+        original_commit = repo.confirm_edit_proposal
+        if outcome in {'unknown', 'source_blocked'}:
+            def interrupted(*args, **kwargs):
+                original_commit(*args, **kwargs)
+                raise RuntimeError('lose final edit commit after sealing')
+            monkeypatch.setattr(repo, 'confirm_edit_proposal', interrupted)
+        elif outcome in {'head', 'tail', 'revoked'}:
+            released = case.scheduler._released_for_commit
+            changed = []
+            def injected(conn, grant):
+                result = released(conn, grant)
+                if not changed and grant.request_id == final.request_id:
+                    changed.append(True)
+                    if outcome == 'head':
+                        repo.create_timeline_version(TimelineVersion('later-head', 'local', case.task.id,
+                            case.base.id, 2, case.base.snapshot, None), connection=conn)
+                    elif outcome == 'tail':
+                        conn.execute("UPDATE narration_segments SET duration_seconds=2 WHERE id=?", (case.rows[-1].id,))
+                    else:
+                        monkeypatch.setattr(case.owner, 'verify_identity', lambda _: 'unauthorized')
+                return result
+            monkeypatch.setattr(case.scheduler, '_released_for_commit', injected)
+        if outcome == 'normal':
+            case.executor.execute(final, case.scheduler)
+        else:
+            with pytest.raises(RecoveryBlocked):
+                case.executor.execute(final, case.scheduler)
+            assert repo.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
+            assert repo.get_narration_segment('local', case.task.id, case.rows[0].id) == case.rows[0]
+            assert not repo.list_edit_operations('local', case.task.id)
+            assert repo.creation_narration_usage('local', job.id)['unsettled']
+            if outcome in {'unknown', 'source_blocked'}:
+                monkeypatch.setattr(repo, 'confirm_edit_proposal', original_commit)
+                if outcome == 'source_blocked':
+                    def rejected(*args, **kwargs):
+                        raise PermissionError('original edit source no longer authorized')
+                    case.executor.source_verifier = rejected
+                assert case.executor.recover_pcm_unit(job, case.actor, case.scheduler)
+        if outcome in {'normal', 'unknown'}:
+            current = repo.get_creation_task('local', case.task.id)
+            assert current.current_timeline_version_id != case.base.id
+            snapshot = repo.get_timeline_version('local', current.current_timeline_version_id).snapshot
+            assert [row['source_section_id'] for row in snapshot['narration_segments']] == ['section_1', 'section_2', 'section_3']
+            assert snapshot['narration_segments'][0]['audio_reference'].endswith('paid-replacement')
+            assert repo.get_narration_segment('local', case.task.id, case.rows[-1].id) == case.rows[-1]
+            assert repo.get_job_run('local', job.id).status == 'succeeded'
+            assert case.scheduler._get(final.request_id).state == 'done'
+            assert len(repo.list_edit_operations('local', case.task.id)) == 1
+        elif outcome == 'source_blocked':
+            assert repo.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
+            assert repo.get_job_run('local', job.id).status == 'interrupted'
+            events = [e for e in repo.list_task_events('local', case.task.id)
+                if e.job_id == job.id and e.event_type == 'narration_edit_result_reconciled']
+            assert len(events) == 1 and events[0].payload['publication_blocked']
+            assert not repo.creation_narration_usage('local', job.id)['unsettled']
+        with repo._connect() as conn:
+            assert conn.execute('SELECT COUNT(*) FROM job_runs WHERE workspace_id=? AND task_id=?',
+                ('local', case.task.id)).fetchone()[0] == 1
+    finally:
+        case.scheduler.close()
+
+
+def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from app.creation.contracts import NarrationSegment
+    from app.creation_execution import narration_edit_stage_facts
+    from app.creation import narration_pcm
+
+    case = _narration_units_case(tmp_path, section_count=3, start_job=False)
+    repo = case.repo
+    try:
+        task = repo.get_creation_task('local', case.task_id)
+        script = repo.get_creation_task_script('local', case.script_id)
+        script.sections[-1] = replace(script.sections[-1], content='尾段 "quoted"\n\\ café 😺',
+            visual_prompt='原稿视觉提示')
+        with repo._connect() as conn:
+            conn.execute('BEGIN')
+            conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',
+                (repo._script_payload(conn, script), script.id))
+        plan = repo.get_creation_plan('local', task.plan_id)
+        rows = []
+        for index, section in enumerate(script.sections):
+            path = tmp_path / f'paid-edit-source-{index}.wav'
+            # Admission only stats existing paid sources; no decoding or media worker.
+            path.write_bytes(b'paid source metadata fixture')
+            key = f'paid-edit-{index}'
+            artifact = NarrationArtifactRecord(id=key, workspace_id='local', task_id=task.id,
+                script_id=script.id, voice_profile_id='voice_1', cache_key=key, audio_path=str(path),
+                duration_seconds=1, sample_rate=24000, model_id='test', language='zh', pronunciation_version='v1')
+            repo.save_narration_artifact(artifact)
+            rows.append(NarrationSegment(id=f'edit-row-{index}', workspace_id='local', task_id=task.id,
+                script_id=script.id, source_section_id=section.id, text=section.content,
+                audio_reference=repo.narration_artifact_reference(key), duration_seconds=1,
+                sample_rate=24000, model_id='test', voice_profile_id='voice_1', voice_version='v1',
+                language='zh', pronunciation_version='v1', status='ready',
+                created_at=script.created_at - timedelta(seconds=index)))
+        repo.save_narration_segments('local', task.id, script.id, rows)
+        saved = repo.list_narration_segments('local', task.id, script.id)
+        assert [row.source_section_id for row in saved] == [section.id for section in reversed(script.sections)]
+        # A genuine full montage remains part of the legacy manifest contract.
+        montage = {'id': 'edit-montage', 'task_id': task.id, 'status': 'ready',
+            'cues': [{'text': row.text} for row in rows]}
+        with repo._connect() as conn:
+            conn.execute('INSERT INTO creation_task_montage_plans VALUES (?,?,?,?,?)',
+                (montage['id'], 'local', task.id, json.dumps(montage), task.updated_at.isoformat()))
+        proposal = SimpleNamespace(workspace_id='local', task_id=task.id, status='proposed', operation={
+            'operation_type': 'RegenerateNarrationSegment', 'payload': {
+                'base_version_id': task.current_timeline_version_id, 'narration_segment_id': rows[0].id,
+                'expected_audio_reference': rows[0].audio_reference}})
+        actual_digest = narration_pcm.narration_edit_manifest_digest
+        expected_keys = []
+
+        def oracle(fields, script_fields, sections, segments):
+            expected = json.dumps({**fields, 'script': asdict(script),
+                'segments': [asdict(row) for row in saved]}, sort_keys=True, default=str).encode()
+            actual = b''.join(narration_pcm.narration_edit_manifest_chunks(
+                fields, script_fields, sections, segments))
+            assert actual == expected
+            digest = hashlib.sha256(expected).hexdigest()
+            assert actual_digest(fields, script_fields, iter(script.sections), iter(saved)) == digest
+            expected_keys.append('narration_edit:' + digest)
+            return digest
+
+        monkeypatch.setattr(narration_pcm, 'narration_edit_manifest_digest', oracle)
+        def forbidden(*args, **kwargs):
+            pytest.fail('edit admission must not hydrate the full script or run media')
+        monkeypatch.setattr(repo, 'get_creation_task_script', forbidden)
+        monkeypatch.setattr(repo, '_creation_task_script_from_payload', forbidden)
+        monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', forbidden)
+        monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
+        with repo.creation_execution_read() as conn:
+            key, resources = narration_edit_stage_facts(repo, task, proposal, plan,
+                case.owner.narration_budget, connection=conn)
+            assert key == expected_keys[-1]
+            assert resources['section_count'] == 1
+            assert conn.in_transaction
+            assert conn.execute('SELECT 1').fetchone()[0] == 1
+    finally:
+        case.scheduler.close()
+
+
 def test_pcm_body_stream_preserves_original_encoding_and_keys(tmp_path, monkeypatch):
     from app.creation import narration_pcm
     case = _ready_pcm_body_case(tmp_path, monkeypatch)

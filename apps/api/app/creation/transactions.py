@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from uuid import uuid4
 
-from app.creation.contracts import CoverAsset, EditOperation, EditProposal, SubtitleTrack, TimelineVersion
+from app.creation.contracts import CoverAsset, EditOperation, EditProposal, NarrationSegment, SubtitleTrack, TimelineVersion
 from app.models import utc_now
 
 
@@ -57,6 +57,7 @@ class EditChangeSet:
     cover_asset: CoverAsset | None
     narration_segments: list | None = None
     narration_artifact: object | None = None
+    narration_replacement: NarrationSegment | None = None
 
 
 def clone_subtitle_track(track, *, timeline_version_id, track_id=None, artifact_ref=None,
@@ -85,8 +86,15 @@ def prepare_change_set(*, proposal: EditProposal, base_version: TimelineVersion,
                        operation_type, operation_payload, result_version_id, montage_plan_id,
                        montage_payload, subtitle_tracks, cover_asset, snapshot_source=None,
                        narration_segments=None, narration_artifact=None, include_track_ids=True,
-                       absent_cover_value=False, source_subtitle_tracks=None):
+                       absent_cover_value=False, source_subtitle_tracks=None,
+                       narration_replacement=None, narration_snapshot=None):
     """Compute the whole immutable change before acquiring a SQLite write lock."""
+    if narration_replacement is not None:
+        if (operation_type != 'RegenerateNarrationSegment' or narration_segments is not None
+                or narration_snapshot is None):
+            raise ValueError('单段配音替换需要原编辑及真实完整快照')
+    elif narration_snapshot is not None:
+        raise ValueError('配音快照缺少原单段替换事实')
     now = utc_now()
     operation = EditOperation(id=f"operation_{uuid4().hex}", workspace_id=proposal.workspace_id,
         task_id=proposal.task_id, proposal_id=proposal.id, operation_type=operation_type,
@@ -117,6 +125,8 @@ def prepare_change_set(*, proposal: EditProposal, base_version: TimelineVersion,
         snapshot.pop("cover_asset_id", None)
     if narration_segments is not None:
         snapshot["narration_segments"] = [asdict(segment) for segment in narration_segments]
+    if narration_replacement is not None:
+        snapshot["narration_segments"] = narration_snapshot
     if narration_artifact is not None:
         snapshot["narration_cache_key"] = narration_artifact.cache_key
     snapshot.update(invalidated_refs=proposal.invalidated_refs, edit_operation_id=operation.id)
@@ -124,7 +134,7 @@ def prepare_change_set(*, proposal: EditProposal, base_version: TimelineVersion,
         parent_version_id=base_version.id, sequence=base_version.sequence+1, snapshot=snapshot,
         created_by_operation_id=operation.id, created_at=now)
     return EditChangeSet(operation, version, montage_plan_id, montage_payload,
-        subtitle_tracks, cover_asset, narration_segments, narration_artifact)
+        subtitle_tracks, cover_asset, narration_segments, narration_artifact, narration_replacement)
 
 
 def commit_change_set(repository, change: EditChangeSet, *, connection=None, verify_sources=None):
@@ -134,7 +144,8 @@ def commit_change_set(repository, change: EditChangeSet, *, connection=None, ver
         operation=operation, result_version=change.version, montage_plan_id=change.montage_plan_id,
         montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks,
         cover_asset=change.cover_asset, narration_segments=change.narration_segments,
-        narration_artifact=change.narration_artifact, connection=connection, verify_sources=verify_sources)
+        narration_artifact=change.narration_artifact, narration_replacement=change.narration_replacement,
+        connection=connection, verify_sources=verify_sources)
 
 
 def commit_direct_change(repository, command, intent, proposal, change, *, verify_sources, connection=None):

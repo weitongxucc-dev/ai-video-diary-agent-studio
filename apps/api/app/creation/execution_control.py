@@ -574,15 +574,16 @@ class CreationExecutionControl:
     def submit_narration_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         """One original edit Job, source adoption, then its existing bounded queue."""
         owner = runtime.registrations['creation_job'].owner
-        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+        with self.repository.creation_execution_read() as reader:
+            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task.id, connection=reader)
+        task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         digest = narration_edit_digest(proposal.operation)
         candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,
             kind=NARRATION_EDIT_KIND, input_digest=digest,
             idempotency_key=f'narration-edit:{task.id}:{actor.member_id}:{digest}:{proposal.id}')
         source=self._edit_source(task,proposal,actor,source)
         payload = {**actor.identity_payload(), 'script_id': script.id, 'plan_id': plan.id, 'source':source,
-            'revision_digest': revision_digest(script, plan), 'input_digest': digest, 'edit_proposal_id': proposal.id}
+            'revision_digest': snapshot.input_digest, 'input_digest': digest, 'edit_proposal_id': proposal.id}
         def existing(conn):
             prior = conn.execute('SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?',
                 (workspace_id, candidate.idempotency_key)).fetchone()

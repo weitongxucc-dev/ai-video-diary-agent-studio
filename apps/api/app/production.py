@@ -7376,14 +7376,38 @@ class ProductionRepository:
         return self.list_narration_segments(workspace_id, task_id, script_id, connection=connection)
 
     def get_narration_segment(
-        self, workspace_id: str, task_id: str, segment_id: str
+        self, workspace_id: str, task_id: str, segment_id: str, *, connection=None
     ) -> NarrationSegment:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             self._require_creation_task(conn, workspace_id, task_id)
             row = narration_segment_row(conn, workspace_id, task_id, segment_id)
         if row is None:
             raise KeyError(segment_id)
         return self._narration_segment_from_row(row)
+
+    def iter_narration_segments(self, workspace_id, task_id, script_id, *, connection):
+        """Original manifest order; the caller owns the entire read snapshot."""
+        if not connection.in_transaction:
+            raise ValueError('配音行读取必须属于原事务')
+        task = self._require_creation_task(connection, workspace_id, task_id)
+        if task.confirmed_script_id != script_id:
+            raise ValueError('配音行不属于当前确认文案')
+        cursor = connection.execute('SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? '
+            'AND script_id=? ORDER BY created_at ASC,id ASC', (workspace_id, task_id, script_id))
+        try:
+            for row in cursor:
+                yield self._narration_segment_from_row(row)
+        finally:
+            cursor.close()
+
+    def iter_narration_edit_segments(self, task, replacement, *, connection):
+        """Validate the whole set, then emit the real prospective rows in script order."""
+        for _ in self._iter_section_change_segments(task, replacement, connection=connection, adopted=True):
+            pass
+        header, _ = self.script_records.read_execution_script_metadata(
+            connection, task.workspace_id, task.confirmed_script_id)
+        for _, segment in self.iter_creation_narration_sections(task, header, connection=connection):
+            yield replacement if segment.id == replacement.id else segment
 
     def list_narration_segments(
         self, workspace_id: str, task_id: str, script_id: str | None = None,
@@ -7943,9 +7967,9 @@ class ProductionRepository:
         return proposal
 
     def get_edit_proposal(
-        self, workspace_id: str, proposal_id: str
+        self, workspace_id: str, proposal_id: str, *, connection=None
     ) -> EditProposal:
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT * FROM edit_proposals WHERE workspace_id = ? AND id = ?",
                 (workspace_id, proposal_id),
@@ -8126,7 +8150,7 @@ class ProductionRepository:
         verify_sources(command, conn)
         self.create_edit_intent(intent, connection=conn, source=None)
         self.create_edit_proposal(proposal, connection=conn)
-        result = self.confirm_edit_proposal(command.workspace_id, command.task_id, proposal.id, operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id, montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks, cover_asset=change.cover_asset, narration_segments=change.narration_segments, narration_artifact=change.narration_artifact, connection=conn)
+        result = self.confirm_edit_proposal(command.workspace_id, command.task_id, proposal.id, operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id, montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks, cover_asset=change.cover_asset, narration_segments=change.narration_segments, narration_replacement=change.narration_replacement, narration_artifact=change.narration_artifact, connection=conn)
         return result
 
     def confirm_edit_proposal(
@@ -8140,6 +8164,7 @@ class ProductionRepository:
         montage_plan_id: str | None = None,
         montage_payload: dict[str, object] | None = None,
         narration_segments: list[NarrationSegment] | None = None,
+        narration_replacement: NarrationSegment | None = None,
         narration_artifact: NarrationArtifactRecord | None = None,
         subtitle_tracks: list[SubtitleTrack] | None = None,
         cover_asset: CoverAsset | None = None,
@@ -8147,6 +8172,9 @@ class ProductionRepository:
         verify_sources=None,
     ) -> tuple[EditProposal, EditOperation, TimelineVersion, CreationTask]:
         """Confirm applied facts; a supplied permit transaction owns the commit."""
+        if narration_replacement is not None and (
+                operation.operation_type != 'RegenerateNarrationSegment' or narration_segments is not None):
+            raise ValueError('单段配音替换仅属于原局部配音编辑')
         _validate_edit_operation(operation)
         _validate_timeline_version(result_version)
         if operation.status != "applied":
@@ -8165,7 +8193,7 @@ class ProductionRepository:
         if (montage_plan_id is None) != (montage_payload is None):
             raise ValueError("混剪计划 ID 与 payload 必须同时提供")
         if operation.operation_type == "RegenerateNarrationSegment" and (
-            narration_segments is None or montage_payload is None
+            (narration_segments is None and narration_replacement is None) or montage_payload is None
         ):
             raise ValueError("声音或字幕编辑确认必须同时保存完整配音分段与 montage/cue 事实")
         if operation.operation_type == "UpdateSubtitleCue" and not (
@@ -8193,7 +8221,7 @@ class ProductionRepository:
             ):
                 raise ValueError("封面与结果时间线版本谱系不一致")
         if narration_artifact is not None:
-            if narration_segments is None:
+            if narration_segments is None and narration_replacement is None:
                 raise ValueError("整轨配音产物必须与完整分段事实同时保存")
             if (
                 narration_artifact.workspace_id != workspace_id
@@ -8274,6 +8302,24 @@ class ProductionRepository:
                 ).fetchone()
                 if montage_row is None or str(montage_row["id"]) != montage_plan_id:
                     raise ValueError("当前任务不存在同源混剪计划")
+            if narration_replacement is not None:
+                if (narration_artifact is None or narration_artifact.script_id != task.confirmed_script_id
+                        or narration_replacement.id != proposal.operation['payload']['narration_segment_id']):
+                    raise ValueError('配音替换或整轨产物不属于原提案')
+                previous = self.get_narration_segment(workspace_id, task_id, narration_replacement.id, connection=conn)
+                if previous.audio_reference != proposal.operation['payload']['expected_audio_reference']:
+                    raise ValueError('原配音来源已变化，不能覆盖')
+                rows = result_version.snapshot.get('narration_segments')
+                if not isinstance(rows, list):
+                    raise ValueError('局部配音必须保留真实完整最终快照')
+                count = 0
+                for count, segment in enumerate(self.iter_narration_edit_segments(
+                        task, narration_replacement, connection=conn), 1):
+                    if count > len(rows) or json.loads(_json_payload(segment)) != json.loads(_json_object(rows[count-1])):
+                        raise ValueError('局部配音最终快照与原事务事实不符')
+                if count != len(rows):
+                    raise ValueError('局部配音最终快照存在多余分段')
+                self.replace_adopted_narration_segment(task, narration_replacement, connection=conn)
             if narration_segments is not None:
                 script_ids = {segment.script_id for segment in narration_segments}
                 if len(script_ids) != 1:

@@ -12,7 +12,7 @@ from app.montage import creation_task_montage_plan_to_payload
 from app.audio_timeline import rebind_narration_audio
 from app.models import utc_now
 from typing import TYPE_CHECKING
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 import hashlib
 from app.creation.editing.metadata_use_case import refresh_montage_review_state, LegacyMontageReference, InvalidMontage
@@ -264,8 +264,9 @@ class NarrationStageUseCase:
             rebind_narration_audio(current_montage.audio_timeline, reference, reference, duration_ms, duration_ms)
         if task.confirmed_script_id is None:
             raise ValueError('当前任务没有已确认文案')
-        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        target = self.repository.get_narration_segment(workspace_id, task.id, segment_id)
+        with self.repository.creation_execution_read() as conn:
+            script, _ = self.repository.script_records.read_execution_script_metadata(conn, workspace_id, task.confirmed_script_id)
+            target = self.repository.get_narration_segment(workspace_id, task.id, segment_id, connection=conn)
         if target.script_id != script.id:
             raise ValueError('配音片段不属于当前确认文案')
         if plan.selected_voice is None:
@@ -280,8 +281,12 @@ class NarrationStageUseCase:
         return updated_target,generated_record
 
     def retime_for_segments(self, workspace_id: str, plan: CreationTaskMontagePlan, segments: list[NarrationSegment], narration_reference: str) -> CreationTaskMontagePlan:
+        return self.retime_for_durations(workspace_id, plan,
+            {segment.id: float(segment.duration_seconds or 0) for segment in segments if segment.status == 'ready'},
+            narration_reference)
+
+    def retime_for_durations(self, workspace_id, plan, duration_by_segment, narration_reference):
         updated = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(plan))
-        duration_by_segment = {segment.id: float(segment.duration_seconds or 0) for segment in segments if segment.status == 'ready'}
         cues_by_segment: dict[str, list[NarrationCue]] = {}
         for cue in updated.cues:
             cues_by_segment.setdefault(cue.narration_segment_id, []).append(cue)
@@ -360,36 +365,38 @@ class NarrationStageUseCase:
         return self.prepare_edit_adoption(workspace_id,task_id,proposal_id,candidate,resources,receipt),receipt
 
     def prepare_edit_adoption(self, workspace_id, task_id, proposal_id, candidate, resources, receipt):
-        task=self.repository.get_creation_task(workspace_id,task_id)
-        proposal=self.repository.get_edit_proposal(workspace_id,proposal_id)
-        payload=proposal.operation['payload']
-        if candidate is None or candidate['segment_id']!=payload['narration_segment_id']:
-            raise ValueError('局部配音缺少同一原Job的生成候选')
-        if not receipt['finalized']:
-            return None
-        target = self.repository.get_narration_artifact(workspace_id,candidate['cache_key'])
-        original = self.repository.get_narration_segment(workspace_id,task.id,candidate['segment_id'])
-        updated_target = replace(original,audio_reference=self.repository.narration_artifact_reference(target.cache_key),
-            duration_seconds=target.duration_seconds,sample_rate=target.sample_rate,model_id=target.model_id,
-            pronunciation_version=target.pronunciation_version,status='ready',updated_at=utc_now())
-        by_section = {item.source_section_id:item for item in self.repository.list_narration_segments(
-            workspace_id,task.id,task.confirmed_script_id)}
-        by_section[updated_target.source_section_id]=updated_target
-        script = self.repository.get_creation_task_script(workspace_id,task.confirmed_script_id)
-        segments = [by_section[section.id] for section in script.sections]
-        combined=self.pcm_record(task,resources,receipt,segments)
-        key=combined.cache_key
-        montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id,task.id))
-        montage = self.retime_for_segments(workspace_id,montage,segments,self.repository.narration_artifact_reference(key))
+        with self.repository.creation_execution_read() as conn:
+            task = self.repository.get_creation_task(workspace_id, task_id, connection=conn)
+            proposal = self.repository.get_edit_proposal(workspace_id, proposal_id, connection=conn)
+            payload = proposal.operation['payload']
+            if candidate is None or candidate['segment_id'] != payload['narration_segment_id']:
+                raise ValueError('局部配音缺少同一原Job的生成候选')
+            if not receipt['finalized']:
+                return None
+            target = self.repository.get_narration_artifact(workspace_id, candidate['cache_key'], connection=conn)
+            original = self.repository.get_narration_segment(workspace_id, task.id, candidate['segment_id'], connection=conn)
+            updated_target = replace(original, audio_reference=self.repository.narration_artifact_reference(target.cache_key),
+                duration_seconds=target.duration_seconds, sample_rate=target.sample_rate, model_id=target.model_id,
+                pronunciation_version=target.pronunciation_version, status='ready', updated_at=utc_now())
+            # This is the real immutable final snapshot, in the legacy script order.
+            narration_snapshot = [asdict(row) for row in self.repository.iter_narration_edit_segments(
+                task, updated_target, connection=conn)]
+            combined = self.pcm_record(task, resources, receipt,
+                self.repository.iter_narration_edit_segments(task, updated_target, connection=conn))
+            montage = creation_task_montage_plan_from_payload(
+                self.repository.get_creation_task_montage_plan(workspace_id, task.id, connection=conn))
+        montage = self.retime_for_durations(workspace_id, montage,
+            {row['id']: float(row['duration_seconds'] or 0) for row in narration_snapshot if row['status'] == 'ready'},
+            self.repository.narration_artifact_reference(combined.cache_key))
 
         def commit(connection):
-            current = self.repository.get_creation_task(workspace_id, task_id)
+            current = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
             if current.current_timeline_version_id != payload['base_version_id']:
                 raise ValueError('当前时间线已变化，未提交局部配音')
-            base = self.repository.get_timeline_version(workspace_id, payload['base_version_id'])
+            base = self.repository.get_timeline_version(workspace_id, payload['base_version_id'], connection=connection)
             self.repository.save_narration_artifact(target, connection=connection)
             try:
-                return self.metadata.persist_montage_edit(workspace_id=workspace_id, task=current, proposal=proposal, base_version=base, updated_plan=montage, operation_type='RegenerateNarrationSegment', operation_payload=payload, narration_segments=segments, narration_artifact=combined, connection=connection)
+                return self.metadata.persist_montage_edit(workspace_id=workspace_id, task=current, proposal=proposal, base_version=base, updated_plan=montage, operation_type='RegenerateNarrationSegment', operation_payload=payload, narration_replacement=updated_target, narration_snapshot=narration_snapshot, narration_artifact=combined, connection=connection)
             except LegacyMontageReference as exc:
                 raise stage_failure(**exc.details) from exc
             except InvalidMontage as exc:

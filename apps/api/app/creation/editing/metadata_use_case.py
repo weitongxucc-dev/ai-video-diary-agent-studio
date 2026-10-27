@@ -650,7 +650,7 @@ class MetadataEditUseCase:
         )
         return MetadataEditResult(persisted_operation, persisted_plan, current_task, narration,execution_readiness=readiness)
 
-    def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None, verify_sources=None, actor_identity=None):
+    def persist_montage_edit(self, *, workspace_id: str, task: CreationTask, proposal: EditProposal, base_version: TimelineVersion, updated_plan: CreationTaskMontagePlan, operation_type: str, operation_payload: dict[str, object], narration_segments: list[NarrationSegment] | None=None, narration_artifact: NarrationArtifactRecord | None=None, subtitle_source_version: TimelineVersion | None=None, edited_subtitle_tracks: list[SubtitleTrack] | None=None, connection=None, direct_command=None, direct_intent=None, direct_source_verifier=None, proposal_source_command=None, proposal_source_verifier=None, result_version_id=None, verify_sources=None, actor_identity=None, narration_replacement=None, narration_snapshot=None):
         try:
             dissolve_frames(updated_plan.clips)
             validate_overlays(updated_plan.graphic_overlays, updated_plan.duration_seconds)
@@ -684,7 +684,7 @@ class MetadataEditUseCase:
                 raise EditConflict(f'字幕重定时未保存，当前版本保持不变：{exc}') from exc
         source_cover = self.cover_asset_for_version(workspace_id, task.id, source_version)
         carried_cover = clone_cover_asset(source_cover, timeline_version_id=result_version_id) if source_cover is not None else None
-        change = prepare_change_set(proposal=proposal, base_version=base_version, operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id, montage_plan_id=updated_plan.id, montage_payload=montage_payload, subtitle_tracks=carried_tracks, cover_asset=carried_cover, snapshot_source=source_version.snapshot, narration_segments=narration_segments, narration_artifact=narration_artifact, include_track_ids=edited_subtitle_tracks is not None or bool(carried_tracks) or 'subtitle_track_ids' in source_version.snapshot, absent_cover_value=True,
+        change = prepare_change_set(proposal=proposal, base_version=base_version, operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id, montage_plan_id=updated_plan.id, montage_payload=montage_payload, subtitle_tracks=carried_tracks, cover_asset=carried_cover, snapshot_source=source_version.snapshot, narration_segments=narration_segments, narration_artifact=narration_artifact, narration_replacement=narration_replacement, narration_snapshot=narration_snapshot, include_track_ids=edited_subtitle_tracks is not None or bool(carried_tracks) or 'subtitle_track_ids' in source_version.snapshot, absent_cover_value=True,
             source_subtitle_tracks=self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))
         readiness = {}
         def verify_commit(conn):

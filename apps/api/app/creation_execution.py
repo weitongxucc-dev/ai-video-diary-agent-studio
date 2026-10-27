@@ -386,8 +386,13 @@ def narration_scope_fields(budget, *, task, inputs, reference, language, max_out
             'model_cache': budget.additional_disk_bytes, 'output': max_output_bytes}}}
 
 
-def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, reference_preparation=None, comparison_reference=None, narration_runtime_facts=None, source_binding=None):
+def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, reference_preparation=None, comparison_reference=None, narration_runtime_facts=None, source_binding=None, connection=None):
     """Seal one confirmed script segment; admission does not decode or generate."""
+    if connection is None:
+        with repository.creation_execution_read() as reader:
+            return narration_edit_stage_facts(repository, task, proposal, plan, budget,
+                reference_preparation=reference_preparation, comparison_reference=comparison_reference,
+                narration_runtime_facts=narration_runtime_facts, source_binding=source_binding, connection=reader)
     if budget is None:
         raise ValueError("局部配音预算尚未标定，请配置 DEVICE_NARRATION_* 标定值")
     operation = proposal.operation
@@ -397,9 +402,12 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
             or operation["operation_type"] != "RegenerateNarrationSegment"
             or task.current_timeline_version_id != payload["base_version_id"]):
         raise ValueError("配音编辑提案或时间线已变化，请重新预览")
-    script = repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
-    segment = repository.get_narration_segment(task.workspace_id, task.id, payload["narration_segment_id"])
-    section = next(item for item in script.sections if item.id == segment.source_section_id)
+    script, script_fields = repository.script_records.read_execution_script_metadata(
+        connection, task.workspace_id, task.confirmed_script_id)
+    segment = repository.get_narration_segment(task.workspace_id, task.id,
+        payload["narration_segment_id"], connection=connection)
+    section = next(item for item in repository.script_records.iter_execution_script_sections(
+        connection, task.workspace_id, script.id) if item.id == segment.source_section_id)
     if (script.selection_status != "confirmed" or segment.script_id != script.id
             or segment.status != "ready" or not segment.duration_seconds
             or segment.duration_seconds <= 0 or segment.text != section.content
@@ -411,23 +419,29 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
     if not plan.selected_voice.version or inputs.voice.version != plan.selected_voice.version:
         raise ValueError('局部配音需要明确的声音固定版本')
     if segment.audio_reference.startswith("narration://artifact/"):
-        artifact = repository.get_narration_artifact(task.workspace_id, segment.audio_reference.removeprefix("narration://artifact/"))
+        artifact = repository.get_narration_artifact(task.workspace_id, segment.audio_reference.removeprefix("narration://artifact/"), connection=connection)
         if artifact is None or artifact.task_id != task.id or artifact.script_id != script.id:
             raise ValueError("原配音产物不属于当前任务及文案版本")
     original = repository.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
     stat = original.stat()
     if not original.is_file() or stat.st_size <= 0:
         raise ValueError("原配音来源缺失，未安排局部重做")
-    segments = repository.list_narration_segments(task.workspace_id, task.id, script.id)
+    count = 0
+    for _, audio in repository.iter_creation_narration_sections(task, script, connection=connection):
+        if audio is None or audio.status != 'ready':
+            raise ValueError('合并配音存在不可用片段，未安排局部重做')
+        count += 1
+    if count == 0 or count != script.sections_total_count:
+        raise ValueError('原配音片段集合不完整')
     source_audio = []
     segment_artifacts = []
     total_duration = 0.0
-    for item in segments:
+    for item in repository.iter_narration_segments(task.workspace_id, task.id, script.id, connection=connection):
         if (item.status != "ready" or item.script_id != script.id or not item.duration_seconds
                 or item.duration_seconds <= 0 or not item.audio_reference):
             raise ValueError("合并配音存在不可用片段，未安排局部重做")
         record = repository.get_narration_artifact(task.workspace_id,
-            item.audio_reference.removeprefix("narration://artifact/"))
+            item.audio_reference.removeprefix("narration://artifact/"), connection=connection)
         if (not item.audio_reference.startswith("narration://artifact/") or record is None
                 or record.task_id != task.id or record.script_id != script.id):
             raise ValueError("合并配音产物不属于当前任务及文案版本")
@@ -439,7 +453,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
         source_audio.append([item.id, str(path.resolve()), info.st_size, info.st_mtime_ns,
                              info.st_ctime_ns, info.st_ino, info.st_dev])
         total_duration += item.duration_seconds
-    montage = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
+    montage = repository.get_creation_task_montage_plan(task.workspace_id, task.id, connection=connection)
     digest_reference = comparison_reference or reference_preparation
     resources = {"kind": "creation_narration", "narration_reference":digest_reference, "execution_mode": "isolated_qwen3_tts",
                  "text_chars": len(section.content) + len(inputs.voice.reference_text),
@@ -452,16 +466,19 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
         resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
             language=segment.language, max_output_bytes=resources['max_output_bytes'],
             runtime_facts=narration_runtime_facts, source_binding=source_binding))
-    manifest = {"operation": operation, "script": asdict(script), "segment": asdict(segment),
+    manifest = {"operation": operation, "segment": asdict(segment),
                 "voice": asdict(inputs.voice), "reference_input": digest_reference['reference'],
-                "segments": [asdict(item) for item in segments], "source_audio": source_audio,
+                "source_audio": source_audio,
                 "segment_artifacts": segment_artifacts,
                 "montage": montage,
                 "rules": [asdict(item) for item in inputs.pronunciation_entries],
                 "model_id": plan.selected_voice.model_id, "language": segment.language,
                 "original_audio": [str(original.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns],
                 "resources": resources}
-    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+    from app.creation.narration_pcm import narration_edit_manifest_digest
+    digest = narration_edit_manifest_digest(manifest, script_fields,
+        repository.script_records.iter_execution_script_sections(connection, task.workspace_id, script.id),
+        repository.iter_narration_segments(task.workspace_id, task.id, script.id, connection=connection))
     return f"narration_edit:{digest}", resources
 
 
@@ -1115,24 +1132,19 @@ class CreationJobOwnerVerifier:
         return resources
 
     def prepare_pcm_sources(self, job, *, generated=None, section_id=None):
-        from app.creation.narration_pcm import prepare_sources
-        task=self.repository.get_creation_task(job.workspace_id,job.task_id)
-        if generated is None and job.kind==NARRATION_EDIT_KIND:
-            candidate=self.repository.narration_edit_generated(job.workspace_id,job.id)
-            if candidate is not None:
-                generated=self.repository.get_narration_artifact(job.workspace_id,candidate['cache_key'])
-                section_id=self.repository.get_narration_segment(job.workspace_id,job.task_id,candidate['segment_id']).source_section_id
+        from app.creation.narration_pcm import prepare_sources, narration_reference_facts
         paths=[]
         with self.repository.creation_execution_read() as conn:
-            if job.kind == KIND:
-                snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
-                task = snapshot.task
-                segments = (segment for _, segment in self.repository.iter_creation_narration_sections(
-                    task, snapshot.script_header, connection=conn))
-            else:
-                segments = iter(self.repository.list_narration_segments(
-                    job.workspace_id,job.task_id,task.confirmed_script_id,connection=conn))
-            for segment in segments:
+            snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
+            task, plan = snapshot.task, snapshot.plan
+            if generated is None and job.kind == NARRATION_EDIT_KIND:
+                candidate = self.repository.narration_edit_generated(job.workspace_id, job.id, connection=conn)
+                if candidate is not None:
+                    generated = self.repository.get_narration_artifact(job.workspace_id, candidate['cache_key'], connection=conn)
+                    section_id = self.repository.get_narration_segment(job.workspace_id, job.task_id,
+                        candidate['segment_id'], connection=conn).source_section_id
+            for _, segment in self.repository.iter_creation_narration_sections(
+                    task, snapshot.script_header, connection=conn):
                 if segment is None or segment.status!='ready' or generated is not None and segment.source_section_id==section_id:
                     continue
                 record=self.repository.get_narration_artifact(job.workspace_id,
@@ -1142,8 +1154,6 @@ class CreationJobOwnerVerifier:
                 paths.append(record.audio_path)
         if generated is not None:
             paths.append(generated.audio_path)
-        plan=self.repository.get_creation_plan(job.workspace_id,task.plan_id)
-        from app.creation.narration_pcm import narration_reference_facts
         _,_,reference=narration_reference_facts(self.repository,task,plan)
         return {**prepare_sources(paths),'_narration_reference':reference}
 
@@ -1176,7 +1186,8 @@ class CreationJobOwnerVerifier:
                     revision=snapshot.input_digest) != 'ready':
                 raise RecoveryBlocked('原PCM作业的固定文案或制作输入已变化')
         else:
-            job,task,event,script,plan = self._facts(conn,request.workspace_id,request.owner_id)
+            job, snapshot, event = self._snapshot_facts(conn, request.workspace_id, request.owner_id)
+            task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         key,resources = (self.narration_edit_facts(job,task,event,plan,connection=conn,request=request,original_recovery=original_recovery)
             if job.kind == NARRATION_EDIT_KIND else self.narration_unit_facts(conn,job,task,script,plan,request=request,original_recovery=original_recovery))
         if key != request.unit_key or resources != request.resources:
@@ -1185,7 +1196,13 @@ class CreationJobOwnerVerifier:
 
     def migrate_narration_request(self, conn, old, actor, *, source_preparation, write_guard=None):
         from app.creation.narration_pcm import verify_narration_source
-        job, task, event, script, plan = self._facts(conn, old.workspace_id, old.owner_id)
+        current = self.repository.get_job_run(old.workspace_id, old.owner_id, connection=conn)
+        revision = None
+        if current.kind == NARRATION_EDIT_KIND:
+            job, snapshot, event = self._snapshot_facts(conn, old.workspace_id, old.owner_id)
+            task, script, plan, revision = snapshot.task, snapshot.script_header, snapshot.plan, snapshot.input_digest
+        else:
+            job, task, event, script, plan = self._facts(conn, old.workspace_id, old.owner_id)
         if write_guard is not None:
             write_guard(conn)
         original = CreationExecutionActor.from_event(job.workspace_id, event)
@@ -1216,7 +1233,7 @@ class CreationJobOwnerVerifier:
                     {key:value for key,value in trusted.resources.items() if key != 'narration_reference'}):
                 raise RecoveryBlocked('原段配音的其他输入或预算已变化')
             return intent, trusted
-        if self._check_facts(replace(job, status='queued'), task, event, script, plan, stage, old.member_id) != 'ready':
+        if self._check_facts(replace(job, status='queued'), task, event, script, plan, stage, old.member_id, revision=revision) != 'ready':
             raise RecoveryBlocked('原配音业务依赖已变化')
         if job.kind == KIND:
             if (task.narration_cache_key is not None
@@ -1264,10 +1281,10 @@ class CreationJobOwnerVerifier:
                                       self.presenter_budget, self.presenter_models)
 
     def narration_edit_facts(self, job, task, event, plan, *, connection=None, request=None, original_recovery=False, pcm_preparation=None, comparison_reference=None):
-        with nullcontext(connection) if connection is not None else self.repository._connect() as conn:
+        with self.repository.creation_execution_read(connection) as conn:
             if pcm_preparation is None and request is not None and request.resources.get('execution_mode')=='cpu_pcm_wav_assembly':
                 pcm_preparation=self.persisted_pcm_sources(request,conn)
-            proposal = self.repository.get_edit_proposal(job.workspace_id,event['edit_proposal_id'])
+            proposal = self.repository.get_edit_proposal(job.workspace_id,event['edit_proposal_id'], connection=conn)
             reference = (pcm_preparation or {}).get('_narration_reference')
             if reference is None:
                 if request is not None:
@@ -1278,7 +1295,7 @@ class CreationJobOwnerVerifier:
                     if reference is None and job.attempt == 0 and job.started_at is None:
                         self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
             key,resources = narration_edit_stage_facts(self.repository,task,proposal,plan,self.narration_budget,
-                reference_preparation=reference, comparison_reference=comparison_reference,
+                reference_preparation=reference, comparison_reference=comparison_reference, connection=conn,
                 narration_runtime_facts=self.narration_runtime_facts,
                 source_binding=(self.repository.creation_narration_source_binding(
                     job.workspace_id, job.id, connection=conn).payload
@@ -1305,12 +1322,10 @@ class CreationJobOwnerVerifier:
             if candidate['source_key'] != key:
                 raise RecoveryBlocked('局部配音候选的原版本或来源已变化')
             target = self.repository.get_narration_artifact(job.workspace_id,candidate['cache_key'],connection=conn)
-            segments = self.repository.list_narration_segments(task.workspace_id,task.id,task.confirmed_script_id,connection=conn)
-            script = self.repository.get_creation_task_script(task.workspace_id,task.confirmed_script_id)
-            ordered = {item.source_section_id:item for item in segments}
-            files,ready = [],[]
-            for section in script.sections:
-                segment = ordered[section.id]
+            script, _ = self.repository.script_records.read_execution_script_metadata(conn, task.workspace_id, task.confirmed_script_id)
+            files,ready,ordered_ids = [],[],[]
+            for section, segment in self.repository.iter_creation_narration_sections(task, script, connection=conn):
+                ordered_ids.append(section.id)
                 record = target if segment.id == candidate['segment_id'] else self.repository.get_narration_artifact(
                     job.workspace_id,segment.audio_reference.removeprefix('narration://artifact/'),connection=conn)
                 if record is None or record.task_id != task.id or record.script_id != script.id:
@@ -1322,7 +1337,7 @@ class CreationJobOwnerVerifier:
                     'sample_rate':record.sample_rate,'channels':1,'uses':1})
             source_digest = hashlib.sha256(json.dumps([key,files],sort_keys=True).encode()).hexdigest()
             resources = self.pcm_resources(conn,job,common,ready,files,source_digest,
-                [section.id for section in script.sections],limits,plan,pcm_preparation=pcm_preparation,request=request)
+                ordered_ids,limits,plan,pcm_preparation=pcm_preparation,request=request)
             digest=hashlib.sha256(json.dumps(resources,sort_keys=True).encode()).hexdigest()
             return 'narration_edit:pcm:'+digest,resources
 
@@ -2419,7 +2434,7 @@ class CreationJobUnitExecutor:
         if hasattr(owner,'registrations'):
             owner=owner.registrations[DEVICE_OWNER_TYPE].owner
         with self.repository.creation_execution_read() as conn:
-            if job.kind == KIND:
+            if job.kind in {KIND, NARRATION_EDIT_KIND}:
                 original, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
                 task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             else:
@@ -2455,7 +2470,7 @@ class CreationJobUnitExecutor:
                 if owner.pcm_assembly_baseline(request,conn,original_recovery=True)!=baseline:
                     raise RecoveryBlocked('原PCM恢复提交前依赖已变化')
                 current_revision = None
-                if job.kind == KIND:
+                if job.kind in {KIND, NARRATION_EDIT_KIND}:
                     current_job, snapshot, current_event = owner._snapshot_facts(conn, job.workspace_id, job.id)
                     current_task, current_script, current_plan = snapshot.task, snapshot.script_header, snapshot.plan
                     current_revision = snapshot.input_digest
@@ -2934,16 +2949,18 @@ class CreationJobUnitExecutor:
         from app.granted_subprocess import GrantedCommandCancelled
         scheduler.assert_grant(grant)
         with self.repository._connect() as conn:
-            row=conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?',(grant.request_id,)).fetchone()
+            row=conn.execute('SELECT * FROM device_work_requests WHERE id=?',(grant.request_id,)).fetchone()
             permit=conn.execute('SELECT granted_at_utc FROM device_permit WHERE id=1 AND request_id=?',(grant.request_id,)).fetchone()
-        resources=json.loads(row['resources_json'])
+        request = scheduler._request(row)
+        resources = request.resources
         if resources.get('input_contract')!='narration_units_v1' or permit is None or not permit['granted_at_utc']:
             raise PermissionError('旧局部配音请求须先按原Job转换为有界单元，未调用模型')
         owner=scheduler.owners
         if hasattr(owner,'registrations'):
             owner=owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository._connect() as conn:
-            _job,task,event,_script,plan=owner._facts(conn,grant.workspace_id,grant.owner_id)
+        with self.repository.creation_execution_read() as conn:
+            _job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
+            task, plan = snapshot.task, snapshot.plan
         actor=CreationExecutionActor.from_event(grant.workspace_id,event)
         job,remaining_seconds,remaining_bytes=self.repository.start_creation_narration_unit(grant,resources,[])
         started=time.monotonic()-max(0,(datetime.now(timezone.utc)-datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
@@ -2983,6 +3000,8 @@ class CreationJobUnitExecutor:
                 commit,receipt=self.narration_stage.prepare_edit(job.workspace_id,job.task_id,context,event['edit_proposal_id'],resources)
                 pcm_preparation=owner.prepare_pcm_sources(job) if not receipt['finalized'] else None
                 def checkpoint(conn,current):
+                    if receipt['finalized'] and owner.check_current(request, conn) != 'ready':
+                        raise PermissionError('原局部配音最终采用前身份、授权或依赖已变化')
                     settle(conn,current)
                     if receipt['finalized']:
                         return self._narration_edit_checkpoint(conn,current,'succeeded',commit=commit)
