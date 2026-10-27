@@ -121,7 +121,7 @@ def test_scope_identity_input_revision_and_finite_unit_are_not_self_authorized(s
         reserve(repo, CreationExecutionActor('local', 'other-member'), jobs[0], 'wrong-actor')
     with pytest.raises(BudgetScopeConflict):
         reserve(repo, actor, jobs[0], 'stale-revision', revision=3)
-    with pytest.raises(ValueError, match='有限正数'):
+    with pytest.raises(ValueError, match='单元最大占用须有限且为正'):
         reserve(repo, actor, jobs[0], 'infinite', maximum={'execution_seconds': float('inf'), 'generated_bytes': 1})
     with pytest.raises(PermissionError):
         repo.authorize_execution_budget_scope('local', origin, actor, **{**command, 'authorization_guard': None})
