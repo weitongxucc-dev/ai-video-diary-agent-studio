@@ -19,7 +19,8 @@ from app.material_ingestion import (
     MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialHashUnitExecutor,
     MaterialIngestionService,
 )
-from app.production import CreationPlan, ProductionRepository, _material_hash_candidate
+from app.production import CreationPlan, ProductionRepository
+from app.material_hash import material_hash_candidate as _material_hash_candidate
 from app.material_probe import MaterialProbeDependency, material_probe_unit_key
 from app.creation.contracts import CreationTask, JobRun, TaskEvent
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
@@ -151,7 +152,33 @@ def hash_scheduler(repo: ProductionRepository, tmp_path: Path, *, resources=None
     )
 
 
-def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: Path) -> None:
+@pytest.fixture
+def scheduled_hash_no_execution(monkeypatch):
+    import _media_preview_test_fixtures as media_fixtures
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("hash fixture must not execute media, models or a bound driver")
+
+    original_driver = MaterialHashUnitExecutor.execute
+
+    def reject_bound_driver(executor, grant, scheduler):
+        if executor._service is None:
+            # Preserve the original unbound PermissionError gate, with no dispatch.
+            return original_driver(executor, grant, scheduler)
+        return forbidden()
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "start", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "run_granted_probe", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "run_granted_scene", forbidden)
+    monkeypatch.setattr(MaterialHashUnitExecutor, "execute", reject_bound_driver)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
+    assert MaterialIngestionService.run_granted_probe is forbidden
+
+
+def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: Path, scheduled_hash_no_execution) -> None:
     duration = Mock(return_value=1.0)
     repo, library = make_repo(tmp_path, duration)
     source = library / "clip.mp4"
@@ -189,7 +216,7 @@ def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: P
         with pytest.raises(PermissionError, match="不属于"):
             executor.execute(grant, scheduler)
         executor.bind(service)
-        executor.execute(grant, scheduler)
+        assert service.run_granted_hash(grant) is not None
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute("SELECT attempted_digest, state FROM material_ingestion_files").fetchone() == (digest, "waiting")
@@ -222,7 +249,7 @@ def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: P
         scheduler.close()
 
 
-def test_scheduled_hash_changed_source_defers_old_grant_and_keeps_workspace_owner(tmp_path: Path) -> None:
+def test_scheduled_hash_changed_source_defers_old_grant_and_keeps_workspace_owner(tmp_path: Path, scheduled_hash_no_execution) -> None:
     repo, library = make_repo(tmp_path)
     source = library / "clip.mp4"
     source.write_bytes(b"first")
@@ -275,7 +302,7 @@ def test_scheduled_hash_missing_library_defers_without_checkpoint(tmp_path: Path
         scheduler.close()
 
 
-def test_scheduled_hash_scan_repairs_checkpoint_to_probe_submit_gap(tmp_path: Path) -> None:
+def test_scheduled_hash_scan_repairs_checkpoint_to_probe_submit_gap(tmp_path: Path, scheduled_hash_no_execution) -> None:
     repo, library = make_repo(tmp_path)
     (library / "clip.mp4").write_bytes(b"source")
     repo.bind_material_ingestion("one", expected_directory=str(library))
@@ -288,10 +315,10 @@ def test_scheduled_hash_scan_repairs_checkpoint_to_probe_submit_gap(tmp_path: Pa
         service.discover_and_submit_hashes()
         grant = scheduler.pick_and_grant()
         assert grant is not None
-        result = repo.hash_granted_material(grant, scheduler.assert_grant)
+        result = repo.hash_intake.hash_granted_material(grant, scheduler.assert_grant)
         scheduler.complete_unit(
             grant, checkpoint_database_path=repo.database_path,
-            checkpoint_write=lambda conn, active: repo.commit_material_hash(conn, active, result),
+            checkpoint_write=lambda conn, active: repo.hash_records.commit_material_hash(conn, active, result, source_verdict=repo.hash_intake.material_hash_verdict),
         )
         scheduler.close()
         restarted_repo = ProductionRepository(repo.database_path, library)
@@ -872,3 +899,55 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
             "one", "task-one", initial.id, title="越过确认", sections=revised_sections,
             expected_updated_at=confirmed.updated_at,
         )
+
+
+def test_scheduled_hash_checkpoint_sql_refusal_rolls_back_observation_and_permit(tmp_path, scheduled_hash_no_execution):
+    from app.material_hash import material_hash_candidate
+    from app.materials.hash_intake import MaterialHashIntake
+    from app.materials.hash_records import MaterialHashRecordStore
+
+    repo, library = make_repo(tmp_path)
+    assert isinstance(repo.hash_intake, MaterialHashIntake)
+    assert isinstance(repo.hash_records, MaterialHashRecordStore)
+    assert repo.probe_records._hash_candidate_from_stat is material_hash_candidate
+    (library / "clip.mp4").write_bytes(b"isolated permit hash checkpoint")
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = hash_scheduler(repo, tmp_path)
+    service = MaterialIngestionService(repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0)
+    try:
+        service.discover_and_submit_hashes()
+        request_ids = service.discover_and_submit_hashes()
+        assert len(request_ids) == 1
+        grant = scheduler.pick_and_grant()
+        assert grant is not None and grant.request_id == request_ids[0]
+        result = repo.hash_intake.hash_granted_material(grant, scheduler.assert_grant)
+        with sqlite3.connect(repo.database_path) as conn:
+            original_observation = conn.execute("SELECT * FROM material_ingestion_files").fetchone()
+            original_request = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
+            original_permit = conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone()
+            conn.execute("""CREATE TRIGGER refuse_hash_checkpoint BEFORE INSERT ON material_analysis_checkpoints
+                WHEN NEW.unit_key LIKE 'hash:v1:%' AND EXISTS(
+                    SELECT 1 FROM material_ingestion_files WHERE workspace_id=NEW.workspace_id
+                    AND attempted_digest=NEW.source_sha256 AND state='waiting')
+                BEGIN SELECT RAISE(ABORT, 'isolated hash checkpoint refusal'); END""")
+        checked = []
+        original_verdict = repo.hash_intake.material_hash_verdict
+
+        def verify_original_source(workspace_id, asset_id, input_digest, unit_key, connection):
+            assert connection.in_transaction
+            checked.append(connection)
+            return original_verdict(workspace_id, asset_id, input_digest, unit_key, connection)
+
+        with pytest.raises(sqlite3.IntegrityError, match="isolated hash checkpoint refusal"):
+            scheduler.complete_unit(grant, checkpoint_database_path=repo.database_path,
+                checkpoint_write=lambda conn, active: repo.hash_records.commit_material_hash(
+                    conn, active, result, source_verdict=verify_original_source))
+        assert checked
+        with sqlite3.connect(repo.database_path) as conn:
+            assert conn.execute("SELECT * FROM material_ingestion_files").fetchone() == original_observation
+            assert conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone() == original_request
+            assert conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone() == original_permit
+            assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints").fetchone() == (0,)
+            assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (1,)
+    finally:
+        scheduler.close()

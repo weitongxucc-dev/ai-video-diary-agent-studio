@@ -54,7 +54,7 @@ class MaterialHashOwnerVerifier:
         candidate = None
         with self.repository._connect() as conn:
             if intent.unit_key.startswith("hash:v1:"):
-                verdict = self.repository.material_hash_verdict(
+                verdict = self.repository.hash_intake.material_hash_verdict(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
                 )
@@ -122,7 +122,7 @@ class MaterialHashOwnerVerifier:
                 or request.work_class != "background" or request.source_refs):
             return "unauthorized"
         if request.unit_key.startswith("hash:v1:"):
-            return self.repository.material_hash_verdict(
+            return self.repository.hash_intake.material_hash_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
@@ -328,7 +328,7 @@ class MaterialIngestionService:
         with self._scan_lock:
             self.submit_pending_probe_dependencies()
             self.submit_pending_scene_windows()
-            for candidate in self.repository.discover_material_hash_candidates(
+            for candidate in self.repository.hash_intake.discover_material_hash_candidates(
                 stable_seconds=self.stable_seconds
             ):
                 binding = self.repository.get_material_ingestion_binding()
@@ -406,13 +406,13 @@ class MaterialIngestionService:
             self.scheduler.assert_grant(active)
         try:
             check(grant)
-            result = self.repository.hash_granted_material(grant, check)
+            result = self.repository.hash_intake.hash_granted_material(grant, check)
         except GrantedCommandCancelled:
             self.scheduler.defer_unit(grant, reason="worker_interrupted",
                 retry_not_before_utc=datetime.now(timezone.utc)+timedelta(minutes=1))
             return None
         except (OSError, ValueError, PermissionError, RecoveryBlocked) as error:
-            verdict = self.repository.material_hash_verdict_for_grant(grant)
+            verdict = self.repository.hash_intake.material_hash_verdict_for_grant(grant)
             reason = {
                 "dependency": "dependency_unavailable",
                 "stale": "input_stale",
@@ -423,7 +423,7 @@ class MaterialIngestionService:
             } else None
             self.scheduler.defer_unit(grant, reason=reason, retry_not_before_utc=retry_at)
             return None
-        verdict = self.repository.material_hash_verdict_for_grant(grant)
+        verdict = self.repository.hash_intake.material_hash_verdict_for_grant(grant)
         if verdict != "ready":
             reason = {"dependency": "dependency_unavailable", "stale": "input_stale",
                       "unauthorized": "authorization_lost"}.get(verdict, "transient_failure")
@@ -432,7 +432,7 @@ class MaterialIngestionService:
             return None
         self.scheduler.complete_unit(
             grant, checkpoint_database_path=self.repository.database_path,
-            checkpoint_write=lambda conn, active: self.repository.commit_material_hash(conn, active, result),
+            checkpoint_write=lambda conn, active: self.repository.hash_records.commit_material_hash(conn, active, result, source_verdict=self.repository.hash_intake.material_hash_verdict),
         )
         try:
             self.submit_pending_probe_dependencies()

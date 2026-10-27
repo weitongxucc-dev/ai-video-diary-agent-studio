@@ -633,12 +633,10 @@ def test_legacy_probe_request_replaced_once_without_losing_wait_age(
         service.discover_and_submit_hashes()
         hash_grant = scheduler.pick_and_grant()
         assert hash_grant is not None
-        result = repo.hash_granted_material(hash_grant, scheduler.assert_grant)
+        result = repo.hash_intake.hash_granted_material(hash_grant, scheduler.assert_grant)
         scheduler.complete_unit(
             hash_grant, checkpoint_database_path=repo.database_path,
-            checkpoint_write=lambda conn, active: repo.commit_material_hash(
-                conn, active, result,
-            ),
+            checkpoint_write=lambda conn, active: repo.hash_records.commit_material_hash(conn, active, result, source_verdict=repo.hash_intake.material_hash_verdict),
         )
         asset_id = repo.list_assets("one")[0].id
         old_stage = hashlib.sha256(json.dumps({
