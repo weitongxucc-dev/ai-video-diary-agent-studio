@@ -22,7 +22,7 @@ from app.quality_worker_runtime import (source_receipt, quality_phase_request,
 
 class QualityCheckRepository:
     def __init__(self, database_path: str | Path) -> None:
-        self.database_path = str(database_path)
+        self.database_path = str(Path(database_path).expanduser())
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS creation_task_quality_checks (

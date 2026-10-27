@@ -1,11 +1,14 @@
 """Actual runtime bindings and failed preparation with synthetic device paths."""
 import asyncio
+import ast
+import inspect
 import json
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -59,16 +62,60 @@ def healthy_idle_predecessor(tmp_path, monkeypatch, later_owner):
     return predecessor, completed
 
 
-def test_database_switch_moves_five_actual_service_writes_together(isolated_host, tmp_path):
+@pytest.fixture
+def isolated_database_host(tmp_path, monkeypatch):
+    from app.config import Settings
+    from app.model_installer import ModelInstaller
+
+    for function in (main._publish_runtime_dependencies, main._activate_runtime_reload, main._publish_runtime_routes):
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    monkeypatch.setattr(main, name, getattr(main, name))
+    monkeypatch.setattr(main.app.router, "routes", list(main.app.router.routes))
+    monkeypatch.setattr(main.app, "openapi_schema", main.app.openapi_schema)
+    for name in ("material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
+        monkeypatch.setattr(main, name, None)
+    monkeypatch.setattr(main, "creation_execution_mode", "legacy")
+    monkeypatch.setattr(main, "material_execution_mode", "legacy")
+    # Exercise real preparation/publication, without starting background drivers.
+    monkeypatch.setattr(main, "_start_material_ingestion", lambda: None)
+    monkeypatch.setattr(main, "_start_device_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    monkeypatch.setenv("TMPDIR", os.environ["TMPDIR"])
+    env_path = tmp_path / "accepted.env"
+    env_path.write_text("")
+    monkeypatch.setenv("AI_VIDEO_DIARY_DOTENV", str(env_path))
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "old.sqlite3"))
+    monkeypatch.setenv("MODEL_ROOT_PATH", str(tmp_path / "models"))
+    main._publish_runtime_dependencies(main.prepare_runtime_dependencies(Settings.from_env()))
+    monkeypatch.setattr(main, "model_installer", ModelInstaller(main.model_catalog))
+
+
+@pytest.mark.parametrize("path_kind", ["absolute", "home", "relative"])
+def test_database_switch_moves_five_actual_service_writes_together(isolated_database_host, tmp_path, monkeypatch, path_kind):
     old_db = Path(main.settings.database_path)
     main.conversation_repo.create("probe", "member", "home", "home", "OLD")
     new_db = tmp_path / "new" / "studio.sqlite3"
-    response = client().post("/api/settings/runtime", json={"database_path": str(new_db)})
+    if path_kind == "home":
+        monkeypatch.setenv("HOME", str(tmp_path))
+        configured_db = "~/new/studio.sqlite3"
+    elif path_kind == "relative":
+        monkeypatch.chdir(tmp_path)
+        configured_db = "new/studio.sqlite3"
+    else:
+        configured_db = str(new_db)
+    response = client().post("/api/settings/runtime", json={"database_path": configured_db})
     assert response.status_code == 200, response.text
-    assert Path(main.settings.database_path) == Path(main.production_repo.database_path) == new_db
+    assert Path(main.settings.database_path).expanduser().resolve() == main.production_repo.database_path.resolve() == new_db
+    assert isinstance(main.quality_check_repo.database_path, str)
+    assert main.quality_check_repo.database_path == str(Path(configured_db).expanduser())
+    assert Path(main.quality_check_repo.database_path).samefile(main.production_repo.database_path)
     assert main.conversation_repo.current_or_create("probe", "member", "home", "home")["title"] != "OLD"
     main.conversation_repo.create("probe", "member", "home", "home", "AFTER")
     main.quality_check_repo.begin("probe", "after-task", "after-version", None, None)
+    with closing(main._quality_inspection_use_case(budget=None)._connect()) as conn:
+        assert conn.execute("SELECT task_id FROM creation_task_quality_checks WHERE workspace_id='probe'").fetchone()[0] == "after-task"
     main.local_members_service.add_member("AFTER")
     main.scheduled_task_service.create_task("probe", ScheduledTaskCreateRequest(
         task_type="creation_render", trigger_mode="idle", target_ref="AFTER",
