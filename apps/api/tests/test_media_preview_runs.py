@@ -97,7 +97,7 @@ def _voice_request(
     }
     queued = harness.prepare(service, params)
     if complete and queued.status == "queued" and harness.complete_once():
-        return repository.get_media_preview_run(harness.actor.workspace_id, "voice", queued.identity)
+        return repository.preview_records.get_media_preview_run(harness.actor.workspace_id, "voice", queued.identity)
     return queued
 
 
@@ -119,7 +119,7 @@ def _avatar_request(repository, *, audio, provider=None, retry=False, complete=T
     }
     queued = harness.prepare(service, params)
     if complete and queued.status == "queued" and harness.complete_once():
-        return repository.get_media_preview_run(harness.actor.workspace_id, "avatar_lipsync", queued.identity)
+        return repository.preview_records.get_media_preview_run(harness.actor.workspace_id, "avatar_lipsync", queued.identity)
     return queued
 
 
@@ -207,17 +207,17 @@ def test_voice_preview_persists_idempotent_fixture_run_and_workspace_scope(tmp_p
     assert provider.calls == 1
     assert provider.references == [str(_reference.resolve())]
     assert first.output_path and Path(first.output_path).is_file()
-    assert repository.get_media_preview_run("workspace_a", "voice", first.identity) == first
-    assert repository.get_media_preview_run("workspace_b", "voice", first.identity) is None
-    assert repository.list_media_preview_runs("workspace_a", "voice") == [first]
-    assert repository.list_media_preview_runs("workspace_b") == []
+    assert repository.preview_records.get_media_preview_run("workspace_a", "voice", first.identity) == first
+    assert repository.preview_records.get_media_preview_run("workspace_b", "voice", first.identity) is None
+    assert repository.preview_records.list_media_preview_runs("workspace_a", "voice") == [first]
+    assert repository.preview_records.list_media_preview_runs("workspace_b") == []
     reloaded = ProductionRepository(
         database_path=repository.database_path,
         video_library_path=repository.video_library_path,
         duration_reader=lambda _path: 10.0,
         scene_reader=lambda _path, _duration: [],
     )
-    assert reloaded.get_media_preview_run("workspace_a", "voice", first.identity) == first
+    assert reloaded.preview_records.get_media_preview_run("workspace_a", "voice", first.identity) == first
 
 
 def test_voice_preview_failure_requires_explicit_retry_and_preserves_attempt_history(tmp_path):
@@ -234,8 +234,8 @@ def test_voice_preview_failure_requires_explicit_retry_and_preserves_attempt_his
     assert unchanged == failed
     assert (retried.status, retried.attempt) == ("succeeded", 2)
     assert provider.calls == 2
-    assert repository.get_media_preview_run("workspace_a", "voice", failed.identity) == retried
-    assert repository.list_media_preview_attempts("workspace_a", "voice", failed.identity) == [
+    assert repository.preview_records.get_media_preview_run("workspace_a", "voice", failed.identity) == retried
+    assert repository.preview_records.list_media_preview_attempts("workspace_a", "voice", failed.identity) == [
         retried,
         failed,
     ]
@@ -253,7 +253,7 @@ def test_running_voice_preview_is_returned_without_a_second_provider_call(tmp_pa
     assert duplicate.id == pending.id and duplicate.device_request_id == pending.device_request_id
     assert provider.calls == 0
     assert repository._preview_harness.complete_once()
-    assert repository.get_media_preview_run("workspace_a", "voice", pending.identity).status == "succeeded"
+    assert repository.preview_records.get_media_preview_run("workspace_a", "voice", pending.identity).status == "succeeded"
 
 
 def test_unknown_device_admission_keeps_preview_queued_until_granted(tmp_path):
@@ -272,7 +272,7 @@ def test_unknown_device_admission_keeps_preview_queued_until_granted(tmp_path):
     assert provider.calls == 0
     harness.resources.admitted = True
     assert harness.complete_once()
-    final = repository.get_media_preview_run("workspace_a", "voice", queued.identity)
+    final = repository.preview_records.get_media_preview_run("workspace_a", "voice", queued.identity)
     assert final.status == "succeeded" and provider.calls == 1
     with repository._connect() as connection:
         permit = connection.execute("SELECT state, request_id FROM device_permit WHERE id=1").fetchone()
@@ -342,7 +342,7 @@ def test_concurrent_first_voice_preview_claims_provider_once(tmp_path):
     assert provider.calls == 0
     assert len({record.device_request_id for record in results}) == 1
     assert repository._preview_harness.complete_once()
-    final = repository.get_media_preview_run("workspace_a", "voice", results[0].identity)
+    final = repository.preview_records.get_media_preview_run("workspace_a", "voice", results[0].identity)
     assert final.status == "succeeded"
     assert provider.calls == 1
     assert sorted(record.status for record in results) == ["queued", "queued"]
@@ -397,21 +397,23 @@ def test_concurrent_retry_claims_exactly_one_next_voice_attempt(tmp_path):
     assert provider.calls == 1
     assert len({record.device_request_id for record in results}) == 1
     assert repository._preview_harness.complete_once()
-    final = repository.get_media_preview_run("workspace_a", "voice", failed.identity)
+    final = repository.preview_records.get_media_preview_run("workspace_a", "voice", failed.identity)
     assert final.status == "succeeded"
 
     assert not first.is_alive() and not second.is_alive()
     assert errors == []
     assert provider.calls == 2
     assert sorted(record.status for record in results) == ["queued", "queued"]
-    attempts = repository.list_media_preview_attempts("workspace_a", "voice", failed.identity)
+    attempts = repository.preview_records.list_media_preview_attempts("workspace_a", "voice", failed.identity)
     assert [(record.attempt, record.status) for record in attempts] == [
         (2, "succeeded"),
         (1, "failed"),
     ]
 
 
-def test_media_preview_attempt_migrates_existing_latest_record(tmp_path):
+def test_media_preview_attempt_migrates_existing_latest_record(tmp_path, monkeypatch):
+    from test_profile_api_contract import preview_record_guards
+    preview_record_guards(monkeypatch)
     database_path = tmp_path / "legacy.sqlite3"
     started_at = datetime(2026, 8, 28, tzinfo=timezone.utc)
     with sqlite3.connect(database_path) as conn:
@@ -471,7 +473,7 @@ def test_media_preview_attempt_migrates_existing_latest_record(tmp_path):
 
     repository = ProductionRepository(database_path=database_path, video_library_path=library)
 
-    migrated = repository.get_media_preview_run("workspace_a", "voice", "legacy-identity")
+    migrated = repository.preview_records.get_media_preview_run("workspace_a", "voice", "legacy-identity")
     assert migrated is not None
     assert (migrated.id, migrated.attempt, migrated.status) == ("legacy-run", 1, "failed")
 
@@ -658,7 +660,7 @@ def test_avatar_preview_failure_requires_explicit_retry(tmp_path):
     assert unchanged == failed
     assert (retried.status, retried.attempt) == ("succeeded", 2)
     assert provider.calls == 2
-    assert repository.list_media_preview_attempts(
+    assert repository.preview_records.list_media_preview_attempts(
         "workspace_a", "avatar_lipsync", failed.identity
     ) == [retried, failed]
 

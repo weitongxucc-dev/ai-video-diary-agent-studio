@@ -586,9 +586,12 @@ class VoicePreviewService:
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
+        preview_records=None,
     ):
         from app.materials.contracts import MediaAuthorityError
-        from app.production import MediaPreviewRunRecord
+        from app.profiles.preview_contracts import MediaPreviewRunRecord
+
+        records = repository.preview_records if preview_records is None else preview_records
 
         inputs = repository.resolve_narration_inputs(
             workspace_id=workspace_id,
@@ -631,7 +634,7 @@ class VoicePreviewService:
         })
         identity = hashlib.sha256((identity + json.dumps(reference_facts, sort_keys=True)).encode()).hexdigest()
         identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
-        existing = repository.get_media_preview_run(workspace_id, "voice", identity)
+        existing = records.get_media_preview_run(workspace_id, "voice", identity)
         succeeded_reusable = authorization_failure is None and reference_error is None and not (
             existing is not None
             and existing.status == "succeeded"
@@ -655,7 +658,7 @@ class VoicePreviewService:
             authorization_id=voice.authorization.id if voice.authorization else "",
             authorization_version=voice.authorization.version if voice.authorization else "",
         )
-        running, claimed = repository.claim_media_preview_run(
+        running, claimed = records.claim_media_preview_run(
             candidate,
             retry=retry,
             succeeded_reusable=succeeded_reusable,
@@ -663,16 +666,16 @@ class VoicePreviewService:
         if not claimed:
             return running
         if authorization_failure is not None:
-            return self._finish(repository, running, status="blocked", reason=authorization_failure,
+            return self._finish(records, running, status="blocked", reason=authorization_failure,
                 impact="声音预览被使用资格或授权限制阻断，不会生成或复用音频。",
                 repair_action="确认该档案的使用限制和授权状态后，以有效版本重试。")
         if reference_error is not None:
-            return self._finish(repository, running, status="blocked", reason=reference_failure_reason,
+            return self._finish(records, running, status="blocked", reason=reference_failure_reason,
                                 impact=reference_failure_impact,
                                 repair_action=reference_error)
         if existing is not None and existing.status == "succeeded":
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason="output_missing",
@@ -681,7 +684,7 @@ class VoicePreviewService:
             )
         if voice.language not in {resolved_language, "zh-en"}:
             return self._finish(
-                repository,
+                records,
                 running,
                 status="unavailable",
                 reason="language_mismatch",
@@ -690,7 +693,7 @@ class VoicePreviewService:
             )
         if not voice.reference_text.strip():
             return self._finish(
-                repository, running, status="blocked", reason="reference_text_missing",
+                records, running, status="blocked", reason="reference_text_missing",
                 impact="原参考已保存，但缺少对应文字，未调用声音模型。",
                 repair_action="为该参考填写实际对应文字并保存新版本后再生成预览。",
             )
@@ -707,7 +710,7 @@ class VoicePreviewService:
         )
         if preflight_failure is not None:
             return self._finish(
-                repository,
+                records,
                 running,
                 status="unavailable",
                 reason=preflight_failure.reason,
@@ -716,7 +719,7 @@ class VoicePreviewService:
             )
         if not preview_text.strip():
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason="preview_text_empty",
@@ -724,12 +727,12 @@ class VoicePreviewService:
                 repair_action="提供简短预览文本后重试。",
             )
         if not voice.model_id or voice.model_id != self.provider.model_id:
-            return self._finish(repository, running, status="unavailable", reason="voice_model_unconfigured",
+            return self._finish(records, running, status="unavailable", reason="voice_model_unconfigured",
                 impact="参考已保存，但该声音版本尚未选择当前可用的生成模型。", repair_action="选择已配置模型并保存新声音版本后预览。")
         if prepare_only:
             return running
         if grant_context is None:
-            return self._finish(repository, running, status="blocked", reason="device_grant_required",
+            return self._finish(records, running, status="blocked", reason="device_grant_required",
                 impact="未获独立预览设备许可，未调用声音模型。", repair_action="从声音预览入口提交持久设备请求。")
         if (grant_context.grant.owner_type != "media_preview" or
                 not grant_context.grant.unit_key.startswith("voice:")):
@@ -761,13 +764,13 @@ class VoicePreviewService:
             if grant_context is not None:
                 grant_context.check()
         except (GrantedCommandError, PermissionError) as exc:
-            self._finish(repository, running, status="failed", reason=type(exc).__name__,
+            self._finish(records, running, status="failed", reason=type(exc).__name__,
                 impact="设备许可执行未完成，未保存成功声音预览。", repair_action=str(exc))
             raise
         except (VoiceCloneError, OSError) as exc:
             failure = _voice_generation_failure(exc)
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason=failure.reason,
@@ -775,14 +778,14 @@ class VoicePreviewService:
                 repair_action=failure.repair_action,
             )
         except ValueError as exc:
-            return self._finish(repository, running, status="failed", reason="reference_derivation_failed",
+            return self._finish(records, running, status="failed", reason="reference_derivation_failed",
                 impact="声音参考派生或源资格校验失败，未保存成功预览。", repair_action=str(exc))
         if (
             Path(result.audio_path).resolve() != output_path.resolve()
             or not _valid_preview_output(result.audio_path, self.output_root)
         ):
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason="output_invalid",
@@ -790,14 +793,14 @@ class VoicePreviewService:
                 repair_action="检查声音 provider 输出路径与文件后重试。",
             )
         return self._finish(
-            repository,
+            records,
             running,
             status="succeeded",
             output_path=str(output_path),
         )
 
     @staticmethod
-    def _finish(repository, record, *, status, output_path=None, reason=None, impact=None, repair_action=None):
+    def _finish(records, record, *, status, output_path=None, reason=None, impact=None, repair_action=None):
         from dataclasses import replace
 
         completed = replace(
@@ -809,7 +812,7 @@ class VoicePreviewService:
             repair_action=repair_action,
             finished_at=utc_now(),
         )
-        return repository.save_media_preview_run(completed)
+        return records.save_media_preview_run(completed)
 
 
 def _voice_generation_failure(exc: VoiceCloneError | OSError) -> MediaRuntimeFailure:

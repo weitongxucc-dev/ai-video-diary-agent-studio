@@ -2701,7 +2701,7 @@ def request_avatar_lipsync_preview(request: Request, payload: AvatarLipSyncPrevi
     ws = current_workspace_id(request)
     actor = _require_permit_actor(request, ws)
     runtime = _creation_runtime()
-    voice_run = production_repo.get_media_preview_run(ws, "voice", payload.voice_preview_identity)
+    voice_run = production_repo.preview_records.get_media_preview_run(ws, "voice", payload.voice_preview_identity)
     if voice_run is None or not _preview_readable(voice_run, request):
         raise HTTPException(status_code=404, detail="voice preview not found")
     audio_path = _preview_output_path(voice_run)
@@ -2741,7 +2741,7 @@ def _preview_readable(run, request: Request):
 def cancel_media_preview(preview_type: str, identity: str, request: Request):
     ws = current_workspace_id(request)
     actor = _require_permit_actor(request, ws)
-    run = production_repo.get_media_preview_run(ws, preview_type, identity)
+    run = production_repo.preview_records.get_media_preview_run(ws, preview_type, identity)
     if run is None or not _preview_readable(run, request):
         raise HTTPException(status_code=404, detail="media preview not found")
     if run.status not in {"queued", "running"} or not run.device_request_id:
@@ -2750,7 +2750,7 @@ def cancel_media_preview(preview_type: str, identity: str, request: Request):
     result = runtime.scheduler.cancel(run.device_request_id, actor)
     runtime.registrations["media_preview"].executor.request_cancel(run.device_request_id)
     if result["state"] == "cancelled":
-        run = production_repo.save_media_preview_run(replace(run, status="cancelled", finished_at=utc_now(),
+        run = production_repo.preview_records.save_media_preview_run(replace(run, status="cancelled", finished_at=utc_now(),
             output_path=None, reason="cancelled", impact="预览已取消，参考和输入保留。", repair_action="需要时显式重新预览。"))
     return _media_preview_response(run)
 
@@ -2764,7 +2764,7 @@ def list_media_previews(
         raise HTTPException(status_code=422, detail="invalid preview type")
     workspace_id = current_workspace_id(request)
     latest_by_identity = {}
-    for run in production_repo.list_media_preview_runs(workspace_id, preview_type):
+    for run in production_repo.preview_records.list_media_preview_runs(workspace_id, preview_type):
         if not _preview_readable(run, request):
             continue
         current = latest_by_identity.get(run.identity)
@@ -2793,9 +2793,9 @@ def list_media_preview_attempts(
     if preview_type not in {"voice", "avatar_lipsync"}:
         raise HTTPException(status_code=422, detail="invalid preview type")
     workspace_id = current_workspace_id(request)
-    if production_repo.get_media_preview_run(workspace_id, preview_type, identity) is None:
+    if production_repo.preview_records.get_media_preview_run(workspace_id, preview_type, identity) is None:
         raise HTTPException(status_code=404, detail="media preview not found")
-    runs = [run for run in production_repo.list_media_preview_attempts(workspace_id, preview_type, identity) if _preview_readable(run, request)]
+    runs = [run for run in production_repo.preview_records.list_media_preview_attempts(workspace_id, preview_type, identity) if _preview_readable(run, request)]
     return MediaPreviewRunsResponse(
         items=[_media_preview_response(run) for run in runs],
         total_count=len(runs),
@@ -2810,7 +2810,7 @@ def stream_media_preview_output(
 ) -> FileResponse:
     if preview_type not in {"voice", "avatar_lipsync"}:
         raise HTTPException(status_code=422, detail="invalid preview type")
-    run = production_repo.get_media_preview_run(
+    run = production_repo.preview_records.get_media_preview_run(
         current_workspace_id(request), preview_type, identity
     )
     if run is None or not _preview_readable(run, request):

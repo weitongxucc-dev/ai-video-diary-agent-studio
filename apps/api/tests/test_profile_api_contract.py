@@ -271,6 +271,68 @@ class Access:
         return True
 
 
+def preview_record_guards(monkeypatch):
+    import subprocess
+    from app.device_runtime import DeviceRuntime
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    def forbidden(*args, **kwargs):
+        pytest.fail('preview-record evidence forbids provider, waveform, Popen, runtime, model and driver execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    monkeypatch.setattr(VoiceProvider, 'generate', forbidden)
+    monkeypatch.setattr(UnavailableAvatarAndLipSyncProvider, 'render', forbidden)
+    monkeypatch.setattr(main, 'run_task_turn', forbidden)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset', 'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    return forbidden
+
+
+def record_only_preview(repo, tmp_path, monkeypatch, *, before_submit=None):
+    """Real profile/reference metadata and scheduler; declared bytes, no media execution."""
+    forbidden = preview_record_guards(monkeypatch)
+    root = repo.video_library_path
+    root.mkdir(parents=True, exist_ok=True)
+    path = root/'declared-reference.mp4'
+    path.write_bytes(b'declared registered reference metadata only')
+    stat = path.stat()
+    asset = repo._save_asset(MaterialAsset(id='declared-reference', workspace_id='ws',file_name=path.name,
+        path=str(path),size_bytes=stat.st_size,modified_at=datetime.fromtimestamp(stat.st_mtime),
+        duration_seconds=2,media_type='video',analysis_status='ready',review_status='approved',owner_user_id='member'))
+    ref = repo.workspace_media_reference_for_asset('ws', asset.id)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn, workspace_id='ws', reference=ref)
+    voice = VoiceProfile(id='voice',workspace_id='ws',version='v1',language='zh',owner_user_id='member',
+        display_name='declared voice',reference_audio_path=ref,reference_text='已声明参考文字',model_id='fixture-model',
+        reference=ProfileReference(asset_id=asset.id))
+    # Seed an already registered profile fact; registration's real ffprobe is outside this evidence.
+    with repo._connect() as conn:
+        repo._profile_records._save_versioned_voice_profile(conn, voice)
+    provider = VoiceProvider()
+    service = VoicePreviewService(tmp_path/'output',provider)
+    budget = NarrationBudget(100,1,10**6,5,10**6,1,10,10**6,2,0.1,10**6,10**6)
+    reg = profile_preview_registration(repo,voice_service=service,
+        avatar_service=AvatarPreviewService(tmp_path/'output',UnavailableAvatarAndLipSyncProvider()),
+        narration_budget=budget,presenter_budget=None,verify_identity=lambda actor:'ready')
+    resources = Resources()
+    runtime = build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'record-device.lock',
+        device_access=Access(),registrations={'media_preview':reg},resources=resources,processes=Processes())
+    # The executor is forbidden too: tests call only the real scheduler's transactional owner callback.
+    monkeypatch.setattr(reg.executor, 'execute', forbidden)
+    actor = CreationExecutionActor('ws','member')
+    params = {'voice_profile_id':voice.id,'voice_version':voice.version,'preview_text':'metadata binding check'}
+    prepared = service.request(repository=repo,workspace_id='ws',viewer_user_id='member',prepare_only=True,**params)
+    assert prepared.status=='queued' and provider.calls==0
+    if before_submit is not None:
+        before_submit(runtime,resources,provider)
+    queued = submit_profile_preview(runtime,prepared,actor,params)
+    return runtime,resources,provider,queued
+
+
 def setup_preview(
     repo, tmp_path, provider=None, before_submit=None, authorization=None
 ):
@@ -340,7 +402,7 @@ def setup_preview(
 def test_preview_binding_tick_before_submitter_bind(
     repo, tmp_path, monkeypatch, binding_time, outcome
 ):
-    original_bind = repo.bind_preview_device_request
+    original_bind = repo.preview_records.bind_preview_device_request
     phases = []
     runtime_ref = []
 
@@ -376,7 +438,7 @@ def test_preview_binding_tick_before_submitter_bind(
 
             provider.generate = interleaved_generate
             assert runtime.run_once()
-            terminal = repo.get_media_preview_run("ws", "voice", run.identity)
+            terminal = repo.preview_records.get_media_preview_run("ws", "voice", run.identity)
             phases.append(terminal)
             # Inspect the committed checkpoint before the submitter can repair it.
             assert terminal.device_request_id == request_id
@@ -384,7 +446,7 @@ def test_preview_binding_tick_before_submitter_bind(
             assert rebound == terminal
             return rebound
 
-        monkeypatch.setattr(repo, "bind_preview_device_request", delayed_bind)
+        monkeypatch.setattr(repo.preview_records, "bind_preview_device_request", delayed_bind)
 
     try:
         runtime, _, provider, final = setup_preview(
@@ -427,7 +489,7 @@ def test_preview_binding_tick_before_submitter_bind(
 def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(
     repo, tmp_path, monkeypatch
 ):
-    original_bind = repo.bind_preview_device_request
+    original_bind = repo.preview_records.bind_preview_device_request
     runtime_ref = []
 
     def arrange(runtime, resources, provider):
@@ -442,7 +504,7 @@ def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(
                 )["state"]
                 == "cancelled"
             )
-            cancelled = repo.save_media_preview_run(
+            cancelled = repo.preview_records.save_media_preview_run(
                 replace(
                     run,
                     status="cancelled",
@@ -456,16 +518,15 @@ def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(
             assert bound == replace(cancelled, device_request_id=request_id)
             return bound
 
-        monkeypatch.setattr(repo, "bind_preview_device_request", delayed_bind)
+        monkeypatch.setattr(repo.preview_records, "bind_preview_device_request", delayed_bind)
 
     try:
-        runtime, resources, provider, final = setup_preview(
-            repo, tmp_path, before_submit=arrange
+        runtime, resources, provider, final = record_only_preview(
+            repo, tmp_path, monkeypatch, before_submit=arrange
         )
         resources.admit_value = True
         assert (
             final.status == "cancelled"
-            and not runtime.run_once()
             and provider.calls == 0
         )
         assert original_bind(final, final.device_request_id) == final
@@ -485,7 +546,7 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
         monkeypatch.setattr(resources, "released", lambda grant: None)
         with pytest.raises(RecoveryBlocked, match="未确认释放"):
             runtime.run_once()
-        pending = repo.get_media_preview_run("ws", "voice", queued.identity)
+        pending = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             pending.status == "running"
             and pending.device_request_id == queued.device_request_id
@@ -496,7 +557,7 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
             and pending.preview_input == queued.preview_input
         )
         assert (
-            repo.bind_preview_device_request(queued, queued.device_request_id)
+            repo.preview_records.bind_preview_device_request(queued, queued.device_request_id)
             == pending
         )
         with repo._connect() as conn:
@@ -527,13 +588,13 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
         with pytest.raises(RecoveryBlocked):
             recovered.run_once()
         assert (
-            repo.get_media_preview_run("ws", "voice", queued.identity) == pending
+            repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == pending
             and provider.calls == 1
         )
         recovery["state"] = "released"
         monkeypatch.setattr(resources, "released", lambda grant: True)
         assert recovered.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             final.status == "succeeded"
             and final.id == queued.id
@@ -557,34 +618,44 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
             assert recovered.stop(1)
 
 
-def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo, tmp_path):
-    runtime, resources, provider, queued = setup_preview(repo, tmp_path)
+def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo, tmp_path, monkeypatch):
+    runtime, resources, provider, queued = record_only_preview(repo, tmp_path, monkeypatch)
     try:
         unbound = replace(queued, device_request_id=None)
-        assert repo.save_media_preview_run(unbound) == queued
+        assert repo.preview_records.save_media_preview_run(unbound) == queued
         with pytest.raises(ValueError, match="其他设备请求"):
-            repo.save_media_preview_run(
+            repo.preview_records.save_media_preview_run(
                 replace(queued, device_request_id="other-request")
             )
         with pytest.raises(ValueError, match="输入不一致"):
-            repo.bind_preview_device_request(queued, "nonexistent-request")
+            repo.preview_records.bind_preview_device_request(queued, "nonexistent-request")
         with pytest.raises(ValueError, match="输入不一致"):
-            repo.bind_preview_device_request(
+            repo.preview_records.bind_preview_device_request(
                 replace(queued, input_digest="changed"), queued.device_request_id
             )
         assert (
-            repo.get_media_preview_run("ws", "voice", queued.identity) == queued
+            repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == queued
             and provider.calls == 0
         )
         resources.admit_value = True
-        assert runtime.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None
+        # Service terminal receipts stay provisional until the sole device transaction.
+        from app.profile_preview_execution import _PreviewCheckpointRecords
+        port = _PreviewCheckpointRecords(repo.preview_records)
+        assert not hasattr(port, 'resolve_narration_inputs')
+        declared = VoicePreviewService._finish(port, queued, status='failed', reason='declared_failure',
+            impact='No provider execution in this evidence', repair_action='Explicit retry')
+        assert repo.preview_records.get_media_preview_run('ws','voice',queued.identity)==queued
+        runtime.scheduler.fail_unit(grant, reason='preview_failed', failure_write=lambda conn, _:
+            repo.preview_records.checkpoint(declared, grant.request_id, connection=conn))
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         with pytest.raises(ValueError, match="不可覆盖"):
-            repo.save_media_preview_run(unbound)
+            repo.preview_records.save_media_preview_run(unbound)
         assert (
-            repo.bind_preview_device_request(unbound, queued.device_request_id) == final
+            repo.preview_records.bind_preview_device_request(unbound, queued.device_request_id) == final
         )
-        assert repo.get_media_preview_run("ws", "voice", queued.identity) == final
+        assert repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == final
     finally:
         assert runtime.stop(1)
 
@@ -722,7 +793,7 @@ def restricted_preview(repo, tmp_path):
 
         avatar_provider = NoAvatarProvider()
         avatar_service = AvatarPreviewService(tmp_path / "output", avatar_provider)
-        audio = repo.get_media_preview_run("ws", "voice", queued.identity)
+        audio = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         avatar_params = dict(
             person_id=person.id,
             person_version=person.version,
@@ -802,7 +873,7 @@ def test_preview_restriction_exact_blocked_reason_no_cache_reuse(
         None,
     )
     assert f.voice_provider.calls == 1 and f.avatar_provider.calls == 0
-    assert repo.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
+    assert repo.preview_records.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
     # Default facts/generation resolution remains strict, even though preview
     # preparation can read the reference and describe the explicit restriction.
     with pytest.raises(ValueError, match="受限"):
@@ -862,7 +933,7 @@ def test_preview_restriction_private_read_denied_before_authorization(
         asset = repo.get_asset("ws", profile.reference.asset_id)
         repo._save_asset(replace(asset, owner_user_id="other"))
         Path(asset.path).unlink()
-    before = repo.list_media_preview_runs("ws")
+    before = repo.preview_records.list_media_preview_runs("ws")
     service = f.voice_service if kind == "voice" else f.avatar_service
     params = f.voice_params if kind == "voice" else f.avatar_params
     with pytest.raises(PermissionError):
@@ -873,7 +944,7 @@ def test_preview_restriction_private_read_denied_before_authorization(
             prepare_only=True,
             **params,
         )
-    assert repo.list_media_preview_runs("ws") == before
+    assert repo.preview_records.list_media_preview_runs("ws") == before
     assert f.voice_provider.calls == 1 and f.avatar_provider.calls == 0
 
 
@@ -923,7 +994,7 @@ def test_preview_source_excluded_is_explicit_use_restriction(
     )
     assert "excluded" in result.repair_action
     assert f.voice_provider.calls == 1 and f.avatar_provider.calls == 0
-    assert repo.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
+    assert repo.preview_records.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
     assert Path(f.audio.output_path).is_file()
     with pytest.raises(ValueError, match="使用状态限制"):
         repo.profile_reference_input(profile, viewer_user_id="member")
@@ -936,7 +1007,7 @@ def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo, tmp_pa
         assert runtime.run_once() is False and provider.calls == 0
         resources.admit_value = True
         assert runtime.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert final.status == "succeeded", final
         assert (
             Path(final.output_path).read_bytes() == wav_bytes() and provider.calls == 1
@@ -972,7 +1043,7 @@ def test_preview_failure_is_not_success_and_preserves_input(repo, tmp_path):
     try:
         resources.admit_value = True
         assert runtime.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             final.status == "failed"
             and final.output_path is None
@@ -992,7 +1063,7 @@ def test_preview_submission_failure_is_persisted_without_provider(
         runtime.scheduler.cancel(
             queued.device_request_id, CreationExecutionActor("ws", "member")
         )
-        repo.save_media_preview_run(
+        repo.preview_records.save_media_preview_run(
             replace(
                 queued,
                 status="cancelled",
@@ -1020,7 +1091,7 @@ def test_preview_submission_failure_is_persisted_without_provider(
             submit_profile_preview(
                 runtime, prepared, CreationExecutionActor("ws", "member"), params
             )
-        last = repo.get_media_preview_run("ws", "voice", prepared.identity)
+        last = repo.preview_records.get_media_preview_run("ws", "voice", prepared.identity)
         assert (
             last.status == "failed"
             and last.reason == "device_submission_failed"
@@ -1285,10 +1356,10 @@ def test_preview_unknown_admission_recovery_and_cache_stay_same_request(repo, tm
         assert not runtime.run_once() and provider.calls == 0
         # Interrupted executor state; the existing queue grants after its process
         # recovery verifier declares the prior group released, not a second queue.
-        repo.save_media_preview_run(replace(queued, status="running"))
+        repo.preview_records.save_media_preview_run(replace(queued, status="running"))
         resources.admit_value = True
         assert runtime.run_once() and provider.calls == 1
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             final.id == queued.id
             and final.device_request_id == queued.device_request_id
@@ -1376,7 +1447,7 @@ def test_api_preview_posts_queue_and_cancel_with_member_filtered_read(
         resources.admit_value = True
         assert not runtime.run_once() and provider.calls == 0
         assert (
-            repo.get_media_preview_run("ws", "voice", queued.identity).preview_input
+            repo.preview_records.get_media_preview_run("ws", "voice", queued.identity).preview_input
             == queued.preview_input
         )
     finally:
@@ -1406,7 +1477,7 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
     try:
         resources.admit_value = True
         assert runtime.run_once()
-        audio = repo.get_media_preview_run("ws", "voice", queued.identity)
+        audio = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         path = repo.video_library_path / "avatar.png"
         Image.new("RGB", (2, 2)).save(path)
         asset = repo._save_asset(
@@ -1471,7 +1542,7 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
         )
         assert avatar_provider.calls == 0
         assert runtime.run_once()
-        result = repo.get_media_preview_run("ws", "avatar_lipsync", submitted.identity)
+        result = repo.preview_records.get_media_preview_run("ws", "avatar_lipsync", submitted.identity)
         assert (
             result.status == "failed"
             and result.output_path is None
@@ -1479,7 +1550,7 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
         )
         assert avatar_provider.calls == 1
         assert repo.get_person_profile("ws", person.id, person.version) == person
-        assert repo.get_media_preview_run("ws", "voice", queued.identity) == audio
+        assert repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == audio
     finally:
         assert runtime.stop(1)
 

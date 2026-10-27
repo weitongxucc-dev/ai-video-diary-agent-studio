@@ -541,9 +541,12 @@ class AvatarPreviewService:
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
+        preview_records=None,
     ):
         from app.materials.contracts import MediaAuthorityError
-        from app.production import MediaPreviewRunRecord
+        from app.profiles.preview_contracts import MediaPreviewRunRecord
+
+        records = repository.preview_records if preview_records is None else preview_records
 
         request = repository.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -586,7 +589,7 @@ class AvatarPreviewService:
         identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
         if reference_failure is not None:
             identity = hashlib.sha256(json.dumps([identity, reference_failure]).encode()).hexdigest()
-        existing = repository.get_media_preview_run(workspace_id, "avatar_lipsync", identity)
+        existing = records.get_media_preview_run(workspace_id, "avatar_lipsync", identity)
         succeeded_reusable = authorization_failure is None and reference_failure is None and not (
             existing is not None
             and existing.status == "succeeded"
@@ -610,7 +613,7 @@ class AvatarPreviewService:
             authorization_id=request.authorization.id if request.authorization else "",
             authorization_version=request.authorization.version if request.authorization else "",
         )
-        running, claimed = repository.claim_media_preview_run(
+        running, claimed = records.claim_media_preview_run(
             candidate,
             retry=retry,
             succeeded_reusable=succeeded_reusable,
@@ -618,15 +621,15 @@ class AvatarPreviewService:
         if not claimed:
             return running
         if authorization_failure is not None:
-            return self._finish(repository, running, status="blocked", reason=authorization_failure,
+            return self._finish(records, running, status="blocked", reason=authorization_failure,
                 impact="人物预览被使用资格、授权或人物声音引用限制阻断，未生成视频。",
                 repair_action="确认档案使用限制、授权和所选声音版本后，以有效版本重试。")
         if reference_failure is not None:
-            return self._finish(repository, running, status="blocked", reason=reference_failure[0],
+            return self._finish(records, running, status="blocked", reason=reference_failure[0],
                 impact=reference_failure[1], repair_action=reference_failure[2])
         if existing is not None and existing.status == "succeeded":
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason="output_missing",
@@ -635,7 +638,7 @@ class AvatarPreviewService:
             )
         if not self.provider.ready:
             return self._finish(
-                repository,
+                records,
                 running,
                 status="unavailable",
                 reason="capability_unavailable",
@@ -644,7 +647,7 @@ class AvatarPreviewService:
             )
         if request.language not in self.provider.supported_languages:
             return self._finish(
-                repository,
+                records,
                 running,
                 status="unavailable",
                 reason="language_unavailable",
@@ -656,7 +659,7 @@ class AvatarPreviewService:
             audio.relative_to(self.output_root)
         except ValueError:
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason="audio_path_outside_output_root",
@@ -665,7 +668,7 @@ class AvatarPreviewService:
             )
         if not audio.is_file() or audio.stat().st_size == 0:
             return self._finish(
-                repository,
+                records,
                 running,
                 status="failed",
                 reason="audio_missing",
@@ -673,12 +676,12 @@ class AvatarPreviewService:
                 repair_action="重新生成并选择当前版本的非空配音文件。",
             )
         if request.visual_reference_input.needs_derivation and grant_context is None and not prepare_only:
-            return self._finish(repository, running, status="blocked", reason="reference_grant_required",
+            return self._finish(records, running, status="blocked", reason="reference_grant_required",
                 impact="所选人物范围尚未派生，未调用人物模型。", repair_action="从设备队列取得本次预览许可。")
         if prepare_only:
             return running
         if grant_context is None:
-            return self._finish(repository, running, status="blocked", reason="device_grant_required",
+            return self._finish(records, running, status="blocked", reason="device_grant_required",
                 impact="未获独立预览设备许可，未调用人物模型。", repair_action="从人物预览入口提交持久设备请求。")
         if (grant_context.grant.owner_type != "media_preview" or
                 not grant_context.grant.unit_key.startswith("avatar_lipsync:")):
@@ -689,16 +692,16 @@ class AvatarPreviewService:
                 repository=repository, grant_context=grant_context, viewer_user_id=viewer_user_id,
                 local_diagnostic=local_diagnostic)
         except (GrantedCommandError, PermissionError) as exc:
-            self._finish(repository, running, status="failed", reason=type(exc).__name__,
+            self._finish(records, running, status="failed", reason=type(exc).__name__,
                 impact="设备许可执行未完成，未保存成功人物预览。", repair_action=str(exc))
             raise
         except ValueError as exc:
-            return self._finish(repository, running, status="failed", reason="reference_derivation_failed",
+            return self._finish(records, running, status="failed", reason="reference_derivation_failed",
                 impact="人物参考派生或源资格校验失败，未保存成功预览。", repair_action=str(exc))
         if result.status == "succeeded":
             if not _valid_avatar_preview_output(result.artifact_path, self.output_root):
                 return self._finish(
-                    repository,
+                    records,
                     running,
                     status="failed",
                     reason="output_invalid",
@@ -706,13 +709,13 @@ class AvatarPreviewService:
                     repair_action="检查人物口型 provider 输出路径和文件后重试。",
                 )
             return self._finish(
-                repository,
+                records,
                 running,
                 status="succeeded",
                 output_path=result.artifact_path,
             )
         return self._finish(
-            repository,
+            records,
             running,
             status=("unavailable" if result.status == "unavailable" else "blocked" if result.status == "authorization_denied" else "failed"),
             reason=result.failure_code or "provider_failed",
@@ -721,7 +724,7 @@ class AvatarPreviewService:
         )
 
     @staticmethod
-    def _finish(repository, record, *, status, output_path=None, reason=None, impact=None, repair_action=None):
+    def _finish(records, record, *, status, output_path=None, reason=None, impact=None, repair_action=None):
         completed = replace(
             record,
             status=status,
@@ -731,7 +734,7 @@ class AvatarPreviewService:
             repair_action=repair_action,
             finished_at=datetime.now(timezone.utc),
         )
-        return repository.save_media_preview_run(completed)
+        return records.save_media_preview_run(completed)
 
 
 def avatar_lipsync_cache_key(request: AvatarAndLipSyncRequest, *, input_facts=None) -> str:

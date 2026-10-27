@@ -39,11 +39,7 @@ class ProfilePreviewOwner:
         if conn is None:
             with self.repository._connect() as reader:
                 return self.read(workspace_id, run_id, reader)
-        row = conn.execute("SELECT payload FROM media_preview_attempts WHERE workspace_id=? AND id=?",
-                           (workspace_id, run_id)).fetchone()
-        if row is None:
-            raise KeyError(run_id)
-        return self.repository._media_preview_run_from_payload(json.loads(row["payload"]))
+        return self.repository.preview_records.read(workspace_id, run_id, connection=conn)
 
     def facts(self, run):
         actor = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
@@ -78,7 +74,7 @@ class ProfilePreviewOwner:
             visual = self.repository.profile_reference_input(person, viewer_user_id=reader)
             audio = Path(run.preview_input["audio_path"])
             audio.relative_to(service.output_root)
-            upstream = self.repository.get_media_preview_run(run.workspace_id, "voice", run.preview_input["audio_cache_key"])
+            upstream = self.repository.preview_records.get_media_preview_run(run.workspace_id, "voice", run.preview_input["audio_cache_key"])
             if (upstream is None or upstream.status != "succeeded" or upstream.output_path != str(audio)
                     or upstream.member_identity != run.member_identity
                     or (upstream.voice_profile_id, upstream.voice_version) != (voice.id, voice.version)):
@@ -146,17 +142,11 @@ class ProfilePreviewOwner:
         profiles = self.repository.capture_profile_local_check(conn, run.workspace_id, refs,
             pronunciation_scope=pronunciation_scope)
         def read(current):
-            own = current.execute(
-                "SELECT updated_at FROM media_preview_attempts WHERE workspace_id=? AND id=?",
-                (run.workspace_id, run.id),
-            ).fetchone()
-            upstream = authorization = None
+            own, upstream = self.repository.preview_records.local_revisions(run.workspace_id, run.id,
+                upstream_identity=run.preview_input['audio_cache_key'] if run.preview_type == 'avatar_lipsync' else None,
+                connection=current)
+            authorization = None
             if run.preview_type == "avatar_lipsync":
-                upstream = tuple(map(tuple, current.execute(
-                    """SELECT id,updated_at FROM media_preview_attempts
-                       WHERE workspace_id=? AND preview_type='voice' AND identity=? ORDER BY attempt""",
-                    (run.workspace_id, run.preview_input["audio_cache_key"]),
-                ).fetchall()))
                 authorization = tuple(map(tuple, current.execute(
                     "SELECT version,payload FROM media_authorizations WHERE workspace_id=? AND id=? ORDER BY created_at,version",
                     (run.workspace_id, run.preview_input["authorization_id"]),
@@ -164,7 +154,7 @@ class ProfilePreviewOwner:
             budget = self.narration_budget if run.preview_type == "voice" else self.presenter_budget
             limits = ((budget.max_duration_seconds, budget.max_output_bytes, budget.max_threads,
                        budget.max_timeout_seconds) if budget else None)
-            return (tuple(own) if own else None, upstream, authorization,
+            return (own, upstream, authorization,
                     self.services[run.preview_type].provider.model_id, limits)
         expected = read(conn)
         return lambda current: profiles(current) if read(current) == expected else "stale"
@@ -184,17 +174,20 @@ class ProfilePreviewOwner:
         raise PermissionError("通过档案预览入口显式重试，保留旧尝试")
 
 
-class _PreviewCheckpointRepository:
-    """Only hold the terminal preview checkpoint until the device transaction commits."""
-    def __init__(self, repository):
-        self.repository = repository
+class _PreviewCheckpointRecords:
+    """Finite attempt port: only terminal records wait for the scheduler transaction."""
+    def __init__(self, records):
+        self.records = records
 
-    def __getattr__(self, name):
-        return getattr(self.repository, name)
+    def get_media_preview_run(self, workspace_id, preview_type, identity):
+        return self.records.get_media_preview_run(workspace_id, preview_type, identity)
+
+    def claim_media_preview_run(self, record, *, retry, succeeded_reusable=True):
+        return self.records.claim_media_preview_run(record, retry=retry, succeeded_reusable=succeeded_reusable)
 
     def save_media_preview_run(self, record):
         if record.status in {"queued", "running"}:
-            return self.repository.save_media_preview_run(record)
+            return self.records.save_media_preview_run(record)
         return record
 
 
@@ -220,20 +213,16 @@ class ProfilePreviewExecutor:
         context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources["timeout_seconds"],
                                            resources["max_output_bytes"], resources["threads"], event)
         def write(conn, terminal):
-            current = owner.repository.bind_preview_device_request(terminal, grant.request_id, conn=conn)
-            terminal = replace(terminal, device_request_id=grant.request_id)
-            if current.status not in {"queued", "running"} and current != terminal:
-                raise ValueError("已结束的预览尝试不可覆盖")
-            conn.execute("UPDATE media_preview_attempts SET payload=?, updated_at=? WHERE workspace_id=? AND id=?",
-                         (_json_payload(terminal), utc_now().isoformat(), terminal.workspace_id, terminal.id))
-            return terminal.id
+            return owner.repository.preview_records.checkpoint(terminal, grant.request_id, connection=conn)
+
         try:
             context.check()
             if run.status == "running":
                 # The scheduler re-granted only after the previous registered group released.
-                owner.repository.save_media_preview_run(replace(run, status="queued"))
+                owner.repository.preview_records.save_media_preview_run(replace(run, status="queued"))
             actor = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
-            result = owner.services[run.preview_type].request(repository=_PreviewCheckpointRepository(owner.repository),
+            result = owner.services[run.preview_type].request(repository=owner.repository,
+                preview_records=_PreviewCheckpointRecords(owner.repository.preview_records),
                 workspace_id=run.workspace_id, viewer_user_id=actor.user_id or actor.member_id,
                 grant_context=context, member_identity=run.member_identity, **run.preview_input)
             context.check()
@@ -295,12 +284,12 @@ def submit_profile_preview(runtime, run, actor, preview_input):
     run = replace(run, member_identity=actor.identity_payload(), preview_input=preview_input)
     try:
         digest, unit, _ = owner.facts(run)
-        run = repository.save_media_preview_run(replace(run, input_digest=digest))
+        run = repository.preview_records.save_media_preview_run(replace(run, input_digest=digest))
         request = runtime.scheduler.submit(SubmissionIntent(run.workspace_id, OWNER, run.id, digest, unit, SchedulePolicy()), actor)
     except (PermissionError, ValueError, OSError) as exc:
-        repository.save_media_preview_run(replace(run, status="failed", finished_at=utc_now(),
+        repository.preview_records.save_media_preview_run(replace(run, status="failed", finished_at=utc_now(),
             reason="device_submission_failed", impact="独立预览未进入设备队列，未调用模型。", repair_action=str(exc)))
         raise
-    run = repository.bind_preview_device_request(run, request.id)
+    run = repository.preview_records.bind_preview_device_request(run, request.id)
     runtime.wake()
     return run
