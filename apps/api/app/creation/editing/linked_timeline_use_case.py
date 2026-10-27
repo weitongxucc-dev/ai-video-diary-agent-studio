@@ -23,7 +23,8 @@ from app.creation.editing.metadata_use_case import (
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
 from app.montage import creation_task_montage_plan_from_payload, MontageClip
-from app.production import content_readable, material_segment_eligible, effective_segment_usage_role
+from app.source_policy import knowledge_item_readable as content_readable
+from app.production import material_segment_eligible, effective_segment_usage_role
 from uuid import uuid4
 from app.task_audio import media_digest
 

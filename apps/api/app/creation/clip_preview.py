@@ -7,7 +7,8 @@ from app.creation.editing.clips import ClipPreviewCommand, ClipPreviewConflict, 
 from app.canvas import preview_size
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload
-from app.production import (content_readable, material_allows_footage, material_segment_eligible, effective_segment_usage_role)
+from app.source_policy import knowledge_item_readable as content_readable
+from app.production import material_allows_footage, material_segment_eligible, effective_segment_usage_role
 from app.creation.contracts import (EditIntent, EditProposal, EditCommand)
 from app.visual_effects import VisualEffects, with_visual_effects, fade_filters, clip_playback_rate
 

@@ -21,7 +21,8 @@ from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, 
 from app.media.clip_preview import ClipPreviewExecutor
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.models import utc_now
-from app.production import TimelineVersionConflict, content_readable
+from app.production import TimelineVersionConflict
+from app.source_policy import knowledge_item_readable as content_readable
 from app.schemas import (
     CreationTaskExactEditRequest, CreationTaskEditPreviewResponse,
     CreationTaskObservationRequest, MediaScriptToolPreviewRequest,

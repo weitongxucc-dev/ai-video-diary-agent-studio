@@ -1,7 +1,7 @@
 """Shared quality reads and original-failure continuation; no execution owner here."""
 from app.creation.quality_inspection_use_case import QUALITY_KIND
 from app.device_runtime import RuntimeUnavailable
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 
 
 class QualityApplication:

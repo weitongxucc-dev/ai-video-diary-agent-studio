@@ -13,9 +13,12 @@ from uuid import uuid4
 
 from app.creation.script_draft_use_case import ScriptDraftRejected, ScriptDraftUseCase
 from app.production import (
-    CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference,
-    ProductionRepository, content_readable,
+    CreationPlan,
+    CreationPlanKnowledgeReference,
+    CreationPlanSourceReference,
+    ProductionRepository,
 )
+from app.source_policy import knowledge_item_readable as content_readable
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository
 from app.source_types import source_item_identity

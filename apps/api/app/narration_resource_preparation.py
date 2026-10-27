@@ -30,7 +30,7 @@ from app.profiles.contracts import profile_cache_identity, profile_use_failure
 from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
 from app.granted_subprocess import GrantedCommandError
 from app.voice_clone import VoiceCloneError, text_to_speech_preflight
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 
 
 UNIT_KEY = 'narration-prepare:v1'

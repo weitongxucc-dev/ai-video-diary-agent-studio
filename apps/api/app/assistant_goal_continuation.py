@@ -896,7 +896,7 @@ class GoalResultProjection:
                     and goal["status"] in {"running", "waiting_result", "waiting_adoption", "waiting_unknown"})
 
     def authorized(self, context, identity_status):
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
 
         task, member_id = context.task, context.source["member_id"]
         if (identity_status != "ready"

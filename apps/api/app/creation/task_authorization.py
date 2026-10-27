@@ -223,7 +223,7 @@ class TaskAuthorizationUseCase:
 
     def prepare_material_edit(self, task, editor_identity, asset_ids):
         """Prepare only newly used fixed materials; ordinary editing does not issue a task grant."""
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
         current = self.repository.get_task_authorization(task.workspace_id, task.id)
         reader = editor_identity.get('user_id') or editor_identity['member_id']
         status = self.status(task.workspace_id, task.id, operation='render')

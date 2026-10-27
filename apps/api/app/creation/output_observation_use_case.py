@@ -11,7 +11,7 @@ from app.creation_execution import CreationExecutionActor
 from app.graphic_sources import graphic_source_facts
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 from app.schemas import CreationTaskObservationRequest
 from app.task_audio import TASK_MEDIA_KIND
 from app.task_observation import observe_output, MAX_SAMPLE_EDGE, MAX_OBSERVATION_BYTES

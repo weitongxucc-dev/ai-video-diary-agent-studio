@@ -394,7 +394,7 @@ class TaskAudio:
 
     def validate_source_access(self, workspace_id, task_id, reference, actor):
         from app.creation_execution import CreationExecutionActor
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
         records = {item.logical_ref: item for item in self.repository.list_artifact_records(workspace_id, task_id)}
         pending, visited = [reference], set()
         while pending:

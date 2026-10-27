@@ -18,7 +18,7 @@ from app.creation_execution import CreationExecutionActor
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SourceRef, SubmissionIntent, VerifiedWork, Window
 from app.device_runtime import RuntimeUnavailable
 from app.montage import creation_task_montage_plan_from_payload
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 from app.quality_inspection import final_quality_check_payload
 from app.quality_checks import fit_quality_result
 from app.quality_worker_runtime import (QualityBudget, file_identity, source_receipt,

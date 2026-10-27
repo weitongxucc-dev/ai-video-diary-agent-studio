@@ -278,7 +278,6 @@ from app.production import (
     EXACT_EDIT_SOURCE,
     MaterialVersionConflict,
     TimelineVersionConflict,
-    content_readable,
     CreationPlan,
     VideoTemplate,
     CreationPlanBlocker,
@@ -297,6 +296,7 @@ from app.production import (
     effective_segment_usage_role,
     material_segment_eligible,
 )
+from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.topic_contracts import (
     TopicCandidate as CreationTaskTopicCandidate,
     TopicEvidenceReference,
@@ -1292,7 +1292,7 @@ def _validate_assistant_scope(request: Request, kind: str, scope_id: str) -> Non
 def _content_visible(
     request: Request, workspace_id: str, visibility: str, owner_user_id: str | None
 ) -> bool:
-    """内容可见范围判据，与仓储层共用同一规则（app.production.content_readable）。"""
+    """内容可见范围判据，与仓储层共用同一规则（app.source_policy.knowledge_item_readable）。"""
     user_id, local_diagnostic = _content_reader(request, workspace_id)
     return content_readable(
         user_id=user_id,

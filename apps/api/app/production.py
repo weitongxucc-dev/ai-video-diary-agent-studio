@@ -95,6 +95,7 @@ from app.materials.discovery import MaterialDiscoveryService
 from app.materials.discovery_store import DiscoveryStore
 from app.materials.discovery_intake import DiscoveryIntake
 from app.source_policy import content_owner
+from app.source_policy import knowledge_item_readable as _content_readable
 from app.materials.contracts import MediaAuthorityError as _MediaAuthorityError
 from app.creation.contracts import (
     CreationPlanVoiceReference as _CreationPlanVoiceReference,
@@ -155,26 +156,6 @@ EXACT_EDIT_SOURCE = ContextVar("exact_edit_source", default=None)
 
 
 
-def content_readable(
-    *,
-    user_id: str | None,
-    local_diagnostic: bool,
-    visibility: str,
-    owner_user_id: str | None,
-) -> bool:
-    """内容可读判据。与知识域共用同一套规则（转发到 app.source_policy）。
-
-    私有只对上传者本人可读，共享对成员可读；认证态缺可信身份不可读，不降级
-    local；保留的 local workspace 受控诊断下本机私有照常可读（非成员隔离）。
-    """
-    from app.source_policy import knowledge_item_readable
-
-    return knowledge_item_readable(
-        user_id=user_id,
-        local_diagnostic=local_diagnostic,
-        visibility=visibility,
-        owner_user_id=owner_user_id,
-    )
 
 
 BatchStatus = Literal[
@@ -1352,7 +1333,7 @@ class ProductionRepository:
 
     @staticmethod
     def profile_readable(profile, user_id, local_diagnostic=False):
-        return content_readable(user_id=user_id, local_diagnostic=local_diagnostic, visibility=profile.visibility, owner_user_id=profile.owner_user_id)
+        return _content_readable(user_id=user_id, local_diagnostic=local_diagnostic, visibility=profile.visibility, owner_user_id=profile.owner_user_id)
 
     def current_profile_authorization(self, profile):
         return self.get_authorization(profile.workspace_id, profile.authorization.id) if profile.authorization else None
@@ -3032,7 +3013,7 @@ class ProductionRepository:
             return templates
         return [
             item for item in templates
-            if content_readable(
+            if _content_readable(
                 user_id=viewer_user_id,
                 local_diagnostic=False,
                 visibility=item.visibility,
@@ -3320,7 +3301,7 @@ class ProductionRepository:
                         raise ValueError("规划窗口引用的素材已不存在")
                     asset = self._asset_from_payload(json.loads(asset_row["payload"]))
                     segment = next((part for part in asset.segments if part.id == match.segment_ref.removeprefix("segment:")),None)
-                    if not content_readable(user_id=owner,local_diagnostic=local_diagnostic,visibility=asset_row["visibility"],owner_user_id=asset.owner_user_id):
+                    if not _content_readable(user_id=owner,local_diagnostic=local_diagnostic,visibility=asset_row["visibility"],owner_user_id=asset.owner_user_id):
                         raise PermissionError("当前成员已无权使用规划窗口的素材")
                     if segment is None or not material_segment_eligible(asset,segment,workspace_id,automation_only=True):
                         raise ValueError("规划窗口引用的素材文件或使用资格已变化")
@@ -3710,7 +3691,7 @@ class ProductionRepository:
 
     @staticmethod
     def _knowledge_adoption_owner(task: _CreationTask, member_id: str) -> None:
-        if not member_id or not content_readable(user_id=member_id, local_diagnostic=False,
+        if not member_id or not _content_readable(user_id=member_id, local_diagnostic=False,
                 visibility=task.visibility, owner_user_id=task.owner_user_id):
             raise KeyError(task.id)
         if task.owner_user_id and task.owner_user_id != member_id:
@@ -3867,7 +3848,7 @@ class ProductionRepository:
             return self._list_creation_tasks_by_visibility(workspace_id, include_private)
         return [
             task for task in self._list_creation_tasks_by_visibility(workspace_id, True)
-            if content_readable(
+            if _content_readable(
                 user_id=viewer_user_id,
                 local_diagnostic=False,
                 visibility=task.visibility,
@@ -6897,7 +6878,7 @@ class ProductionRepository:
         asset = self.get_asset(workspace_id, values.get("asset_id") or clip.asset_id)
         segment_id = values.get("segment_id") or clip.segment_id
         segment = next((item for item in asset.segments if item.id == segment_id), None)
-        if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
+        if not _content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
                 visibility=asset.visibility, owner_user_id=asset.owner_user_id):
             raise PermissionError("当前成员无权使用该素材")
         if segment is None:
@@ -6930,7 +6911,7 @@ class ProductionRepository:
         facts = []
         for asset_id, segment_id in dict.fromkeys(pairs):
             asset = self.get_asset(workspace_id, asset_id, connection=connection)
-            if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
+            if not _content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
                     visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                 raise PermissionError("当前成员不能使用该镜头素材")
             segment = next((item for item in asset.segments if item.id == segment_id), None)
@@ -7944,7 +7925,7 @@ class ProductionRepository:
 
     @staticmethod
     def _narration_voice_selection_owner(task: _CreationTask, member_id: str) -> None:
-        if not member_id or not content_readable(user_id=member_id, local_diagnostic=False,
+        if not member_id or not _content_readable(user_id=member_id, local_diagnostic=False,
                 visibility=task.visibility, owner_user_id=task.owner_user_id):
             raise KeyError(task.id)
         if task.owner_user_id and task.owner_user_id != member_id:
@@ -8010,7 +7991,7 @@ class ProductionRepository:
             plan = self._creation_plan_from_payload(json.loads(str(plan_row["payload"])))
             if plan.creation_task_id != task.id:
                 raise ValueError("创作方案与任务不一致")
-            if (not content_readable(user_id=member_id, local_diagnostic=False,
+            if (not _content_readable(user_id=member_id, local_diagnostic=False,
                     visibility=plan.visibility, owner_user_id=plan.owner_user_id)
                     or plan.owner_user_id and plan.owner_user_id != member_id):
                 raise PermissionError("当前成员不能更改此创作方案的配音声音。")
@@ -8554,7 +8535,7 @@ class ProductionRepository:
         again over the top of it.
         """
         asset = self._asset_by_source_url(workspace_id, source_url)
-        if asset is not None and not content_readable(
+        if asset is not None and not _content_readable(
             user_id=viewer_user_id, local_diagnostic=local_diagnostic,
             visibility=asset.visibility, owner_user_id=asset.owner_user_id,
         ):
@@ -8612,7 +8593,7 @@ class ProductionRepository:
             raise ValueError("素材文件不存在或为空，未登记。")
         recorded = self._asset_by_source_url(workspace_id, source_url)
         if recorded is not None:
-            if not content_readable(
+            if not _content_readable(
                 user_id=verified_owner_user_id, local_diagnostic=local_diagnostic,
                 visibility=recorded.visibility, owner_user_id=recorded.owner_user_id,
             ):

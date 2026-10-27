@@ -41,7 +41,7 @@ class PictureFragmentAssembly:
         return f'event_{job.id}_picture_fragment_manifest'
 
     def _inputs(self, job, actor, *, connection=None):
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
         task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=connection)
         if (actor.workspace_id != job.workspace_id or task.owner_user_id != (actor.user_id or actor.member_id)
                 or not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,

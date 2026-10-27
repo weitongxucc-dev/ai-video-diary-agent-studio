@@ -5,7 +5,8 @@ from pathlib import Path
 
 from app.creation.contracts import TimelineVersion
 from app.creation.contracts import CreationTask
-from app.production import ProductionRepository, content_readable
+from app.production import ProductionRepository
+from app.source_policy import knowledge_item_readable as content_readable
 
 
 class PublishOutputQualificationUseCase:

@@ -6,7 +6,7 @@ from uuid import uuid4
 from PIL import Image, ImageOps
 from app.models import utc_now
 from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 
 
 def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,upload):

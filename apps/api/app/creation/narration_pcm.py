@@ -231,7 +231,7 @@ def narration_reference_facts(repository,task,plan,prepared=None):
             voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         reference=ProfileReferenceInput(**prepared['reference'])
         from app.profiles.contracts import profile_use_failure
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
         current=repository.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id).voice
         for profile in (inputs.voice,current):

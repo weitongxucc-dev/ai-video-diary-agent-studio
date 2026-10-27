@@ -10,11 +10,8 @@ from typing import Literal
 from app.creation.script_draft_use_case import ScriptDraftRejected, script_failure
 from app.creation.source_errors import SourcePreflightError
 from app.creation.source_inputs_use_case import CreationSourceInputs
-from app.production import (
-    CreationPlan,
-    ProductionRepository,
-    content_readable,
-)
+from app.production import CreationPlan, ProductionRepository
+from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.topic_contracts import (
     TopicCandidate as CreationTaskTopicCandidate,
 )

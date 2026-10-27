@@ -318,7 +318,7 @@ class TaskBusiness:
 
     def _input_context(self, conn, frozen, task, actor, old_goal, sealed):
         from app.assistant.references import normalize_selection, validate_timeline_reference, timeline_object_refs
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
         from datetime import datetime
         if frozen.get('kind')!='task' or frozen.get('task_id')!=task.id:
             raise TaskBusinessRejected('追加输入切换了任务，需要从交互入口重新授权')

@@ -10,13 +10,31 @@ from pathlib import Path
 
 import pytest
 
-from app.production import CreationPlan, ProductionRepository, VideoTemplate, content_readable
+from app.production import CreationPlan, ProductionRepository, VideoTemplate
+from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.contracts import CreationTask
 
 ALICE = "member-alice"
 BOB = "member-bob"
 WORKSPACE = "workspace-110"
 LOCAL = "local"
+
+
+@pytest.fixture(autouse=True)
+def no_read_identity_execution(monkeypatch):
+    import subprocess
+    import _media_preview_test_fixtures as media_fixtures
+    from app.material_ingestion import MaterialHashUnitExecutor, MaterialIngestionService
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("read identity verification must not execute media, models or drivers")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    monkeypatch.setattr(MaterialHashUnitExecutor, "execute", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "start", forbidden)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
 
 
 @pytest.fixture
@@ -138,7 +156,13 @@ def test_confirm_without_verified_identity_keeps_legacy_ownerless_row(production
 
 
 def test_content_readable_matches_the_knowledge_domain_rule() -> None:
-    # 转发同一规则，不是第二套：无身份不可读、未知范围保守、local 仅诊断范围可见。
+    from app import production as production_module
+    from app.source_policy import knowledge_item_readable
+
+    assert content_readable is knowledge_item_readable
+    assert production_module._content_readable is knowledge_item_readable
+    assert not hasattr(production_module, "content_readable")
+    # 直接绑定唯一规则：无身份不可读、未知范围保守、local 仅诊断范围可见。
     assert content_readable(
         user_id=None, local_diagnostic=False, visibility="shared", owner_user_id="x"
     ) is False
