@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import multiprocessing
+import json
 import os
 import sqlite3
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from threading import Event
+from time import monotonic
 
 import pytest
 
@@ -179,6 +182,115 @@ def _scheduler(tmp_path, *, db_name="business.sqlite", lock_name="device.lock", 
 def _complete(scheduler, grant):
     return scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                                    checkpoint_write=lambda conn, current: current.unit_key)
+
+
+def _sqlite_connection_facts(conn):
+    # Read the actual connection policy; never set a PRAGMA to make contention pass.
+    return {"database": conn.execute("PRAGMA database_list").fetchone()[2],
+            "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
+            "busy_timeout_ms": conn.execute("PRAGMA busy_timeout").fetchone()[0],
+            "isolation_level": conn.isolation_level}
+
+
+def _trace_sqlite_commits(monkeypatch, owner):
+    connect = owner._connect
+    attempted, connections, statements = Event(), [], []
+
+    def traced_connect():
+        conn = connect()
+        connections.append(_sqlite_connection_facts(conn))
+
+        def trace(sql):
+            normalized = sql.strip().upper()
+            statements.append(normalized)
+            if normalized == "COMMIT":
+                attempted.set()
+
+        conn.set_trace_callback(trace)
+        return conn
+
+    monkeypatch.setattr(owner, "_connect", traced_connect)
+    return attempted, connections, statements
+
+
+def _sqlite_table_facts(repository, tables):
+    with closing(repository._connect()) as conn:
+        return {table: sorted([dict(row) for row in conn.execute(f"SELECT * FROM {table}")],
+                              key=lambda row: json.dumps(row, sort_keys=True)) for table in tables}
+
+
+@pytest.mark.parametrize("hold_until_timeout", [False, True], ids=["release_within_wait", "timeout_then_resume"])
+def test_production_snapshot_contends_with_original_scheduler_checkpoint(tmp_path, monkeypatch, hold_until_timeout):
+    from app.creation.contracts import JobRun, TaskEvent
+    from test_creation_execution import _seed
+
+    repository, task_id, _, _ = _seed(tmp_path, workspace_id="private-a", voice=False)
+    scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock", owners=Owners(),
+                                resources=Resources(), processes=Processes())
+    job = repository.create_job_run(JobRun("snapshot-job", "private-a", task_id, "snapshot-checkpoint",
+                                           "snapshot-job", "sha256:one"))
+    repository.claim_job_run(job.workspace_id, job.id)
+    request = scheduler.submit(_intent(job.id), "member-a")
+    grant = scheduler.pick_and_grant()
+    assert grant is not None and grant.request_id == request.id
+    event_id = "snapshot-checkpoint"
+    tables = ("job_runs", "task_events", "device_work_requests", "device_request_events", "device_permit")
+    before = _sqlite_table_facts(repository, tables)
+    ledger_before = scheduler.ledger_path.read_bytes()
+    attempted, connections, statements = _trace_sqlite_commits(monkeypatch, scheduler)
+
+    def checkpoint(conn, current):
+        assert conn.in_transaction and current.request_id == request.id
+        repository.finish_job_run(job.workspace_id, job.id, status="succeeded", connection=conn)
+        repository.append_task_event(TaskEvent(event_id, job.workspace_id, task_id, job.id,
+                                               "snapshot_checkpoint", {}), connection=conn)
+        return event_id
+
+    def complete():
+        return scheduler.complete_unit(grant, checkpoint_database_path=repository.database_path,
+                                       checkpoint_write=checkpoint)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with repository.creation_execution_read() as reader:
+            snapshot = repository.read_creation_execution_snapshot(job.workspace_id, task_id, connection=reader)
+            reader_facts = _sqlite_connection_facts(reader)
+            assert snapshot.task.id == task_id and reader.in_transaction
+            started = monotonic()
+            pending = pool.submit(complete)
+            assert attempted.wait(10), "writer did not reach its COMMIT attempt"
+            assert not pending.done()
+            if hold_until_timeout:
+                with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                    pending.result(timeout=reader_facts["busy_timeout_ms"] / 1000 + 5)
+                assert "ROLLBACK" in statements
+                assert _sqlite_table_facts(repository, tables) == before
+                assert scheduler.ledger_path.read_bytes() == ledger_before
+                assert scheduler._get(request.id).state == "granted"
+        elapsed = monotonic() - started  # Reader closes only after the observed attempt/failure.
+        if not hold_until_timeout:
+            assert pending.result(timeout=10) == event_id
+    first_connections = list(connections)
+    if hold_until_timeout:
+        scheduler.assert_grant(grant)
+        assert complete() == event_id  # Explicit resume of the original grant, without resubmission.
+    scheduler.assert_released(grant)
+    after = _sqlite_table_facts(repository, tables)
+    assert [row["id"] for row in after["job_runs"]] == [job.id]
+    assert after["job_runs"][0]["status"] == "succeeded"
+    assert after["job_runs"][0]["attempt"] == before["job_runs"][0]["attempt"]
+    assert [row["id"] for row in after["task_events"]] == [event_id]
+    assert len(after["device_work_requests"]) == 1
+    finished = after["device_work_requests"][0]
+    assert (finished["id"], finished["state"], finished["checkpoint_ref"]) == (request.id, "done", event_id)
+    original = before["device_work_requests"][0]
+    assert (finished["attempt_number"], finished["last_grant_generation"]) == (original["attempt_number"], original["last_grant_generation"])
+    assert after["device_request_events"] == before["device_request_events"]
+    assert after["device_permit"][0]["state"] == "free"
+    assert all(item["database"] == str(repository.database_path) for item in first_connections)
+    print("SQLITE_LOCK_EVIDENCE " + json.dumps({"owner": "scheduler.complete_unit", "timeout": hold_until_timeout,
+        "reader": reader_facts, "writer_connections": first_connections, "elapsed_seconds": elapsed,
+        "request_id": request.id, "job_id": job.id, "one_checkpoint": True,
+        "timeout_rollback_verified": hold_until_timeout}, sort_keys=True))
 
 
 def test_preparation_dispatch_scope_preserves_other_requests_and_shared_permit(tmp_path):
