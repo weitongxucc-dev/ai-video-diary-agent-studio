@@ -1,5 +1,6 @@
 from __future__ import annotations
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
+from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
 from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
 from app.assistant.task_business_adapter import TaskBusinessAdapter
@@ -7157,92 +7158,34 @@ def _assistant_result_binding(task_id, request, turn_id, details):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+def _assistant_edit_result_binding():
+    return AssistantEditResultBinding(production_repo, conversation_repo)
+
+
 def _resolve_assistant_edit_request(task_id, request, turn_id, details):
+    binding = _assistant_edit_result_binding()
     try:
-        request_id = UUID(str(details["request_id"]))
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="编辑请求定位缺少有效请求身份") from exc
-    phase = details.get("phase", "preview")
-    if phase not in {"preview", "apply", "script", "observation"}:
-        raise HTTPException(status_code=502, detail="编辑请求定位phase不可核验")
-    query_url = f"/api/creation-tasks/{quote(task_id, safe='')}/assistant/edit-requests/{request_id}?phase={phase}"
-    if details.get("task_id", task_id) != task_id or details.get("query_url") != query_url:
-        raise HTTPException(status_code=502, detail="编辑请求定位不属于当前任务")
-    try:
-        actual = get_exact_edit_request_result(task_id, request_id, request, phase)
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-        call_id = details.get("tool_call_id")
-        if (details.get("assistant_turn_id") != turn_id or not isinstance(call_id, str)
-                or not 1 <= len(call_id) <= 128 or request_id != uuid5(NAMESPACE_URL,
-                    json.dumps([task_id, turn_id, call_id], ensure_ascii=False, separators=(",", ":")))):
-            raise HTTPException(status_code=502, detail="原请求尚无服务端记录，工具定位来源不可核验") from exc
-        status = details.get("status")
-        status = "unknown" if status in {"unknown", "result_unknown"} else status
-        if status not in {"unknown", "rejected", "not_submitted"}:
-            raise HTTPException(status_code=502, detail="未提交请求不能声称已有结果")
-        actual = {"status": status, "input_digest": None, "result_status_code": None, "result": None, "submitted_input": None}
-    if actual["status"] == "recorded" and actual["result_status_code"] >= 400:
-        actual["status"] = "rejected"
-    locator = AssistantEditRequestLocator(task_id=task_id, request_id=request_id, phase=phase, query_url=query_url,
-        status=actual["status"], input_digest=actual["input_digest"],
-        submitted_input=actual["submitted_input"], result_status_code=actual["result_status_code"], result=actual["result"])
-    workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
-    source = None
-    previous = next((event for event in production_repo.list_task_events(workspace_id, task_id)
-        if event.event_type == "assistant_edit_request_located"
-        and event.payload["source"]["assistant_turn_id"] == turn_id
-        and event.payload["locator"]["request_id"] == str(request_id)), None)
-    if previous is not None:
-        source = previous.payload["source"]
-    actual_result = locator.result or {}
-    if actual_result.get("job_id"):
-        start = production_repo.get_task_event(workspace_id, f"event_{actual_result['job_id']}_start")
-        original = start.payload["arguments"].get("_typed_source")
-        if original is not None:
-            source = original
-    elif isinstance(actual_result.get("proposal"), dict):
-        proposal = production_repo.get_edit_proposal(workspace_id, actual_result["proposal"]["id"])
-        original = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source")
-        if original is not None:
-            source = original
-    if phase == "apply" and "operation_type" in (locator.submitted_input or {}):
-        recorded_operation = (locator.result or {}).get("operation")
-        if locator.result_status_code == 200 and isinstance(recorded_operation, dict):
-            operation = production_repo.get_edit_operation(workspace_id, recorded_operation["id"])
-            proposal = production_repo.get_edit_proposal(workspace_id, operation.proposal_id)
-            intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
-            original = intent.constraints.get("request_source")
-            if (operation.task_id != task_id or not original
-                    or (original.get("workspace_id"), original.get("task_id"), original.get("member_id"), original.get("request_id"))
-                        != (workspace_id, task_id, member_id, str(request_id))):
-                raise HTTPException(status_code=502, detail="原编辑操作与请求来源不一致")
-            source = original
-    if source is None:
-        binding = _assistant_result_binding(task_id, request, turn_id, details)
-        snapshot = binding["context"]["target_snapshot"]
-        actor = _request_permit_actor(request, workspace_id) if auth_context.enabled else CreationExecutionActor(workspace_id, member_id)
-        source = {"workspace_id": workspace_id, "task_id": task_id, "member_id": member_id,
-            "conversation_id": binding["conversation_id"], "assistant_turn_id": turn_id,
-            **{key: binding[key] for key in ("input_id", "input_turn_id") if key in binding},
-            "expected_timeline_version_id": snapshot["timeline_version_id"], "expected_timeline_sequence": snapshot["timeline_sequence"],
-            "actor_identity": actor.identity_payload() if actor else None}
-        if phase == "apply" and "operation_type" in (locator.submitted_input or {}):
-            submitted = locator.submitted_input
-            source.update(assistant_turn_id=submitted.get("assistant_turn_id"),
-                          expected_timeline_version_id=submitted.get("expected_timeline_version_id"),
-                          expected_timeline_sequence=submitted.get("expected_timeline_sequence"))
-    if (source.get("workspace_id"), source.get("task_id"), source.get("member_id"), source.get("assistant_turn_id")) != (
-            workspace_id, task_id, member_id, turn_id):
-        raise HTTPException(status_code=502, detail="原编辑回执来源与当前查询身份不一致")
-    production_repo.append_task_event(TaskEvent(id=f"event_edit_locator_{turn_id}_{request_id}", workspace_id=workspace_id,
-        task_id=task_id, job_id=None, event_type="assistant_edit_request_located",
-        payload={"source": source, "locator": locator.model_dump(mode="json"),
-                 "request_event_id": "event_edit_request_" + media_digest([workspace_id, member_id, str(request_id), phase])},
-        created_at=utc_now()))
-    return locator
+        reference = binding.request_reference(task_id, turn_id, details)
+        try:
+            task = _creation_task_or_404(current_workspace_id(request), task_id)
+            member_id = _assistant_member_id(request, task.workspace_id)
+            actual = _exact_preview_use_case().read_request_receipt(
+                task, member_id, str(reference.request_id), reference.phase)
+        except (HTTPException, GoalProjectionRejected, EditPreviewRejected) as exc:
+            if exc.status_code != 404:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+            actual = binding.missing_result(task_id, turn_id, reference, details)
+        locator = binding.locator(task_id, reference, actual)
+        workspace_id = current_workspace_id(request)
+        member_id = _assistant_member_id(request, workspace_id)
+        prepared = binding.prepare_binding(workspace_id, task_id, member_id, turn_id, locator, details)
+        actor = None
+        if prepared.source is None:
+            actor = (_request_permit_actor(request, workspace_id) if auth_context.enabled
+                     else CreationExecutionActor(workspace_id, member_id))
+        return binding.record_locator(prepared, actor)
+    except EditResultRejected as exc:
+        raise HTTPException(status_code=502, detail=exc.detail) from exc
 
 
 def _script_tool_metadata(value):
@@ -7514,18 +7457,10 @@ def _creation_task_assistant_turn(
 def _assistant_applied_edit_receipt(task_id, request, turn_id, details):
     workspace_id = current_workspace_id(request)
     edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, details)
-    if edit_request.phase != "apply" or edit_request.status != "recorded" or edit_request.result_status_code != 200:
-        raise HTTPException(status_code=502, detail="直接编辑尚无可核验的完成回执")
-    confirmed = CreationTaskEditConfirmResponse.model_validate(edit_request.result)
-    actual = production_repo.get_edit_operation(workspace_id, confirmed.operation.id)
-    source_input = edit_request.submitted_input or {}
-    if (actual.task_id != task_id or actual.status != "applied" or not actual.result_version_id
-            or source_input.get("assistant_turn_id") != turn_id
-            or source_input.get("operation_type") != actual.operation_type
-            or source_input.get("expected_timeline_version_id") != actual.base_version_id
-            or confirmed.operation.result_version_id != actual.result_version_id):
-        raise HTTPException(status_code=502, detail="直接编辑回执与当前输入及实际操作不一致")
-    return edit_request
+    try:
+        return _assistant_edit_result_binding().require_applied(workspace_id, task_id, turn_id, edit_request)
+    except EditResultRejected as exc:
+        raise HTTPException(status_code=502, detail=exc.detail) from exc
 
 
 def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, details):

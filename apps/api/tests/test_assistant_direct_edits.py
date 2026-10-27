@@ -24,6 +24,28 @@ from app.assistant_goal_continuation import GoalResultProjection, GoalCandidate
 from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def edit_result_native_guards(request, monkeypatch):
+    # Apply to this slice's original metadata representatives before their
+    # metadata_http_state dependency is resolved; SDK/media nodes are not run.
+    selected = {'test_rejected_direct_request_replays_original_error_without_business_writes',
+                'test_http_exact_journal_source_is_readable_from_business_after_head_advances'}
+    if request.node.originalname not in selected:
+        return
+    def forbidden(*args, **kwargs):
+        pytest.fail('edit result metadata evidence forbids Popen/media/model/driver execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset',
+                     'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    monkeypatch.setattr(main, 'run_task_turn', forbidden)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+    monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
+
+
 SDK_RUNNER = r"""
 import {pathToFileURL} from 'node:url';
 import {join,dirname} from 'node:path';
@@ -525,6 +547,20 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
             expected_timeline_sequence=s.base.sequence),identity=s.identity)
     current=s.repo.get_creation_task('ws',s.task.id)
     assert current.current_timeline_version_id!=s.base.id
+    if phase == 'apply':
+        from copy import deepcopy
+        from starlette.requests import Request
+        from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
+        request = Request({'type':'http', 'headers':[(b'x-local-member-token', s.token.encode())]})
+        locator = main._assistant_applied_edit_receipt(s.task.id, request, turn['id'], {
+            'request_id':payload['request_id'], 'phase':'apply',
+            'query_url':s.url+f"/assistant/edit-requests/{payload['request_id']}?phase=apply"})
+        assert locator.result['operation']['result_version_id'] == current.current_timeline_version_id
+        forged = deepcopy(locator.result)
+        forged['operation']['result_version_id'] = 'not-the-committed-head'
+        with pytest.raises(EditResultRejected, match='实际操作不一致'):
+            AssistantEditResultBinding(s.repo, conversations).require_applied('ws', s.task.id, turn['id'],
+                locator.model_copy(update={'result':forged}))
     business=main._task_business()
     business.authorizations=authority
     binding={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'conversation_id':chat['id'],

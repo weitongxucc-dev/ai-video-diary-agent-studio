@@ -23,7 +23,7 @@ script_state = test_media_script_api.state
 
 @pytest.fixture(autouse=True)
 def isolated_local_workspace(request, monkeypatch):
-    if 'execution_binding_state' in request.fixturenames:
+    if {'execution_binding_state', 'edit_result_state'} & set(request.fixturenames):
         # Install before dynamically requesting any seed fixture. Neither old
         # media helpers nor a native child may run in binding-only evidence.
         import subprocess
@@ -39,7 +39,8 @@ def isolated_local_workspace(request, monkeypatch):
         monkeypatch.setattr(main, 'run_task_turn', forbidden)
         monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
         monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
-    state = request.getfixturevalue("execution_http_state" if "execution_http_state" in request.fixturenames else "state")
+    state = request.getfixturevalue("edit_result_state" if "edit_result_state" in request.fixturenames else
+        "execution_http_state" if "execution_http_state" in request.fixturenames else "state")
     # Existing domain fixtures name their single local workspace workspace_a.
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     from test_montage_pipeline import synthetic_clip_preview_budget
@@ -404,7 +405,8 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
 
 
 @pytest.mark.parametrize("code", [403, 409, 422])
-def test_original_request_correction_requires_actual_422_no_side_effect(state, monkeypatch, code):
+def test_original_request_correction_requires_actual_422_no_side_effect(edit_result_state, monkeypatch, code):
+    state = edit_result_state
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
     request_id = uuid5(NAMESPACE_URL, json.dumps([state.task.id, state.turn["id"], "validation"], separators=(",", ":")))
     locator = main._resolve_assistant_edit_request(state.task.id, state.request, state.turn["id"], {
@@ -1304,3 +1306,120 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
         with repo._connect() as conn:
             conn.execute('UPDATE creation_tasks SET payload=?,visibility=? WHERE id=?',
                 (json.dumps(saved_task, default=str), saved_task['visibility'], task.id))
+
+
+@pytest.fixture
+def edit_result_state(tmp_path, monkeypatch):
+    """Metadata-only real edit/Conversation owners, without model or SDK setup."""
+    from fastapi.testclient import TestClient
+    from starlette.requests import Request
+    from app.conversation_repository import ConversationRepository
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from test_metadata_edit_use_case import metadata_state
+    state = metadata_state(tmp_path)
+    conversations = ConversationRepository(state.repo.database_path)
+    monkeypatch.setattr(main, 'production_repo', state.repo)
+    monkeypatch.setattr(main, 'artifact_store', state.store)
+    monkeypatch.setattr(main, 'local_members_service', state.members)
+    monkeypatch.setattr(main, 'conversation_repo', conversations)
+    monkeypatch.setattr(main, 'auth_context', SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, '_goal_continuation_service', None)
+    monkeypatch.setattr(main, 'assistant_continuation_driver', None)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request:'ws')
+    monkeypatch.setattr(main, '_verify_creation_identity', lambda actor:
+        'ready' if main.find_member(state.members, actor.member_id) else 'unauthorized')
+    monkeypatch.setattr(main, 'settings', replace(main.settings,
+        video_inbox_path=str(state.repo.video_library_path), video_output_path=str(tmp_path/'outputs')))
+    chat = conversations.create('ws', state.member.member_id, 'task', state.task.id)
+    chat = conversations.save_draft(chat['id'], 'ws', state.member.member_id, '核对本次编辑请求', chat['draft_version'])
+    turn, _ = conversations.create_turn_idempotent(chat['id'], 'ws', state.member.member_id,
+        chat['draft_text'], str(uuid4()), chat['draft_version'], request_context={
+            'kind':'task', 'task_id':state.task.id, 'stage':'review', 'selected_object_refs':[],
+            'target_snapshot':{'timeline_version_id':state.base.id, 'timeline_sequence':state.base.sequence}})
+    actor = CreationExecutionActor('ws', state.member.member_id)
+    authority = TaskAuthorizationUseCase(state.repo, lambda identity:
+        'ready' if identity['workspace_id'] == 'ws' and main.find_member(
+            state.members, identity['member_id']) else 'unauthorized')
+    business_for = main._task_business
+    def current_business():
+        business = business_for()
+        business.authorizations = authority
+        return business
+    monkeypatch.setattr(main, '_task_business', current_business)
+    def finish(**response):
+        conversations.finish_turn(turn['id'], 'completed', '已回读原请求', result={
+            'kind':'task_turn', 'edit_preview':False, 'response':response})
+        goal = main._goal_service().register_turn(turn['id'])
+        assert goal is not None
+        authorization = authority.ensure(state.repo.get_creation_task('ws', state.task.id), actor, interactive=True)
+        required = authority._requirements('ws', state.task.id)[1]
+        state.repo.save_task_authorization(replace(authorization, revision=authorization.revision+1,
+            resource_scope={**authorization.resource_scope, 'references':required['references']}),
+            expected_revision=authorization.revision)
+        authority.bind_business_context(state.repo.get_creation_task('ws', state.task.id), actor, goal, memory={})
+    state.production, state.workspace_id, state.version = state.repo, 'ws', state.base
+    state.conversations, state.conversation, state.turn = conversations, chat, turn
+    state.request = Request({'type':'http', 'headers':[(b'x-local-member-token', state.token.encode())]})
+    state.client = TestClient(main.app, headers={'X-Local-Member-Token':state.token})
+    state.base_url = '/api/creation-tasks/'+state.task.id
+    state.finish = finish
+    return state
+
+
+def test_edit_result_unknown_preserves_old_source_without_new_request(edit_result_state, monkeypatch):
+    state = edit_result_state
+    turn_id = state.turn['id']
+    chat = state.conversations.get(state.conversation['id'], 'ws', state.member.member_id)
+    chat = state.conversations.save_draft(chat['id'], 'ws', state.member.member_id, '核对原输入', chat['draft_version'])
+    old_input = str(uuid4())
+    state.conversations.enqueue_input(chat['id'], 'ws', state.member.member_id,
+        target_turn_id=turn_id, client_request_id=old_input, message=chat['draft_text'], mode='follow_up',
+        expected_draft_version=chat['draft_version'], expected_reference_version=chat['reference_version'],
+        request_context={'kind':'task', 'task_id':state.task.id, 'selected_reference':None,
+            'target_snapshot':{'timeline_version_id':state.base.id, 'timeline_sequence':state.base.sequence}})
+    state.conversations.transition_input(chat['id'], 'ws', state.member.member_id, old_input, 'consumed')
+    call_id = 'unknown-edit'
+    request_id = uuid5(NAMESPACE_URL, json.dumps([state.task.id, turn_id, call_id], separators=(',', ':')))
+    details = {'request_id':str(request_id), 'query_url':state.base_url+f'/assistant/edit-requests/{request_id}?phase=apply',
+        'phase':'apply', 'assistant_turn_id':turn_id, 'tool_call_id':call_id, 'status':'result_unknown',
+        'input_id':old_input, 'input_turn_id':turn_id}
+    locator = main._resolve_assistant_edit_request(state.task.id, state.request, turn_id, details)
+    assert locator.status == 'unknown' and locator.result is None
+    stored = state.repo.get_task_event('ws', f'event_edit_locator_{turn_id}_{request_id}')
+    assert stored.payload['source']['input_id'] == old_input
+    with state.repo._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='edit_request_claimed'").fetchone()[0] == 0
+    with monkeypatch.context() as replay:
+        replay.setattr(state.conversations, 'task_result_source', lambda *a,**kw:pytest.fail('must restore original source'))
+        replay.setattr(main, 'auth_context', SimpleNamespace(enabled=True))
+        replay.setattr(main, '_request_permit_actor', lambda *a:pytest.fail('restored source must not resolve actor'))
+        assert main._resolve_assistant_edit_request(state.task.id, state.request, turn_id, details) == locator
+    assert state.repo.get_task_event('ws', stored.id) == stored
+    # Applied verification follows the durable locator, even on rejection.
+    with pytest.raises(main.HTTPException) as not_applied:
+        main._assistant_applied_edit_receipt(state.task.id, state.request, turn_id, details)
+    assert not_applied.value.status_code == 502
+    assert state.repo.get_task_event('ws', stored.id) == stored
+    assert state.repo.list_edit_operations('ws', state.task.id) == []
+
+
+def test_edit_result_does_not_swallow_reader_permission_or_conflict(edit_result_state, monkeypatch):
+    state = edit_result_state
+    request_id = uuid5(NAMESPACE_URL, json.dumps([state.task.id, state.turn['id'], 'reader'], separators=(',', ':')))
+    details = {'request_id':str(request_id), 'query_url':state.base_url+f'/assistant/edit-requests/{request_id}?phase=preview',
+        'assistant_turn_id':state.turn['id'], 'tool_call_id':'reader', 'status':'not_submitted'}
+    case = main._exact_preview_use_case()
+    monkeypatch.setattr(main, '_exact_preview_use_case', lambda:case)
+    for code in (403, 409):
+        def denied(*args, **kwargs):
+            raise main.EditPreviewRejected(code, 'original reader rejection')
+        with monkeypatch.context() as blocked:
+            blocked.setattr(case, 'read_request_receipt', denied)
+            blocked.setattr(state.conversations, 'task_result_source', lambda *a,**kw:pytest.fail('reader refusal must not use fallback'))
+            with pytest.raises(main.HTTPException) as error:
+                main._resolve_assistant_edit_request(state.task.id, state.request, state.turn['id'], details)
+            assert error.value.status_code == code
+    assert not [event for event in state.repo.list_task_events('ws', state.task.id)
+        if event.event_type in {'assistant_edit_request_located', 'edit_request_claimed'}]
