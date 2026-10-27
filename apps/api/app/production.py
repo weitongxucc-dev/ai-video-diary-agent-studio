@@ -4614,6 +4614,59 @@ class ProductionRepository:
                 raise ValueError('已保存配音片段的文字与采用正文不匹配，须先核对原产物')
             yield section, segment
 
+    def read_creation_section_input(self, task, script, section_id, *, connection):
+        """Read one actual effective section and its original audio in the caller snapshot."""
+        if not connection.in_transaction:
+            raise ValueError('段落规划读取必须复用已开启的事务')
+        if (script.workspace_id, script.task_id, script.id) != (
+                task.workspace_id, task.id, task.confirmed_script_id):
+            raise ValueError('采用的段版本不属于当前确认文案')
+        row = connection.execute(
+            'SELECT ordinal,section_json FROM creation_task_script_sections '
+            'WHERE workspace_id=? AND script_id=? AND section_id=?',
+            (task.workspace_id, script.id, section_id)).fetchone()
+        if row is None:
+            raise ValueError('稳定段落ID不属于当前确认文案')
+        section = CreationTaskScriptSection(**json.loads(row['section_json']))
+        adopted = self.stage_segment_state(task.workspace_id, task.id, section_id, connection=connection)
+        if adopted is not None:
+            if adopted['script_id'] != script.id:
+                raise ValueError('采用的段版本不属于当前确认文案')
+            section = replace(section, content=adopted['text'])
+        audio_rows = connection.execute(
+            'SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? '
+            'AND source_section_id=? LIMIT 2', (task.workspace_id, task.id, script.id, section_id)).fetchmany(2)
+        if len(audio_rows) > 1:
+            raise ValueError('现有配音片段不属于当前唯一文案段落')
+        return {'ordinal': row['ordinal'], 'section': section, 'adopted': adopted,
+            'audio': self._narration_segment_from_row(audio_rows[0]) if audio_rows else None}
+
+    def iter_creation_section_planning_inputs(self, task, script, *, connection):
+        """Yield effective text once per section, plus scalar clocks; never collect bodies."""
+        if not connection.in_transaction:
+            raise ValueError('段落规划读取必须复用已开启的事务')
+        cursor = connection.execute(
+            'SELECT section_id FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? ORDER BY ordinal',
+            (task.workspace_id, script.id))
+        try:
+            for row in cursor:
+                current = self.read_creation_section_input(task, script, row['section_id'], connection=connection)
+                audio, adopted = current['audio'], current['adopted']
+                measured = (float(audio.duration_seconds) if audio is not None and audio.status == 'ready'
+                    and audio.duration_seconds is not None else 0)
+                window = adopted['montage'].get('delivery_window') if adopted is not None else None
+                yield current['section'], measured, window
+        finally:
+            cursor.close()
+
+    def creation_section_titles(self, workspace_id, task_id, section_ids, *, connection=None):
+        with self.creation_execution_read(connection) as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            return {row['section_id']: row['title'] for row in conn.execute(
+                "SELECT section_id,json_extract(section_json,'$.title') AS title FROM creation_task_script_sections "
+                'WHERE workspace_id=? AND script_id=? AND section_id IN (SELECT value FROM json_each(?))',
+                (workspace_id, task.confirmed_script_id, json.dumps(section_ids)))}
+
     @staticmethod
     def _knowledge_adoption_event_id(workspace_id: str, member_id: str, request_id: str) -> str:
         return "event_knowledge_adoption_" + hashlib.sha256(
@@ -5575,9 +5628,11 @@ class ProductionRepository:
                     'waiting_reason':job.failure_reason or (waiting['wait_reason'] or waiting['last_failure_reason'] if waiting else 'queue_submission_pending')})
         return {'items':values,'total_count':count,'truncated':len(values)<count}
 
-    def save_segment_video_preparation(self,event):
+    def save_segment_video_preparation(self,event, *, write_guard=None):
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            if write_guard is not None:
+                write_guard(conn)
             current = self.stage_section_version(event.workspace_id,event.task_id,event.payload['section_id'],connection=conn)
             if current != event.payload['expected_segment_version']:
                 raise ValueError('保存视频准备前段落版本已变化')
@@ -5936,35 +5991,42 @@ class ProductionRepository:
                 'timeline':section_timeline_dependencies(montage,section_id),'source_versions':sources,'subtitles':tracks}
 
     def stage_section_version(self, workspace_id, task_id, section_id, *, connection=None):
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            adopted = self.stage_segment_state(workspace_id, task_id, section_id, connection=conn)
-            if adopted is not None:
-                return adopted['segment_version']
-            script = self.effective_creation_script(workspace_id, task_id, connection=conn)
-            section = next(item for item in script.sections if item.id == section_id)
-            row = conn.execute('SELECT audio_reference FROM narration_segments WHERE workspace_id=? AND task_id=? '
-                'AND script_id=? AND source_section_id=?', (workspace_id, task_id, script.id, section_id)).fetchone()
-            return hashlib.sha256(json.dumps([script.id, section_id, section.content, row['audio_reference'] if row else None],
-                ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+        if connection is None or not connection.in_transaction:
+            with self.creation_execution_read() as reader:
+                return self.stage_section_version(workspace_id, task_id, section_id, connection=reader)
+        adopted = self.stage_segment_state(workspace_id, task_id, section_id, connection=connection)
+        if adopted is not None:
+            return adopted['segment_version']
+        task = self._require_creation_task(connection, workspace_id, task_id)
+        header, _ = self.script_records.read_execution_script_metadata(connection, workspace_id, task.confirmed_script_id)
+        current = self.read_creation_section_input(task, header, section_id, connection=connection)
+        section, audio = current['section'], current['audio']
+        return hashlib.sha256(json.dumps([header.id, section_id, section.content, audio.audio_reference if audio else None],
+            ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
     def stage_segment_state(self, workspace_id, task_id, section_id, *, connection=None):
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
-            version = conn.execute('SELECT snapshot_json FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
-                (workspace_id, task_id, task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
-            snapshot = json.loads(version['snapshot_json']) if version else {}
-            reference = snapshot.get('stage_segments', {}).get(section_id)
-            if reference is None:
-                return None
-            row = conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=? '
-                "AND event_type='segment_publication'", (workspace_id, task_id, reference)).fetchone()
-            if row is None:
-                raise ValueError('段版本引用的原产物记录不可读取')
-            invalidation = snapshot.get('stage_segment_invalidations', {}).get(section_id)
-            invalid = invalidation is not None and invalidation['publication_id'] == reference
-            return {'segment_version': reference, **json.loads(row['payload_json']),
-                'current_validity': 'invalidated' if invalid else 'current',
-                'invalidation_reason': invalidation['reason'] if invalid else None}
+        if connection is None or not connection.in_transaction:
+            with self.creation_execution_read() as reader:
+                return self.stage_segment_state(workspace_id, task_id, section_id, connection=reader)
+        task = self._require_creation_task(connection, workspace_id, task_id)
+        version = connection.execute(
+            "SELECT s.value AS publication_id,i.value AS invalidation_json FROM timeline_versions v "
+            "JOIN json_each(v.snapshot_json,'$.stage_segments') s ON s.key=? "
+            "LEFT JOIN json_each(v.snapshot_json,'$.stage_segment_invalidations') i ON i.key=s.key "
+            'WHERE v.workspace_id=? AND v.task_id=? AND v.id=?',
+            (section_id, workspace_id, task_id, task.current_timeline_version_id)).fetchone()
+        if version is None or version['publication_id'] is None:
+            return None
+        reference = version['publication_id']
+        row = connection.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=? '
+            "AND event_type='segment_publication'", (workspace_id, task_id, reference)).fetchone()
+        if row is None:
+            raise ValueError('段版本引用的原产物记录不可读取')
+        invalidation = json.loads(version['invalidation_json']) if version['invalidation_json'] is not None else None
+        invalid = invalidation is not None and invalidation['publication_id'] == reference
+        return {'segment_version': reference, **json.loads(row['payload_json']),
+            'current_validity': 'invalidated' if invalid else 'current',
+            'invalidation_reason': invalidation['reason'] if invalid else None}
 
     def unsettled_segment_units(self, workspace_id, job_id):
         with self._connect() as conn:

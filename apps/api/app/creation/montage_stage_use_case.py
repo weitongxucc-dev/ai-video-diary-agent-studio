@@ -36,19 +36,33 @@ def voice_timeline(script, audio, windows):
     return AudioTimeline(tracks=[voice])
 
 
-def delivery_windows_for_task(repository, task, script, segments, *, exclude_section=None, measured_override=None):
-    from app.creation.duration_requirement import DurationRequirement, SectionWindow, measured_section_windows
-    requirement = DurationRequirement.from_plan(repository.get_creation_plan(task.workspace_id, task.plan_id))
-    adopted = []
-    for section in script.sections:
-        state = repository.stage_segment_state(task.workspace_id, task.id, section.id)
-        window = state['montage'].get('delivery_window') if state is not None else None
+def delivery_windows_from_section_inputs(plan, section_inputs, *, exclude_section=None,
+                                        measured_override=None, text_override=None):
+    from app.creation.duration_requirement import DurationRequirement, SectionTiming, SectionWindow, measured_section_windows
+    requirement = DurationRequirement.from_plan(plan)
+    timings, adopted = [], []
+    for section, measured, window in section_inputs:
+        text = text_override[1] if text_override is not None and section.id == text_override[0] else section.content
+        timings.append(SectionTiming.from_text(section.id, text, (measured_override or {}).get(section.id, measured)))
         if window is not None and section.id != exclude_section:
             adopted.append(SectionWindow(**window))
+    return requirement, measured_section_windows(requirement, timings, adopted=adopted)
+
+
+def delivery_windows_for_task(repository, task, script, segments, *, exclude_section=None,
+                              measured_override=None, text_override=None):
+    # Whole-storyboard consumers already own their full script. They use the
+    # same scalar allocator as the single-section snapshot reader.
+    plan = repository.get_creation_plan(task.workspace_id, task.plan_id)
     measured = {segment.source_section_id: float(segment.duration_seconds)
                 for segment in segments if segment.duration_seconds is not None and segment.status == 'ready'}
-    measured.update(measured_override or {})
-    return requirement, measured_section_windows(requirement, script.sections, measured, adopted=adopted)
+    def section_inputs():
+        for section in script.sections:
+            state = repository.stage_segment_state(task.workspace_id, task.id, section.id)
+            window = state['montage'].get('delivery_window') if state is not None else None
+            yield section, measured.get(section.id, 0), window
+    return delivery_windows_from_section_inputs(plan, section_inputs(), exclude_section=exclude_section,
+        measured_override=measured_override, text_override=text_override)
 
 
 class MontageStageUseCase:

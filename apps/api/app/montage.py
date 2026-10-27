@@ -19,7 +19,9 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.creation.duration_requirement import DurationRequirement, DurationConflict, stream_duration_seconds
+from app.creation.duration_requirement import DurationRequirement, DurationConflict, SectionWindow, stream_duration_seconds
+from app.creation.execution_input import ExecutionScriptHeader
+from app.creation.script_contracts import CreationTaskScriptSection
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.device_scheduler import DeviceScheduler, Grant
 from app.host_resource_probes import (
@@ -429,12 +431,56 @@ class MontagePlanner:
         presenter_share_target: int = 0,
         delivery_windows=None,
     ) -> CreationTaskMontagePlan:
+        self._validate_creation_planning_source(workspace_id, task_id, script, narration_audio_path)
+        cues = _build_creation_task_cues(
+            script,
+            min_seconds=profile.target_duration_min_seconds,
+            max_seconds=duration_target_seconds,
+            narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section=narration_segment_ids_by_section,
+            narration_segment_durations_by_section=narration_segment_durations_by_section,
+        )
+        return self._build_creation_plan(
+            workspace_id=workspace_id, task_id=task_id, script_id=script.id, script_title=script.title,
+            sections=script.sections, cues=cues, assets=assets,
+            media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
+            person_render_by_section=person_render_by_section, presenter_share_target=presenter_share_target,
+            delivery_windows=delivery_windows)
+
+    def build_for_creation_section(
+        self, *, workspace_id: str, task_id: str, script_header: ExecutionScriptHeader,
+        section: CreationTaskScriptSection, profile: ProductionProfile, duration_target_seconds: int,
+        assets: list[MaterialAsset], media_reference_for_asset: Callable[[str], str],
+        narration_audio_path: str, narration_duration_seconds: float,
+        narration_segment_id: str, delivery_window: SectionWindow,
+    ) -> CreationTaskMontagePlan:
+        """Plan one selected section; the header still describes the real script."""
+        self._validate_creation_planning_source(workspace_id, task_id, script_header, narration_audio_path)
+        cues = _build_creation_section_cues(
+            (section,), min_seconds=profile.target_duration_min_seconds, max_seconds=duration_target_seconds,
+            narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section={section.id: narration_segment_id},
+            narration_segment_durations_by_section={section.id: narration_duration_seconds})
+        return self._build_creation_plan(
+            workspace_id=workspace_id, task_id=task_id, script_id=script_header.id, script_title=script_header.title,
+            sections=(section,), cues=cues, assets=assets,
+            media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
+            person_render_by_section=None, presenter_share_target=0, delivery_windows=(delivery_window,))
+
+    @staticmethod
+    def _validate_creation_planning_source(workspace_id, task_id, script, narration_audio_path):
         if script.workspace_id != workspace_id or script.task_id != task_id:
             raise ValueError("文案不属于当前创作任务")
         if script.selection_status != "confirmed":
             raise ValueError("只有已确认文案才能生成剪辑计划")
         if not narration_audio_path.startswith("narration://artifact/"):
             raise ValueError("剪辑计划必须引用已持久化的创作任务配音")
+
+    def _build_creation_plan(
+        self, *, workspace_id, task_id, script_id, script_title, sections, cues, assets,
+        media_reference_for_asset, narration_audio_path, person_render_by_section,
+        presenter_share_target, delivery_windows,
+    ) -> CreationTaskMontagePlan:
         b_roll_candidates = [
             (asset, segment)
             for asset in assets
@@ -444,18 +490,10 @@ class MontagePlanner:
             and effective_segment_usage_role(asset, segment) == "b_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
-        cues = _build_creation_task_cues(
-            script,
-            min_seconds=profile.target_duration_min_seconds,
-            max_seconds=duration_target_seconds,
-            narration_duration_seconds=narration_duration_seconds,
-            narration_segment_ids_by_section=narration_segment_ids_by_section,
-            narration_segment_durations_by_section=narration_segment_durations_by_section,
-        )
         cues_by_section: dict[str, list[NarrationCue]] = {}
         for cue in cues:
             cues_by_section.setdefault(cue.source_section_id, []).append(cue)
-        sections_by_id = {section.id: section for section in script.sections}
+        sections_by_id = {section.id: section for section in sections}
         # Captions keep their own clock. A shot covers the adopted semantic
         # section's measured narration span, anchored to its first display cue.
         visual_cues = [replace(section_cues[0], text=sections_by_id[section_id].content,
@@ -484,7 +522,7 @@ class MontagePlanner:
             raise error("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
-        visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
+        visual_requirements = {section.id: section.visual_prompt.strip() for section in sections}
         retrieval_cues = {
             cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
             for cue in visual_cues
@@ -657,8 +695,8 @@ class MontagePlanner:
             id=f"task_montage_{uuid4().hex[:10]}",
             workspace_id=workspace_id,
             task_id=task_id,
-            script_id=script.id,
-            script_title=script.title,
+            script_id=script_id,
+            script_title=script_title,
             status=status,
             cues=cues,
             clips=clips,
@@ -1146,6 +1184,18 @@ def _build_creation_task_cues(
     narration_segment_ids_by_section: dict[str, str] | None = None,
     narration_segment_durations_by_section: dict[str, float] | None = None,
 ) -> list[NarrationCue]:
+    return _build_creation_section_cues(
+        script.sections, min_seconds=min_seconds, max_seconds=max_seconds,
+        narration_duration_seconds=narration_duration_seconds,
+        narration_segment_ids_by_section=narration_segment_ids_by_section,
+        narration_segment_durations_by_section=narration_segment_durations_by_section)
+
+
+def _build_creation_section_cues(
+    sections, *, min_seconds: int, max_seconds: int, narration_duration_seconds: float,
+    narration_segment_ids_by_section: dict[str, str] | None = None,
+    narration_segment_durations_by_section: dict[str, float] | None = None,
+) -> list[NarrationCue]:
     if narration_duration_seconds > max_seconds:
         raise ValueError(
             f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"
@@ -1153,7 +1203,7 @@ def _build_creation_task_cues(
     if not math.isfinite(narration_duration_seconds) or narration_duration_seconds <= 0:
         raise ValueError("旁白时长无效")
     entries: list[tuple[str, str, float]] = []
-    for section in script.sections:
+    for section in sections:
         parts = _split_narration(section.content)
         for part in parts:
             entries.append((section.id, part, max(1.0, float(len(part)))))
