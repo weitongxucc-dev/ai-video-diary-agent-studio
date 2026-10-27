@@ -2331,11 +2331,14 @@ class CreationJobUnitExecutor:
         owner = scheduler.owners
         if hasattr(owner, 'registrations'):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository._connect() as reader:
-            original_job, task, event, script, plan = owner._facts(reader, job.workspace_id, job.id)
+        with self.repository.creation_execution_read() as reader:
+            original_job, snapshot, event = owner._snapshot_facts(reader, job.workspace_id, job.id)
+            task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
             started = self.repository.get_task_event(job.workspace_id,
                 f'event_{job.id}_narration_started_{generation}', connection=reader)
+            selected = self.repository.read_creation_section_input(task, script, request.resources['section_id'], connection=reader)
+            section, pending = selected['section'], selected['audio']
         resources = request.resources
         usage_id = f'{request.id}:{generation}'
         if (original_job != job or actor != CreationExecutionActor.from_event(job.workspace_id, event)
@@ -2350,10 +2353,8 @@ class CreationJobUnitExecutor:
             raise RecoveryBlocked('原单段作业、许可、结算或来源身份不匹配')
         if task.stage != 'narration':
             raise RecoveryBlocked('原单段已不属于当前配音阶段')
-        section = next(item for item in script.sections if item.id == resources['section_id'])
-        pending = next(item for item in self.repository.list_narration_segments(job.workspace_id,
-            job.task_id, script.id) if item.source_section_id == section.id)
-        if (pending.status != 'pending' or pending.id != resources['segment_id'] or pending.text != section.content
+        if (snapshot.input_digest != job.input_digest or pending is None
+                or pending.status != 'pending' or pending.id != resources['segment_id'] or pending.text != section.content
                 or (pending.model_id, pending.voice_profile_id, pending.voice_version, pending.language, pending.pronunciation_version)
                     != tuple(resources[name] for name in ('model_id', 'voice_profile_id', 'voice_version', 'language', 'pronunciation_version'))):
             raise RecoveryBlocked('原单段不在原声音与文案的pending边界')
@@ -2427,10 +2428,11 @@ class CreationJobUnitExecutor:
                     conn.execute('BEGIN IMMEDIATE')
                     if write_guard is not None:
                         write_guard(conn)
-                    current, current_task, current_event, current_script, current_plan = owner._facts(conn, job.workspace_id, job.id)
+                    current, current_snapshot, current_event = owner._snapshot_facts(conn, job.workspace_id, job.id)
+                    current_task, current_script, current_plan = current_snapshot.task, current_snapshot.script_header, current_snapshot.plan
                     permit = conn.execute('SELECT state,generation FROM device_permit WHERE id=1').fetchone()
                     current_request = conn.execute('SELECT state,last_grant_generation,resources_json FROM device_work_requests WHERE id=?', (request_id,)).fetchone()
-                    if (current != job or current_event != event or permit is None
+                    if (current != job or current_event != event or current_snapshot.input_digest != job.input_digest or permit is None
                             or tuple(permit) != ('free', free_generation)
                             or current_request is None or tuple(current_request)[:2] != ('failed', generation)
                             or json.loads(current_request['resources_json']) != resources
@@ -2599,25 +2601,17 @@ class CreationJobUnitExecutor:
         if (resources.get('input_contract') != 'narration_units_v1'
                 or resources.get('narration_phase') not in {'segment', 'merge'}):
             raise PermissionError('原整阶段配音契约须先转换为逐段执行')
-        pcm_request = scheduler._get(grant.request_id) if resources['narration_phase'] == 'merge' else None
+        original_request = scheduler._get(grant.request_id)
+        pcm_request = original_request if resources['narration_phase'] == 'merge' else None
         scheduler.assert_grant(grant)
         owner = scheduler.owners
         if hasattr(owner, 'registrations'):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
         with self.repository.creation_execution_read() as conn:
-            if resources['narration_phase'] == 'merge':
-                job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
-                task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
-                pending = None
-            else:
-                job, task, event, script, plan = owner._facts(conn, grant.workspace_id, grant.owner_id)
-                pending = [NarrationSegment(id=self.narration_stage.segment_id(task.id, script.id, section.id),
-                    workspace_id=task.workspace_id, task_id=task.id, script_id=script.id, source_section_id=section.id,
-                    text=section.content, audio_reference=None, duration_seconds=None, sample_rate=None,
-                    model_id=resources['model_id'], voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'],
-                    language=resources['language'], pronunciation_version=resources['pronunciation_version'], status='pending')
-                    for section in script.sections]
-        job, remaining_seconds, remaining_bytes = self.repository.start_creation_narration_unit(grant, resources, pending)
+            job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
+            task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+        job, remaining_seconds, remaining_bytes = self.repository.start_creation_narration_unit(grant, resources, None,
+            pending_segment_for=self.narration_stage.pending_segment if resources['narration_phase'] == 'segment' else None)
         already_elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation = threading.Event()
         started = time.monotonic() - already_elapsed
@@ -2694,6 +2688,8 @@ class CreationJobUnitExecutor:
                         raise PermissionError('原PCM提交前任务授权已变化')
                     if owner.pcm_assembly_baseline(pcm_request, conn) != resources['pcm_assembly']:
                         raise RecoveryBlocked('原PCM提交前来源或检查点已变化')
+                elif owner.check_current(original_request, conn) != 'ready':
+                    raise RecoveryBlocked('原单段提交前授权、完整文案或来源已变化，保留原开始记录和已生成结果')
                 settle(conn, current)
                 if segment is None:
                     if not resources['merge_final']:

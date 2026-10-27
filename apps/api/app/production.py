@@ -6440,7 +6440,7 @@ class ProductionRepository:
                 'source_binding_event_id': source_binding_event_id}), connection=connection)
         return self.get_job_run(job.workspace_id, job.id, connection=connection)
 
-    def start_creation_narration_unit(self, grant, resources, pending_segments):
+    def start_creation_narration_unit(self, grant, resources, pending_segments, *, pending_segment_for=None):
         from app.device_scheduler import RecoveryBlocked
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -6497,6 +6497,32 @@ class ProductionRepository:
                     count += 1
                 if count == 0 or count != header.sections_total_count:
                     raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
+            elif pending_segment_for is not None:
+                snapshot = self.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+                header = snapshot.script_header
+                if snapshot.input_digest != grant.input_digest or header.selection_status != 'confirmed':
+                    raise RecoveryBlocked('原单段启动前固定文案或制作输入已变化')
+                count = conn.execute('SELECT COUNT(*) FROM narration_segments WHERE workspace_id=? AND task_id=? '
+                    'AND script_id=?', (task.workspace_id, task.id, header.id)).fetchone()[0]
+                if not header.sections_total_count or count not in (0, header.sections_total_count):
+                    raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
+                for section, segment in self.iter_creation_narration_sections(task, header, connection=conn):
+                    if count:
+                        if segment is None or segment.text != section.content:
+                            raise RecoveryBlocked('原配音片段集合与采用正文不匹配，不能覆盖恢复')
+                        _validate_narration_segment(segment)
+                        continue
+                    segment = pending_segment_for(task, header, section, resources)
+                    _validate_narration_segment(segment)
+                    if ((segment.workspace_id, segment.task_id, segment.script_id, segment.source_section_id, segment.text)
+                            != (task.workspace_id, task.id, header.id, section.id, section.content)
+                            or segment.status != 'pending'):
+                        raise ValueError('初始配音分段必须属于当前唯一采用文案')
+                    conn.execute('INSERT INTO narration_segments '
+                        '(id,workspace_id,task_id,script_id,source_section_id,text,audio_reference,duration_seconds,sample_rate,'
+                        'model_id,voice_profile_id,voice_version,language,pronunciation_version,status,created_at,updated_at,'
+                        'source_kind,source_artifact_ref,source_sha256,source_script_digest) '
+                        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', _narration_segment_values(segment))
             else:
                 current_segments = self.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
                 if not current_segments:
@@ -6590,11 +6616,8 @@ class ProductionRepository:
         if segment.status != 'ready' or segment.audio_reference != self.narration_artifact_reference(artifact.cache_key):
             raise ValueError('单段检查点必须绑定已核实的ready产物')
         self.save_narration_artifact(artifact, connection=connection)
-        current = self.list_narration_segments(segment.workspace_id, segment.task_id, segment.script_id, connection=connection)
-        if segment.source_section_id not in {item.source_section_id for item in current}:
-            raise ValueError('片段检查点缺少原完整pending集合')
-        self._upsert_narration_segments(connection, workspace_id=segment.workspace_id, task_id=segment.task_id,
-            script_id=segment.script_id, segments=[segment if item.source_section_id == segment.source_section_id else item for item in current])
+        task = self._require_creation_task(connection, segment.workspace_id, segment.task_id)
+        self.replace_adopted_narration_segment(task, segment, connection=connection)
 
     def checkpoint_creation_narration_segment(self, grant, artifact, segment, ordinal, *, connection):
         self.commit_creation_narration_segment(artifact, segment, connection=connection)

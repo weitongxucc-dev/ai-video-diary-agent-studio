@@ -101,6 +101,21 @@ def narration_preparation(tmp_path):
             'merge_final':True,'inputs':[{'reference':'narration://artifact/'+use_case.segment_id(task.id,script.id,section.id)}
                 for section in script.sections]}
     from contextlib import nullcontext
+    repository.creation_execution_read=lambda connection=None:nullcontext(SimpleNamespace(in_transaction=True))
+    def read_snapshot(workspace_id,task_id,*,connection):
+        read_task(workspace_id,task_id)
+        header=SimpleNamespace(id=script.id,selection_status=script.selection_status,language=script.language,
+            sections_total_count=len(script.sections),workspace_id=workspace_id,task_id=task_id)
+        return SimpleNamespace(task=task,plan=plan,script_header=header,input_digest=job.input_digest)
+    def section_inputs(current_task,header,*,connection):
+        for section in script.sections:
+            yield section,segments.get(use_case.segment_id(task.id,script.id,section.id))
+    def selected_input(current_task,header,section_id,*,connection):
+        section=next(item for item in script.sections if item.id==section_id)
+        return {'section':section,'audio':segments.get(use_case.segment_id(task.id,script.id,section.id))}
+    repository.read_creation_execution_snapshot=read_snapshot
+    repository.iter_creation_narration_sections=section_inputs
+    repository.read_creation_section_input=selected_input
     repository._connect=lambda:nullcontext(SimpleNamespace(execute=lambda *_:SimpleNamespace(fetchone=lambda:
         {'resources_json':json.dumps(resources())})))
     for section in script.sections:
@@ -213,7 +228,8 @@ def test_narration_preparation_rejects_unbound_or_unusable_work(narration_prepar
     assert len(s.calls)==(1 if invalid=='exhausted-output' else 0)
     assert s.task.narration_cache_key is None
     with pytest.raises(PermissionError):
-        s.case.generate('workspace',s.task.id,grant_context=s.context('narration:segment:v1:'+section.id+':digest'))
+        s.case.prepare_segment('workspace',s.task.id,script_id=s.script.id,section_id=section.id,
+            grant_context=s.context('narration:legacy-stage'))
 
 
 def _metadata_retime_plan(durations, caption_durations=None):

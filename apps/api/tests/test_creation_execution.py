@@ -3177,11 +3177,23 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     assert wav_reads
 
 
-def _segment_units_case(tmp_path, monkeypatch):
+def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     case = _narration_units_case(tmp_path)
-    asset, reference = register_synthetic_video_asset(case.repo,workspace_id='local',member_id=case.actor.member_id,
-        path=tmp_path/'library/section.mp4',asset_id='section_video',seconds=2)
+    if declared_source:
+        path = tmp_path / 'library/section.mp4'
+        path.write_bytes(b'declared-planning-source-not-native-media')
+        asset = case.repo._save_asset(MaterialAsset(id='section_video', workspace_id='local', file_name=path.name,
+            path=str(path), size_bytes=path.stat().st_size, modified_at=datetime.now(timezone.utc), duration_seconds=2,
+            usage_role='b_roll', review_status='approved', analysis_status='ready', media_type='video',
+            owner_user_id=case.actor.member_id, segments=[MaterialSegment(id='section_video-segment-0',
+                asset_id='section_video', start_seconds=0, end_seconds=2, description='declared planning source', review_status='approved')]))
+        reference = case.repo.workspace_media_reference_for_asset('local', asset.id)
+        with case.repo._connect() as conn:
+            case.repo._claim_workspace_media_reference(conn, workspace_id='local', reference=reference)
+    else:
+        asset, reference = register_synthetic_video_asset(case.repo,workspace_id='local',member_id=case.actor.member_id,
+            path=tmp_path/'library/section.mp4',asset_id='section_video',seconds=2)
     class Renderer:
         def render(self, plan, audio_path, **kwargs):
             assert kwargs['scheduler']._get(kwargs['grant'].request_id).resources['kind']=='creation_render'
@@ -4779,9 +4791,9 @@ def test_edit_source_unverifiable_jobs_cannot_be_submitted(tmp_path, monkeypatch
     assert case.repo.get_job_run('local', case.job.id).status == 'running'
 
 
-def _legacy_generated_segment_case(tmp_path, monkeypatch):
+def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=False):
     from app.narration import NarrationArtifact, NarrationGenerator, _pronunciation_dictionary, _pronunciation_version
-    case = _segment_units_case(tmp_path, monkeypatch)
+    case = _segment_units_case(tmp_path, monkeypatch, declared_source=declared_source)
     _require_section_visual_decision(case, monkeypatch)
     canonical = NarrationGenerator(tmp_path/'legacy-output', SimpleNamespace(model_id='test'))
     case.stage.generator.output_root = canonical.output_root
@@ -4832,7 +4844,7 @@ def _legacy_generated_segment_case(tmp_path, monkeypatch):
 @pytest.mark.parametrize('mismatch', [None, 'output', 'source'])
 def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_charge(tmp_path, monkeypatch, mismatch):
     from app.device_scheduler import RecoveryBlocked
-    case = _legacy_generated_segment_case(tmp_path, monkeypatch)
+    case = _legacy_generated_segment_case(tmp_path, monkeypatch, declared_source=True)
     before = case.repo.creation_narration_usage('local', case.job.id)
     if mismatch == 'output':
         path = case.output['path']
@@ -4843,12 +4855,19 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         Path(source.source_path).write_bytes(Path(source.source_path).read_bytes() + b'not_original')
     def guard(conn):
         assert conn.in_transaction
+    def no_full(*args, **kwargs):
+        pytest.fail('paid single-segment recovery must not hydrate whole script/audio collections')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo, name, no_full)
+    monkeypatch.setattr(case.owner, '_facts', no_full)
     if mismatch:
         from app.creation.execution_control import ExecutionControlRejected
         with pytest.raises(ExecutionControlRejected):
             case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
         assert case.repo.get_narration_artifact('local', case.output['cache_key']) is None
-        assert all(row.status == 'pending' for row in case.repo.list_narration_segments('local', case.task_id, case.script_id))
+        with case.repo._connect() as conn:
+            assert {row[0] for row in conn.execute('SELECT status FROM narration_segments WHERE task_id=?', (case.task_id,))} == {'pending'}
     else:
         case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
         result = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
@@ -5288,6 +5307,324 @@ def _bounded_narration_start_case(tmp_path, monkeypatch):
         monkeypatch.setattr(repo, name, no_full)
     monkeypatch.setattr(case.execution, 'validate_input', no_full)
     return case
+
+
+def _single_segment_preparation_case(tmp_path):
+    from app.creation.contracts import NarrationSegment, TaskEvent
+    from app.creation_execution import CreationStageGrantContext
+    case = _narration_units_case(tmp_path, section_count=45)
+    repo = case.repo
+    with repo._connect() as conn:
+        repo.append_task_event(TaskEvent('preparation-adopted-text', 'local', case.task_id, None,
+            'segment_publication', {'script_id': case.script_id, 'text': '采用后的目标正文',
+                                    'narration_reference': 'narration://artifact/prior'}), connection=conn)
+        version = TimelineVersion(id='preparation-version', workspace_id='local', task_id=case.task_id,
+            parent_version_id=None, sequence=1, created_by_operation_id=None,
+            snapshot={'stage_segments': {'section_1': 'preparation-adopted-text'}})
+        repo.create_timeline_version(version, connection=conn)
+        task = repo.get_creation_task('local', case.task_id, connection=conn)
+        task.current_timeline_version_id = version.id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    assert grant is not None and grant.unit_key.startswith('narration:segment:v1:section_1:')
+    resources = case.scheduler._get(grant.request_id).resources
+    pending = NarrationSegment(id=case.stage.segment_id(case.task_id, case.script_id, 'section_1'),
+        workspace_id='local', task_id=case.task_id, script_id=case.script_id, source_section_id='section_1',
+        text='采用后的目标正文', audio_reference=None, duration_seconds=None, sample_rate=None,
+        model_id=resources['model_id'], voice_profile_id=resources['voice_profile_id'],
+        voice_version=resources['voice_version'], language=resources['language'],
+        pronunciation_version=resources['pronunciation_version'], status='pending')
+    _insert_preparation_segment(repo, pending)
+    context = CreationStageGrantContext(case.scheduler, grant, time.monotonic() + 30,
+        resources['max_output_bytes'], resources['threads'])
+    return case, context, pending
+
+
+def _insert_preparation_segment(repo, segment):
+    values = asdict(segment)
+    values.update(created_at=segment.created_at.isoformat(), updated_at=segment.updated_at.isoformat())
+    with repo._connect() as conn:
+        conn.execute('INSERT INTO narration_segments (' + ','.join(values) + ') VALUES ('
+            + ','.join('?' for _ in values) + ')', tuple(values.values()))
+
+
+def _forbid_single_segment_full_inputs(case, monkeypatch):
+    def no_full(*args, **kwargs):
+        pytest.fail('ordinary single-segment execution/recovery must not collect full body inputs')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo, name, no_full)
+    monkeypatch.setattr(case.owner, '_facts', no_full)
+
+
+def test_single_segment_executor_keeps_full_pending_rows_and_existing_ready_without_full_inputs(tmp_path, monkeypatch):
+    case = _narration_units_case(tmp_path, section_count=45)
+    _forbid_single_segment_full_inputs(case, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    first = case.scheduler.pick_and_grant()
+    original = case.scheduler._get(first.request_id)
+    try:
+        case.executor.execute(first, case.scheduler)
+        ready = case.repo.get_narration_segment('local', case.task_id,
+            case.stage.segment_id(case.task_id, case.script_id, 'section_1'))
+        assert ready.status == 'ready' and case.scheduler._get(first.request_id).state == 'done'
+        with case.repo._connect() as conn:
+            assert conn.execute('SELECT COUNT(*) FROM narration_segments WHERE task_id=?', (case.task_id,)).fetchone()[0] == 45
+            conn.execute("CREATE TRIGGER preserve_first_ready BEFORE UPDATE ON narration_segments "
+                         "WHEN OLD.source_section_id='section_1' BEGIN SELECT RAISE(ABORT,'ready row rewritten'); END")
+        second = case.scheduler.pick_and_grant()
+        assert second.owner_id == first.owner_id and second.input_digest == first.input_digest
+        assert second.unit_key.startswith('narration:segment:v1:section_2:')
+        case.executor.execute(second, case.scheduler)
+        assert case.repo.get_narration_segment('local', case.task_id, ready.id) == ready
+        assert case.scheduler._get(first.request_id).resources == original.resources
+        assert case.scheduler._get(second.request_id).state == 'done'
+        usage = case.repo.creation_narration_usage('local', case.job.id)
+        assert usage['used_output_bytes'] > 0 and usage['used_seconds'] > 0 and not usage['unsettled']
+        assert len(case.generated) == 2 and case.merged == []
+        assert len(case.execution.jobs('local', case.task_id)) == 1
+        with case.repo._connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM narration_segments WHERE task_id=? AND status='pending'", (case.task_id,)).fetchone()[0] == 43
+            rows = conn.execute("SELECT unit_key FROM device_work_requests WHERE owner_id=? AND state='waiting'", (case.job.id,)).fetchall()
+            assert len(rows) == 1 and rows[0][0].startswith('narration:segment:v1:section_3:')
+    finally:
+        case.scheduler.close()
+
+
+@pytest.mark.parametrize('changed', ['normal', 'tail', 'authorization'])
+def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(tmp_path, monkeypatch, changed):
+    from app.creation.duration_requirement import DurationConflict
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.device_scheduler import RecoveryBlocked
+    case = _narration_units_case(tmp_path, section_count=45)
+    segments = SegmentProductionUseCase(case.repo, narration_stage=case.stage, renderer=None,
+        artifact_store=ArtifactStore(tmp_path / 'artifacts'), output_root=tmp_path / 'output')
+    case.owner.segments = case.executor.segments = segments
+    case.owner.task_authorizations = TaskAuthorizationUseCase(case.repo, lambda identity: 'ready')
+    case.owner.task_authorizations.ensure(case.repo.get_creation_task('local', case.task_id), case.actor)
+    _forbid_single_segment_full_inputs(case, monkeypatch)
+    prepared, released, injected, settlements = [], [], [], []
+    conflict_event = segments.planning_conflict_event
+    def planning_conflict(*args, **kwargs):
+        raise DurationConflict('declared planning port has no valid visual coverage')
+    def observed_conflict(*args, **kwargs):
+        event = conflict_event(*args, **kwargs)
+        prepared.append(event)
+        return event
+    monkeypatch.setattr(segments, 'prepare_video', planning_conflict)
+    monkeypatch.setattr(segments, 'planning_conflict_event', observed_conflict)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    request = case.scheduler._get(grant.request_id)
+    release = case.scheduler._released_for_commit
+    observe = case.scheduler._observed_current
+    settle = case.repo.settle_creation_narration_unit
+    def released_for_commit(conn, current):
+        result = release(conn, current)
+        released.append(current.request_id)
+        return result
+    def change_after_observation(conn, observation):
+        result = observe(conn, observation)
+        if released and not injected and changed != 'normal':
+            assert conn.in_transaction and result == 'ready'
+            if changed == 'tail':
+                conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','commit后变动尾段') "
+                             "WHERE script_id=? AND section_id='section_45'", (case.script_id,))
+            else:
+                authorization = case.repo.get_task_authorization('local', case.task_id, connection=conn)
+                case.repo.save_task_authorization(replace(authorization, revision=authorization.revision + 1,
+                    revoked_at=datetime.now(timezone.utc), last_verdict='unauthorized'),
+                    expected_revision=authorization.revision, connection=conn)
+            injected.append(changed)
+        return result
+    def counted_settlement(*args, **kwargs):
+        settlements.append(True)
+        return settle(*args, **kwargs)
+    monkeypatch.setattr(case.scheduler, '_released_for_commit', released_for_commit)
+    monkeypatch.setattr(case.scheduler, '_observed_current', change_after_observation)
+    monkeypatch.setattr(case.repo, 'settle_creation_narration_unit', counted_settlement)
+    # The real conflict path returns before next_creation_intent, even when authorized.
+    monkeypatch.setattr('app.creation_execution.next_creation_intent', lambda *a, **k: pytest.fail('conflict must have no next owner'))
+    try:
+        if changed == 'normal':
+            case.executor.execute(grant, case.scheduler)
+            assert settlements == [True]
+            assert case.scheduler._get(grant.request_id).state == 'done'
+            assert case.repo.get_task_event('local', prepared[0].id).event_type == 'segment_visual_planning_conflict'
+        else:
+            with pytest.raises(RecoveryBlocked, match='原单段提交前'):
+                case.executor.execute(grant, case.scheduler)
+            assert injected == [changed] and settlements == []
+            current = case.scheduler._get(grant.request_id)
+            assert current.state == 'granted' and current.resources == request.resources
+            assert current.last_grant_generation == grant.generation
+            usage = case.repo.creation_narration_usage('local', case.job.id)
+            assert len(usage['unsettled']) == 1 and usage['used_output_bytes'] == usage['used_seconds'] == 0
+            with pytest.raises(KeyError):
+                case.repo.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
+            with pytest.raises(KeyError):
+                case.repo.get_task_event('local', prepared[0].id)
+            with case.repo._connect() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM narration_segments WHERE task_id=? AND status='ready'", (case.task_id,)).fetchone()[0] == 0
+                assert conn.execute('SELECT COUNT(*) FROM narration_artifacts').fetchone()[0] == 0
+        assert len(prepared) == 1 and released == [grant.request_id]
+        assert len(case.generated) == 1 and case.merged == []
+        assert (tmp_path / (hashlib.sha256(case.generated[0][1].encode()).hexdigest() + '.wav')).is_file()
+        assert len(case.execution.jobs('local', case.task_id)) == 1
+        assert len(case.repo.list_creation_job_request_states('local', case.job.id)) == 1
+    finally:
+        case.scheduler.close()
+
+
+def test_single_segment_target_sql_abort_rolls_back_publication_and_keeps_original_charge(tmp_path, monkeypatch):
+    case = _narration_units_case(tmp_path)
+    _forbid_single_segment_full_inputs(case, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    with case.repo._connect() as conn:
+        conn.execute("CREATE TRIGGER reject_single_ready AFTER UPDATE ON narration_segments WHEN NEW.status='ready' "
+                     "BEGIN SELECT RAISE(ABORT,'single ready commit rejected'); END")
+    try:
+        case.executor.execute(grant, case.scheduler)
+        request = case.scheduler._get(grant.request_id)
+        assert request.state == 'failed'
+        usage = case.repo.creation_narration_usage('local', case.job.id)
+        assert usage['used_output_bytes'] > 0 and not usage['unsettled']
+        with case.repo._connect() as conn:
+            assert conn.execute('SELECT checkpoint_ref FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()[0] is None
+            assert {row[0] for row in conn.execute('SELECT status FROM narration_segments WHERE task_id=?', (case.task_id,))} == {'pending'}
+            assert conn.execute('SELECT COUNT(*) FROM narration_artifacts').fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM task_events WHERE job_id=? AND event_type='creation_narration_unit_settled'", (case.job.id,)).fetchone()[0] == 1
+        assert len(case.generated) == 1 and len(case.execution.jobs('local', case.task_id)) == 1
+    finally:
+        case.scheduler.close()
+
+
+def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_generator(tmp_path, monkeypatch):
+    from app.narration import NarrationArtifact
+    case, context, pending = _single_segment_preparation_case(tmp_path)
+    repo = case.repo
+    seen, readers, selected_readers, calls = {}, [], [], []
+    snapshot_read = repo.read_creation_execution_snapshot
+    selected_read = repo.read_creation_section_input
+    iterate = repo.iter_creation_narration_sections
+    resolve = repo.resolve_creation_task_narration_inputs
+
+    def snapshot(*args, connection):
+        readers.append(connection)
+        return snapshot_read(*args, connection=connection)
+
+    def scan(*args, connection):
+        assert connection is readers[-1] and connection.in_transaction
+        scanned = seen.setdefault(connection, [])
+        for section, audio in iterate(*args, connection=connection):
+            scanned.append(section.id)
+            yield section, audio
+
+    def selected(*args, connection):
+        assert connection is readers[-1] and connection.in_transaction
+        selected_readers.append(connection)
+        return selected_read(*args, connection=connection)
+
+    def reader_closed():
+        assert len(selected_readers) == 1
+        with pytest.raises(sqlite3.ProgrammingError):
+            selected_readers[0].execute('SELECT 1')
+
+    def current_inputs(**kwargs):
+        reader_closed()
+        assert kwargs['voice_profile_id'] == pending.voice_profile_id
+        assert kwargs['voice_version'] == pending.voice_version
+        return resolve(**kwargs)
+
+    def controlled_generator(**kwargs):
+        reader_closed()
+        assert seen[selected_readers[0]] == [f'section_{i}' for i in range(1, 46)]
+        assert kwargs['narration_text'] == pending.text
+        assert kwargs['grant_context'] is context
+        assert kwargs['segment_id'] == pending.id and kwargs['script_id'] == case.script_id
+        assert kwargs['voice_identity'].id == pending.voice_profile_id
+        assert kwargs['language'] == 'zh'
+        calls.append(kwargs)
+        path = tmp_path / 'declared-output.bin'
+        path.write_bytes(b'declared-generator-output')
+        return NarrationArtifact(str(path), 1., 24000, 'declared-generator', task_id=case.task_id,
+            script_id=case.script_id, voice_profile_id=pending.voice_profile_id,
+            cache_key='declared-unit-key', language='zh', pronunciation_version=pending.pronunciation_version)
+
+    def no_full(*args, **kwargs):
+        pytest.fail('single-segment preparation must not hydrate full script or narration collections')
+
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments'):
+        monkeypatch.setattr(repo, name, no_full)
+    monkeypatch.setattr(repo, 'read_creation_execution_snapshot', snapshot)
+    monkeypatch.setattr(repo, 'iter_creation_narration_sections', scan)
+    monkeypatch.setattr(repo, 'read_creation_section_input', selected)
+    monkeypatch.setattr(repo, 'resolve_creation_task_narration_inputs', current_inputs)
+    monkeypatch.setattr(case.stage, 'generator', SimpleNamespace(generate_for_creation_task=controlled_generator))
+    try:
+        artifact, segment, size = case.stage.prepare_segment('local', case.task_id, script_id=case.script_id,
+            section_id='section_1', grant_context=context)
+        assert len(calls) == 1 and size == len(b'declared-generator-output')
+        assert artifact.cache_key == 'declared-unit-key' and segment.audio_reference == 'narration://artifact/declared-unit-key'
+        assert segment.created_at == pending.created_at and segment.id == pending.id and segment.status == 'ready'
+        assert repo.get_narration_segment('local', case.task_id, pending.id) == pending
+        assert repo.get_job_run('local', case.job.id).status == 'queued'
+        assert repo.get_narration_artifact('local', artifact.cache_key) is None
+    finally:
+        case.scheduler.close()
+
+
+@pytest.mark.parametrize('changed', ['raw-tail', 'adopted-tail', 'audio-tail', 'current-voice'])
+def test_single_segment_preparation_refuses_changed_tail_or_current_voice_before_generator(tmp_path, monkeypatch, changed):
+    from app.creation.contracts import TaskEvent
+    case, context, pending = _single_segment_preparation_case(tmp_path)
+    repo = case.repo
+    if changed == 'raw-tail':
+        with repo._connect() as conn:
+            conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','变动尾段') "
+                         "WHERE script_id=? AND section_id='section_45'", (case.script_id,))
+    elif changed == 'adopted-tail':
+        with repo._connect() as conn:
+            repo.append_task_event(TaskEvent('preparation-wrong-tail', 'local', case.task_id, None,
+                'segment_publication', {'script_id': 'other-script', 'text': '错误采用尾段',
+                                        'narration_reference': 'narration://artifact/tail'}), connection=conn)
+            repo.create_timeline_version(TimelineVersion(id='preparation-tail-version', workspace_id='local',
+                task_id=case.task_id, parent_version_id='preparation-version', sequence=2, created_by_operation_id=None,
+                snapshot={'stage_segments': {'section_1': 'preparation-adopted-text',
+                                             'section_45': 'preparation-wrong-tail'}}), connection=conn)
+            task = repo.get_creation_task('local', case.task_id, connection=conn)
+            task.current_timeline_version_id = 'preparation-tail-version'
+            conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    elif changed == 'audio-tail':
+        _insert_preparation_segment(repo, replace(pending, id='wrong-tail-audio', source_section_id='section_45',
+            text='不匹配的尾段音频文字', status='ready', audio_reference='narration://artifact/tail',
+            duration_seconds=1., sample_rate=24000))
+    else:
+        resolve = repo.resolve_creation_task_narration_inputs
+        def revoked_inputs(**kwargs):
+            with repo._connect() as conn:
+                conn.execute("UPDATE versioned_voice_profiles SET payload=json_set(payload,'$.use_state','blocked') "
+                             "WHERE workspace_id='local' AND id=?", (pending.voice_profile_id,))
+            return resolve(**kwargs)
+        monkeypatch.setattr(repo, 'resolve_creation_task_narration_inputs', revoked_inputs)
+    calls = []
+    def forbidden_generator(**kwargs):
+        calls.append(kwargs)
+        pytest.fail('changed input must be rejected before generator execution')
+    monkeypatch.setattr(case.stage, 'generator', SimpleNamespace(generate_for_creation_task=forbidden_generator))
+    try:
+        with pytest.raises((ValueError, PermissionError)):
+            case.stage.prepare_segment('local', case.task_id, script_id=case.script_id,
+                section_id='section_1', grant_context=context)
+        assert calls == []
+        assert repo.get_narration_segment('local', case.task_id, pending.id) == pending
+        assert repo.get_job_run('local', case.job.id).status == 'queued'
+    finally:
+        case.scheduler.close()
 
 
 def test_bounded_narration_start_reenters_original_unit_and_checks_current(tmp_path, monkeypatch):
