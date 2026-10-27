@@ -680,6 +680,20 @@ class DeviceScheduler:
                     "device_busy": request.state in {"granted", "yield_requested"}}
         raise PermissionError("无权查看设备队列")
 
+    def task_media_result_request(self, workspace_id, job_id, input_digest, actor):
+        """Return original request detail only when the owner permits that detail."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
+                "AND owner_type='creation_job' AND owner_id=? AND input_digest=? AND unit_key=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (workspace_id, job_id, input_digest, f"task_media:{input_digest}")).fetchone()
+        if row is None:
+            return None, {}
+        view = self.view_for(row['id'], actor)
+        if view.get('id', view.get('request_id')) != row['id']:
+            return None, {}
+        return self._request(row), view
+
     def list_queue_for(self, actor: object) -> dict[str, object]:
         if not self.owners.can_view_device_summary(actor):
             raise PermissionError("无权查看设备队列")

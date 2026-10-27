@@ -927,7 +927,8 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
     monkeypatch.setattr(TaskAudio,'_measure_publication',measure)
     # The domain tests use persisted receipts, not claims of playable video.
     if facts_override is None:
-        monkeypatch.setattr(main_module,'_task_media_outputs_current',lambda job:True)
+        from app.creation.output_observation_use_case import OutputObservationUseCase
+        monkeypatch.setattr(OutputObservationUseCase, 'published_outputs_current', lambda self, job: True)
     original_post=getattr(state, "domain_original_post", state.client.post)
     state.domain_original_post=original_post
     def post(*args,**kwargs):

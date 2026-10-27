@@ -6,6 +6,45 @@ from app.schemas import TaskMediaJobResponse
 from test_task_media_grants import case
 
 
+def _result_read_guards(monkeypatch):
+    import subprocess
+    from app.device_runtime import DeviceRuntime
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    def forbidden(*args, **kwargs):
+        pytest.fail('result-read evidence forbids runtime execution, media, Popen, model and driver')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset', 'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    for name in ('run_task_turn', 'run_plan_turn', 'start_assistant_continuation_driver', '_start_device_runtime'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
+
+
+def _declared_result(repo, job, result):
+    # Input facts for read projection only, never proof of a worker run.
+    from app.creation.contracts import TaskEvent
+    repo.claim_job_run(job.workspace_id, job.id)
+    repo.append_task_event(TaskEvent(f'event_{job.id}_result', job.workspace_id, job.task_id, job.id,
+        'task_media_result', {'result': result}))
+    repo.finish_job_run(job.workspace_id, job.id, status='succeeded')
+
+
+def _declared_resource_refusal(repo, media, runtime, job):
+    from types import SimpleNamespace
+    from app.models import utc_now
+    with repo._connect() as conn:
+        conn.execute("UPDATE device_work_requests SET state='blocked',wait_reason='resource_busy' WHERE owner_id=?", (job.id,))
+        row = conn.execute('SELECT * FROM device_work_requests WHERE owner_id=?', (job.id,)).fetchone()
+        request = runtime.scheduler._request(row)
+        media.record_admission(conn, request, SimpleNamespace(verdict=False, declared=request.resources,
+            checks={'swap_used_bytes': {'actual': 20, 'maximum': 10, 'passed': False}},
+            observed_interval_seconds=0.1), utc_now())
+
+
 def test_202_fixed_result_route_replay_success_and_cancel(tmp_path, monkeypatch):
     repo, actor, state, factory, build, media = case(tmp_path)
     runtime = build(media)
@@ -45,10 +84,11 @@ def test_202_fixed_result_route_replay_success_and_cancel(tmp_path, monkeypatch)
 
 def test_result_read_cannot_cross_member_task_or_changed_input(tmp_path, monkeypatch):
     from dataclasses import replace
+    _result_read_guards(monkeypatch)
     repo, actor, state, factory, build, media = case(tmp_path)
     runtime = build(media)
     job = media.submit(runtime, actor, 'task', 'audio_listen', {}, 'audio_listen')
-    runtime.run_once()
+    _declared_result(repo, job, {"audio_url": "/declared-output"})
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args: actor)
@@ -65,9 +105,13 @@ def test_result_read_cannot_cross_member_task_or_changed_input(tmp_path, monkeyp
 
 
 def _resource_api_case(tmp_path, monkeypatch):
-    from test_task_media_grants import _resource_admission_case
-    values = _resource_admission_case(tmp_path, monkeypatch)
-    repo, actor, _state, _, _, _media, runtime, _samples = values
+    _result_read_guards(monkeypatch)
+    from test_host_resource_probes import _render_resources
+    repo, actor, state, factory, build, media = case(tmp_path)
+    resources = {**_render_resources(), 'private_payload':'PRIVATE_INPUT', 'secret':'PRIVATE_KEY'}
+    media.facts = lambda *args: ({'base_version_id':None, 'revision':state['revision']}, resources)
+    runtime = build(media)  # Constructs real scheduler/owners only; start/run_once are forbidden.
+    values = (repo, actor, state, factory, build, media, runtime, {})
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
     monkeypatch.setattr(main, 'device_runtime', runtime)
@@ -83,7 +127,7 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
         job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
         url = f'/api/creation-tasks/task/media-jobs/{job.id}'
         assert client.get(url).json()['resource_wait'] is None
-        assert not runtime.run_once()
+        _declared_resource_refusal(repo, media, runtime, job)
         pending = TaskMediaJobResponse.model_validate(client.get(url).json())
         assert pending.status == 'queued' and pending.waiting_reason == 'resource_busy'
         assert pending.resource_wait.context == 'pending_request'
@@ -92,6 +136,13 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
         page = client.get('/api/creation-tasks/task/media-jobs').json()
         assert page['items'][0]['resource_wait']['observation_id'] == pending.resource_wait.observation_id
         assert 'PRIVATE' not in client.get(url).text and str(tmp_path) not in client.get(url).text
+        with monkeypatch.context() as summary:
+            summary.setattr(runtime.scheduler.owners, 'can_view_detail', lambda *args:False)
+            summary.setattr(runtime.scheduler.owners, 'can_view_device_summary', lambda *args:True)
+            assert runtime.scheduler.task_media_result_request('local', job.id, job.input_digest, actor) == (None, {})
+            summary_receipt = client.get(url).json()
+            assert summary_receipt['device_request_id'] is None and summary_receipt['resource_wait'] is None
+            assert pending.device_request_id not in str(summary_receipt)
         state['revision'] += 1
         second = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
         assert second.id != job.id
@@ -135,7 +186,7 @@ def test_terminal_conversation_uses_same_resource_history_without_changing_cance
         'conversation_id':conversation['id'],'expected_timeline_version_id':None,'expected_timeline_sequence':0}
     try:
         job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {'_typed_source':source}, 'edit_preview')
-        assert not runtime.run_once()
+        _declared_resource_refusal(repo, media, runtime, job)
         before = client.get(f'/api/creation-tasks/task/media-jobs/{job.id}').json()['resource_wait']
         conversations.finish_turn(turn['id'],'completed',result={'kind':'task_turn','response':{}})
         client.post(f'/api/creation-tasks/task/media-jobs/{job.id}/cancel')

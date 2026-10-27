@@ -21,7 +21,8 @@ from _media_preview_test_fixtures import write_synthetic_video
 
 REAL_AUDIO_FACTORY = main._task_audio
 REAL_MEASURE = TaskAudio._measure_publication
-REAL_CURRENT = main._task_media_outputs_current
+from app.creation.output_observation_use_case import OutputObservationUseCase
+REAL_CURRENT = OutputObservationUseCase.published_outputs_current
 
 
 @pytest.fixture
@@ -30,7 +31,7 @@ def visual_application(permitted_media_state, monkeypatch):
     # Restore every old domain-only seam; only its explicit data/caps/roster domain remains.
     monkeypatch.setattr(main, '_task_audio', REAL_AUDIO_FACTORY)
     monkeypatch.setattr(TaskAudio, '_measure_publication', REAL_MEASURE)
-    monkeypatch.setattr(main, '_task_media_outputs_current', REAL_CURRENT)
+    monkeypatch.setattr(OutputObservationUseCase, 'published_outputs_current', REAL_CURRENT)
     state.client.post = state.domain_original_post
     monkeypatch.setattr(main,'settings',replace(main.settings,native_ocr_worker_path=None))
     original_swap = psutil.swap_memory

@@ -1,4 +1,6 @@
 from __future__ import annotations
+from app.creation.media_result_use_case import MediaResultUseCase, MediaResultRejected
+from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
 from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
 from app.assistant.script_tool_result_binding import (AssistantScriptToolResultBinding,
@@ -3495,7 +3497,7 @@ def _preview_audio_edit_request(task_id, request, payload, *, original_clip=Fals
                 base=_ensure_montage_base_version(workspace_id,task,plan)
                 values['payload']['base_version_id']=base.id
             job=media.submit(runtime,actor,task_id,'audio_edit_preview',values,'edit_preview')
-            receipt=_task_media_job_response(media,job,actor,runtime);receipt['result']=None
+            receipt=_media_result_receipt(media,job,actor,runtime);receipt['result']=None
             return JSONResponse(status_code=202,content=receipt)
         except PermissionError as exc:
             raise HTTPException(status_code=403,detail=str(exc)) from exc
@@ -3560,7 +3562,7 @@ def _submit_audio_ingress(task_id, request, operation, result_kind, *, audio=Non
         runtime = _creation_runtime()
         media = runtime.registrations['creation_job'].owner.task_media
         job = media.submit(runtime, actor, task_id, operation, values, result_kind)
-        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt = _media_result_receipt(media, job, actor, runtime)
         receipt['result'] = None
         return JSONResponse(status_code=202, content=receipt)
     except Exception as exc:
@@ -3624,7 +3626,7 @@ def _queue_exact_preview(task_id,request,payload,*,source,media_kind):
             draft_only=request.query_params.get('draft')=='true' or request.url.path.endswith('/edits/exact'),source=source)
         runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
         job=case.submit(runtime,media,actor,task,values)
-        return _task_media_job_response(media,job,actor,runtime)
+        return _media_result_receipt(media,job,actor,runtime)
     except EditPreviewRejected as exc:
         raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
     except PermissionError as exc:
@@ -3681,64 +3683,56 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
 
 
 
-def _task_media_outputs_current(job):
-    return _output_observation_use_case().published_outputs_current(job)
 
 
-def _task_media_device_request(job, actor, runtime):
-    with production_repo._connect() as conn:
-        row = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
-            "AND owner_type='creation_job' AND owner_id=? AND input_digest=? AND unit_key=? "
-            "ORDER BY created_at DESC LIMIT 1",
-            (job.workspace_id, job.id, job.input_digest, f"task_media:{job.input_digest}")).fetchone()
-    if row is None:
-        return None, {}
-    view = runtime.scheduler.view_for(row["id"], actor)
-    if view.get("id", view.get("request_id")) != row["id"]:
-        return None, {}
-    return runtime.scheduler._request(row), view
 
 
-def _task_media_job_response(media, job, actor, runtime):
-    from app.schemas import TaskMediaJobResponse
-    current, event = media.read(job.workspace_id, job.id)
-    if CreationExecutionActor.from_event(job.workspace_id, event) != actor or media.authorization_verdict(current,event,actor,check_scope=False) != "ready":
-        raise HTTPException(status_code=404, detail="任务媒体作业不存在")
-    verdict = media.check(current, event, actor)
-    status = "stale" if verdict != "ready" and current.status not in {"failed", "cancelled"} else current.status
-    result = None
-    result_invalid = status == "succeeded" and not _task_media_outputs_current(current)
-    if result_invalid:
-        status = "failed"
-    if status == "succeeded":
-        result = production_repo.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
-    device_request_id = waiting_reason = None
-    device_request, view = _task_media_device_request(job, actor, runtime)
-    if device_request is not None:
-        device_request_id = device_request.id
-        waiting_reason = view.get("wait_reason")
-    payload = event["arguments"].get("payload", {})
-    refs = payload.get("selected_object_refs", [])
-    if not refs and payload.get("clip_ids"):
-        refs = [f"clip:{item}" for item in payload["clip_ids"]]
-    if not refs and payload.get("clip_id"):
-        refs = [f"clip:{payload['clip_id']}"]
-    if not refs and payload.get("target_id"):
-        refs = [f"audio:{payload['target_id']}"]
-    if not refs and payload.get("audio_edit"):
-        refs = [f"audio:{payload['audio_edit']['target_id']}"]
-    if not refs and payload.get("track_id"):
-        refs = [f"subtitle-track:{payload['track_id']}"]
-    if not refs and event["operation"] == "audio_waveform":
-        refs = [f"audio:{event['arguments']['clip_id']}"]
-    refs = [item for item in refs if re.fullmatch(r"(?:clip|audio|cue|overlay|subtitle-track):[A-Za-z0-9_-]{1,120}", item)][:8]
-    return TaskMediaJobResponse(job_id=job.id, status=status, result_kind=event["result_kind"],
-        operation=event["operation"], target_refs=refs, input_digest=job.input_digest, created_at=job.created_at,
-        result_url=f"/api/creation-tasks/{job.task_id}/media-jobs/{job.id}", base_version_id=event["input_facts"]["base_version_id"],
-        device_request_id=device_request_id, waiting_reason=waiting_reason, result=result,
-        resource_wait=media.resource_admission_receipt(current, event, actor, device_request, status),
-        failure_reason="result_invalid" if result_invalid else current.failure_reason,
-        repair_action="本次媒体文件已丢失或变化；请恢复原文件。系统不会重渲染已提交产物。" if result_invalid else current.repair_action).model_dump(mode="json")
+
+
+def _media_results():
+    return MediaResultUseCase(production_repo, _output_observation_use_case())
+
+
+def _media_result_binding():
+    return AssistantMediaResultBinding(production_repo, conversation_repo, _goal_projection(),
+        artifact_store, _output_observation_use_case())
+
+
+def _media_result_receipt(media, job, actor, runtime):
+    try:
+        return _media_results().receipt(media, job, actor, runtime.scheduler)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
+
+def _read_media_result(task_id, job_id, request):
+    actor = _require_permit_actor(request, current_workspace_id(request))
+    runtime = _creation_runtime()
+    media = runtime.registrations['creation_job'].owner.task_media
+    try:
+        return _media_results().read(media, task_id, job_id, actor, runtime.scheduler)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
+
+def _related_media_result(task_id, request, turn_id, conversation_id, reported):
+    # Schema validation precedes runtime acquisition, as in the original gate.
+    related = TaskMediaJobResponse.model_validate(reported)
+    workspace_id = current_workspace_id(request)
+    media = _creation_runtime().registrations['creation_job'].owner.task_media
+    try:
+        job_id = _media_result_binding().related_job(media, workspace_id, task_id, turn_id, conversation_id, related)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    return TaskMediaJobResponse.model_validate(_read_media_result(task_id, job_id, request))
+
+
+def _completed_media_result(task, request, turn_id, slot, *, contract, input_refs):
+    actor = _require_permit_actor(request, task.workspace_id)
+    try:
+        return _media_result_binding().completed_receipt(task, actor, turn_id, slot, contract=contract, input_refs=input_refs)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 def _observation_version(task, payload):
@@ -3873,7 +3867,7 @@ def observe_creation_task_output(task_id: str, request: Request, payload: Creati
         source=_prepare_observation_request(task_id,request,payload)
         runtime=_creation_runtime()
         receipt=_output_observation_use_case().submit(runtime,runtime.registrations['creation_job'].owner.task_media,
-            task,actor,payload,source,receipt_for=_task_media_job_response)
+            task,actor,payload,source,receipt_for=_media_result_receipt)
     except OutputObservationRejected as exc:
         raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
     except PermissionError as exc:
@@ -3898,13 +3892,15 @@ def list_task_media_jobs(task_id: str, request: Request, cursor: str | None = No
 def _list_goal_media_jobs(task, actor, *, cursor=None, limit=20):
     runtime = _creation_runtime()
     media = runtime.registrations['creation_job'].owner.task_media
-    jobs, next_cursor = media.list(task.workspace_id, task.id, actor, cursor=cursor, limit=limit)
-    return {'items': [_task_media_job_response(media, job, actor, runtime) for job in jobs], 'next_cursor': next_cursor}
+    try:
+        return _media_results().list(media, task, actor, runtime.scheduler, cursor=cursor, limit=limit)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 @app.get("/api/creation-tasks/{task_id}/media-jobs/{job_id}")
 def get_task_media_job(task_id: str, job_id: str, request: Request):
-    return _goal_media_result(task_id, job_id, request)
+    return _read_media_result(task_id, job_id, request)
 
 
 @app.post("/api/creation-tasks/{task_id}/media-jobs/{job_id}/cancel")
@@ -3928,7 +3924,7 @@ def cancel_task_media_job(task_id: str, job_id: str, request: Request):
             runtime.registrations["creation_job"].executor.request_cancel(row["id"])
         production_repo.finish_job_run(job.workspace_id, job.id, status="cancelled", failure_reason="user_cancelled",
             impact="当前时间线保持不变。", repair_action="需要时重新安排媒体处理。")
-    return _task_media_job_response(media, job, actor, runtime)
+    return _media_result_receipt(media, job, actor, runtime)
 
 
 @app.post("/api/creation-tasks/{task_id}/media-jobs/{job_id}/retry")
@@ -3942,7 +3938,7 @@ def retry_task_media_job(task_id: str, job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="任务媒体作业不存在") from exc
     if job.task_id != task_id or CreationExecutionActor.from_event(job.workspace_id, event) != actor:
         raise HTTPException(status_code=404, detail="任务媒体作业不存在")
-    reason = "result_invalid" if job.status=="succeeded" and not _task_media_outputs_current(job) else job.status
+    reason = "result_invalid" if job.status=="succeeded" and not _output_observation_use_case().published_outputs_current(job) else job.status
     if reason not in {"failed", "cancelled", "result_invalid"}:
         raise HTTPException(status_code=409, detail="只有失败或已取消的媒体作业可以显式重试")
     with production_repo._connect() as conn:
@@ -3957,7 +3953,7 @@ def retry_task_media_job(task_id: str, job_id: str, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     runtime.wake()
-    receipt = _task_media_job_response(media, job, actor, runtime)
+    receipt = _media_result_receipt(media, job, actor, runtime)
     receipt["result"] = None
     return JSONResponse(status_code=202, content=receipt)
 
@@ -4087,7 +4083,7 @@ def _submit_clip_preview(task_id, request, *, base_version_id, operation_type, c
             "clip_id":clip_ids[0], "base_version_id":base.id,
             **({"effects":values} if operation_type == "AdjustVisualEffects" else values)}
         job = media.submit(runtime, actor, task_id, operation, arguments, "edit_preview")
-        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt = _media_result_receipt(media, job, actor, runtime)
         receipt["result"] = None
         return JSONResponse(status_code=202, content=receipt)
     except (ClipPreviewUnavailable, HostBudgetUncalibrated) as exc:
@@ -4142,7 +4138,7 @@ def list_creation_task_recordings(task_id: str, request: Request):
             _, duration_ms = service.recording(
                 workspace_id, task_id, record.logical_ref,
             )
-            if not _task_media_outputs_current(production_repo.get_job_run(workspace_id, record.producer_job_id)):
+            if not _output_observation_use_case().published_outputs_current(production_repo.get_job_run(workspace_id, record.producer_job_id)):
                 continue
         except (KeyError, ValueError, FileNotFoundError):
             continue  # Failed or obsolete uploads are never offered as current narration.
@@ -4191,7 +4187,7 @@ def adopt_creation_task_recording(
         source, duration_ms = _task_audio().recording(
             workspace_id, task.id, payload.source_ref,
         )
-        if not _task_media_outputs_current(production_repo.get_job_run(workspace_id, source.producer_job_id)):
+        if not _output_observation_use_case().published_outputs_current(production_repo.get_job_run(workspace_id, source.producer_job_id)):
             raise ValueError("电脑录音已变化或缺少受许可核验回执，请重新录制")
         audio_path = _task_audio().source(workspace_id, task.id, source.logical_ref)
         cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
@@ -4253,7 +4249,7 @@ def _require_task_media_artifact(record, request):
     original, event = media.read(record.workspace_id, job.id)
     if CreationExecutionActor.from_event(record.workspace_id, event) != actor or media.verify_identity(actor) != "ready":
         raise KeyError(record.id)
-    if original.status != "succeeded" or not _task_media_outputs_current(original):
+    if original.status != "succeeded" or not _output_observation_use_case().published_outputs_current(original):
         raise KeyError(record.id)
     if record.kind not in {"audio_source", "task_recording"} and media.check(original, event, actor) != "ready":
         raise KeyError(record.id)
@@ -4317,36 +4313,6 @@ def _script_configuration():
     return toolchain, budget
 
 
-def _completed_source_receipt(task, request, turn_id, slot, *, contract, input_refs):
-    actor = _require_permit_actor(request, task.workspace_id)
-    goal = conversation_repo.get_task_goal(turn_id)
-    bound = conversation_repo.completed_goal_source(turn_id, requested_outputs=[contract], input_refs=input_refs)
-    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if (bound is None or bound["job_id"] != slot["job_id"] or
-            (goal["target_snapshot"].get("timeline_version_id"), goal["target_snapshot"].get("timeline_sequence")) != (
-                task.current_timeline_version_id, version.sequence if version else 0)):
-        raise HTTPException(status_code=409, detail="已完成来源的原目标版本链已失效")
-    try:
-        actual = _goal_script_source_slot(goal, slot["job_id"], actor)
-        if any(actual[key] != slot[key] for key in ("source_ref", "artifact_id", "sha256", "size_bytes", "width", "height", "name", "input_refs")):
-            raise ValueError("已完成来源登记事实发生变化")
-        if actual["size_bytes"] > contract["max_bytes"] or actual["width"] > contract["width"] or actual["height"] > contract["height"]:
-            raise ValueError("已完成来源不符合本次输出尺寸或大小上限")
-        for item in input_refs:
-            facts = graphic_source_facts(production_repo, artifact_store, task.workspace_id, task.id, item["source_ref"], actor=actor)
-            if facts["artifact_id"] != item["expected_artifact_id"] or facts["sha256"] != item["expected_sha256"]:
-                raise ValueError("原固定输入登记修订已变化")
-        job = production_repo.get_job_run(task.workspace_id, slot["job_id"])
-        start = production_repo.get_task_event(task.workspace_id, f"event_{job.id}_start").payload
-        result = production_repo.get_task_event(task.workspace_id, f"event_{job.id}_result").payload["result"]
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (KeyError, ValueError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return TaskMediaJobResponse(operation=start["operation"], target_refs=[],
-        input_digest=job.input_digest, created_at=job.created_at, job_id=job.id, status=job.status,
-        result_kind="graphic_source", result_url=f"/api/creation-tasks/{task.id}/media-jobs/{job.id}",
-        base_version_id=start["input_facts"]["base_version_id"], result={**result, "reused_completed_source": True}).model_dump(mode="json")
 
 
 def _prepare_script_request(task_id, request, payload):
@@ -4376,7 +4342,7 @@ def _prepare_script_request(task_id, request, payload):
             requested_outputs=[item.model_dump(mode="json") for item in payload.requested_outputs],
             input_refs=[item.model_dump(mode="json") for item in payload.input_refs])
         if slot is not None:
-            source["reused_completed_source"] = _completed_source_receipt(task, request, str(payload.assistant_turn_id), slot,
+            source["reused_completed_source"] = _completed_media_result(task, request, str(payload.assistant_turn_id), slot,
                 contract=payload.requested_outputs[0].model_dump(mode="json"),
                 input_refs=[item.model_dump(mode="json") for item in payload.input_refs])
     return source
@@ -4477,7 +4443,7 @@ def _submit_media_script(task_id, request, payload, *, tool_id=None):
         runtime = _creation_runtime()
         media = runtime.registrations['creation_job'].owner.task_media
         job = media.submit(runtime, actor, task_id, operation, values, 'graphic_source')
-        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt = _media_result_receipt(media, job, actor, runtime)
         if edit_request_event:
             _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=202, content=receipt))
         receipt['result'] = None
@@ -4662,7 +4628,7 @@ def preview_creation_task_visual(task_id: str, request: Request, payload: Visual
             plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
             values['payload']['base_version_id']=_ensure_montage_base_version(workspace_id,task,plan).id
         job=media.submit(runtime,actor,task_id,'visual_edit_preview',values,'edit_preview')
-        receipt=_task_media_job_response(media,job,actor,runtime)
+        receipt=_media_result_receipt(media,job,actor,runtime)
         receipt['result']=None
         return JSONResponse(status_code=202,content=receipt)
     except PermissionError as exc:
@@ -7212,14 +7178,6 @@ def _resolve_assistant_script_tool(task_id, request, turn_id, details):
         _script_tool_error(exc.reason)
 
 
-def _assistant_related_media_job(task_id, request, turn_id, conversation_id, reported):
-    related = TaskMediaJobResponse.model_validate(reported)
-    workspace_id = current_workspace_id(request)
-    original, submitted = _creation_runtime().registrations["creation_job"].owner.task_media.read(workspace_id, related.job_id)
-    source = submitted["arguments"].get("_typed_source", {})
-    if original.task_id != task_id or source.get("assistant_turn_id") != turn_id or source.get("conversation_id") != conversation_id:
-        raise HTTPException(status_code=502, detail="先前媒体回执不属于本轮真实目标")
-    return TaskMediaJobResponse.model_validate(get_task_media_job(task_id, original.id, request))
 
 
 def _record_script_window_tool_event(event, *, workspace_id, member_id, task_id, turn_id):
@@ -7489,7 +7447,7 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     elif isinstance(preview, dict) and preview.get("kind") in {"media_script_tool_result", "media_script_tool_status"}:
         script_tool, reply = _resolve_assistant_script_tool(task_id, request, turn_id, preview)
         if preview.get("related_media_job") is not None:
-            media_job = _assistant_related_media_job(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
+            media_job = _related_media_result(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
         edit_preview = None
     elif isinstance(preview, dict) and preview.get("kind") == "edit_applied":
         edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview)
@@ -7499,23 +7457,21 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
     elif isinstance(preview, dict) and preview.get("kind") == "edit_request_status":
         edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, preview)
         if preview.get("related_media_job") is not None:
-            media_job = _assistant_related_media_job(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
+            media_job = _related_media_result(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
         edit_preview = None
         reply = "原编辑请求定位已保存；尚未确认修改完成。" if edit_request.status == "unknown" else "原编辑请求已回读，请查看实际状态；没有重复提交。"
     elif isinstance(preview, dict) and preview.get("kind") == "media_job":
-        candidate = TaskMediaJobResponse.model_validate(preview.get("media_job"))
-        # Only the stable job identity is consumed from the tool receipt.
-        # Re-read state, ownership and result URLs from the production owner.
-        if (candidate.result or {}).get("reused_completed_source") is True:
-            goal = conversation_repo.get_task_goal(turn_id)
-            slot = next((item for item in (goal or {}).get("completed_source_slots", []) if item["job_id"] == candidate.job_id), None)
-            if slot is None:
-                raise HTTPException(status_code=409, detail="复用来源不属于当前原目标的已完成输出槽")
+        try:
+            selected = _media_result_binding().select_finish(turn_id, preview.get("media_job"))
+        except MediaResultRejected as exc:
+            raise HTTPException(exc.status_code, exc.detail) from exc
+        if selected.completed_slot is not None:
+            slot = selected.completed_slot
             task, _member_id = _exact_edit_access(task_id, request, write=True)
-            media_job = TaskMediaJobResponse.model_validate(_completed_source_receipt(task, request, turn_id, slot,
+            media_job = TaskMediaJobResponse.model_validate(_completed_media_result(task, request, turn_id, slot,
                 contract=slot["requested_output"], input_refs=slot["input_refs"]))
         else:
-            media_job = TaskMediaJobResponse.model_validate(get_task_media_job(task_id, candidate.job_id, request))
+            media_job = TaskMediaJobResponse.model_validate(_read_media_result(task_id, selected.job_id, request))
         edit_preview = None
     elif isinstance(preview, dict) and "script_id" in preview and "proposal" not in preview:
         script_id = preview.get("script_id") if isinstance(preview, dict) else None
@@ -8860,7 +8816,7 @@ def preview_creation_task_edit(task_id:str,request:Request,payload:CreationTaskE
             base=_ensure_montage_base_version(workspace_id,task,plan)
             if 'base_version_id' in values['payload']:values['payload']['base_version_id']=base.id
         job=media.submit(runtime,actor,task_id,'command_edit_preview',values,'edit_preview')
-        receipt=_task_media_job_response(media,job,actor,runtime);receipt['result']=None
+        receipt=_media_result_receipt(media,job,actor,runtime);receipt['result']=None
         return JSONResponse(status_code=202,content=receipt)
     except PermissionError as exc:raise HTTPException(status_code=403,detail=str(exc)) from exc
     except (ValueError,KeyError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
@@ -8892,7 +8848,7 @@ def _preview_command_edit_request(task_id,request,payload,*,base_version_id=Fals
                 _require_assistant_input_origin(request,command.source)
             runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
             job=case.exact.submit_clip(runtime,media,actor,command,operation='command_edit_preview')
-            receipt=_task_media_job_response(media,job,actor,runtime);receipt['result']=None
+            receipt=_media_result_receipt(media,job,actor,runtime);receipt['result']=None
             return JSONResponse(status_code=202,content=receipt)
         return _edit_preview_response(*outcome) if outcome is not None else None
     except (EditPreviewRejected,PicturePreviewRejected,AudioEditRejected,CommandParseRejected) as exc:
@@ -9291,7 +9247,7 @@ def preview_creation_task_exact_edit(task_id: str, request: Request, payload: Cr
         else CreationExecutionActor(task.workspace_id,member_id))
     try:
         result = _exact_preview_use_case().submit_preview(_creation_runtime, actor, task, payload,
-            identity={'member_id': member_id, 'local_diagnostic': False}, project_media=_task_media_job_response, expected_input_id=request.headers.get("X-Assistant-Input-ID"),
+            identity={'member_id': member_id, 'local_diagnostic': False}, project_media=_media_result_receipt, expected_input_id=request.headers.get("X-Assistant-Input-ID"),
             draft_only=request.query_params.get("draft")=="true")
         return JSONResponse(status_code=result.status_code, content=result.value)
     except (EditPreviewRejected, PicturePreviewRejected, AudioEditRejected) as exc:
@@ -9352,7 +9308,7 @@ def preview_compound_selection(task_id:str,proposal_id:str,request:Request,paylo
             montage = creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id, task_id))
             _ensure_montage_base_version(workspace_id, task, montage)
         job = media.submit(runtime, actor, task_id, 'compound_selection_preview', values, 'edit_preview')
-        receipt = _task_media_job_response(media, job, actor, runtime)
+        receipt = _media_result_receipt(media, job, actor, runtime)
         receipt['result'] = None
         return JSONResponse(status_code=202, content=receipt)
     except PermissionError as exc:
@@ -13685,7 +13641,7 @@ def _submit_goal_observation(task,actor,values,origin,guard):
         **{key:origin[key] for key in ('input_id','input_turn_id') if key in origin}}
     runtime=_creation_runtime()
     return _output_observation_use_case().submit(runtime,runtime.registrations['creation_job'].owner.task_media,
-        task,actor,payload,source,receipt_for=_task_media_job_response,write_guard=guard)
+        task,actor,payload,source,receipt_for=_media_result_receipt,write_guard=guard)
 
 
 def _goal_request_metadata(task,actor,request_id,phase):
@@ -13700,7 +13656,7 @@ def _goal_media_metadata(task,actor,job_id):
     runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
     job,event=media.read(task.workspace_id,job_id)
     _goal_projection().require_media_task(task.id,job)
-    return _task_media_job_response(media,job,actor,runtime)
+    return _media_result_receipt(media,job,actor,runtime)
 
 
 def _goal_script_source_slot(goal, job_id, actor):
@@ -13991,19 +13947,6 @@ def _goal_request_result(task_id, request_id, request, phase):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _goal_media_result(task_id, job_id, request):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    runtime = _creation_runtime()
-    media = runtime.registrations["creation_job"].owner.task_media
-    try:
-        job, event = media.read(actor.workspace_id, job_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="任务媒体作业不存在") from exc
-    try:
-        _goal_projection().require_media_task(task_id, job)
-    except GoalProjectionRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
-    return _task_media_job_response(media, job, actor, runtime)
 
 
 def _goal_service():
@@ -14212,14 +14155,9 @@ def _project_assistant_business_candidate(candidate):
     if projection.media is not None:
         from app.schemas import TaskMediaJobResponse
         data = projection.media
-        job, start, actor = data["job"], data["start"], data["actor"]
-        device_request, _view = _task_media_device_request(job, actor, device_runtime)
-        projection.response_patch["media_job"] = TaskMediaJobResponse(job_id=job.id,
-            status=data["response_status"], operation=start["operation"], input_digest=job.input_digest, created_at=job.created_at,
-            result_kind=start["result_kind"], base_version_id=projection.event["base_version_id"],
-            failure_reason=job.failure_reason, result=data["result"],
-            resource_wait=media.resource_admission_receipt(job, start, actor, device_request, data["status"]),
-            result_url=f"/api/creation-tasks/{candidate['task_id']}/media-jobs/{job.id}").model_dump(mode="json")
+        projection.response_patch["media_job"] = _media_results().terminal_receipt(
+            media, data, data['actor'], device_runtime.scheduler,
+            task_id=candidate['task_id'], base_version_id=projection.event['base_version_id'])
     if owner.commit(context, projection):
         if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
             _wake_assistant_continuations()
@@ -14244,7 +14182,7 @@ def _project_assistant_request_candidate(candidate):
         patch["edit_preview"] = _edit_preview_response(*result.preview).model_dump(mode="json")
     elif result.job is not None:
         media = device_runtime.registrations["creation_job"].owner.task_media
-        patch["media_job"] = _task_media_job_response(media, result.job, context.actor, device_runtime)
+        patch["media_job"] = _media_result_receipt(media, result.job, context.actor, device_runtime)
     projection = owner.request_projection(context, result, patch)
     if owner.commit(context, projection):
         if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):

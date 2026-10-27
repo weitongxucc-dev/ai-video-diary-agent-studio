@@ -659,3 +659,44 @@ def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, m
     assert main._reconcile_assistant_business_results() == 0
     assert reopened.get_turn(state.turn_id) == after
     assert len(reopened.list_turns(after['conversation_id'])) == 1
+
+
+def test_related_media_receipt_uses_original_turn_job_and_rejects_foreign_source(receipt_state, monkeypatch, tmp_path):
+    from test_task_media_api import _result_read_guards
+    from app.creation_execution import CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.device_runtime import build_device_runtime, OwnerRegistration
+    from app.member_permits import MemberDeviceAccess
+    from app.task_audio import TaskMediaJobs
+    from test_device_runtime import Resources, Processes
+    from test_host_resource_probes import _render_resources
+    _result_read_guards(monkeypatch)
+    state = receipt_state
+    media = TaskMediaJobs(state.production,facts=lambda *a:({'base_version_id':None},_render_resources()),
+        verify_identity=main._verify_creation_identity)
+    runtime = build_device_runtime(database_path=state.production.database_path,device_lock_path=tmp_path/'related.lock',
+        device_access=MemberDeviceAccess(state.members),registrations={'creation_job':OwnerRegistration(
+            CreationJobOwnerVerifier(state.production,task_media=media,verify_identity=main._verify_creation_identity),
+            CreationJobUnitExecutor(state.production,render_action=None,render_is_valid=None,task_media=media))},
+        resources=Resources(),processes=Processes())
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    origin=state.conversations.task_turn_source(state.turn_id,'local',state.member.member_id,state.task.id)
+    job=media.submit(runtime,state.actor,state.task.id,'media_script_preview',{'_typed_source':{
+        'assistant_turn_id':state.turn_id,'conversation_id':origin['conversation_id']}},'graphic_source')
+    try:
+        reported=main._media_result_receipt(media,job,state.actor,runtime)
+        actual=main._related_media_result(state.task.id,state.request,state.turn_id,origin['conversation_id'],
+            {**reported,'status':'succeeded','result':{'source_ref':'forged'}})
+        assert actual.job_id==job.id and actual.status=='queued' and actual.result is None
+        with monkeypatch.context() as denied:
+            denied.setattr(main,'_require_permit_actor',lambda *a:(_ for _ in ()).throw(main.HTTPException(403,'actor refused')))
+            with pytest.raises(main.HTTPException) as foreign:
+                main._related_media_result(state.task.id,state.request,'different-turn',origin['conversation_id'],reported)
+            assert foreign.value.status_code==502
+        with monkeypatch.context() as other:
+            other.setattr(main,'_require_permit_actor',lambda *a:replace(state.actor,member_id='other'))
+            with pytest.raises(main.HTTPException) as foreign_actor:
+                main._related_media_result(state.task.id,state.request,state.turn_id,origin['conversation_id'],reported)
+            assert foreign_actor.value.status_code==404
+        assert [item.id for item in state.production.list_job_runs('local',state.task.id)].count(job.id)==1
+    finally:
+        runtime.scheduler.close()

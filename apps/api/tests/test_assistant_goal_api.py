@@ -18,11 +18,16 @@ from test_material_edit_qualification import material_edit_state as material_edi
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state  # noqa: F401
 import test_media_script_api
 
+from test_media_script_tool_api import receipt_state as receipt_state
+
 script_state = test_media_script_api.state
 
 
 @pytest.fixture(autouse=True)
 def isolated_local_workspace(request, monkeypatch):
+    if "media_result_state" in request.fixturenames:
+        request.getfixturevalue("media_result_state")
+        return
     if {'execution_binding_state', 'edit_result_state'} & set(request.fixturenames):
         # Install before dynamically requesting any seed fixture. Neither old
         # media helpers nor a native child may run in binding-only evidence.
@@ -1423,3 +1428,109 @@ def test_edit_result_does_not_swallow_reader_permission_or_conflict(edit_result_
             assert error.value.status_code == code
     assert not [event for event in state.repo.list_task_events('ws', state.task.id)
         if event.event_type in {'assistant_edit_request_located', 'edit_request_claimed'}]
+
+
+@pytest.fixture
+def media_result_state(receipt_state, monkeypatch, tmp_path):
+    """Persisted producer/PNG metadata and adopted-version facts; never runs media."""
+    from app.creation.contracts import ArtifactRecord, TransformRun, TaskEvent, TimelineVersion
+    from app.creation_execution import CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.device_runtime import build_device_runtime, OwnerRegistration
+    from app.member_permits import MemberDeviceAccess
+    from app.models import utc_now
+    from app.task_audio import TaskMediaJobs
+    from test_device_runtime import Resources, Processes
+    from test_host_resource_probes import _render_resources
+    from test_task_media_api import _result_read_guards
+    _result_read_guards(monkeypatch)
+    state = receipt_state
+    repo, actor, conversations = state.production, state.actor, state.conversations
+    resources = _render_resources()
+    media = TaskMediaJobs(repo, facts=lambda *args: ({'base_version_id':
+        repo.get_creation_task('local', state.task.id).current_timeline_version_id}, resources),
+        verify_identity=main._verify_creation_identity)
+    runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path/'read-only-device.lock',
+        device_access=MemberDeviceAccess(state.members), registrations={'creation_job': OwnerRegistration(
+            CreationJobOwnerVerifier(repo, task_media=media, verify_identity=main._verify_creation_identity),
+            CreationJobUnitExecutor(repo, render_action=None, render_is_valid=None, task_media=media))},
+        resources=Resources(), processes=Processes())
+    monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
+    monkeypatch.setattr(main, 'device_runtime', runtime)
+    origin = conversations.task_turn_source(state.turn_id, 'local', state.member.member_id, state.task.id)
+    source = {'workspace_id':'local', 'task_id':state.task.id, 'member_id':state.member.member_id,
+        'assistant_turn_id':state.turn_id, 'conversation_id':origin['conversation_id'],
+        'actor_identity':actor.identity_payload(), 'expected_timeline_version_id':None, 'expected_timeline_sequence':0}
+    contract = {'name':'card.png', 'width':64, 'height':64, 'max_bytes':4096}
+    job = media.submit(runtime, actor, state.task.id, 'media_script_preview',
+        {'_typed_source':source, 'payload':{'requested_outputs':[contract], 'input_refs':[]}}, 'graphic_source')
+    running = repo.claim_job_run('local', job.id)
+    # Opaque fixture bytes stand for an already verified publication. No PNG is generated/decoded.
+    blob = state.store.publish_bytes('artifacts/declared-result.png', b'declared existing PNG publication')
+    stat = state.store.resolve_file(blob.logical_ref).stat()
+    revision = {'size_bytes':stat.st_size, 'mtime_ns':stat.st_mtime_ns, 'ctime_ns':stat.st_ctime_ns}
+    record = repo.create_artifact_record(ArtifactRecord('declared-result-png','local',state.task.id,
+        'graphic_source',blob.logical_ref,blob.sha256,blob.size_bytes,job.id,[]))
+    repo.lineage_records.create_transform_run(TransformRun('declared-result-transform','local',state.task.id,
+        job.id,'media_script',job.input_digest,[],[record.logical_ref],'declared metadata',
+        {'owner_member_id':actor.member_id, 'name':'card.png', 'width':16, 'height':16, 'file_revision':revision},
+        'succeeded',running.started_at,utc_now()))
+    result = {'source_ref':record.logical_ref, 'artifact_id':record.id, 'sha256':record.sha256,
+        'size_bytes':record.size_bytes, 'width':16, 'height':16, 'name':'card.png', 'applied':False}
+    repo.append_task_event(TaskEvent('event_'+job.id+'_result','local',state.task.id,job.id,'task_media_result',{'result':result}))
+    repo.append_task_event(TaskEvent('event_'+job.id+'_verified','local',state.task.id,job.id,'task_media_verified',
+        {'outputs':[{'reference':record.logical_ref, **revision}]}))
+    repo.finish_job_run('local',job.id,status='succeeded',output_refs=[record.logical_ref])
+    receipt = main._media_result_receipt(media,job,actor,runtime)
+    conversations.finish_turn(state.turn_id,'completed','declared completed publication',result={
+        'kind':'task_turn','response':{'media_job':receipt}})
+    goal = conversations.register_task_goal(state.turn_id)
+    assert goal is not None
+    slot = main._goal_script_source_slot(goal,job.id,actor)
+    assert conversations.record_goal_completed_sources(state.turn_id,[slot],expected_goal=goal)
+    # Adoption is an input fact here, not a claim to exercise the editor or renderer.
+    version = repo.create_timeline_version(TimelineVersion('declared-adopted-version','local',state.task.id,None,1,{'montage':{}},None))
+    event = {'type':'business_result','event_id':'declared-actual-adoption','phase':'apply','status':'confirmed',
+        'task_id':state.task.id,'job_id':job.id,'base_version_id':None,'result_version_id':version.id,'actionable':False}
+    assert conversations.project_business_result(state.turn_id,'local',actor.member_id,event,
+        response_patch={}, message='declared adopted-version event')
+    candidate = next(item for item in conversations.goal_event_candidates() if item['event']['event_id']==event['event_id'])
+    claim = conversations.claim_goal_event(candidate,{'timeline_version_id':version.id,'timeline_sequence':version.sequence},max_rounds=3)
+    assert claim is not None
+    state.task = repo.get_creation_task('local',state.task.id)
+    state.original_job, state.media, state.runtime = job, media, runtime
+    state.slot, state.contract, state.child_id, state.version = slot, contract, claim['turn_id'], version
+    yield state
+    runtime.scheduler.close()
+
+
+@pytest.mark.parametrize('damaged',[False,True])
+def test_media_result_completed_slot_keeps_adopted_chain_and_rechecks_file(media_result_state, damaged):
+    state = media_result_state
+    before = [job.id for job in state.production.list_job_runs('local',state.task.id)]
+    ordinary = state.client.get(f'/api/creation-tasks/{state.task.id}/media-jobs/{state.original_job.id}')
+    assert ordinary.status_code==200 and ordinary.json()['status']=='stale'
+    assert 'script_source' not in state.slot
+    if damaged:
+        state.store.resolve_file(state.slot['source_ref']).write_bytes(b'changed actual publication')
+        with pytest.raises(main.HTTPException) as changed:
+            main._completed_media_result(state.task,state.request,state.child_id,state.slot,
+                contract=state.contract,input_refs=[])
+        assert changed.value.status_code==409
+    else:
+        reused = main._completed_media_result(state.task,state.request,state.child_id,state.slot,
+            contract=state.contract,input_refs=[])
+        assert reused['job_id']==state.original_job.id and reused['status']=='succeeded'
+        assert reused['result']['reused_completed_source'] is True and reused['result']['applied'] is False
+        selected = main._media_result_binding().select_finish(state.child_id,{**reused,'result':{**reused['result'],'source_ref':'forged'}})
+        assert selected.job_id==state.original_job.id and selected.completed_slot['source_ref']==state.slot['source_ref']
+        assert state.conversations.completed_goal_source(state.child_id,
+            requested_outputs=[{**state.contract,'name':'new-slot.png'}],input_refs=[]) is None
+        # A real task version change without updating the original goal is refused.
+        from dataclasses import replace
+        state.production.create_timeline_version(replace(state.version,id='unbound-later-version',parent_version_id=state.version.id,sequence=2))
+        task = state.production.get_creation_task('local',state.task.id)
+        with pytest.raises(main.HTTPException) as stale:
+            main._completed_media_result(task,state.request,state.child_id,state.slot,contract=state.contract,input_refs=[])
+        assert stale.value.status_code==409
+    assert [job.id for job in state.production.list_job_runs('local',state.task.id)]==before
+    assert state.conversations.get_turn(state.child_id)['status']=='running'
