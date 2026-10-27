@@ -5715,6 +5715,89 @@ class ProductionRepository:
         self.append_task_event(event,connection=connection)
         return event.id
 
+    def _iter_section_change_segments(self, task, replacement, *, connection, adopted):
+        """Validate the complete set one row at a time; replace only the target."""
+        if not connection.in_transaction:
+            raise ValueError('局部联动必须复用已开启的事务')
+        header, _ = self.script_records.read_execution_script_metadata(
+            connection, task.workspace_id, task.confirmed_script_id)
+        if (header.task_id != task.id or header.selection_status != 'confirmed'
+                or (replacement.workspace_id, replacement.task_id, replacement.script_id) !=
+                (task.workspace_id, task.id, header.id)):
+            raise ValueError('配音分段与当前确认文案谱系不一致')
+        count = connection.execute('SELECT COUNT(*),COUNT(DISTINCT source_section_id) FROM narration_segments '
+            'WHERE workspace_id=? AND task_id=? AND script_id=?', (task.workspace_id, task.id, header.id)).fetchone()
+        orphan = connection.execute('SELECT 1 FROM narration_segments n WHERE n.workspace_id=? AND n.task_id=? '
+            'AND n.script_id=? AND NOT EXISTS (SELECT 1 FROM creation_task_script_sections s WHERE '
+            's.workspace_id=n.workspace_id AND s.script_id=n.script_id AND s.section_id=n.source_section_id) LIMIT 1',
+            (task.workspace_id, task.id, header.id)).fetchone()
+        if not header.sections_total_count or tuple(count) != (header.sections_total_count, header.sections_total_count) or orphan:
+            raise ValueError('已持久化的配音分段集不完整或不唯一，不能覆盖')
+        target = self.read_creation_section_input(task, header, replacement.source_section_id, connection=connection)['audio']
+        if target is None or target.id != replacement.id or target.created_at != replacement.created_at:
+            raise ValueError('配音分段稳定 ID 或创建时间不能覆盖')
+        if adopted and replacement.updated_at < target.updated_at:
+            raise ValueError('不能用过期状态覆盖配音分段')
+        recorded = replacement.source_kind == 'recorded' or connection.execute(
+            "SELECT 1 FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? "
+            "AND source_section_id<>? AND source_kind='recorded' LIMIT 1",
+            (task.workspace_id, task.id, header.id, replacement.source_section_id)).fetchone() is not None
+        script_digest = None
+        if recorded:
+            checksum = hashlib.sha256()
+            checksum.update(('{"script_id": ' + json.dumps(header.id, ensure_ascii=False) + ', "sections": [').encode())
+            for index, section in enumerate(self.script_records.iter_execution_script_sections(connection, task.workspace_id, header.id)):
+                if index:
+                    checksum.update(b', ')
+                checksum.update(json.dumps({'id': section.id, 'content': section.content},
+                    ensure_ascii=False, sort_keys=True).encode())
+            checksum.update(b']}')
+            script_digest = checksum.hexdigest()
+        cursor = connection.execute('SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? '
+            'ORDER BY created_at ASC,id ASC', (task.workspace_id, task.id, header.id))
+        try:
+            for row in cursor:
+                current = self._narration_segment_from_row(row)
+                segment = replacement if current.source_section_id == replacement.source_section_id else current
+                _validate_narration_segment(segment)
+                section = self.read_creation_section_input(task, header, segment.source_section_id, connection=connection)['section']
+                if (adopted or segment.source_section_id != replacement.source_section_id) and segment.text != section.content:
+                    raise ValueError('配音分段文字必须与已采用文案段落一致')
+                if segment.source_kind == 'recorded' and segment.source_script_digest != script_digest:
+                    raise ValueError('电脑录音必须绑定当前确认文案内容')
+                yield segment
+        finally:
+            cursor.close()
+
+    def read_section_change_inputs(self, task, replacement, *, connection):
+        """Keep one real final snapshot body plus ordered audio metadata, not full DTO copies."""
+        header, _ = self.script_records.read_execution_script_metadata(
+            connection, task.workspace_id, task.confirmed_script_id)
+        snapshot_rows, audio = [], {}
+        for segment in self._iter_section_change_segments(task, replacement, connection=connection, adopted=False):
+            snapshot_rows.append(json.loads(json.dumps(asdict(segment), default=str)))
+            audio[segment.source_section_id] = {'section_id': segment.source_section_id, 'narration_segment_id': segment.id,
+                'audio_reference': segment.audio_reference, 'duration_seconds': segment.duration_seconds, 'status': segment.status}
+        ordered = [audio[row[0]] for row in connection.execute('SELECT section_id FROM creation_task_script_sections '
+            'WHERE workspace_id=? AND script_id=? ORDER BY ordinal', (task.workspace_id, header.id))]
+        return {'script_header': header, 'narration_snapshot': snapshot_rows, 'audio': ordered}
+
+    def replace_adopted_narration_segment(self, task, replacement, *, connection):
+        for _ in self._iter_section_change_segments(task, replacement, connection=connection, adopted=True):
+            pass
+        # Validation above preserves the complete-set contract, while this write
+        # cannot insert, overwrite another segment, or rewrite unrelated rows.
+        connection.execute('UPDATE narration_segments SET text=?,audio_reference=?,duration_seconds=?,sample_rate=?,model_id=?, '
+            'voice_profile_id=?,voice_version=?,language=?,pronunciation_version=?,status=?,updated_at=?,source_kind=?, '
+            'source_artifact_ref=?,source_sha256=?,source_script_digest=? '
+            'WHERE workspace_id=? AND task_id=? AND script_id=? AND source_section_id=? AND id=?',
+            (replacement.text,replacement.audio_reference,replacement.duration_seconds,replacement.sample_rate,replacement.model_id,
+             replacement.voice_profile_id,replacement.voice_version,replacement.language,replacement.pronunciation_version,
+             replacement.status,replacement.updated_at.isoformat(),replacement.source_kind,replacement.source_artifact_ref,
+             replacement.source_sha256,replacement.source_script_digest,task.workspace_id,task.id,task.confirmed_script_id,
+             replacement.source_section_id,replacement.id))
+        return replacement
+
     def publish_segment_version(self, event, artifacts, transform, edges, *, adopted, expected_version_id,
                                 expected_segment_version, segment=None, timeline_change=None, connection):
         task = self._require_creation_task(connection,event.workspace_id,event.task_id)
@@ -5741,8 +5824,10 @@ class ProductionRepository:
             operation = None
             tracks = []
             if segment is not None:
-                before = next(item for item in self.list_narration_segments(task.workspace_id,task.id,
-                    payload['script_id'],connection=connection) if item.source_section_id==payload['section_id'])
+                header, _ = self.script_records.read_execution_script_metadata(connection, task.workspace_id, payload['script_id'])
+                before = self.read_creation_section_input(task, header, payload['section_id'], connection=connection)['audio']
+                if before is None:
+                    raise ValueError('局部修订缺少原配音分段')
                 before_state = self.stage_segment_state(task.workspace_id,task.id,payload['section_id'],connection=connection)
                 if before_state is None or task.current_timeline_version_id is None:
                     raise ValueError('局部修订缺少原采用段及历史基础，未覆盖原成果')
@@ -5754,11 +5839,9 @@ class ProductionRepository:
                 result_version_id = f'timeline_{uuid4().hex}'
                 history['before_timeline_version_id'] = task.current_timeline_version_id
                 history['after_timeline_version_id'] = result_version_id
-                current_segments = self.list_narration_segments(task.workspace_id,task.id,payload['script_id'],connection=connection)
-                next_segments = [segment if item.source_section_id==segment.source_section_id else item for item in current_segments]
                 if timeline_change is None:
                     raise ValueError('局部修改缺少同源时间线联动负责人')
-                snapshot,tracks = timeline_change(task,snapshot,payload['section_id'],payload['montage'],next_segments,
+                snapshot,tracks = timeline_change(task,snapshot,payload['section_id'],payload['montage'],segment,
                     result_version_id,self.get_job_run(task.workspace_id,event.job_id,connection=connection),connection)
                 operation_id = f'operation_{uuid4().hex}'
                 history['operation_id'] = operation_id
@@ -5786,9 +5869,7 @@ class ProductionRepository:
             else:
                 self.create_timeline_version(version,connection=connection,expected_current_version_id=task.current_timeline_version_id)
             if segment is not None:
-                current = self.list_narration_segments(task.workspace_id,task.id,payload['script_id'],connection=connection)
-                self.save_narration_segments(task.workspace_id,task.id,payload['script_id'],
-                    [segment if item.source_section_id==segment.source_section_id else item for item in current],connection=connection)
+                self.replace_adopted_narration_segment(task, segment, connection=connection)
                 self._invalidate_section_composition(task.workspace_id,task.id,connection)
                 self.append_task_event(TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=task.workspace_id,
                     task_id=task.id,job_id=event.job_id,event_type='section_edit_dependencies',payload={
@@ -5880,8 +5961,6 @@ class ProductionRepository:
             if publication.payload['narration_reference'] != segment.audio_reference or publication.payload['text'] != segment.text:
                 raise ValueError('历史正文、配音与采用段来源不一致')
             current = self.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
-            segments = self.list_narration_segments(workspace_id,task_id,task.confirmed_script_id,connection=conn)
-            segments = [segment if row.source_section_id==section_id else row for row in segments]
             snapshot = dict(current.snapshot)
             snapshot['stage_segments'] = {**snapshot.get('stage_segments',{}),section_id:publication.id}
             version_id = f'timeline_{uuid4().hex}'
@@ -5899,7 +5978,7 @@ class ProductionRepository:
             else:
                 invalidations.pop(section_id, None)
             snapshot['stage_segment_invalidations'] = invalidations
-            snapshot,tracks = timeline_change.restore(task,snapshot,section_id,publication.payload['montage'],segments,
+            snapshot,tracks = timeline_change.restore(task,snapshot,section_id,publication.payload['montage'],segment,
                 version_id,job,conn,source_version=source_version,desired_version=desired_version)
             action = '重做' if redo else '撤销'
             operation_type = 'RedoTimelineVersion' if redo else 'UndoTimelineVersion'
@@ -5925,7 +6004,7 @@ class ProductionRepository:
                 readiness=execution_readiness_write(conn)
                 self.append_task_event(TaskEvent(f'event_{operation.id}_execution_readiness',workspace_id,task_id,None,
                     'edit_execution_readiness',{'operation_id':operation.id,**readiness}),connection=conn)
-            self.save_narration_segments(workspace_id,task_id,task.confirmed_script_id,segments,connection=conn)
+            self.replace_adopted_narration_segment(task, segment, connection=conn)
             task = self._invalidate_section_composition(workspace_id,task_id,conn)
             self.append_task_event(TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=workspace_id,task_id=task_id,
                 job_id=job.id,event_type='section_edit_dependencies',payload={'operation_id':operation.id,

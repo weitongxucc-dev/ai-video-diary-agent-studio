@@ -6183,3 +6183,205 @@ def test_section_dependency_projection_keeps_global_conflict_checks(tmp_path,con
     _section_projection_next_version(case,snapshot)
     with pytest.raises(ValueError,match='不连续|交叠'):
         case.repo.section_dependency_snapshot('local',case.task_id,'section_3')
+
+
+def _section_change_paid_case(tmp_path, monkeypatch):
+    """Reuse persisted context facts; only build text/SRT, never execute media."""
+    from app.creation.contracts import SubtitleCue, SubtitleTrack, TaskEvent, TransformRun
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase, default_subtitle_style, execution_subtitle_track
+    from app.creation.section_change_use_case import SectionTimelineChange
+    from app.subtitle_tracks import render_srt
+    case = _section_context_projection_case(tmp_path)
+    repo = case.repo
+    case.store = ArtifactStore(tmp_path/'change-artifacts')
+    case.edits = MetadataEditUseCase(repo,case.store,output_root=tmp_path/'text-output',audio_service=None)
+    case.task = repo.get_creation_task('local',case.task_id)
+    case.original_rows = repo.list_narration_segments('local',case.task_id,case.script_id)
+    cues = [NarrationCue(**{**value,'narration_segment_id':f"audio_{value['source_section_id'].split('_')[-1]}"}) for value in case.montage['cues']]
+    clips = [MontageClip(**{**value,'transition_in_seconds':0}) for value in case.montage['clips']]
+    full = CreationTaskMontagePlan(id='section_change_full',workspace_id='local',task_id=case.task_id,
+        script_id=case.script_id,script_title='真实完整五段夹具',status='ready',cues=cues,clips=clips,
+        duration_seconds=5,low_confidence_clip_count=0,created_at=case.task.created_at,updated_at=case.task.created_at,
+        narration_audio_path='narration://artifact/original')
+    case.montage = creation_task_montage_plan_to_payload(full)
+    case.snapshot = {**case.snapshot,'montage':case.montage}
+    repo.create_timeline_version(TimelineVersion('change_base','local',case.task_id,'projection_v1',2,case.snapshot,None),
+        expected_current_version_id='projection_v1')
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=json_set(payload,'$.stage','montage') WHERE id=?", (case.task_id,))
+    repo.save_creation_task_montage_plan('local',case.task_id,full.id,case.montage)
+    track = SubtitleTrack('source_before','local',case.task_id,'change_base','zh-CN',None,default_subtitle_style(),
+        [SubtitleCue(cue.id,None,cue.text,clip.timeline_start_seconds,clip.timeline_end_seconds) for cue,clip in zip(cues,clips)],
+        'timeline',None,None,None,'unavailable','not_built','no_file','build_text')
+    ref,transform = case.edits.publish_subtitle_text(workspace_id='local',task_id=case.task_id,proposal_id='text_before',
+        kind='subtitle_cue_update',input_refs=['timeline:change_base'],content=render_srt(execution_subtitle_track(track)),
+        engine='subtitle-srt/v1',parameters={})
+    repo.create_subtitle_track(replace(track,status='valid',artifact_ref=ref,transform_id=transform,
+        failure_reason=None,impact=None,repair_action=None))
+    case.before = next(row for row in case.original_rows if row.source_section_id=='section_3')
+    case.replacement = replace(case.before,text='目标段改写后的正文',audio_reference='narration://artifact/replacement',
+        duration_seconds=2,updated_at=datetime.now(timezone.utc))
+    local,_ = SectionTimelineChange.local_state(case.montage,[], 'section_3')
+    local.update(duration_seconds=2,narration_audio_path=case.replacement.audio_reference,audio_timeline=None)
+    for index,cue in enumerate(local['cues']):
+        cue.update(text='目标新句'+str(index),duration_seconds=1)
+    for index,clip in enumerate(local['clips']):
+        clip.update(source_end_seconds=1,timeline_start_seconds=index,timeline_end_seconds=index+1)
+    case.local = local
+    case.publication = TaskEvent('publication_new','local',case.task_id,case.job.id,'segment_publication',
+        {'section_id':'section_3','script_id':case.script_id,'text':case.replacement.text,
+         'narration_reference':case.replacement.audio_reference,'duration_seconds':2,'montage':local,
+         'video_artifact_id':'video_3','request_id':'original_revision','input_id':'original_input','adopted':True})
+    now = datetime.now(timezone.utc)
+    case.transform = TransformRun('change_transform','local',case.task_id,case.job.id,'segment_render','fixture',[],['video://artifact/3'],
+        'metadata-fixture',{},'succeeded',now,now)
+    case.change = SectionTimelineChange(repo,case.store)
+    def no_full(*args,**kwargs):
+        pytest.fail('section publication/restore must not hydrate full script or full narration DTO list')
+    for name in ('effective_creation_script','get_creation_task_script','_creation_task_script_from_payload',
+                 'list_narration_segments','save_narration_segments'):
+        monkeypatch.setattr(repo,name,no_full)
+    monkeypatch.setattr(case.executor,'execute',lambda *a,**k: pytest.fail('no media execution'))
+    original_publish = case.store.publish_bytes
+    def publish_without_writer(*args,**kwargs):
+        with sqlite3.connect(repo.database_path,timeout=.02) as conn:
+            conn.execute('BEGIN IMMEDIATE');conn.rollback()
+        return original_publish(*args,**kwargs)
+    monkeypatch.setattr(case.store,'publish_bytes',publish_without_writer)
+    return case
+
+
+def _publish_paid_section_change(case):
+    case.change.prepare_current('local',case.task_id,'section_3',case.local,case.replacement,case.job)
+    with case.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        case.repo.publish_segment_version(case.publication,[],case.transform,[],adopted=True,
+            expected_version_id='change_base',expected_segment_version='publication_3',segment=case.replacement,
+            timeline_change=case.change,connection=conn)
+        assert conn.in_transaction
+    task = case.repo.get_creation_task('local',case.task_id)
+    version = case.repo.get_timeline_version('local',task.current_timeline_version_id)
+    return task,version,case.repo.get_edit_operation('local',version.created_by_operation_id)
+
+
+def test_section_change_publish_restore_preserves_later_facts_without_full_inputs(tmp_path,monkeypatch):
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase, TimelineRestoreCommand
+    from app.device_scheduler import RecoveryBlocked
+    case = _section_change_paid_case(tmp_path,monkeypatch)
+    task,version,operation = _publish_paid_section_change(case)
+    assert len(version.snapshot['narration_segments'])==5
+    assert case.repo.get_narration_segment('local',case.task_id,'audio_3')==case.replacement
+    snapshot = json.loads(json.dumps(version.snapshot))
+    snapshot['montage']['clips'][-1]['crop_y']=.31
+    later = TimelineVersion('change_later','local',case.task_id,version.id,version.sequence+1,snapshot,None)
+    case.repo.create_timeline_version(later,expected_current_version_id=version.id)
+    for track in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=version.id):
+        case.repo.create_subtitle_track(replace(track,id=track.id+'_later',timeline_version_id=later.id))
+    restore = TimelineRestoreUseCase(case.repo,case.edits)
+    for redo,expected in [(False,case.before),(True,case.replacement)]:
+        task=case.repo.get_creation_task('local',case.task_id)
+        seen=case.repo.get_timeline_version('local',task.current_timeline_version_id)
+        request='redo_narrow' if redo else 'undo_narrow'
+        result=restore.execute(TimelineRestoreCommand('local',task,redo),actor=case.actor,request_id=request,
+            target_operation_id=operation.id,expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
+        replay=restore.execute(TimelineRestoreCommand('local',task,redo),actor=case.actor,request_id=request,
+            target_operation_id=operation.id,expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
+        assert result.operation.id==replay.operation.id
+        assert result.montage.clips[-1].crop_y==.31
+        assert case.repo.get_narration_segment('local',case.task_id,'audio_3').text==expected.text
+        for before in case.original_rows:
+            if before.id!='audio_3':
+                assert case.repo.get_narration_segment('local',case.task_id,before.id)==before
+        assert result.task.output_ready is False and result.task.narration_cache_key is None
+    # A claim without a durable outcome must remain query-only on the same ID.
+    task=case.repo.get_creation_task('local',case.task_id)
+    inputs={'action':'undo','target_operation_id':None,'expected_timeline_version_id':None,
+        'expected_timeline_sequence':None,'source':None,'actor_identity':case.actor.identity_payload()}
+    case.repo.claim_timeline_restore(task,case.actor.member_id,'unknown_narrow',inputs)
+    jobs_before=len(case.execution.jobs('local',case.task_id))
+    with pytest.raises(RecoveryBlocked,match='未知'):
+        restore.execute(TimelineRestoreCommand('local',task,False),actor=case.actor,request_id='unknown_narrow')
+    assert restore.read_request('local',case.task_id,'unknown_narrow',case.actor)['status']=='result_unknown'
+    assert len(case.execution.jobs('local',case.task_id))==jobs_before
+    assert not case.generated and not case.merged
+    case.scheduler.close()
+
+
+@pytest.mark.parametrize('failure',['target_cas','late_guard'])
+def test_section_change_original_transaction_rolls_back_all_facts(tmp_path,monkeypatch,failure):
+    case = _section_change_paid_case(tmp_path,monkeypatch)
+    case.change.prepare_current('local',case.task_id,'section_3',case.local,case.replacement,case.job)
+    if failure=='late_guard':
+        update=case.repo.replace_adopted_narration_segment
+        def denied(*args,**kwargs):
+            update(*args,**kwargs)
+            raise PermissionError('current authorization revoked before commit')
+        monkeypatch.setattr(case.repo,'replace_adopted_narration_segment',denied)
+    with pytest.raises((ValueError,PermissionError),match='发布前|revoked'):
+        with case.repo._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            case.repo.publish_segment_version(case.publication,[],case.transform,[],adopted=True,
+                expected_version_id='change_base',expected_segment_version='changed-target' if failure=='target_cas' else 'publication_3',
+                segment=case.replacement,timeline_change=case.change,connection=conn)
+    assert case.repo.get_creation_task('local',case.task_id).current_timeline_version_id=='change_base'
+    assert case.repo.get_narration_segment('local',case.task_id,'audio_3')==case.before
+    with pytest.raises(KeyError):
+        case.repo.get_task_event('local',case.publication.id)
+    with case.repo._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='ReviseScriptSection'").fetchone()[0]==0
+        assert conn.execute("SELECT COUNT(*) FROM transform_runs WHERE id='change_transform'").fetchone()[0]==0
+    assert not case.generated and not case.merged
+    case.scheduler.close()
+
+
+def test_section_change_single_target_retains_complete_set_and_recorded_digest(tmp_path,monkeypatch):
+    case=_section_change_paid_case(tmp_path,monkeypatch)
+    with case.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        task=case.repo.get_creation_task('local',case.task_id,connection=conn)
+        # Reference encoding is the original recorded-script manifest, including
+        # raw confirmed text rather than subsequently adopted effective text.
+        manifest={'script_id':case.script_id,'sections':[{'id':row['section_id'],'content':json.loads(row['section_json'])['content']}
+            for row in conn.execute('SELECT section_id,section_json FROM creation_task_script_sections WHERE script_id=? ORDER BY ordinal',(case.script_id,))]}
+        original_digest=hashlib.sha256(json.dumps(manifest,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        recorded=replace(case.before,source_kind='recorded',model_id=None,voice_profile_id=None,voice_version=None,
+            source_artifact_ref='narration://artifact/recorded',source_sha256='a'*64,source_script_digest=original_digest,
+            updated_at=datetime.now(timezone.utc))
+        case.repo.replace_adopted_narration_segment(task,recorded,connection=conn)
+        assert conn.in_transaction
+        with pytest.raises(ValueError,match='录音'):
+            case.repo.replace_adopted_narration_segment(task,replace(recorded,source_script_digest='b'*64),connection=conn)
+        with pytest.raises(ValueError,match='过期'):
+            case.repo.replace_adopted_narration_segment(task,case.before,connection=conn)
+        conn.execute("DELETE FROM narration_segments WHERE id='audio_5'")
+        with pytest.raises(ValueError,match='不完整'):
+            case.repo.read_section_change_inputs(task,recorded,connection=conn)
+        conn.rollback()
+    assert case.repo.get_narration_segment('local',case.task_id,'audio_3')==case.before
+    assert case.repo.get_narration_segment('local',case.task_id,'audio_5')==case.original_rows[-1]
+    case.scheduler.close()
+
+
+def test_section_change_restore_rechecks_guard_in_original_owner_transaction(tmp_path,monkeypatch):
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase, TimelineRestoreCommand
+    case=_section_change_paid_case(tmp_path,monkeypatch)
+    task,version,operation=_publish_paid_section_change(case)
+    restore=TimelineRestoreUseCase(case.repo,case.edits)
+    calls=[]
+    def current_authorization(conn):
+        assert conn.in_transaction
+        calls.append(True)
+        if len(calls)>1:
+            raise PermissionError('task authorization revoked after preparation')
+    with pytest.raises(PermissionError,match='revoked'):
+        restore.execute(TimelineRestoreCommand('local',task,False),actor=case.actor,request_id='revoked_narrow',
+            target_operation_id=operation.id,expected_timeline_version_id=version.id,expected_timeline_sequence=version.sequence,
+            write_guard=current_authorization)
+    assert len(calls)==2
+    assert case.repo.get_creation_task('local',case.task_id).current_timeline_version_id==version.id
+    assert case.repo.get_narration_segment('local',case.task_id,'audio_3')==case.replacement
+    assert restore.read_request('local',case.task_id,'revoked_narrow',case.actor)['status']=='refused'
+    with case.repo._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='UndoTimelineVersion'").fetchone()[0]==0
+    assert not case.generated and not case.merged
+    case.scheduler.close()

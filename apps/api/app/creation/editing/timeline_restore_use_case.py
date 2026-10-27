@@ -419,12 +419,11 @@ class TimelineRestoreUseCase:
                 for attempt in range(2):
                     change.prepare_current(workspace_id,task_id,history['section_id'],publication.payload['montage'],segment,job,
                         desired_version=desired_version)
-                    latest=self.repository.get_creation_task(workspace_id,task_id)
-                    baseline=self.repository.get_timeline_version(workspace_id,latest.current_timeline_version_id)
-                    rows=self.repository.list_narration_segments(workspace_id,task_id,latest.confirmed_script_id)
-                    rows=[segment if row.source_section_id==history['section_id'] else row for row in rows]
-                    prospective,_,_=change.compute(latest,baseline.snapshot,history['section_id'],
-                        publication.payload['montage'],rows,'restore-permission-preparation',desired_version=desired_version)
+                    with self.repository.creation_execution_read() as reader:
+                        latest=self.repository.get_creation_task(workspace_id,task_id,connection=reader)
+                        baseline=self.repository.get_timeline_version(workspace_id,latest.current_timeline_version_id,connection=reader)
+                        prospective,_,_=change.compute(latest,baseline.snapshot,history['section_id'],
+                            publication.payload['montage'],segment,'restore-permission-preparation',reader,desired_version=desired_version)
                     if baseline.snapshot.get('montage') is not None and prospective.get('montage') is not None:
                         authorization_write=self.montage_edits.prepare_material_scope(latest,
                             creation_task_montage_plan_from_payload(baseline.snapshot['montage']),
