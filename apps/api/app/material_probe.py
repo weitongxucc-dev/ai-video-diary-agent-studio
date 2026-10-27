@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import math
 from dataclasses import asdict, dataclass
 from typing import Literal
@@ -209,3 +211,35 @@ def parse_ffprobe_output(output: bytes) -> MaterialProbeFacts:
     if duration is None:
         raise ValueError("媒体时长无效")
     return MaterialProbeFacts(duration, format_name, tuple(streams))
+
+@dataclass(frozen=True)
+class MaterialProbeDependency:
+    workspace_id: str
+    asset_id: str
+    source_sha256: str
+    provisional_revision: str
+
+
+@dataclass(frozen=True)
+class MaterialProbeCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    source_sha256: str
+    provisional_revision: str
+    unit_key: str
+
+
+def material_probe_unit_key(source_sha256: str, *, version: int = 1) -> str:
+    """Identity for bounded ffprobe metadata only; scene analysis is separate."""
+    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+        raise ValueError("素材源哈希无效")
+    if version not in {1, 2}:
+        raise ValueError("素材探测契约版本无效")
+    stage_input = hashlib.sha256(json.dumps(
+        {"stage": f"probe-meta:v{version}", "source_sha256": source_sha256,
+         "probe_contract": ("ffprobe-metadata:v1" if version == 1
+                            else "ffprobe-metadata-rates:v2")},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    return f"probe-meta:v{version}:{stage_input}"

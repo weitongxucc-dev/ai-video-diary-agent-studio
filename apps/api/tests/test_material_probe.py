@@ -24,7 +24,8 @@ from app.material_probe import (
     MaterialProbeFacts, MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output,
     probe_checkpoint_needs_rate_refresh,
 )
-from app.production import MaterialProbeDependency, ProductionRepository, material_probe_unit_key
+from app.material_probe import MaterialProbeDependency, material_probe_unit_key
+from app.production import ProductionRepository
 
 
 def probe_payload(*, duration: str = "3.250", video: bool = True) -> bytes:
@@ -116,14 +117,32 @@ class _CheckpointProbeOwner(MaterialHashOwnerVerifier):
 
     def check_current(self, request, conn):
         if request.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
-            return self.repository.material_probe_source_verdict(
+            return self.repository.probe_records.material_probe_source_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
         return super().check_current(request, conn)
 
 
-def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: Path) -> None:
+@pytest.fixture
+def probe_metadata_no_execution(monkeypatch):
+    import _media_preview_test_fixtures as media_fixtures
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("probe record verification must not execute media, models or drivers")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "start", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "run_granted_probe", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "run_granted_scene", forbidden)
+    monkeypatch.setattr(MaterialHashUnitExecutor, "execute", forbidden)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
+    assert MaterialIngestionService.run_granted_probe is forbidden
+
+
+def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: Path, probe_metadata_no_execution) -> None:
     library = tmp_path / "library"
     library.mkdir()
     source = library / "clip.mp4"
@@ -148,11 +167,11 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
         assert source_sha is not None
         probe_grant = scheduler.pick_and_grant()
         assert probe_grant is not None and probe_grant.unit_key.startswith("probe-meta:v1:")
-        candidate = repo.material_probe_candidate_for_grant(probe_grant)
+        candidate = repo.probe_records.material_probe_candidate_for_grant(probe_grant)
         facts = parse_ffprobe_output(probe_payload())
         scheduler.complete_unit(
             probe_grant, checkpoint_database_path=repo.database_path,
-            checkpoint_write=lambda conn, active: repo.commit_material_probe(
+            checkpoint_write=lambda conn, active: repo.probe_records.commit_material_probe(
                 conn, active, candidate, facts,
             ),
         )
@@ -172,7 +191,7 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
         dependency = MaterialProbeDependency(
             "one", asset_id, source_sha, hash_grant.input_digest,
         )
-        assert repo.material_probe_key_for_dependency(dependency) == material_probe_unit_key(
+        assert repo.probe_records.material_probe_key_for_dependency(dependency) == material_probe_unit_key(
             source_sha, version=2,
         )
         assert repo.pending_material_scene_dependencies() == []
@@ -181,10 +200,10 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
         assert v2_grant is not None and v2_grant.unit_key == material_probe_unit_key(
             source_sha, version=2,
         )
-        v2_candidate = repo.material_probe_candidate_for_grant(v2_grant)
+        v2_candidate = repo.probe_records.material_probe_candidate_for_grant(v2_grant)
         scheduler.complete_unit(
             v2_grant, checkpoint_database_path=repo.database_path,
-            checkpoint_write=lambda conn, active: repo.commit_material_probe(
+            checkpoint_write=lambda conn, active: repo.probe_records.commit_material_probe(
                 conn, active, v2_candidate, facts,
             ),
         )
@@ -197,7 +216,7 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
                 "WHERE unit_key LIKE 'probe-meta:v%:%'"
             ).fetchone() == (2,)
         restarted = ProductionRepository(repo.database_path, library)
-        assert restarted.material_probe_key_for_dependency(dependency) == v2_grant.unit_key
+        assert restarted.probe_records.material_probe_key_for_dependency(dependency) == v2_grant.unit_key
         assert len(service.submit_pending_probe_dependencies()) == 1
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute(
@@ -210,7 +229,7 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
         scheduler.close()
 
 
-def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_path: Path) -> None:
+def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_path: Path, probe_metadata_no_execution) -> None:
     library = tmp_path / "library"
     library.mkdir()
     source = library / "clip.mp4"
@@ -235,11 +254,11 @@ def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_p
         assert isinstance(source_sha, str)
         probe_grant = scheduler.pick_and_grant()
         assert probe_grant is not None and probe_grant.unit_key.startswith("probe-meta:v1:")
-        candidate = repo.material_probe_candidate_for_grant(probe_grant)
+        candidate = repo.probe_records.material_probe_candidate_for_grant(probe_grant)
         facts = parse_ffprobe_output(probe_payload())
         scheduler.complete_unit(
             probe_grant, checkpoint_database_path=repo.database_path,
-            checkpoint_write=lambda conn, active: repo.commit_material_probe(
+            checkpoint_write=lambda conn, active: repo.probe_records.commit_material_probe(
                 conn, active, candidate, facts,
             ),
         )
@@ -262,7 +281,7 @@ def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_p
         scheduler.close()
 
 
-def test_probe_terminal_failure_is_persisted_and_not_auto_retried(tmp_path: Path) -> None:
+def test_probe_terminal_failure_is_persisted_and_not_auto_retried(tmp_path: Path, probe_metadata_no_execution) -> None:
     library = tmp_path / "library"
     library.mkdir()
     (library / "clip.mp4").write_bytes(b"not a decodable video")
@@ -284,10 +303,10 @@ def test_probe_terminal_failure_is_persisted_and_not_auto_retried(tmp_path: Path
         assert service.run_granted_hash(hash_grant) is not None
         probe_grant = scheduler.pick_and_grant()
         assert probe_grant is not None
-        candidate = repo.material_probe_candidate_for_grant(probe_grant)
+        candidate = repo.probe_records.material_probe_candidate_for_grant(probe_grant)
         scheduler.fail_unit(
             probe_grant, reason="probe_invalid_media",
-            failure_write=lambda conn, active: repo.fail_material_probe(
+            failure_write=lambda conn, active: repo.probe_records.fail_material_probe(
                 conn, active, candidate, "probe_invalid_media",
             ),
         )
@@ -687,5 +706,60 @@ def test_legacy_probe_request_replaced_once_without_losing_wait_age(
             )
         with pytest.raises(ValueError, match="拒绝自动替换"):
             service.submit_pending_probe_dependencies()
+    finally:
+        scheduler.close()
+
+
+def test_probe_checkpoint_sql_refusal_rolls_back_asset_and_keeps_original_permit(tmp_path, monkeypatch, probe_metadata_no_execution):
+    from app.materials.probe_records import MaterialProbeRecordStore
+
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "clip.mp4").write_bytes(b"isolated checkpoint source")
+    repo = ProductionRepository(tmp_path / "production.sqlite", library)
+    assert isinstance(repo.probe_records, MaterialProbeRecordStore)
+    repo.bind_material_ingestion("one", expected_directory=str(library))
+    scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock",
+        owners=_CheckpointProbeOwner(repo), resources=_Resources(), processes=_Processes())
+    service = MaterialIngestionService(repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0)
+    try:
+        service.discover_and_submit_hashes()
+        service.discover_and_submit_hashes()
+        hash_grant = scheduler.pick_and_grant()
+        assert hash_grant is not None
+        assert service.run_granted_hash(hash_grant) is not None
+        probe_grant = scheduler.pick_and_grant()
+        assert probe_grant is not None
+        candidate = repo.probe_records.material_probe_candidate_for_grant(probe_grant)
+        original_asset = repo.get_asset("one", candidate.asset_id)
+        with sqlite3.connect(repo.database_path) as connection:
+            original_request = connection.execute("SELECT * FROM device_work_requests WHERE id=?", (probe_grant.request_id,)).fetchone()
+            original_permit = connection.execute("SELECT * FROM device_permit WHERE id=1").fetchone()
+            connection.execute("""CREATE TRIGGER refuse_probe_checkpoint BEFORE INSERT ON material_analysis_checkpoints
+                WHEN NEW.unit_key LIKE 'probe-meta:%'
+                BEGIN SELECT RAISE(ABORT, 'isolated probe checkpoint refusal'); END""")
+        applied = []
+        apply_metadata = repo.probe_records._apply_probe_metadata
+
+        def observe_metadata(connection, *args):
+            assert connection.in_transaction
+            result = apply_metadata(connection, *args)
+            assert json.loads(connection.execute("SELECT payload FROM material_assets WHERE id=?", (candidate.asset_id,)).fetchone()[0])["duration_seconds"] == 3.25
+            applied.append(connection)
+            return result
+
+        monkeypatch.setattr(repo.probe_records, "_apply_probe_metadata", observe_metadata)
+        with pytest.raises(sqlite3.IntegrityError, match="isolated probe checkpoint refusal"):
+            scheduler.complete_unit(probe_grant, checkpoint_database_path=repo.database_path,
+                checkpoint_write=lambda conn, active: repo.probe_records.commit_material_probe(
+                    conn, active, candidate, parse_ffprobe_output(probe_payload()),
+                ))
+        assert len(applied) == 1
+        assert repo.get_asset("one", candidate.asset_id) == original_asset
+        with sqlite3.connect(repo.database_path) as connection:
+            assert connection.execute("SELECT * FROM device_work_requests WHERE id=?", (probe_grant.request_id,)).fetchone() == original_request
+            assert connection.execute("SELECT * FROM device_permit WHERE id=1").fetchone() == original_permit
+            assert connection.execute("SELECT COUNT(*) FROM material_analysis_checkpoints WHERE unit_key LIKE 'probe-meta:%'").fetchone() == (0,)
+            assert connection.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (2,)
     finally:
         scheduler.close()

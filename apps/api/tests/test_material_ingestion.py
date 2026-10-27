@@ -19,13 +19,8 @@ from app.material_ingestion import (
     MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialHashUnitExecutor,
     MaterialIngestionService,
 )
-from app.production import (
-    CreationPlan,
-    MaterialProbeDependency,
-    ProductionRepository,
-    _material_hash_candidate,
-    material_probe_unit_key,
-)
+from app.production import CreationPlan, ProductionRepository, _material_hash_candidate
+from app.material_probe import MaterialProbeDependency, material_probe_unit_key
 from app.creation.contracts import CreationTask, JobRun, TaskEvent
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 
@@ -219,7 +214,7 @@ def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: P
                 MaterialHashServiceActor("one", str(library.resolve())),
             )
         restarted = ProductionRepository(repo.database_path, library, duration_reader=duration)
-        assert restarted.pending_material_probe_dependencies() == [
+        assert restarted.probe_records.pending_material_probe_dependencies() == [
             MaterialProbeDependency("one", repo.list_assets("one")[0].id, digest,
                                     grant.input_digest),
         ]
