@@ -14,7 +14,7 @@ from app.artifact_store import ArtifactStore
 from app.creation.contracts import JobRun, TaskEvent
 from app.creation_execution import CreationExecutionActor, PERSON_EDIT_KIND
 from app.device_runtime import build_device_runtime
-from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe, MontageBudget, NarrationBudget
+from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe, MontageBudget, NarrationBudget, CpuAudioBudget
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.creation.contracts import CreationPlanVoiceReference
@@ -159,7 +159,9 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
     monkeypatch.setattr(main, 'creation_execution', main._new_creation_execution(repo))
     # Exact original narration-application values, with no resource admission/dispatch here.
-    budget=NarrationBudget(1000,10,1_000_000,300,8_000_000,1,90,1024**3,16,.1,1024**3,1_000_000)
+    budget=NarrationBudget(1000,10,1_000_000,300,8_000_000,1,90,1024**3,16,.1,1024**3,1_000_000,
+        input_scope='single_call_experiment_v1')
+    audio_budget=CpuAudioBudget(2,32*1024**2,30,30,48000,2,3*1024**2,1,30,1024,16,.1,2048,1024)
     montage_budget=MontageBudget(10,20,1_000_000,1_000_000,30,1_000_000)
     host_budget=HostBudget(100,1,100*1024**3,1,10**12,10_000_000,narration=budget,montage=montage_budget)
     swap=psutil.swap_memory();disk=psutil.disk_io_counters();disk_devices=psutil.disk_io_counters(perdisk=True)
@@ -169,12 +171,16 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
     resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget)
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant,verify_identity=main._verify_creation_identity,
-        narration_budget=budget,montage_budget=montage_budget)
+        narration_budget=budget,narration_audio_budget=audio_budget,montage_budget=montage_budget)
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',
         device_access=MemberDeviceAccess(members,identity_verifier=main._verify_creation_identity),
         registrations={'creation_job':registration},resources=resources,processes=HostProcessProbe())
     monkeypatch.setattr(main,'device_runtime',runtime)
+    # Only supply the assembled runtime; this HTTP representative never starts its driver.
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(runtime,'start',lambda:pytest.fail('HTTP representative must not start a driver'))
     control=main._creation_execution_control()
+    registration.owner.segments = registration.executor.segments = control.segments
     assert control.repository is control.execution.repository is control.render_stage.repository is repo
     assert control.execution is main.creation_execution and control.verify_identity is main._verify_creation_identity
     client=TestClient(main.app,headers={'X-Local-Member-Token':token})
@@ -182,7 +188,9 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
     url='/api/creation-tasks/'+task_id
     evidence={}
     try:
-        preview=client.get(url+'/execution/preview')
+        with monkeypatch.context() as readonly:
+            readonly.setattr(main, '_creation_runtime', lambda: pytest.fail('GET must not start runtime'))
+            preview=client.get(url+'/execution/preview')
         assert preview.status_code==200 and preview.json()['requirements']['can_continue'],preview.text
         request={'script_id':script_id,'input_digest':preview.json()['input_digest'],'requirements_confirmed':True}
         first=client.post(url+'/execution/start',json=request)
@@ -191,7 +199,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         duplicate=client.post(url+'/execution/start',json=request)
         assert duplicate.status_code==202 and duplicate.json()['job']['id']==first_job,duplicate.text
         rows=repo.list_creation_job_request_states('local',first_job)
-        assert len(rows)==1 and isinstance(rows[0],sqlite3.Row) and set(rows[0].keys())=={'id','state'}
+        assert len(rows)==1 and isinstance(rows[0],sqlite3.Row) and set(rows[0].keys())=={'id','state','unit_key','wait_reason','last_failure_reason'}
         request_id=rows[0]['id']
         assert rows[0]['state']=='waiting'
         assert repo.list_creation_job_request_states('other-workspace',first_job)==[]
@@ -209,6 +217,24 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         assert main._creation_job_for_request('local',request_id).id==first_job
         bound=client.get(url+'/execution',params={'job_id':first_job})
         assert bound.status_code==200 and bound.json()['job']['id']==first_job,bound.text
+        # Keep the current original Job and immutable start receipt. A new trusted
+        # task owner may read the task, but cannot adopt the former actor's Job.
+        other_member, other_token = members.join(members.create_invite_code(), '后续任务成员')
+        original_task = repo.get_creation_task('local', task_id)
+        changed_owner = asdict(original_task)
+        changed_owner['owner_user_id'] = other_member.member_id
+        with repo._connect() as conn:
+            conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
+                (json.dumps(changed_owner, default=str), task_id))
+        try:
+            assert main.creation_execution.latest('local', task_id).id == first_job
+            identity_query = client.get(url+'/execution', params={'job_id':first_job},
+                headers={'X-Local-Member-Token':other_token})
+            assert identity_query.status_code == 409 and '身份或任务不可核验' in identity_query.text, identity_query.text
+        finally:
+            with repo._connect() as conn:
+                conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
+                    (json.dumps(asdict(original_task), default=str), task_id))
         # Explicit projection fixture: interrupted durable job plus original historical running event.
         with repo._connect() as conn:
             conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=?",('local',first_job))
@@ -224,8 +250,10 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         repo.append_task_event(TaskEvent(id=f'event_{local.id}_start',workspace_id='local',task_id=task_id,job_id=local.id,
             event_type='declared_local_start',payload={**actor.identity_payload(),'input_digest':local.input_digest}))
         local_query=client.get(url+'/execution',params={'job_id':local.id})
-        assert local_query.status_code==409 and '身份或任务不可核验' in local_query.text,local_query.text
-        cancelled=client.post(url+'/execution/cancel')
+        assert local_query.status_code==409 and '原制作作业已被新的制作请求替代' in local_query.text,local_query.text
+        with monkeypatch.context() as cancelling:
+            cancelling.setattr(main, '_creation_runtime', lambda: pytest.fail('cancel must not start runtime'))
+            cancelled=client.post(url+'/execution/cancel')
         assert cancelled.status_code==200 and cancelled.json()['job']['status']=='cancelled',cancelled.text
         assert repo.list_creation_job_request_states('local',first_job)[0]['state']=='cancelled'
         assert not repo.active_creation_request_ids('local',first_job)
@@ -286,6 +314,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         assert all(json.loads(row['children_json'])==[] for row in permits)
         evidence={'preview':preview.json(),'first':first.json(),'duplicate':duplicate.json(),'bound':bound.json(),
             'declared_interrupted_projection':interrupted.json(),'local_kind_query_status':local_query.status_code,
+            'current_original_job_identity_rejection':identity_query.json(),
             'cancelled':cancelled.json(),'resumed':resumed.json(),'request_rows':request_rows,'permits':permits,
             'lazy_decoder_ids':decoded,'ordered_wait_fixture':dict(latest),'jobs':[asdict(j) for j in repo.list_job_runs('local',task_id)],
             'narration_budget':asdict(budget),'host_budget':asdict(host_budget),

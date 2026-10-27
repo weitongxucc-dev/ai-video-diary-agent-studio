@@ -21,7 +21,8 @@ script_state = test_media_script_api.state
 
 
 @pytest.fixture(autouse=True)
-def isolated_local_workspace(state, monkeypatch):
+def isolated_local_workspace(request, monkeypatch):
+    state = request.getfixturevalue("execution_http_state" if "execution_http_state" in request.fixturenames else "state")
     # Existing domain fixtures name their single local workspace workspace_a.
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     from test_montage_pipeline import synthetic_clip_preview_budget
@@ -751,8 +752,53 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
     connection.close()
 
 
+@pytest.fixture
+def execution_http_state(tmp_path, monkeypatch):
+    """Persist only the HTTP source/version facts; no media or execution dispatch."""
+    from dataclasses import asdict
+    from fastapi.testclient import TestClient
+    from app.conversation_repository import ConversationRepository
+    from app.creation.contracts import TimelineVersion
+    from app.local_members import LocalMemberService
+    from test_creation_execution import _seed
+
+    root = tmp_path / 'execution-http'
+    root.mkdir()
+    repo, task_id, _, _ = _seed(root, workspace_id='local')
+    members = LocalMemberService(repo.database_path)
+    member, token = members.join(members.create_invite_code(), 'HTTP来源隔离成员')
+    task = repo.get_creation_task('local', task_id)
+    task.owner_user_id = member.member_id
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
+            (json.dumps(asdict(task), default=str), task.id))
+    version = repo.create_timeline_version(TimelineVersion(
+        'http-source-version', 'local', task.id, None, 1, {}, None))
+    conversations = ConversationRepository(root / 'conversations.sqlite3')
+    chat = conversations.create('local', member.member_id, 'task', task.id)
+    chat = conversations.save_draft(chat['id'], 'local', member.member_id, '核对当前作品', chat['draft_version'])
+    turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', member.member_id,
+        chat['draft_text'], str(uuid4()), chat['draft_version'], request_context={
+            'kind':'task', 'task_id':task.id, 'stage':'review',
+            'target_snapshot':{'timeline_version_id':version.id, 'timeline_sequence':version.sequence}})
+    monkeypatch.setattr(main, 'auth_context', SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main, 'local_members_service', members)
+    monkeypatch.setattr(main, 'production_repo', repo)
+    monkeypatch.setattr(main, 'conversation_repo', conversations)
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, '_verify_creation_identity', lambda actor:
+        'ready' if actor.member_id == member.member_id and main.find_member(members, actor.member_id) else 'unauthorized')
+    monkeypatch.setattr(main, '_creation_runtime', lambda: pytest.fail('rejected source must not start runtime'))
+    client = TestClient(main.app, headers={'X-Local-Member-Token':token})
+    return SimpleNamespace(production=repo, workspace_id='local', task=task, members=members,
+        member=member, conversations=conversations, conversation=chat, version=version,
+        finish=lambda: conversations.finish_turn(turn['id'], 'completed', result={}),
+        raw_post=client.post, base_url='/api/creation-tasks/'+task.id)
+
+
 @pytest.mark.parametrize('rejection', ['foreign_turn','old_version','new_instruction','stopped'])
-def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction(state, rejection):
+def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction(execution_http_state, rejection):
+    state = execution_http_state
     state.finish()
     chat=state.conversations.get(state.conversation['id'],state.workspace_id,state.member.member_id)
     text='开始制作'
@@ -875,20 +921,23 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
 
 
 @pytest.mark.parametrize('case_kind',['adopt','revision','stale','revoked','cancelled','queue_gap'])
-def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypatch,case_kind):
-    from fastapi import FastAPI
+def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypatch,case_kind,execution_http_state):
     from fastapi.testclient import TestClient
     from app.creation.execution_control import CreationExecutionControl
     from app.assistant.task_business import TaskBusiness
-    from test_creation_execution import _visual_decision_case,_require_section_visual_decision,submit_creation_stage,_submit_section_revision
+    from test_creation_execution import _segment_units_case,_require_section_visual_decision,submit_creation_stage,_submit_section_revision
     root=tmp_path/'visual-http';root.mkdir()
-    case=_visual_decision_case(root,monkeypatch)
+    case=_segment_units_case(root,monkeypatch,declared_source=True)
+    asset=case.repo.get_asset('local','section_video')
+    asset.segments[0].end_seconds=asset.duration_seconds
+    case.repo._save_asset(asset)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     if case_kind=='revision':
         for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
         _,revision,_=_submit_section_revision(case)
         job=case.repo.get_job_run('local',revision['job_id'])
     else: job=case.job
+    monkeypatch.setattr(case.segments.renderer,'render',lambda *a,**kw:pytest.fail('visual HTTP must not render'))
     _require_section_visual_decision(case,monkeypatch)
     grant=case.scheduler.pick_and_grant()
     assert grant.owner_id==job.id
@@ -909,12 +958,9 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
     monkeypatch.setattr(main,'_creation_execution_control',lambda:control)
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
     monkeypatch.setattr(main,'_require_automation_task_open',lambda *args:None)
-    app=FastAPI()
-    app.add_api_route('/api/creation-tasks/{task_id}/execution',main.get_creation_execution,methods=['GET'])
-    path='/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision'
-    app.add_api_route(path,main.get_segment_visual_decision,methods=['GET'])
-    app.add_api_route(path,main.adopt_segment_visual_decision,methods=['POST'])
-    client=TestClient(app)
+    monkeypatch.setattr(main,'device_runtime',runtime)
+    # Exercise the registered router, not retired main handler exports.
+    client=TestClient(main.app)
     root_url=f'/api/creation-tasks/{case.task_id}/execution'
     try:
         status=client.get(root_url)

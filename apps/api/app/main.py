@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.schemas import SegmentVisualDecisionAdoptRequest
 from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
 from app.assistant.task_business_adapter import TaskBusinessAdapter
@@ -8,6 +7,7 @@ from app.creation.script_generation_intent import ScriptGenerationIntent
 from app.creation.script_generation_routes import build_script_generation_router
 from app.creation.script_draft_use_case import ScriptDraftUseCase, ScriptDraftRejected
 from app.creation.execution_control import CreationExecutionControl, DesktopShutdownUseCase, ExecutionControlRejected
+from app.creation.execution_routes import build_creation_execution_router
 from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejected
 from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
@@ -204,7 +204,7 @@ from app.content_templates import list_content_templates
 from app.creation_execution import (
     presenter_inputs, presenter_input_facts, current_presenter_render,
     CpuRenderGrantContext, CreationStageGrantContext, CreationExecution, CreationExecutionActor,
-    CreationJobUnitExecutor, ExecutionStartRequest,
+    CreationJobUnitExecutor,
     revision_digest, submit_creation_stage, PERSON_EDIT_KIND, person_edit_digest,
     NARRATION_EDIT_KIND, narration_edit_digest, montage_waiting_for_confirmation,
 )
@@ -221,7 +221,6 @@ from app.edit_plan import (
     safe_processed_video_path,
 )
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
-from app.job_progress import summarize_job_progress
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
     script_generator_from_settings,
@@ -373,8 +372,6 @@ from app.schemas import (
     AssistantConversationRequestResponse,
     AssistantConversationStopRequest,
     AssistantConversationUpdateRequest,
-    JobProgressResponse,
-    TaskJobProgressResponse,
     ScriptLibrarySourceResponse,
     AuthorizationResponse,
     AuthorizationsResponse,
@@ -13283,134 +13280,23 @@ def _creation_execution_status(workspace_id: str, task_id: str, *, actor=None) -
         raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
-@app.get("/api/creation-tasks/{task_id}/execution/preview")
-def preview_creation_execution(task_id: str, request: Request) -> dict[str, object]:
-    _readable_creation_task(request, task_id)
-    try:
-        return _creation_execution_control().preview(current_workspace_id(request), task_id)
-    except ExecutionControlRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
-@app.get("/api/creation-tasks/{task_id}/execution")
-def get_creation_execution(task_id: str, request: Request, job_id: str | None = None) -> dict[str, object]:
-    _readable_creation_task(request, task_id)
-    if job_id is not None:
-        try:
-            return _read_bound_execution_result(task_id, request, job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="原制作作业不存在") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _creation_execution_status(current_workspace_id(request),task_id,
-        actor=_request_permit_actor(request,current_workspace_id(request)))
-
-
-@app.get('/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision')
-def get_segment_visual_decision(task_id: str, job_id: str, section_id: str, request: Request,
-        offset: int=Query(default=0,ge=0),limit: int=Query(default=8,ge=1,le=8)):
-    _readable_creation_task(request,task_id)
-    ws=current_workspace_id(request)
-    try:
-        return _creation_execution_control().read_visual_decision(ws,task_id,job_id,section_id,
-            _require_permit_actor(request,ws),offset=offset,limit=limit)
-    except PermissionError as exc: raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except KeyError as exc: raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
-    except ValueError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
-
-
-@app.post('/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision')
-def adopt_segment_visual_decision(task_id: str, job_id: str, section_id: str, request: Request,
-        payload: SegmentVisualDecisionAdoptRequest):
-    _readable_creation_task(request,task_id)
-    ws=current_workspace_id(request)
-    _require_automation_task_open(request,ws,task_id)
-    try:
-        return _creation_execution_control().adopt_visual_decision(ws,task_id,job_id,section_id,
-            _require_permit_actor(request,ws),payload,runtime=_creation_runtime())
-    except ExecutionControlRejected as exc: raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-    except PermissionError as exc: raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except KeyError as exc: raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
-    except (ValueError,OSError,RecoveryBlocked) as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
-
-
-@app.get(
-    "/api/creation-tasks/{task_id}/job-runs",
-    response_model=TaskJobProgressResponse,
-)
-def get_task_job_progress(task_id: str, request: Request) -> TaskJobProgressResponse:
-    """任务作业进度：只读后台已经落库的作业行。
-
-    进度、已耗时、更新时间和失败原因都来自这些记录；重开应用读到的是同一批
-    作业，页面关闭不改变它们。等待与处理估时分开，没有可信样本就是未知。
-    """
-    workspace_id = current_workspace_id(request)
-    _readable_creation_task(request, task_id)
-    try:
-        runs = production_repo.list_job_runs(workspace_id, task_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task not found") from exc
-    items, current = summarize_job_progress(runs, now=datetime.now(UTC))
-    return TaskJobProgressResponse(
-        task_id=task_id,
-        current=JobProgressResponse.model_validate(current, from_attributes=True)
-        if current
-        else None,
-        items=[JobProgressResponse.model_validate(item, from_attributes=True) for item in items],
-        total_count=len(items),
-    )
-
-
-@app.post("/api/creation-tasks/{task_id}/execution/start", status_code=202)
-def start_creation_execution(task_id: str, request: Request, payload: ExecutionStartRequest,
-                             assistant_turn_id: UUID | None = None) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    _require_automation_task_open(request,workspace_id,task_id)
-    if not payload.requirements_confirmed:
-        raise HTTPException(status_code=409, detail="请先确认实际文案与本次制作要求")
-    source, replay = _assistant_execution_source(task_id, request, assistant_turn_id, "start", payload.input_digest)
-    if replay is not None:
-        return replay
-    runtime = _creation_runtime()
-    actor = _require_permit_actor(request, workspace_id)
-    try:
-        result = _creation_execution_control().start(workspace_id, task_id, payload.script_id, payload.input_digest, actor, runtime, verify_media=device_runtime is None)
-    except ExecutionControlRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return _bind_assistant_execution_result(task_id, request, str(assistant_turn_id), result, source=source) if source else result
-
-
-@app.post("/api/creation-tasks/{task_id}/execution/resume", status_code=202)
-def resume_creation_execution(task_id: str, request: Request, assistant_turn_id: UUID | None = None) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    _require_automation_task_open(request,workspace_id,task_id)
-    _creation_task_or_404(workspace_id, task_id)
-    source, replay = _assistant_execution_source(task_id, request, assistant_turn_id, "resume")
-    if replay is not None:
-        return replay
-    runtime = _creation_runtime()
-    actor = _require_permit_actor(request, workspace_id)
-    try:
-        result = _creation_execution_control().resume(workspace_id, task_id, actor, runtime, verify_media=device_runtime is None)
-    except ExecutionControlRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return _bind_assistant_execution_result(task_id, request, str(assistant_turn_id), result, source=source) if source else result
-
-
-@app.post("/api/creation-tasks/{task_id}/execution/cancel")
-def cancel_creation_execution(task_id: str, request: Request) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
-    # 取消不要求整机运行时在场：没有许可通道时也必须能把已经发起的作业停下来。
-    runtime = device_runtime
-    actor = _request_permit_actor(request, workspace_id)
-    if actor is None:
-        raise HTTPException(status_code=403, detail="缺少可核查的原制作身份，不能取消")
-    try:
-        return _creation_execution_control().cancel(workspace_id, task_id, actor, runtime, verify_media=device_runtime is None)
-    except ExecutionControlRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
+app.include_router(build_creation_execution_router(
+    control_for=lambda: _creation_execution_control(),
+    workspace_for=lambda request: current_workspace_id(request),
+    readable_task=lambda request, task_id: _readable_creation_task(request, task_id),
+    task_for=lambda workspace_id, task_id: _creation_task_or_404(workspace_id, task_id),
+    request_actor=lambda request, workspace_id: _request_permit_actor(request, workspace_id),
+    require_actor=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
+    require_task_open=lambda request, workspace_id, task_id: _require_automation_task_open(request, workspace_id, task_id),
+    runtime_for_execution=lambda: _creation_runtime(),
+    current_runtime=lambda: device_runtime,
+    list_job_runs=lambda workspace_id, task_id: production_repo.list_job_runs(workspace_id, task_id),
+    assistant_source=lambda task_id, request, turn_id, action, digest: _assistant_execution_source(
+        task_id, request, turn_id, action, digest),
+    bind_assistant_result=lambda task_id, request, turn_id, result, *, source: _bind_assistant_execution_result(
+        task_id, request, turn_id, result, source=source),
+    read_bound_result=lambda task_id, request, job_id: _read_bound_execution_result(task_id, request, job_id),
+))
 
 def _creation_job_for_request(workspace_id: str, request_id: str):
     return _creation_execution_control().job_for_request(workspace_id, request_id)
