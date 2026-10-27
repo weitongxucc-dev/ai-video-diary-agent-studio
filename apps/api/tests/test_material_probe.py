@@ -194,7 +194,7 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
         assert repo.probe_records.material_probe_key_for_dependency(dependency) == material_probe_unit_key(
             source_sha, version=2,
         )
-        assert repo.pending_material_scene_dependencies() == []
+        assert repo.scene_records.pending_material_scene_dependencies() == []
         assert len(service.submit_pending_probe_dependencies()) == 1
         v2_grant = scheduler.pick_and_grant()
         assert v2_grant is not None and v2_grant.unit_key == material_probe_unit_key(
@@ -207,8 +207,8 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
                 conn, active, v2_candidate, facts,
             ),
         )
-        assert repo.pending_material_scene_dependencies() == [dependency]
-        assert len(repo.pending_material_scene_windows()) == 1
+        assert repo.scene_records.pending_material_scene_dependencies() == [dependency]
+        assert len(repo.scene_records.pending_material_scene_windows()) == 1
         assert repo.get_asset("one", asset_id).user_tags == ["人工标注"]
         with sqlite3.connect(repo.database_path) as conn:
             assert conn.execute(
@@ -224,7 +224,7 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
                 "WHERE unit_key LIKE 'probe-meta:v%:%'"
             ).fetchone() == (2,)
         source.write_bytes(b"changed source")
-        assert restarted.pending_material_scene_windows() == []
+        assert restarted.scene_records.pending_material_scene_windows() == []
     finally:
         scheduler.close()
 
@@ -268,7 +268,7 @@ def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_p
         assert asset.analysis_status == "blocked" and not asset.segments
         scheduler.close()
         restarted = ProductionRepository(repo.database_path, library)
-        assert restarted.pending_material_scene_dependencies() == [
+        assert restarted.scene_records.pending_material_scene_dependencies() == [
             MaterialProbeDependency("one", asset_id, source_sha, hash_grant.input_digest),
         ]
         with sqlite3.connect(repo.database_path) as conn:
@@ -276,7 +276,7 @@ def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_p
                 "UPDATE material_analysis_checkpoints SET result_ref='sha256:bad' "
                 "WHERE unit_key LIKE 'probe-meta:v1:%'"
             )
-        assert restarted.pending_material_scene_dependencies() == []
+        assert restarted.scene_records.pending_material_scene_dependencies() == []
     finally:
         scheduler.close()
 
@@ -376,7 +376,7 @@ def test_real_short_video_ffprobe_uses_grant_and_leaves_scene_pending(tmp_path: 
         asset = repo.list_assets("one")[0]
         assert asset.duration_seconds is not None and asset.duration_seconds > 0
         assert asset.analysis_status == "blocked" and not asset.segments
-        assert repo.pending_material_scene_dependencies() == [
+        assert repo.scene_records.pending_material_scene_dependencies() == [
             MaterialProbeDependency("one", asset.id, probe_grant.input_digest,
                                     hash_grant.input_digest),
         ]

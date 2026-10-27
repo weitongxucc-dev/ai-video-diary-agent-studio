@@ -81,7 +81,7 @@ class MaterialHashOwnerVerifier:
                 ):
                     verdict = "stale"
             elif intent.unit_key.startswith("scene-window:v1:"):
-                candidate = self.repository.material_scene_candidate(
+                candidate = self.repository.scene_records.material_scene_candidate(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
                 )
@@ -156,7 +156,7 @@ class MaterialHashOwnerVerifier:
             )
             if source_verdict != "ready":
                 return source_verdict
-            candidate = self.repository.material_scene_candidate(
+            candidate = self.repository.scene_records.material_scene_candidate(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
@@ -384,7 +384,7 @@ class MaterialIngestionService:
             return []
         actor = MaterialHashServiceActor(*binding)
         request_ids = []
-        for candidate in self.repository.pending_material_scene_windows():
+        for candidate in self.repository.scene_records.pending_material_scene_windows():
             if candidate.workspace_id != binding[0]:
                 raise PermissionError("镜头检查点归属与素材绑定不一致")
             intent = SubmissionIntent(
@@ -545,7 +545,7 @@ class MaterialIngestionService:
         scheduler = self.scheduler
         try:
             scheduler.assert_grant(grant)
-            candidate = self.repository.material_scene_candidate_for_grant(grant)
+            candidate = self.repository.scene_records.material_scene_candidate_for_grant(grant)
         except (OSError, ValueError, PermissionError):
             if self._defer_stale_scene(grant):
                 return None
@@ -586,7 +586,7 @@ class MaterialIngestionService:
                 return None
             scheduler.fail_unit(
                 grant, reason="scene_resource_limit",
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, "scene_resource_limit",
                 ),
             )
@@ -597,7 +597,7 @@ class MaterialIngestionService:
             reason = "scene_timeout" if isinstance(error, GrantedCommandTimeout) else "scene_output_limit"
             scheduler.fail_unit(
                 grant, reason=reason,
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, reason,
                 ),
             )
@@ -607,7 +607,7 @@ class MaterialIngestionService:
                 return None
             scheduler.fail_unit(
                 grant, reason="scene_failed",
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, "scene_failed",
                 ),
             )
@@ -621,14 +621,14 @@ class MaterialIngestionService:
         except ValueError:
             scheduler.fail_unit(
                 grant, reason="scene_failed",
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, "scene_failed",
                 ),
             )
             return None
         scheduler.complete_unit(
             grant, checkpoint_database_path=self.repository.database_path,
-            checkpoint_write=lambda conn, active: self.repository.commit_material_scene(
+            checkpoint_write=lambda conn, active: self.repository.scene_records.commit_material_scene(
                 conn, active, candidate, facts,
             ),
         )
@@ -641,7 +641,7 @@ class MaterialIngestionService:
     def _defer_stale_scene(self, grant: Grant) -> bool:
         if self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        verdict = self.repository.material_scene_verdict_for_grant(grant)
+        verdict = self.repository.scene_records.material_scene_verdict_for_grant(grant)
         if verdict == "ready" and shutil.which("ffmpeg") is None:
             verdict = "dependency"
         if verdict == "ready":
