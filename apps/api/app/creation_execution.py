@@ -325,23 +325,37 @@ def current_presenter_render(repository, task, segment, request, resolve_output)
     return render
 
 
-def presenter_stage_facts(repository, task, script, plan, budget, models):
+def presenter_stage_facts(repository, task, script, plan, budget, models, *, connection=None):
     if budget is None:
         raise ValueError("人物制作预算尚未标定，请配置 DEVICE_PRESENTER_* 标定值")
-    inputs = presenter_inputs(repository, task, script, plan, models)
+    if connection is None:
+        with repository.creation_execution_read() as conn:
+            return presenter_stage_facts(repository, task, script, plan, budget, models, connection=conn)
+    inputs, files, duration = [], {}, 0
+    for segment, request in iter_presenter_inputs(repository, task, script, plan, models, connection=connection):
+        # Requests and file identities are global admission facts. Text remains
+        # in its original row and is encoded only when that one pair is hashed.
+        inputs.append((segment.id, request))
+        duration += segment.duration_seconds
+        for fact in presenter_input_facts(request):
+            files[fact['path']] = fact
     if not inputs:
         raise ValueError("当前方案没有待制作的人物段落")
-    files = {fact["path"]: fact for _, item in inputs for fact in presenter_input_facts(item)}
     facts = [files[path] for path in sorted(files)]
     resources = {"kind": "creation_person_render", "execution_mode": "isolated_avatar_lipsync",
                  "section_count": len(inputs), "input_bytes": sum(item["size_bytes"] for item in facts),
-                 "duration_seconds": sum(item.duration_seconds for item, _ in inputs),
+                 "duration_seconds": duration,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
-    manifest = {"inputs": [[asdict(segment), asdict(request)] for segment, request in inputs],
-                "files": facts, "resources": resources}
-    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
-    return f"person_render:{digest}", resources
+    encode = lambda value: json.dumps(value, sort_keys=True, default=str).encode()
+    checksum = hashlib.sha256(b'{"files": ' + encode(facts) + b', "inputs": [')
+    for index, (segment_id, request) in enumerate(inputs):
+        if index:
+            checksum.update(b', ')
+        segment = repository.get_narration_segment(task.workspace_id, task.id, segment_id, connection=connection)
+        checksum.update(encode([asdict(segment), asdict(request)]))
+    checksum.update(b'], "resources": ' + encode(resources) + b'}')
+    return f"person_render:{checksum.hexdigest()}", resources
 
 
 def person_edit_digest(operation):
@@ -540,6 +554,12 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                      presenter_models=None, resolve_presenter_output=None,
                      actor=None, graphic_source_facts=None, audio_mix_facts=None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
+    if not conn.in_transaction:
+        with repository.creation_execution_read() as reader:
+            return cpu_render_facts(repository, reader, task, creation_plan, limits, request=request,
+                presenter_limits=presenter_limits, presenter_models=presenter_models,
+                resolve_presenter_output=resolve_presenter_output, actor=actor,
+                graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts)
     if not task.montage_plan_id or not task.narration_cache_key or not task.confirmed_script_id:
         raise ValueError("当前任务缺少已确认故事板或配音")
     row = conn.execute(
@@ -565,9 +585,9 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         if presenter_limits is None or resolve_presenter_output is None:
             raise ValueError("人物组合 CPU 成片专属预算尚未标定")
         limits = presenter_limits
-        script = repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
-        person_inputs = {segment.id: (segment, item) for segment, item in
-                         presenter_inputs(repository, task, script, creation_plan, presenter_models or {})}
+        script, _ = repository.script_records.read_execution_script_metadata(conn, task.workspace_id, task.confirmed_script_id)
+        person_inputs = {segment.id: item for segment, item in iter_presenter_inputs(
+            repository, task, script, creation_plan, presenter_models or {}, connection=conn)}
     audio_mix = None
     if montage.audio_timeline is not None:
         if not isinstance(actor, CreationExecutionActor) or audio_mix_facts is None:
@@ -646,7 +666,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
             if cue is None or cue.narration_segment_id not in person_inputs:
                 raise ValueError("人物镜头不属于当前配音与露脸选择")
-            segment, item = person_inputs[cue.narration_segment_id]
+            item = person_inputs[cue.narration_segment_id]
+            segment = repository.get_narration_segment(task.workspace_id, task.id, cue.narration_segment_id, connection=conn)
             render = current_presenter_render(repository, task, segment, item, resolve_presenter_output)
             if (render is None or render.id != clip.person_render_id
                     or clip.asset_id != f"person:{render.id}" or clip.source_path != f"person-render://{render.id}"
@@ -893,8 +914,13 @@ class CreationJobOwnerVerifier:
 
     def admission_basis_changed(self, rejection):
         """Reopen only when current fixed unit/profile facts resolve the refusal."""
-        with self.repository._connect() as conn:
-            job,task,start,script,plan=self._facts(conn,rejection['workspace_id'],rejection['job_id'])
+        if rejection['stage'] == 'person_render':
+            with self.repository.creation_execution_read() as conn:
+                job, snapshot, start = self._snapshot_facts(conn, rejection['workspace_id'], rejection['job_id'])
+                task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+        else:
+            with self.repository._connect() as conn:
+                job,task,start,script,plan=self._facts(conn,rejection['workspace_id'],rejection['job_id'])
         stage=rejection['stage']
         budget={'narration':self.narration_budget,'person_render':self.presenter_budget,
             'montage_plan':self.montage_budget}.get(stage)
@@ -975,11 +1001,11 @@ class CreationJobOwnerVerifier:
             actor=actor, graphic_source_facts=self.graphic_source_facts, audio_mix_facts=mix_facts)
 
     def stage_facts(self, task, script, plan, stage, *, connection=None):
-        if stage == 'montage_plan' and connection is None:
+        if stage in {'montage_plan', 'person_render'} and connection is None:
             with self.repository.creation_execution_read() as conn:
                 return self.stage_facts(task, script, plan, stage, connection=conn)
         if stage == "person_render":
-            return presenter_stage_facts(self.repository, task, script, plan, self.presenter_budget, self.presenter_models)
+            return presenter_stage_facts(self.repository, task, script, plan, self.presenter_budget, self.presenter_models, connection=connection)
         key, resources = creation_stage_facts(self.repository, task, script, plan, stage,
                                              self.narration_budget, self.montage_budget, connection=connection)
         if stage == "montage_plan" and plan.presenter_share_target:
@@ -1518,10 +1544,10 @@ class CreationJobOwnerVerifier:
                 or stage == "person_render"
             ):
                 # Whole-stage legacy consumers still require their full DTO.
-                if stage != 'montage_plan':
+                if stage not in {'montage_plan', 'person_render'}:
                     _, _, _, script, _ = self._facts(conn, intent.workspace_id, intent.owner_id)
                 key, resources = (self.stage_facts(task, script, plan, stage, connection=conn)
-                    if connection is not None or stage == 'montage_plan' else self.stage_facts(task, script, plan, stage))
+                    if connection is not None or stage in {'montage_plan', 'person_render'} else self.stage_facts(task, script, plan, stage))
                 if key != intent.unit_key:
                     raise PermissionError("制作阶段输入已变化，请重新安排")
             else:
@@ -1662,7 +1688,7 @@ class CreationJobOwnerVerifier:
             elif stage == 'narration' and request.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
                 key, resources = self.narration_unit_facts(conn, job, task, script, plan, request=request)
             else:
-                if stage != 'montage_plan':
+                if stage not in {'montage_plan', 'person_render'}:
                     _, _, _, script, _ = self._facts(conn, request.workspace_id, request.owner_id)
                 key, resources = self.stage_facts(task, script, plan, stage, connection=conn)
         except PermissionError:
@@ -2103,7 +2129,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
             stage, _resources = owner.narration_unit_facts(conn, job, task, script, plan, pcm_preparation=pcm_preparation)
     elif stage == "person_render" or getattr(owner, stage.removesuffix("_plan") + "_budget", None) is not None:
         with repository.creation_execution_read(connection) as conn:
-            if stage != 'montage_plan':
+            if stage not in {'montage_plan', 'person_render'}:
                 _, _, _, script, _ = owner._facts(conn, job.workspace_id, job.id)
             else:
                 snapshot = repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
@@ -2837,8 +2863,8 @@ class CreationJobUnitExecutor:
             next_intent = next_creation_intent(self.repository, scheduler, job)
             output = task.narration_cache_key if stage == 'narration' else ','.join((item.id for item in self.repository.list_person_renders(task.workspace_id, task.id) if item.status == 'ready')) if stage == 'person_render' else task.montage_plan_id
             def checkpoint(conn, current):
-                if stage == 'montage_plan' and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
-                    raise PermissionError('原故事板检查点提交前授权或来源已变化')
+                if stage in {'montage_plan', 'person_render'} and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
+                    raise PermissionError('原制作检查点提交前授权或来源已变化')
                 return self._checkpoint(conn, current, status='queued', output=output, stage=stage,
                     reason='waiting_for_user' if next_intent is None else None)
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,

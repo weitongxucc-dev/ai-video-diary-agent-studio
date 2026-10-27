@@ -17,7 +17,7 @@ from app.montage import creation_task_montage_plan_from_payload
 from app.creation_execution import current_presenter_render
 import hashlib
 from app.creation_execution import presenter_input_facts
-from app.creation_execution import presenter_inputs
+from app.creation_execution import iter_presenter_inputs
 from app.models import utc_now
 from uuid import uuid4
 from app.creation.editing.metadata_use_case import prepare_changed_montage, LegacyMontageReference, InvalidMontage
@@ -160,15 +160,27 @@ class PersonStageUseCase:
 
     def generate_stage(self, workspace_id: str, task_id: str, context: CreationStageGrantContext):
         context.check()
-        task = self.task_or_missing(workspace_id, task_id)
-        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+        with self.repository.creation_execution_read() as conn:
+            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+            selected = [segment.id for segment, _ in iter_presenter_inputs(self.repository, snapshot.task,
+                snapshot.script_header, snapshot.plan, self.presenter_model_ids(), connection=conn)]
         total_output_bytes = 0
-        for segment, request in presenter_inputs(self.repository, task, script, plan, self.presenter_model_ids()):
+        for segment_id in selected:
             context.check()
-            render = current_presenter_render(self.repository, task, segment, request, self.metadata.picture_renderer.person_path)
+            with self.repository.creation_execution_read() as conn:
+                current = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+                target = next(((segment, request) for segment, request in iter_presenter_inputs(self.repository,
+                    current.task, current.script_header, current.plan, self.presenter_model_ids(), connection=conn)
+                    if segment.id == segment_id), None)
+                if target is None:
+                    raise ValueError('原人物段落或当前份额已变化，不能继续旧安排')
+                segment, request = target
+            # Every source reader has exited before cache publication or a model
+            # call. The original Grant still owns every generated inner result.
+            render = current_presenter_render(self.repository, current.task, segment, request, self.metadata.picture_renderer.person_path)
             if render is None:
-                render = self.generate_record(workspace_id, task.id, CreationTaskPersonRenderRequest(narration_segment_id=segment.id, person_profile_id=request.person.id, person_version=request.person.version), grant_context=context)
+                render = self.generate_record(workspace_id, task_id, CreationTaskPersonRenderRequest(narration_segment_id=segment.id,
+                    person_profile_id=request.person.id, person_version=request.person.version), grant_context=context)
             total_output_bytes += self.metadata.picture_renderer.person_path(render).stat().st_size
             if total_output_bytes > context.max_output_bytes:
                 raise ValueError('人物阶段累计输出超过专属预算')

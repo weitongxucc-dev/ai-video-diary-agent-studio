@@ -344,6 +344,20 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
 
 @pytest.fixture
 def presenter_permit_case(tmp_path, monkeypatch):
+    yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=False)
+
+
+@pytest.fixture
+def presenter_input_stream_case(tmp_path, monkeypatch):
+    yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=True)
+
+
+@pytest.fixture
+def presenter_key_stream_case(tmp_path, monkeypatch):
+    yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=True, section_count=2)
+
+
+def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_count=1):
     """Persistent lawful inputs; resource availability and media bytes are fixtures."""
     import json
     from dataclasses import asdict
@@ -372,8 +386,22 @@ def presenter_permit_case(tmp_path, monkeypatch):
         person_authorization_id="person-auth", voice_authorization_id="voice-auth",
     )
     person_auth = person.authorization
-    register_synthetic_video_asset(repo, workspace_id=WORKSPACE, member_id=member.member_id,
-        path=tmp_path / "library" / "person.mp4", asset_id="person-video", seconds=1)
+    if metadata_only:
+        from app.materials.contracts import MaterialAsset, MaterialSegment
+        path = tmp_path / 'library' / 'person.mp4'
+        path.write_bytes(b'paid metadata-only person source; no codec')
+        asset = MaterialAsset('person-video', WORKSPACE, path.name, str(path), path.stat().st_size,
+            datetime.fromtimestamp(path.stat().st_mtime, timezone.utc), duration_seconds=1,
+            usage_role='b_roll', review_status='approved', analysis_status='ready', owner_user_id=member.member_id,
+            segments=[MaterialSegment('person-video-segment-0', 'person-video', 0, 1,
+                usage_role='b_roll', review_status='approved')])
+        repo._save_asset(asset)
+        with repo._connect() as conn:
+            repo._claim_workspace_media_reference(conn, workspace_id=WORKSPACE,
+                reference=repo.workspace_media_reference_for_asset(WORKSPACE, asset.id))
+    else:
+        register_synthetic_video_asset(repo, workspace_id=WORKSPACE, member_id=member.member_id,
+            path=tmp_path / "library" / "person.mp4", asset_id="person-video", seconds=1)
     plan = CreationPlan(id="plan", workspace_id=WORKSPACE, goal="测试", name="测试", target_count=1,
         language="zh-CN", aspect_ratio="9:16", duration_target_seconds=15,
         knowledge_references=[], source_references=[], selected_voice=CreationPlanVoiceReference(
@@ -390,26 +418,37 @@ def presenter_permit_case(tmp_path, monkeypatch):
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="合成文案",
             visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
         created_at=now.isoformat(), updated_at=now.isoformat(), confirmed_at=now.isoformat())
+    if section_count == 2:
+        payload['sections'].append(dict(id='tail', title='尾段', content='中文 "quoted"\n café 😺',
+            visual_prompt='', evidence_reference_ids=[]))
     audio = tmp_path / "spoken.wav"
     audio.write_bytes(synthetic_wav_bytes())
     repo.save_narration_artifact(NarrationArtifactRecord(id="narration", workspace_id=WORKSPACE,
         task_id=task.id, script_id="script", voice_profile_id="voice", cache_key="narration",
         audio_path=str(audio), duration_seconds=1, sample_rate=16000, model_id="fixture"))
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    seeded = CreationTaskScript(**{key: value for key, value in payload.items()
+        if key not in {'sections', 'created_at', 'updated_at', 'confirmed_at'}},
+        sections=[CreationTaskScriptSection(**item) for item in payload['sections']],
+        created_at=now, updated_at=now, confirmed_at=now)
     with repo._connect() as conn:
+        conn.execute('BEGIN')
+        encoded = repo._script_payload(conn, seeded)
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            ("script", WORKSPACE, task.id, "run", json.dumps(payload), now.isoformat()))
+            ("script", WORKSPACE, task.id, "run", encoded, now.isoformat()))
         task.confirmed_script_id = "script"
         task.narration_cache_key = "narration"
         task.stage = "montage"
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
-    repo.save_narration_segments(WORKSPACE, task.id, "script", [NarrationSegment("segment", WORKSPACE,
-        task.id, "script", "section", "合成文案", "narration://artifact/narration", 1, 16000,
-        "fixture", "voice", "v1", "zh", "v1", "ready")])
+    repo.save_narration_segments(WORKSPACE, task.id, "script", [NarrationSegment(
+        'segment' if index == 0 else 'tail-segment', WORKSPACE, task.id, "script", section['id'], section['content'],
+        "narration://artifact/narration", 1, 16000, "fixture", "voice", "v1", "zh", "v1", "ready")
+        for index, section in enumerate(payload['sections'])])
     budget = PresenterBudget(1, 1024, 15, 4096, 1, 5, 1024**2*64, 32, .1, 1024**2*64, 4096)
     cpu = cpu_render_budget_from_env(_CPU_RENDER_ENV)
     def forbidden(*args):
         pytest.fail("no ungranted stage or real media work")
-    execution = CreationExecution(repo, run_narration=forbidden, run_montage_plan=forbidden,
+    execution = CreationExecution(repo, run_montage_plan=forbidden,
         run_render=forbidden, render_is_valid=forbidden)
     script = repo.get_creation_task_script(WORKSPACE, "script")
     persisted = repo.get_creation_plan(WORKSPACE, plan.id)
@@ -813,4 +852,189 @@ def test_ready_presenter_cache_rejects_changed_audio_or_visual_under_same_refere
         os.utime(original, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     assert not case.registration.owner.person_valid(task)
     with case.repo._connect() as conn, pytest.raises(ValueError, match="人物镜头版本、授权或输出已失效"):
+        case.registration.owner.render_facts(conn, task, plan)
+
+
+def test_presenter_row_admission_preserves_original_json_key_and_resources(presenter_key_stream_case, monkeypatch):
+    import hashlib
+    import json
+    from dataclasses import asdict, replace
+    from app.creation_execution import presenter_inputs, presenter_input_facts, presenter_stage_facts
+    case = presenter_key_stream_case
+    repo = case.repo
+    script = repo.get_creation_task_script(WORKSPACE, 'script')
+    plan = replace(repo.get_creation_plan(WORKSPACE, case.task.plan_id), presenter_share_target=100)
+    inputs = presenter_inputs(repo, case.task, script, plan, {'fast': 'fixture-avatar'})
+    files = {fact['path']: fact for _, request in inputs for fact in presenter_input_facts(request)}
+    facts = [files[path] for path in sorted(files)]
+    resources = {'kind': 'creation_person_render', 'execution_mode': 'isolated_avatar_lipsync',
+        'section_count': len(inputs), 'input_bytes': sum(item['size_bytes'] for item in facts),
+        'duration_seconds': sum(segment.duration_seconds for segment, _ in inputs),
+        'max_output_bytes': case.budget.max_output_bytes, 'threads': case.budget.max_threads,
+        'timeout_seconds': case.budget.max_timeout_seconds}
+    original = {'inputs': [[asdict(segment), asdict(request)] for segment, request in inputs],
+        'files': facts, 'resources': resources}
+    expected = 'person_render:' + hashlib.sha256(json.dumps(original, sort_keys=True, default=str).encode()).hexdigest()
+    def forbidden(*args, **kwargs):
+        pytest.fail('person admission must not hydrate whole script/segment inputs')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
+        monkeypatch.setattr(repo, name, forbidden)
+    with repo.creation_execution_read() as conn:
+        snapshot = repo.read_creation_execution_snapshot(WORKSPACE, case.task.id, connection=conn)
+        actual, measured = presenter_stage_facts(repo, snapshot.task, snapshot.script_header, plan,
+            case.budget, {'fast': 'fixture-avatar'}, connection=conn)
+        assert actual == expected and measured == resources and conn.in_transaction
+        assert measured['section_count'] == 2
+
+
+def _stream_person_executor(case, monkeypatch, boundary):
+    from contextlib import contextmanager
+    from pathlib import Path
+    from types import SimpleNamespace
+    from app.artifact_store import ArtifactStore
+    from app.avatar_lipsync import AvatarAndLipSyncResult
+    from app.creation.person_stage_use_case import PersonStageUseCase
+    from app.creation_execution import CreationJobUnitExecutor
+    from app.video_jobs import VideoJobRunner
+    import app.creation.person_stage_use_case as module
+    active = {}
+    read = case.repo.creation_execution_read
+    @contextmanager
+    def tracked(connection=None):
+        with read(connection) as conn:
+            active[id(conn)] = active.get(id(conn), 0) + 1
+            try:
+                yield conn
+            finally:
+                active[id(conn)] -= 1
+                if not active[id(conn)]:
+                    del active[id(conn)]
+    monkeypatch.setattr(case.repo, 'creation_execution_read', tracked)
+    store = ArtifactStore(case.tmp_path/'stream-output')
+    metadata = SimpleNamespace(artifact_store=store, picture_renderer=SimpleNamespace(
+        person_path=lambda render: Path(render.output_path) if render.output_path and Path(render.output_path).is_file() else None))
+    provider = SimpleNamespace(ready=True, model_id='fixture-avatar')
+    class PaidProvider:
+        def __init__(self, root, provider):
+            self.root = Path(root)
+        def render(self, request, *, output_cache_key, grant_context, **kwargs):
+            assert not active, 'source read transaction must exit before the provider boundary'
+            grant_context.check()
+            boundary.append(grant_context.grant.request_id)
+            output = self.root/'paid-person.mp4'
+            output.write_bytes(b'paid synthetic person output; no model or codec')
+            return AvatarAndLipSyncResult('succeeded', output_cache_key, str(output), 1,
+                'fixture alignment; no model or decoding', None, None, None)
+    monkeypatch.setattr(module, 'AvatarAndLipSyncService', PaidProvider)
+    root = case.tmp_path/'stream-output'; root.mkdir(exist_ok=True)
+    stage = PersonStageUseCase(case.repo, metadata, SimpleNamespace(provider=lambda quality: provider),
+        VideoJobRunner(case.repo), SimpleNamespace(video_output_path=root))
+    def forbidden(*args, **kwargs):
+        pytest.fail('person stream must not hydrate whole input DTOs or execute a worker')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo, name, forbidden)
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
+    return CreationJobUnitExecutor(case.repo, render_action=forbidden, render_is_valid=lambda *args: False,
+        person_stage=stage)
+
+
+def test_presenter_row_owner_executes_after_reader_release_and_reuses_original_request(presenter_input_stream_case, monkeypatch):
+    from app.creation_execution import submit_creation_stage
+    case = presenter_input_stream_case
+    boundary = []
+    executor = _stream_person_executor(case, monkeypatch, boundary)
+    scheduler = _presenter_scheduler(case)
+    grant = None
+    try:
+        request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
+        assert submit_creation_stage(case.execution, scheduler, case.job, case.actor) == request_id
+        original = scheduler._get(request_id)
+        grant = scheduler.pick_and_grant(); assert grant is not None
+        executor.execute(grant, scheduler)
+        assert boundary == [request_id]
+        assert scheduler._get(request_id).resources == original.resources
+        assert scheduler._get(request_id).state == 'done'
+        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == 'queued'
+        assert len(case.repo.list_person_renders(WORKSPACE, case.task.id)) == 1
+        scheduler.assert_released(grant)
+    finally:
+        if grant is not None and scheduler._get(grant.request_id).state in {'granted', 'yield_requested'}:
+            scheduler.fail_unit(grant, reason='fixture_finished', failure_write=lambda conn, current: 'fixture_finished')
+        scheduler.close()
+
+
+@pytest.mark.parametrize('change', ['authorization', 'tail'])
+def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(presenter_input_stream_case, monkeypatch, change):
+    import json
+    from types import SimpleNamespace
+    import app.creation_execution as module
+    case = presenter_input_stream_case
+    boundary = []
+    executor = _stream_person_executor(case, monkeypatch, boundary)
+    scheduler = _presenter_scheduler(case)
+    grant = None
+    try:
+        request_id = module.submit_creation_stage(case.execution, scheduler, case.job, case.actor)
+        grant = scheduler.pick_and_grant(); assert grant is not None
+        # A preexisting review gate makes the real next-unit selection return None.
+        _presenter_montage_fixture(case, SimpleNamespace(id='pending-review-person'))
+        with case.repo._connect() as conn:
+            row = conn.execute('SELECT payload FROM creation_task_montage_plans WHERE id=?', ('montage',)).fetchone()
+            pending = json.loads(row['payload']); pending['status'] = 'waiting_for_user'
+            pending['clips'][0]['needs_confirmation'] = True
+            conn.execute('UPDATE creation_task_montage_plans SET payload=? WHERE id=?', (json.dumps(pending), 'montage'))
+        next_units = []
+        select_next = module.next_creation_intent
+        def observed(*args, **kwargs):
+            result = select_next(*args, **kwargs)
+            next_units.append(result)
+            return result
+        monkeypatch.setattr(module, 'next_creation_intent', observed)
+        released = scheduler._released_for_commit
+        injected = []
+        def changed(conn, current):
+            result = released(conn, current)
+            if not injected:
+                injected.append(True)
+                if change == 'authorization':
+                    monkeypatch.setattr(case.registration.owner, 'verify_identity', lambda _: 'unauthorized')
+                else:
+                    conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','changed tail') WHERE script_id='script' AND section_id='section'")
+            return result
+        monkeypatch.setattr(scheduler, '_released_for_commit', changed)
+        executor.execute(grant, scheduler)
+        assert next_units == [None] and injected and boundary == [request_id]
+        assert scheduler._get(request_id).state != 'done'
+        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == 'interrupted'
+        rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
+        assert len(rendered) == 1 and rendered[0].status == 'ready'
+        assert not [event for event in case.repo.list_task_events(WORKSPACE, case.task.id)
+            if event.job_id == case.job.id and event.event_type == 'creation_execution_stage'
+            and event.payload.get('stage') == 'person_render' and event.payload.get('status') == 'completed']
+    finally:
+        if grant is not None and scheduler._get(grant.request_id).state in {'granted', 'yield_requested'}:
+            scheduler.fail_unit(grant, reason='fixture_finished', failure_write=lambda conn, current: 'fixture_finished')
+        scheduler.close()
+
+
+def test_presenter_cpu_row_inputs_keep_actual_source_accounting_and_cache_revalidation(presenter_input_stream_case, monkeypatch):
+    from app.creation_execution import CpuRenderLimits, cpu_render_facts
+    case = presenter_input_stream_case
+    render = _complete_presenter_fixture(case)
+    task = _presenter_montage_fixture(case, render)
+    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    def forbidden(*args, **kwargs):
+        pytest.fail('person CPU admission must not load full input DTOs')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo, name, forbidden)
+    with case.repo._connect() as idle:
+        assert not idle.in_transaction
+        key, resources = case.registration.owner.render_facts(idle, task, plan)
+        assert key.startswith('render:') and resources['kind'] == 'creation_presenter_render'
+        assert resources['input_bytes'] == (case.tmp_path/'spoken.wav').stat().st_size + (case.tmp_path/'synthetic-person.mp4').stat().st_size
+        assert resources['threads'] == case.cpu.max_threads
+        assert not idle.in_transaction and idle.execute('SELECT 1').fetchone()[0] == 1
+    source = case.tmp_path/'spoken.wav'
+    source.write_bytes(source.read_bytes()+b'changed')
+    with case.repo.creation_execution_read() as conn, pytest.raises(ValueError, match='失效'):
         case.registration.owner.render_facts(conn, task, plan)
