@@ -12,6 +12,18 @@ from app.schemas import (MediaScriptToolSaveRequest, MediaScriptToolUpdateReques
                          MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest)
 from test_assistant_typed_tools import installed_pi
 
+@pytest.fixture(autouse=True)
+def receipt_projection_native_guard(request, monkeypatch):
+    if request.node.originalname not in {'test_metadata_receipt_keeps_the_actual_generated_source',
+            'test_actual_query_receipt_replaces_the_prior_unknown_save'}:
+        return
+    def forbidden(*args,**kwargs):
+        pytest.fail('pure receipt projection must not invoke SDK, media or Popen')
+    monkeypatch.setattr(subprocess,'Popen',forbidden)
+    import _media_preview_test_fixtures as helpers
+    monkeypatch.setattr(helpers,'write_synthetic_video',forbidden)
+
+
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 CAPS = {"schemas": {name: cls.model_json_schema() for name, cls in (
     ("save", MediaScriptToolSaveRequest), ("update", MediaScriptToolUpdateRequest),

@@ -153,7 +153,7 @@ class MediaScriptTools:
             raise PermissionError("current recipe identity is unavailable or unauthorized")
         return actor.user_id or actor.member_id
 
-    def _creation_identity(self, actor, request_id):
+    def registration_identity(self, actor, request_id):
         if self.task_id is not None:
             raise PermissionError("任务授权不能创建通用配方")
         owner = self._identity(actor)
@@ -344,7 +344,7 @@ class MediaScriptTools:
         return tool_id
 
     def create_from_job(self, actor, job_id, *, request_id, name, description, parameter_schema):
-        tool_id, registration_id, key = self._creation_identity(actor,request_id)
+        tool_id, registration_id, key = self.registration_identity(actor,request_id)
         with self.repository._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._save(conn, actor, tool_id, 1, job_id, name, description, parameter_schema,
@@ -352,7 +352,7 @@ class MediaScriptTools:
         return self.get(actor, tool_id,version=1)
 
     def get_created_for_request(self, actor, request_id):
-        tool_id, registration_id, key = self._creation_identity(actor,request_id)
+        tool_id, registration_id, key = self.registration_identity(actor,request_id)
         job = self.repository.get_job_run_by_idempotency_key(actor.workspace_id,key)
         if job is None:
             raise KeyError(str(request_id))

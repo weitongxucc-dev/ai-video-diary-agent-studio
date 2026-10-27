@@ -45,7 +45,8 @@ def invocation(state):
         "parameters": {"color": "blue"}, "input_refs": []}
 
 
-def test_save_replays_original_v1_after_update_and_rejects_changed_input(state):
+def test_save_replays_original_v1_after_update_and_rejects_changed_input(receipt_state):
+    state = receipt_state
     tool_id = state.tool["tool_id"]
     updated = state.client.patch(f"/api/media-script-tools/{tool_id}", json={
         "expected_version": 1, **{key: value for key, value in state.save_payload.items() if key != "request_id"}, "name": "新版卡片"})
@@ -431,3 +432,230 @@ def test_metadata_receipt_keeps_earlier_real_media_job_from_same_turn(assistant_
     assert response.json()["media_job"]["result_kind"] == "graphic_source"
     saved = state.conversations.get_turn(response.json()["turn_id"])
     assert saved["result"]["response"]["media_job"]["job_id"] == response.json()["media_job"]["job_id"]
+
+
+@pytest.fixture
+def receipt_state(tmp_path, monkeypatch):
+    """Declared completed JSON producer facts; real registry, no runner/media."""
+    import subprocess
+    import hashlib
+    from fastapi.testclient import TestClient
+    from starlette.requests import Request
+    from app.artifact_store import ArtifactStore
+    from app.local_members import LocalMemberService
+    from app.models import utc_now
+    from app.production import ProductionRepository, CreationPlan
+    from app.creation.contracts import CreationTask, JobRun, ArtifactRecord, TransformRun
+    from app.task_audio import TASK_MEDIA_KIND
+    def forbidden(*args, **kwargs):
+        pytest.fail('recipe receipt evidence forbids Popen, SDK, media helpers, models and drivers')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset',
+                     'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    for name in ('run_task_turn', 'run_plan_turn', 'start_assistant_continuation_driver',
+                 '_creation_runtime', '_start_device_runtime'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
+    library = tmp_path/'library'
+    library.mkdir()
+    repo = ProductionRepository(tmp_path/'metadata.sqlite3', library)
+    members = LocalMemberService(repo.database_path)
+    member, token = members.whoami(None)
+    actor = CreationExecutionActor('local', member.member_id)
+    plan = CreationPlan('receipt-plan','local','declared metadata','declared metadata',1,'zh-CN','9:16',5,
+        [],[],None,[],0,0,'',[],[],[],'declared-producer')
+    task = CreationTask('receipt-task','local',plan.id,'declared metadata','knowledge_explanation',owner_user_id=member.member_id)
+    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    task = repo.get_creation_task('local',task.id)
+    store = ArtifactStore(tmp_path/'blobs')
+    # Succeeded is a seed fact, not a claim that a script/model was executed.
+    digest = hashlib.sha256(b'declared receipt producer').hexdigest()
+    producer = repo.create_job_run(JobRun('declared-producer','local',task.id,TASK_MEDIA_KIND,'declared-producer',digest))
+    producer = repo.claim_job_run('local', producer.id)
+    definition = {'script_source':"# declared source; never executed\nprint(parameters['color'])",
+        'language':'python', 'parameters':{'color':'red'}, 'input_slots':[],
+        'requested_outputs':[{'name':'card.png','max_bytes':4096,'width':16,'height':16}],
+        'purpose':'preview', 'script_digest':digest, 'toolchain':{'version':'declared','digest':'b'*64}}
+    blob = store.publish_bytes('definitions/declared.json',json.dumps(definition,sort_keys=True).encode())
+    record = repo.create_artifact_record(ArtifactRecord('declared-definition','local',task.id,
+        'media_script_definition',blob.logical_ref,blob.sha256,blob.size_bytes,producer.id,[]))
+    now = utc_now()
+    repo.lineage_records.create_transform_run(TransformRun('declared-transform','local',task.id,producer.id,
+        'media_script',digest,[],[record.logical_ref],'declared-metadata',
+        {'definition_ref':record.logical_ref,'script_digest':digest,'owner_member_id':member.member_id},
+        'succeeded',producer.started_at,now))
+    repo.finish_job_run('local',producer.id,status='succeeded',output_refs=[record.logical_ref])
+    monkeypatch.setattr(main,'production_repo',repo)
+    monkeypatch.setattr(main,'artifact_store',store)
+    monkeypatch.setattr(main,'local_members_service',members)
+    monkeypatch.setattr(main,'auth_context',SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main,'device_runtime',None)
+    monkeypatch.setattr(main,'assistant_continuation_driver',None)
+    monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
+    def actor_for(request, workspace):
+        current = members.resolve_member(request.headers.get('X-Local-Member-Token'))
+        if current is None:
+            raise main.HTTPException(403,'member unavailable')
+        return CreationExecutionActor(workspace,current.member_id)
+    monkeypatch.setattr(main,'_require_permit_actor',actor_for)
+    monkeypatch.setattr(main,'_verify_creation_identity',lambda current:
+        'ready' if main.find_member(members,current.member_id) else 'unauthorized')
+    conversations = ConversationRepository(repo.database_path)
+    monkeypatch.setattr(main,'conversation_repo',conversations)
+    client = TestClient(main.app,headers={'X-Local-Member-Token':token})
+    base_url = '/api/creation-tasks/'+task.id
+    payload = {'request_id':str(uuid4()),'producer_job_id':producer.id,'name':'declared card',
+        'description':'declared reusable JSON source', 'parameter_schema':{'type':'object',
+            'properties':{'color':{'type':'string','maxLength':30}},'required':['color'],'additionalProperties':False}}
+    saved = client.post(base_url+'/media-script-tools',json=payload)
+    assert saved.status_code == 200,saved.text
+    chat = conversations.create('local',member.member_id,'task',task.id)
+    chat = conversations.save_draft(chat['id'],'local',member.member_id,'登记这份工具元数据',chat['draft_version'])
+    turn,_ = conversations.create_turn_idempotent(chat['id'],'local',member.member_id,chat['draft_text'],
+        str(uuid4()),chat['draft_version'],request_context={'kind':'task','task_id':task.id,'stage':'review',
+            'target_snapshot':{'timeline_version_id':None,'timeline_sequence':0}})
+    return SimpleNamespace(production=repo,store=store,members=members,member=member,actor=actor,
+        workspace_id='local',task=task,producer_job_id=producer.id,save_payload=payload,tool=saved.json(),
+        client=client,base_url=base_url,conversations=conversations,turn_id=turn['id'],
+        request=Request({'type':'http',
+            'headers':[(b'x-local-member-token',token.encode())]}))
+
+
+def unknown_receipt(state, call_id='unknown-receipt'):
+    request_id = str(uuid5(NAMESPACE_URL,json.dumps([state.task.id,state.turn_id,call_id],
+        ensure_ascii=False,separators=(',',':'))))
+    return {'kind':'media_script_tool_status','action':'save','status':'unknown','task_id':state.task.id,
+        'assistant_turn_id':state.turn_id,'tool_call_id':call_id,'request_id':request_id,
+        'query_url':f'/api/media-script-tools/requests/{request_id}',
+        'submitted_input':{k:v for k,v in state.save_payload.items() if k!='request_id'}}
+
+
+def test_recipe_receipt_unknown_reentry_preserves_identity_and_never_registers(receipt_state, monkeypatch):
+    from app.media_script_tools import MediaScriptTools
+    state = receipt_state
+    details = unknown_receipt(state)
+    before = [j.id for j in state.production.list_job_runs('local',state.task.id)]
+    order = []
+    original_origin = state.conversations.task_result_source
+    original_identity = MediaScriptTools.registration_identity
+    def origin(*args,**kwargs):
+        order.append('source')
+        return original_origin(*args,**kwargs)
+    def identity(owner,*args,**kwargs):
+        order.append('identity')
+        return original_identity(owner,*args,**kwargs)
+    monkeypatch.setattr(state.conversations,'task_result_source',origin)
+    monkeypatch.setattr(MediaScriptTools,'registration_identity',identity)
+    first, _ = main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
+    assert first.status=='unknown' and first.tool_id is None
+    assert order==['identity','source','identity']
+    event_id=f"event_script_tool_locator_{state.turn_id}_{details['request_id']}"
+    original_event=state.production.get_task_event('local',event_id)
+    second,_=main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
+    assert second==first and state.production.get_task_event('local',event_id)==original_event
+    # Equal replay must still enter the immutable owner gate: a different
+    # provenance value under the same UUID cannot replace the original event.
+    from copy import deepcopy
+    def changed_origin(*args,**kwargs):
+        value=deepcopy(original_origin(*args,**kwargs))
+        value['context']['target_snapshot']['timeline_sequence']=1
+        return value
+    with monkeypatch.context() as changed:
+        changed.setattr(state.conversations,'task_result_source',changed_origin)
+        with pytest.raises(ValueError):
+            main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
+    assert state.production.get_task_event('local',event_id)==original_event
+    assert [j.id for j in state.production.list_job_runs('local',state.task.id)]==before
+    assert not hasattr(MediaScriptTools,'_creation_identity')
+
+
+def test_recipe_receipt_v1_and_unknown_head_are_distinct(receipt_state):
+    from app.schemas import MediaScriptToolUpdateRequest
+    state=receipt_state
+    original={k:v for k,v in state.save_payload.items() if k!='request_id'}
+    updated=state.client.patch('/api/media-script-tools/'+state.tool['tool_id'],
+        json={**original,'expected_version':1,'name':'actual version two'})
+    assert updated.status_code==200,updated.text
+    before=[j.id for j in state.production.list_job_runs('local',state.task.id)]
+    receipt,_=main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,
+        {'kind':'media_script_tool_result','action':'save','request_id':state.save_payload['request_id'],
+         'query_url':'/api/media-script-tools/requests/'+state.save_payload['request_id'],
+         'tool':{**updated.json(),'name':'forged report'}})
+    assert receipt.tool_version==1 and receipt.tool['name']==state.tool['name'] and 'definition' not in receipt.tool
+    submitted=MediaScriptToolUpdateRequest.model_validate({**original,'expected_version':1,'name':'actual version two'}).model_dump(mode='json')
+    status,message=main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,
+        {'kind':'media_script_tool_status','action':'update','status':'unknown','tool_id':state.tool['tool_id'],
+         'query_url':'/api/media-script-tools/'+state.tool['tool_id'],'expected_version':1,'submitted_input':submitted})
+    assert status.status=='unknown' and status.tool_version==2 and '不能将HEAD变化归因' in message
+    with pytest.raises(main.HTTPException) as forged:
+        main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,
+            {'kind':'media_script_tool_result','action':'update','tool':{**updated.json(),'version':1},
+             'expected_version':1,'submitted_input':submitted})
+    assert forged.value.status_code==502
+    assert [j.id for j in state.production.list_job_runs('local',state.task.id)]==before
+
+
+def test_recipe_receipt_keeps_actor_and_registry_error_gates(receipt_state, monkeypatch):
+    from app.media_script_tools import MediaScriptTools,ScriptToolError
+    state=receipt_state
+    with monkeypatch.context() as actor:
+        actor.setattr(main,'_require_permit_actor',lambda *a:(_ for _ in ()).throw(main.HTTPException(403,'actor refused')))
+        with pytest.raises(main.HTTPException) as denied:
+            main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,{})
+        assert denied.value.status_code==403
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(main,'_verify_creation_identity',lambda actor:'unknown')
+        unavailable.setattr(MediaScriptTools,'get_created_for_request',lambda *a,**kw:pytest.fail('reader identity precedes registry'))
+        with pytest.raises(main.HTTPException) as identity_unknown:
+            main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,unknown_receipt(state))
+        assert identity_unknown.value.status_code==503
+    for reason,expected in ((PermissionError('registry denied'),403),(ScriptToolError('metadata invalid'),422),(KeyError('original request'),404)):
+        details=unknown_receipt(state)
+        if expected==404:
+            details['kind']='media_script_tool_result'
+        with monkeypatch.context() as blocked:
+            blocked.setattr(MediaScriptTools,'get_created_for_request',lambda *a,**kw:(_ for _ in ()).throw(reason))
+            blocked.setattr(state.conversations,'task_result_source',lambda *a,**kw:pytest.fail('registry refusal must not use unknown'))
+            with pytest.raises(main.HTTPException) as error:
+                main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
+            assert error.value.status_code==expected
+
+
+def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, monkeypatch):
+    state = receipt_state
+    details = unknown_receipt(state, 'completed-original-request')
+    original, message = main._resolve_assistant_script_tool(state.task.id, state.request, state.turn_id, details)
+    assert original.status == 'unknown' and original.tool is None
+    state.conversations.finish_turn(state.turn_id, 'completed', message, result={'kind': 'task_turn',
+        'response': {'turn_id': state.turn_id, 'script_tool': original.model_dump(mode='json'), 'edit_preview': None}})
+    assert main._reconcile_assistant_business_results() == 0
+    saved = state.client.post(state.base_url + '/media-script-tools', json={
+        **details['submitted_input'], 'request_id': details['request_id']})
+    assert saved.status_code == 200 and saved.json()['version'] == 1, saved.text
+    advanced = state.client.patch('/api/media-script-tools/' + saved.json()['tool_id'], json={
+        **details['submitted_input'], 'expected_version': 1, 'name': 'later HEAD version two'})
+    assert advanced.status_code == 200 and advanced.json()['version'] == 2, advanced.text
+    reopened = ConversationRepository(state.conversations.database_path)
+    monkeypatch.setattr(main, 'conversation_repo', reopened)
+    monkeypatch.setattr(main, 'save_media_script_tool', lambda *a, **k: pytest.fail('recovery must never POST save'))
+    before = reopened.get_turn(state.turn_id)
+    jobs = [job.id for job in state.production.list_job_runs(state.workspace_id, state.task.id)]
+    assert main._reconcile_assistant_business_results() == 1
+    after = reopened.get_turn(state.turn_id)
+    assert after['status'] == before['status'] == 'completed'
+    event = after['result']['continuation']
+    receipt = event['script_tool']
+    assert event['status'] == 'recorded' and not event['actionable']
+    assert receipt['request_id'] == details['request_id'] and receipt['tool_version'] == 1
+    assert receipt['tool_id'] == saved.json()['tool_id'] and receipt['tool']['name'] == saved.json()['name']
+    assert receipt['submitted_input'] == details['submitted_input'] and 'definition' not in receipt['tool']
+    assert after['result']['response']['script_tool'] == receipt
+    assert after['result']['response']['edit_preview'] is None
+    assert [job.id for job in state.production.list_job_runs(state.workspace_id, state.task.id)] == jobs
+    assert main._reconcile_assistant_business_results() == 0
+    assert reopened.get_turn(state.turn_id) == after
+    assert len(reopened.list_turns(after['conversation_id'])) == 1
