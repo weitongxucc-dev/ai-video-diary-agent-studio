@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
 from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
 from app.assistant.task_business_adapter import TaskBusinessAdapter
@@ -14143,29 +14144,12 @@ def _goal_projection():
 
 
 def _goal_request_result(task_id, request_id, request, phase):
-    # Transport projection of the original journal, using the same canonical reader.
-    task, member_id = _exact_edit_access(task_id, request, write=True)
+    task = _creation_task_or_404(current_workspace_id(request), task_id)
+    member_id = _assistant_member_id(request, task.workspace_id)
     try:
-        event_id, event = _goal_projection().request_claim(task, member_id, str(request_id), phase)
-    except GoalProjectionRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc.__cause__
-    inputs = event.payload["inputs"]
-    if phase in {"preview", "script", "observation"} or (phase == "apply" and "operation_type" in inputs):
-        fields = (CreationTaskExactEditRequest.model_fields if phase in {"preview", "apply"} else
-                  CreationTaskObservationRequest.model_fields if phase == "observation" else
-                  MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
-        submitted_input = {key: value for key, value in inputs.items() if key in fields}
-        if phase == "script" and "tool_id" in inputs:
-            submitted_input["tool_id"] = inputs["tool_id"]
-    else:
-        submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
-        submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
-    if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
-        raise HTTPException(status_code=409, detail="原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
-    result = _read_edit_request_result(task, event_id)
-    return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
-            "task_id": task_id, "status": "recorded" if result else "unknown", "submitted_input": submitted_input,
-            "result_status_code": result.status_code if result else None, "result": json.loads(result.body) if result else None}
+        return _exact_preview_use_case().read_request_receipt(task, member_id, str(request_id), phase)
+    except (GoalProjectionRejected, EditPreviewRejected) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _goal_media_result(task_id, job_id, request):
@@ -14207,15 +14191,30 @@ def _register_adopted_creation_goals(request, turn_id, creation_request):
         _wake_assistant_continuations()
 
 
+def _assistant_execution_binding():
+    return AssistantExecutionBinding(
+        production_repo, conversation_repo, lambda: _creation_execution_control(), _goal_projection(),
+        verify_identity=_verify_creation_identity,
+        read_edit_receipt=lambda task, member_id, request_id, phase:
+            _exact_preview_use_case().read_request_receipt(task, member_id, request_id, phase),
+        encode_execution=jsonable_encoder)
+
+
+def _execution_binding_http(exc):
+    status = {'conflict':409, 'forbidden':403, 'unavailable':503,
+              'invalid_receipt':502, 'not_found':404}[exc.kind]
+    return HTTPException(status_code=status, detail=exc.detail)
+
+
 def _read_bound_execution_result(task_id, request, job_id):
     task, _member_id = _exact_edit_access(task_id, request, write=True)
-    actor = _require_permit_actor(request, task.workspace_id)
+    actor = _request_permit_actor(request, task.workspace_id)
     try:
-        result = _creation_execution_control().read_bound(task.workspace_id, task_id, job_id, actor,
-            verify_media=device_runtime is None)
+        return _assistant_execution_binding().read_bound(task, actor, job_id, verify_media=device_runtime is None)
+    except ExecutionBindingRejected as exc:
+        raise _execution_binding_http(exc) from exc
     except ExecutionControlRejected as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return jsonable_encoder(result)
 
 
 def _assistant_goal_action_proofs(workspace_id, task_id, turn_id, *, media_job, edit_preview, edit_request, execution_status):
@@ -14243,157 +14242,74 @@ def _assistant_goal_action_proofs(workspace_id, task_id, turn_id, *, media_job, 
     return proofs
 
 
-def _assistant_execution_locator_id(turn_id, input_id=None):
-    return f"event_assistant_execution_locator_{turn_id}" + (f"_{input_id}" if input_id else "")
+
 
 
 def _bind_assistant_execution_observation(task_id, request, turn_id, details, result):
-    origin = _assistant_result_binding(task_id, request, turn_id, details)
     workspace_id = current_workspace_id(request)
     member_id = _assistant_member_id(request, workspace_id)
-    current = conversation_repo.task_turn_source(turn_id, workspace_id, member_id, task_id)
-    if (current.get("input_id"), current.get("input_turn_id")) != (origin.get("input_id"), origin.get("input_turn_id")):
-        return result  # A late read remains historical; it cannot bind a new goal.
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    snapshot = origin["context"]["target_snapshot"]
-    actor = _require_permit_actor(request, workspace_id)
-    source = {"workspace_id": workspace_id, "task_id": task_id, "member_id": member_id,
-        "conversation_id": origin["conversation_id"], "assistant_turn_id": turn_id,
-        "input_id": origin["input_id"], "input_turn_id": origin["input_turn_id"],
-        "expected_timeline_version_id": snapshot["timeline_version_id"],
-        "expected_timeline_sequence": snapshot["timeline_sequence"],
-        "actor_identity": actor.identity_payload(), "action": "observe"}
-    if not _execution_source_version_current(task, source, result["job"]["id"], result["job"]["status"]):
-        return result
+    binding = _assistant_execution_binding()
+    try:
+        prepared = binding.prepare_observation(workspace_id, task_id, member_id, turn_id, details)
+        if prepared is None:
+            return result
+        actor = _request_permit_actor(request, workspace_id)
+        source = binding.observation_source(prepared, actor, result)
+        if source is None:
+            return result
+    except ExecutionBindingRejected as exc:
+        raise _execution_binding_http(exc) from exc
     return _bind_assistant_execution_result(task_id, request, turn_id, result, source=source)
 
 
 def _assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request):
-    """Derive one authorized successor from this input's committed edit journal."""
-    if (version is None or version.parent_version_id != snapshot.get("timeline_version_id")
-            or version.sequence != snapshot.get("timeline_sequence", 0) + 1):
-        return None
-    operations = [item for item in production_repo.list_edit_operations(task.workspace_id, task.id)
-                  if item.status == "applied" and item.result_version_id == version.id
-                  and item.base_version_id == snapshot["timeline_version_id"]]
-    if len(operations) != 1:
-        return None
-    operation = operations[0]
-    proposal = production_repo.get_edit_proposal(task.workspace_id, operation.proposal_id)
-    source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source") or {}
-    if any(source.get(key) != value for key, value in {
-            "workspace_id": task.workspace_id, "task_id": task.id, "member_id": member_id,
-            "conversation_id": origin["conversation_id"], "assistant_turn_id": str(turn_id),
-            "input_id": origin.get("input_id"), "input_turn_id": origin.get("input_turn_id"),
-            "expected_timeline_version_id": snapshot["timeline_version_id"],
-            "expected_timeline_sequence": snapshot["timeline_sequence"]}.items()):
-        return None
-    request_id = source.get("request_id")
-    if not request_id:
-        return None
-    receipt = get_exact_edit_request_result(task.id, UUID(request_id), request, "apply")
-    submitted, result = receipt["submitted_input"], receipt["result"]
-    if (receipt["status"] != "recorded" or receipt["result_status_code"] != 200 or not result
-            or submitted.get("assistant_turn_id") != str(turn_id)
-            or submitted.get("expected_timeline_version_id") != operation.base_version_id
-            or submitted.get("expected_timeline_sequence") != snapshot["timeline_sequence"]
-            or result.get("operation", {}).get("id") != operation.id
-            or result["operation"].get("result_version_id") != version.id):
-        return None
-    _require_assistant_input_origin(request, source)
-    return {**snapshot, "timeline_version_id": version.id, "timeline_sequence": version.sequence}
+    try:
+        return _assistant_execution_binding().edited_execution_version(
+            task, member_id, turn_id, origin, snapshot, version,
+            input_id=request.headers.get('X-Assistant-Input-ID') or None)
+    except ExecutionBindingRejected as exc:
+        raise _execution_binding_http(exc) from exc
+    except (GoalProjectionRejected, EditPreviewRejected) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _assistant_execution_source(task_id, request, turn_id, action, input_digest=None):
     if turn_id is None:
-        return None, None  # Existing explicit GUI/CLI starts keep their protocol.
+        return None, None
     task, member_id = _exact_edit_access(task_id, request, write=True)
+    binding = _assistant_execution_binding()
     try:
-        origin = conversation_repo.task_execution_source(
-            str(turn_id), task.workspace_id, member_id, task_id,
-            input_id=request.headers.get("x-assistant-input-id") or None)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    snapshot = origin["context"].get("target_snapshot", {})
-    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if not origin["raw_command"].strip():
-        raise HTTPException(status_code=409, detail="原助手制作要求的阶段或目标版本已失效")
-    if origin["context"].get("stage") in {"topic", "script"}:
-        from app.creation.intent_use_case import CreationIntentUseCase
-        plan = _creation_plan_for_task_or_404(task.workspace_id, task)
-        script = (production_repo.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
-            if task.confirmed_script_id else None)
-        if not CreationIntentUseCase.adopted_for_execution(plan, script):
-            raise HTTPException(status_code=409, detail="原回合尚无已授权采用的实际文案版本，不能开始制作。")
-        try:
-            CreationIntentUseCase.reject_discussion_only_input(origin["raw_command"])
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (
-            task.current_timeline_version_id, version.sequence if version else 0):
-        successor = (_assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request)
-                     if action in {"start", "resume"} else None)
-        if successor is None:
-            raise HTTPException(status_code=409, detail="原助手制作要求的目标版本已失效，且没有同一输入的已提交编辑回执")
-        snapshot = successor
-    goal = conversation_repo.get_task_goal(str(turn_id))
-    if goal is not None and goal.get("source_input_id") == origin.get("input_id") and (goal["status"] in {"invalidated", "no_progress", "limit_reached"}
-            or _goal_pending_preview(goal, task.current_timeline_version_id) is not None):
-        raise HTTPException(status_code=409, detail="原要求已停止或仍等待真实修改采用，未开始制作")
-    actor = _require_permit_actor(request, task.workspace_id)
-    source = {"workspace_id": task.workspace_id, "task_id": task_id, "member_id": member_id,
-        "assistant_turn_id": str(turn_id), "conversation_id": origin["conversation_id"],
-        **{key: origin[key] for key in ("input_id", "input_turn_id") if key in origin},
-        "expected_timeline_version_id": snapshot["timeline_version_id"],
-        "expected_timeline_sequence": snapshot["timeline_sequence"], "actor_identity": actor.identity_payload(), "action": action}
-    _require_assistant_input_origin(request, source)
-    try:
-        located = production_repo.get_task_event(task.workspace_id, _assistant_execution_locator_id(turn_id, source.get("input_id")))
-    except KeyError:
-        return source, None
-    if (located.payload["source"] != source
-            or input_digest is not None and located.payload["input_digest"] != input_digest):
-        raise HTTPException(status_code=409, detail="本轮已绑定不同的制作请求；请只查询原作业")
-    return source, _read_bound_execution_result(task_id, request, located.payload["job_id"])
+        prepared = binding.prepare_source(task, member_id, str(turn_id),
+            input_id=request.headers.get('X-Assistant-Input-ID') or None,
+            action=action, input_digest=input_digest)
+        actor = _request_permit_actor(request, task.workspace_id)
+        source, replay_job_id = binding.source(prepared, actor)
+    except ExecutionBindingRejected as exc:
+        raise _execution_binding_http(exc) from exc
+    except (GoalProjectionRejected, EditPreviewRejected) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    replay = _read_bound_execution_result(task_id, request, replay_job_id) if replay_job_id is not None else None
+    return source, replay
 
 
 def _bind_assistant_execution_result(task_id, request, turn_id, candidate, *, source=None):
-    if not isinstance(candidate.get("job"), dict) or not isinstance(candidate["job"].get("id"), str):
-        raise HTTPException(status_code=502, detail="制作回执缺少真实作业身份")
+    binding = _assistant_execution_binding()
     try:
-        result = _read_bound_execution_result(task_id, request, candidate["job"]["id"])
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
-    if source is None:
-        # A model may finish after consuming another input. Re-read the job's
-        # original host binding before consulting the now-current input.
-        previous = next((event for event in production_repo.list_task_events(workspace_id, task_id)
-            if event.event_type == "assistant_execution_located" and event.job_id == result["job"]["id"]
-            and event.payload["source"]["assistant_turn_id"] == turn_id), None)
-        if previous is None:
-            raise HTTPException(status_code=409, detail="制作结果没有本轮的原始提交绑定，请只查询原作业")
-        source = previous.payload["source"]
-    event_id = _assistant_execution_locator_id(turn_id, source.get("input_id"))
-    try:
-        previous = production_repo.get_task_event(workspace_id, event_id)
-    except KeyError:
-        production_repo.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id,
-            job_id=result["job"]["id"], event_type="assistant_execution_located",
-            payload={"job_id": result["job"]["id"], "input_digest": result["job"]["input_digest"], "source": source}))
-    else:
-        if previous.job_id != result["job"]["id"]:
-            raise HTTPException(status_code=409, detail="本轮制作来源已绑定原作业，不能改绑")
-    task = production_repo.get_creation_task(workspace_id, task_id)
-    current = _execution_source_version_current(task, source, result["job"]["id"], result["job"]["status"])
-    conversation_repo.record_task_execution(turn_id, workspace_id, member_id, task_id, result, current_source=current, input_id=source.get("input_id"))
+        job_id = binding.candidate_job_id(candidate)
+        try:
+            result = _read_bound_execution_result(task_id, request, job_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        workspace_id = current_workspace_id(request)
+        member_id = _assistant_member_id(request, workspace_id)
+        result = binding.record_result(workspace_id, task_id, member_id, turn_id, result, source=source)
+    except ExecutionBindingRejected as exc:
+        raise _execution_binding_http(exc) from exc
     _wake_assistant_continuations()
     return result
 
 
-def _execution_source_version_current(task, source, job_id, status):
-    return _goal_projection().execution_source_current(task, source, job_id, status)
+
 
 
 def _project_assistant_execution_results():

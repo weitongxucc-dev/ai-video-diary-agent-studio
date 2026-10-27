@@ -1,5 +1,7 @@
 """The finite exact-edit preview application, with explicit source and execution."""
 from collections import Counter
+import json
+from app.assistant_goal_continuation import GoalResultProjection
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 from uuid import uuid4
@@ -19,8 +21,12 @@ from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, 
 from app.media.clip_preview import ClipPreviewExecutor
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.models import utc_now
-from app.production import TimelineVersionConflict
-from app.schemas import CreationTaskExactEditRequest, CreationTaskEditPreviewResponse
+from app.production import TimelineVersionConflict, content_readable
+from app.schemas import (
+    CreationTaskExactEditRequest, CreationTaskEditPreviewResponse,
+    CreationTaskObservationRequest, MediaScriptToolPreviewRequest,
+    MediaScriptPreviewRequest, CreationTaskEditApplyRequest,
+)
 from app.task_audio import media_digest
 from app.visual_effects import VisualEditRequest
 import subprocess
@@ -97,6 +103,41 @@ class ExactPreviewUseCase:
 
     def read_request_result(self, task, event_id):
         return self.repository.read_edit_request_result(task, event_id)
+
+    def read_request_receipt(self, task, member_id, request_id, phase):
+        """The bounded canonical receipt, shared by HTTP and execution provenance."""
+        # The former self-HTTP read performed a fresh write-access check here,
+        # after successor lineage checks. Preserve it for every plain reader too.
+        try:
+            task = self.repository.get_creation_task(task.workspace_id, task.id)
+        except KeyError as exc:
+            raise EditPreviewRejected(404, "creation task not found") from exc
+        if not content_readable(user_id=member_id, local_diagnostic=False,
+                visibility=task.visibility, owner_user_id=task.owner_user_id):
+            raise EditPreviewRejected(404, "creation task not found")
+        if task.owner_user_id and task.owner_user_id != member_id:
+            raise EditPreviewRejected(403, "当前成员不能修改此任务")
+        event_id, event = GoalResultProjection(self.repository, self.conversations).request_claim(
+            task, member_id, str(request_id), phase)
+        inputs = event.payload["inputs"]
+        if phase in {"preview", "script", "observation"} or (phase == "apply" and "operation_type" in inputs):
+            fields = (CreationTaskExactEditRequest.model_fields if phase in {"preview", "apply"} else
+                      CreationTaskObservationRequest.model_fields if phase == "observation" else
+                      MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
+            submitted_input = {key: value for key, value in inputs.items() if key in fields}
+            if phase == "script" and "tool_id" in inputs:
+                submitted_input["tool_id"] = inputs["tool_id"]
+        else:
+            submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
+            submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
+        if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+            raise EditPreviewRejected(409, "原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
+        result = self.read_request_result(task, event_id)
+        return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
+                "task_id": task.id, "status": "recorded" if result is not None else "unknown",
+                "submitted_input": submitted_input,
+                "result_status_code": result["status_code"] if result is not None else None,
+                "result": result["response"] if result is not None else None}
 
     def record_request_result(self, task, event_id, *, status_code, response):
         if event_id is not None:

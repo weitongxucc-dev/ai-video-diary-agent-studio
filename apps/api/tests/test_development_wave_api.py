@@ -200,12 +200,30 @@ def test_first_turn_rejects_stale_reference_version_without_consuming_draft(tmp_
 
 def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, monkeypatch):
     from types import SimpleNamespace
+    import subprocess
+    import pytest
+    from app.assistant.execution_binding import execution_locator_id
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('original binding representative forbids media helpers, Popen, models and drivers')
+    # Install before any seed context/helper import, with no ASGI lifespan start.
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import _media_preview_test_fixtures as media_helpers
+    import test_creation_execution as creation_helpers
+    for helpers in (media_helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset',
+                     'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(helpers, name, forbidden)
+    monkeypatch.setattr(main, 'run_task_turn', forbidden)
+    monkeypatch.setattr(main, 'run_plan_turn', forbidden)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+    monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
     from app.creation.contracts import TaskEvent
 
     _, repository, owner, _, _ = _sampling_context(tmp_path, monkeypatch)
     # Isolated ledger seam: the host read has already verified the real job.
     source = {"assistant_turn_id": "turn", "input_id": "input-old"}
-    event = TaskEvent(id=main._assistant_execution_locator_id("turn", "input-old"),
+    event = TaskEvent(id=execution_locator_id("turn", "input-old"),
         workspace_id="local", task_id="task", job_id="job", event_type="assistant_execution_located",
         payload={"source": source, "job_id": "job", "input_digest": "digest"})
     monkeypatch.setattr(repository, "list_task_events", lambda *_: [event])
@@ -216,14 +234,15 @@ def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, 
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "local")
     monkeypatch.setattr(main, "_assistant_member_id", lambda *_: owner.member_id)
     monkeypatch.setattr(repository, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
-    monkeypatch.setattr(main, "_execution_source_version_current", lambda *_: True)
+    monkeypatch.setattr(main, "_goal_projection", lambda: SimpleNamespace(
+        execution_source_current=lambda *_: True))
     monkeypatch.setattr(main, "conversation_repo", SimpleNamespace(
         record_task_execution=lambda *args, **kwargs: records.append(kwargs)))
     monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
     assert main._bind_assistant_execution_result("task", object(), "turn", receipt) == receipt
     assert records == [{"current_source": True, "input_id": "input-old"}]
-    assert main._assistant_execution_locator_id("turn", "input-new") != event.id
-    assert main._assistant_execution_locator_id("turn") == "event_assistant_execution_locator_turn"
+    assert execution_locator_id("turn", "input-new") != event.id
+    assert execution_locator_id("turn") == "event_assistant_execution_locator_turn"
     proofs = main._assistant_goal_action_proofs("local", "task", "turn",
         media_job=None, edit_preview=None, edit_request=None, execution_status=receipt)
     assert proofs == [{"kind": "execution_status", "id": "job", "input_id": "input-old"}]

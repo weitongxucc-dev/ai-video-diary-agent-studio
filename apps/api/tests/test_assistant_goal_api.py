@@ -11,6 +11,7 @@ import app.main as main
 import app.assistant_pi as pi
 from dataclasses import replace
 from app.creation_execution import CreationExecution, revision_digest
+from app.assistant.execution_binding import execution_locator_id
 from app.quality_inspection import QualityCheckRepository
 from test_assistant_business_continuation import state as state  # noqa: F401
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
@@ -22,6 +23,22 @@ script_state = test_media_script_api.state
 
 @pytest.fixture(autouse=True)
 def isolated_local_workspace(request, monkeypatch):
+    if 'execution_binding_state' in request.fixturenames:
+        # Install before dynamically requesting any seed fixture. Neither old
+        # media helpers nor a native child may run in binding-only evidence.
+        import subprocess
+        import _media_preview_test_fixtures as media_helpers
+        import test_creation_execution as creation_helpers
+        def forbidden(*args, **kwargs):
+            pytest.fail('binding evidence forbids media helpers, model/driver execution and Popen')
+        monkeypatch.setattr(subprocess, 'Popen', forbidden)
+        for owner in (media_helpers, creation_helpers):
+            for name in ('write_synthetic_video', 'register_synthetic_video_asset',
+                         'register_synthetic_profiles', 'synthetic_wav_bytes'):
+                monkeypatch.setattr(owner, name, forbidden)
+        monkeypatch.setattr(main, 'run_task_turn', forbidden)
+        monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+        monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
     state = request.getfixturevalue("execution_http_state" if "execution_http_state" in request.fixturenames else "state")
     # Existing domain fixtures name their single local workspace workspace_a.
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
@@ -674,7 +691,7 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
     assert response.json()["execution_action"] is None
     goal=state.conversations.get_task_goal(root_id)
     assert goal["source_input_id"] == input_ids[0] and goal["revision"] == 1
-    located=state.production.get_task_event(state.workspace_id,main._assistant_execution_locator_id(root_id,input_ids[0]))
+    located=state.production.get_task_event(state.workspace_id,execution_locator_id(root_id,input_ids[0]))
     assert located.payload["source"]["action"] == "observe" and located.job_id == job_ids[0]
     state.production.claim_job_run(state.workspace_id,job_ids[0])
     state.production.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
@@ -764,7 +781,7 @@ def execution_http_state(tmp_path, monkeypatch):
 
     root = tmp_path / 'execution-http'
     root.mkdir()
-    repo, task_id, _, _ = _seed(root, workspace_id='local')
+    repo, task_id, script_id, _ = _seed(root, workspace_id='local')
     members = LocalMemberService(repo.database_path)
     member, token = members.join(members.create_invite_code(), 'HTTP来源隔离成员')
     task = repo.get_creation_task('local', task_id)
@@ -793,7 +810,8 @@ def execution_http_state(tmp_path, monkeypatch):
     return SimpleNamespace(production=repo, workspace_id='local', task=task, members=members,
         member=member, conversations=conversations, conversation=chat, version=version,
         finish=lambda: conversations.finish_turn(turn['id'], 'completed', result={}),
-        raw_post=client.post, base_url='/api/creation-tasks/'+task.id)
+        raw_post=client.post, base_url='/api/creation-tasks/'+task.id,
+        client=client, token=token, turn_id=turn['id'], script_id=script_id)
 
 
 @pytest.mark.parametrize('rejection', ['foreign_turn','old_version','new_instruction','stopped'])
@@ -1069,3 +1087,220 @@ def test_segment_visual_empty_locator_does_not_require_a_generated_script(tmp_pa
     assert s.task.confirmed_script_id is None
     assert service.visual_decision_locators('ws',s.task.id,CreationExecutionActor('ws',s.member.member_id))=={
         'items':[],'total_count':0,'truncated':False}
+
+
+@pytest.fixture
+def execution_binding_state(execution_http_state, monkeypatch):
+    """Real isolated owners and declared Job facts; no stage/model/media work."""
+    from app.creation.contracts import JobRun
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+    from starlette.requests import Request
+    state = execution_http_state
+    repo = state.production
+    script = repo.get_creation_task_script(state.workspace_id, state.script_id)
+    plan = repo.get_creation_plan(state.workspace_id, state.task.plan_id)
+    actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
+    digest = revision_digest(script, plan)
+    job = repo.create_creation_execution_job(JobRun(
+        id='declared-binding-job', workspace_id=state.workspace_id, task_id=state.task.id,
+        kind='creation_task_execution', idempotency_key='declared-binding-job', input_digest=digest),
+        start_payload={'script_id':script.id, 'plan_id':plan.id, 'input_digest':digest,
+                       **actor.identity_payload()})
+    def no_work(*args, **kwargs):
+        pytest.fail('binding representative must not dispatch work')
+    execution = CreationExecution(repo, run_montage_plan=no_work, run_render=no_work,
+        render_is_valid=lambda *args:False)
+    control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *a,**kw:False),
+        main._verify_creation_identity)
+    exact = ExactPreviewUseCase(repo, None, None, None, None, None, None, state.conversations, None)
+    monkeypatch.setattr(main, 'creation_execution', execution)
+    monkeypatch.setattr(main, '_creation_execution_control', lambda:control)
+    monkeypatch.setattr(main, '_exact_preview_use_case', lambda:exact)
+    state.actor, state.job, state.control, state.exact = actor, job, control, exact
+    state.request = Request({'type':'http', 'headers':[
+        (b'x-local-member-token', state.token.encode())]})
+    return state
+
+
+def test_execution_binding_preserves_source_actor_and_receipt_error_order(execution_binding_state, monkeypatch):
+    from fastapi import HTTPException
+    from app.creation.contracts import TimelineVersion
+    state = execution_binding_state
+    task_id, request = state.task.id, state.request
+    calls = []
+    def actor_denied(*args):
+        calls.append('actor')
+        raise HTTPException(403, 'declared actor parse rejection')
+    monkeypatch.setattr(main, '_request_permit_actor', actor_denied)
+    assert main._assistant_execution_source('missing', object(), None, 'start') == (None, None)
+    with pytest.raises(HTTPException) as bad_receipt:
+        main._bind_assistant_execution_result('missing', object(), state.turn_id, {})
+    assert bad_receipt.value.status_code == 502 and calls == []
+    state.production.create_timeline_version(TimelineVersion('unrelated-head', state.workspace_id,
+        task_id, state.version.id, 2, {}, None))
+    with pytest.raises(HTTPException) as stale:
+        main._assistant_execution_source(task_id, request, state.turn_id, 'start')
+    assert stale.value.status_code == 409 and calls == []
+    state.finish()
+    def new_turn(stage):
+        chat = state.conversations.get(state.conversation['id'], state.workspace_id, state.member.member_id)
+        chat = state.conversations.save_draft(chat['id'], state.workspace_id, state.member.member_id,
+            '开始制作', chat['draft_version'])
+        turn, _ = state.conversations.create_turn_idempotent(chat['id'], state.workspace_id,
+            state.member.member_id, chat['draft_text'], str(uuid4()), chat['draft_version'],
+            request_context={'kind':'task', 'task_id':task_id, 'stage':stage,
+                'target_snapshot':{'timeline_version_id':'unrelated-head', 'timeline_sequence':2}})
+        return turn['id']
+    current_turn = new_turn('review')
+    with pytest.raises(HTTPException) as denied:
+        main._assistant_execution_source(task_id, request, current_turn, 'start')
+    assert denied.value.status_code == 403 and calls == ['actor']
+    state.conversations.finish_turn(current_turn, 'completed', result={})
+    missing_turn = new_turn('script')
+    with monkeypatch.context() as missing:
+        missing.setattr(state.production, 'get_creation_plan',
+            lambda *a,**kw:(_ for _ in ()).throw(KeyError('missing plan')))
+        with pytest.raises(HTTPException) as no_plan:
+            main._assistant_execution_source(task_id, request, missing_turn, 'start')
+    assert no_plan.value.status_code == 404 and calls == ['actor']
+
+
+def test_execution_binding_repairs_conversation_after_original_locator_commit(execution_binding_state, monkeypatch):
+    state = execution_binding_state
+    source, replay = main._assistant_execution_source(state.task.id, state.request,
+        state.turn_id, 'start', state.job.input_digest)
+    assert replay is None
+    wakes = []
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda:wakes.append('wake'))
+    original_record = state.conversations.record_task_execution
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(state.conversations, 'record_task_execution',
+            lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('after durable locator before conversation')))
+        with pytest.raises(RuntimeError, match='after durable locator'):
+            main._bind_assistant_execution_result(state.task.id, state.request, state.turn_id,
+                {'job':{'id':state.job.id}}, source=source)
+    located = state.production.get_task_event(state.workspace_id, execution_locator_id(state.turn_id))
+    assert located.job_id == state.job.id and wakes == []
+    assert state.conversations.get_turn(state.turn_id)['result'] is None
+    assert state.conversations.record_task_execution == original_record
+    result = main._bind_assistant_execution_result(state.task.id, state.request,
+        state.turn_id, {'job':{'id':state.job.id}})
+    assert result['job']['id'] == state.job.id and wakes == ['wake']
+    assert state.production.get_task_event(state.workspace_id, located.id) == located
+    assert state.conversations.get_turn(state.turn_id)['result']['goal_business_actions'] == [
+        {'kind':'execution_status', 'id':state.job.id}]
+    assert main._assistant_execution_source(state.task.id, state.request, state.turn_id,
+        'start', state.job.input_digest)[1]['job']['id'] == state.job.id
+    assert [job.id for job in state.production.list_job_runs(state.workspace_id, state.task.id)] == [state.job.id]
+
+
+def test_execution_binding_late_input_and_version_gate_precede_actor_and_write(execution_binding_state, monkeypatch):
+    from app.creation.contracts import TimelineVersion
+    state = execution_binding_state
+    def consume(message):
+        chat = state.conversations.get(state.conversation['id'], state.workspace_id, state.member.member_id)
+        chat = state.conversations.save_draft(chat['id'], state.workspace_id, state.member.member_id,
+            message, chat['draft_version'])
+        item, _ = state.conversations.enqueue_input(chat['id'], state.workspace_id, state.member.member_id,
+            target_turn_id=state.turn_id, client_request_id=str(uuid4()), message=message, mode='follow_up',
+            expected_draft_version=chat['draft_version'], expected_reference_version=chat['reference_version'],
+            request_context={'kind':'task', 'task_id':state.task.id, 'stage':'review', 'selected_reference':None,
+                'target_snapshot':{'timeline_version_id':state.version.id, 'timeline_sequence':state.version.sequence}})
+        state.conversations.transition_input(chat['id'], state.workspace_id, state.member.member_id,
+            item['input_id'], 'consumed')
+        return item['input_id']
+    old_input = consume('只观察原作业')
+    state.conversations.transition_input(state.conversation['id'], state.workspace_id,
+        state.member.member_id, old_input, 'completed')
+    new_input = consume('核对当前版本')
+    result = {'job':{'id':state.job.id, 'status':'queued'}}
+    actor_calls = []
+    def current_actor(*args):
+        actor_calls.append('actor')
+        return state.actor
+    monkeypatch.setattr(main, '_request_permit_actor', current_actor)
+    monkeypatch.setattr(main, '_exact_edit_access', lambda *a,**kw:pytest.fail('must not enter write access'))
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda:pytest.fail('must not wake'))
+    assert main._bind_assistant_execution_observation(state.task.id, state.request, state.turn_id,
+        {'input_id':old_input, 'input_turn_id':state.turn_id}, result) is result
+    assert actor_calls == []
+    state.production.create_timeline_version(TimelineVersion('changed-head', state.workspace_id,
+        state.task.id, state.version.id, 2, {}, None))
+    assert main._bind_assistant_execution_observation(state.task.id, state.request, state.turn_id,
+        {'input_id':new_input, 'input_turn_id':state.turn_id}, result) is result
+    assert actor_calls == ['actor']
+    assert not [e for e in state.production.list_task_events(state.workspace_id, state.task.id)
+        if e.event_type == 'assistant_execution_located']
+    assert state.conversations.task_turn_source(state.turn_id, state.workspace_id,
+        state.member.member_id, state.task.id)['input_id'] == new_input
+
+
+def test_execution_binding_plain_receipt_preserves_committed_successor_and_bounds(execution_binding_state):
+    from fastapi import HTTPException
+    from app.creation.contracts import EditIntent, EditProposal, EditOperation, TimelineVersion
+    state = execution_binding_state
+    repo, task = state.production, state.production.get_creation_task(state.workspace_id, state.task.id)
+    request_id = str(uuid4())
+    origin = state.conversations.task_turn_source(state.turn_id, state.workspace_id, state.member.member_id, task.id)
+    snapshot = origin['context']['target_snapshot']
+    edit_source = {'workspace_id':state.workspace_id, 'task_id':task.id, 'member_id':state.member.member_id,
+        'conversation_id':origin['conversation_id'], 'assistant_turn_id':state.turn_id,
+        'input_id':None, 'input_turn_id':None, 'expected_timeline_version_id':state.version.id,
+        'expected_timeline_sequence':state.version.sequence, 'request_id':request_id}
+    repo.create_edit_intent(EditIntent('binding-edit-intent', state.workspace_id, task.id, 'declared crop edit',
+        'review', [], None, 'ChangeCrop', {}, {'request_source':edit_source}, 1, 'ready'))
+    repo.create_edit_proposal(EditProposal('binding-edit-proposal', state.workspace_id, task.id,
+        'binding-edit-intent', 'declared committed edit', ['clip://declared-clip'], {'operation_type':'ChangeCrop'}, [], {}, []))
+    repo.transition_edit_proposal(state.workspace_id, task.id, 'binding-edit-proposal', status='confirmed')
+    version = repo.create_timeline_version(TimelineVersion('committed-edit-head', state.workspace_id, task.id,
+        state.version.id, 2, {}, 'binding-edit-operation'))
+    from app.models import utc_now
+    applied_at = utc_now()
+    operation = repo.create_edit_operation(EditOperation('binding-edit-operation', state.workspace_id, task.id,
+        'binding-edit-proposal', 'ChangeCrop', {'clip_id':'declared-clip'}, state.version.id, version.id, 'applied', created_at=applied_at, applied_at=applied_at))
+    task = repo.get_creation_task(state.workspace_id, task.id)
+    inputs = {'operation_type':'ChangeCrop', 'assistant_turn_id':state.turn_id,
+        'expected_timeline_version_id':state.version.id, 'expected_timeline_sequence':state.version.sequence,
+        'clip_id':'declared-clip', 'ignored_private_field':'x'*100000}
+    event_id, _ = repo.claim_edit_request(task, state.member.member_id, request_id, 'apply', inputs)
+    unknown = main._goal_request_result(task.id, request_id, state.request, 'apply')
+    assert unknown['status'] == 'unknown' and unknown['result'] is None and unknown['result_status_code'] is None
+    assert 'ignored_private_field' not in unknown['submitted_input']
+    assert main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
+        origin, snapshot, version, state.request) is None
+    repo.save_edit_request_result(task, event_id, status_code=200,
+        response={'operation':{'id':operation.id, 'result_version_id':version.id}})
+    recorded = main._goal_request_result(task.id, request_id, state.request, 'apply')
+    assert recorded['status'] == 'recorded' and recorded['result']['operation']['id'] == operation.id
+    successor = main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
+        origin, snapshot, version, state.request)
+    assert successor == {**snapshot, 'timeline_version_id':version.id, 'timeline_sequence':version.sequence}
+    assert main._assistant_execution_source(task.id, state.request, state.turn_id, 'start')[0][
+        'expected_timeline_version_id'] == version.id
+    large_id = str(uuid4())
+    repo.claim_edit_request(task, state.member.member_id, large_id, 'apply',
+        {**inputs, 'clip_ids':['中'*22000]})
+    with pytest.raises(HTTPException) as too_large:
+        main._goal_request_result(task.id, large_id, state.request, 'apply')
+    assert too_large.value.status_code == 409 and '有界查询范围' in str(too_large.value.detail)
+    assert len(repo.list_edit_operations(state.workspace_id, task.id)) == 1
+    # Even a previously checked task/source cannot bypass the former self-HTTP
+    # reader's current write gate. Shared visibility exercises owner rejection.
+    from dataclasses import asdict
+    other, _ = state.members.join(state.members.create_invite_code(), '后续编辑任务成员')
+    saved_task = asdict(task)
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=?,visibility=? WHERE id=?',
+            (json.dumps({**saved_task, 'owner_user_id':other.member_id}, default=str), 'shared', task.id))
+    assert repo.get_creation_task(state.workspace_id, task.id).visibility == 'shared'
+    try:
+        with pytest.raises(HTTPException) as changed_owner:
+            main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
+                origin, snapshot, version, state.request)
+        assert changed_owner.value.status_code == 403
+    finally:
+        with repo._connect() as conn:
+            conn.execute('UPDATE creation_tasks SET payload=?,visibility=? WHERE id=?',
+                (json.dumps(saved_task, default=str), saved_task['visibility'], task.id))
