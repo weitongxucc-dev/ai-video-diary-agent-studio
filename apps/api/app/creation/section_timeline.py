@@ -1,6 +1,6 @@
 """Pure section replacement; repositories own publication, artifacts and undo."""
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 
 from app.audio_timeline import AudioTimeline, TimelineAudioClip, narration_audio_timeline
@@ -20,10 +20,16 @@ def _ms(seconds):
 def _section(montage, section_id):
     cues = [cue for cue in montage['cues'] if cue['source_section_id'] == section_id]
     ids = {cue['id'] for cue in cues}
-    positions = [index for index, cue in enumerate(montage['cues']) if cue['id'] in ids]
+    selected, start, end = _section_bounds([cue['id'] for cue in montage['cues']], ids,
+        montage['clips'], montage['duration_seconds'])
+    return cues, selected, start, end
+
+
+def _section_bounds(cue_order, ids, all_clips, duration_seconds):
+    positions = [index for index, cue_id in enumerate(cue_order) if cue_id in ids]
     if positions and positions != list(range(positions[0], positions[-1] + 1)):
         raise ValueError('目标段旁白顺序不连续，不能猜测原声音区间')
-    clips = sorted((clip for clip in montage['clips'] if clip['cue_id'] in ids),
+    clips = sorted((clip for clip in all_clips if clip['cue_id'] in ids),
                    key=lambda clip: clip['timeline_start_seconds'])
     if not clips:
         raise ValueError('当前时间线没有目标段，不能猜测替换位置')
@@ -34,12 +40,12 @@ def _section(montage, section_id):
         if left != cursor or right <= left:
             raise ValueError('目标段镜头不是连续区间，须先核对实际联动范围')
         cursor = right
-    if not 0 <= start < end <= _ms(montage['duration_seconds']):
+    if not 0 <= start < end <= _ms(duration_seconds):
         raise ValueError('目标段区间超出当前时间线')
     if any(clip['cue_id'] not in ids and _ms(clip['timeline_start_seconds']) < end
-           and _ms(clip['timeline_end_seconds']) > start for clip in montage['clips']):
+           and _ms(clip['timeline_end_seconds']) > start for clip in all_clips):
         raise ValueError('其他段与目标区间交叠，须先核对实际联动范围')
-    return cues, clips, start, end
+    return clips, start, end
 
 
 def _clock(current, section_id, local):
@@ -420,22 +426,54 @@ def _restore_subtitles(current, saved, ids, start, end, length, delta, duration,
     return restored
 
 
+@dataclass(frozen=True)
+class SectionDependencyInputs:
+    """Target body facts and global clocks, never a truncated montage plan."""
+    cues: list
+    cue_order: list
+    clip_clocks: list
+    clip_facts: dict
+    duration_seconds: float | None
+    audio_timeline: dict | None
+    narration_audio_path: str | None
+    narration_duration_seconds: float
+    normalize_voice_sources: bool
+    graphic_overlays: list
+
+
 def section_timeline_dependencies(montage, section_id) -> dict:
-    cues = [deepcopy(cue) for cue in montage.get('cues', []) if cue['source_section_id'] == section_id]
+    """Full-plan callers retain the same validation and dependency encoding."""
+    cues = [cue for cue in montage.get('cues', []) if cue['source_section_id'] == section_id]
     ids = {cue['id'] for cue in cues}
     if not any(clip['cue_id'] in ids for clip in montage.get('clips', [])):
-        return {'cues': cues, 'clips': []}
-    _, selected, start, end = _section(montage, section_id)
+        return {'cues': deepcopy(cues), 'clips': []}
+    clips = [{**clip, '_position': index} for index, clip in enumerate(montage.get('clips', []))]
+    return section_dependency_facts(SectionDependencyInputs(cues,
+        [cue['id'] for cue in montage.get('cues', [])], clips,
+        {index: clip for index, clip in enumerate(montage.get('clips', []))},
+        montage.get('duration_seconds'), montage.get('audio_timeline'), montage.get('narration_audio_path'),
+        sum(cue['duration_seconds'] for cue in montage.get('cues', []))
+            if montage.get('audio_timeline') is None and montage.get('narration_audio_path') else 0,
+        montage.get('narration_linkage_created_audio_timeline', False) or montage.get('audio_timeline') is None,
+        montage.get('graphic_overlays', [])))
 
-    def clip_facts(clip):
+
+def section_dependency_facts(inputs: SectionDependencyInputs) -> dict:
+    cues = deepcopy(inputs.cues)
+    ids = {cue['id'] for cue in cues}
+    if not any(clip['cue_id'] in ids for clip in inputs.clip_clocks):
+        return {'cues': cues, 'clips': []}
+    selected, start, end = _section_bounds(inputs.cue_order, ids, inputs.clip_clocks, inputs.duration_seconds)
+
+    def clip_facts(clock):
+        clip = inputs.clip_facts[clock['_position']]
         return {**deepcopy(clip), 'timeline_start_seconds': (_ms(clip['timeline_start_seconds']) - start) / 1000,
                 'timeline_end_seconds': (_ms(clip['timeline_end_seconds']) - start) / 1000}
 
     audio = None
-    graph = montage.get('audio_timeline')
-    if graph is None and montage.get('narration_audio_path'):
-        graph = narration_audio_timeline(montage['narration_audio_path'],
-            sum(cue['duration_seconds'] for cue in montage['cues'])).model_dump()
+    graph = inputs.audio_timeline
+    if graph is None and inputs.narration_audio_path:
+        graph = narration_audio_timeline(inputs.narration_audio_path, inputs.narration_duration_seconds).model_dump()
     if graph is not None:
         timeline = AudioTimeline.model_validate(graph)
         audio = {'format_version': timeline.format_version, 'tracks': []}
@@ -453,12 +491,12 @@ def section_timeline_dependencies(montage, section_id) -> dict:
                     'envelope_duration_ms': clip.envelope_duration_ms or clip.duration_ms})
             if relevant:
                 audio['tracks'].append({**track.model_dump(), 'clips': relevant})
-    ordered = sorted(montage['clips'], key=lambda clip: clip['timeline_start_seconds'])
+    ordered = sorted(inputs.clip_clocks, key=lambda clip: clip['timeline_start_seconds'])
     transitions = [{'left': clip_facts(left), 'right': clip_facts(right)} for left, right in zip(ordered, ordered[1:])
                    if right.get('transition_in_seconds', 0) and (left['cue_id'] in ids or right['cue_id'] in ids)]
     overlays = [{**parse_overlay(item).model_dump(), 'start_seconds': (max(_ms(item['start_seconds']), start) - start) / 1000,
                  'end_seconds': (min(_ms(item['end_seconds']), end) - start) / 1000}
-                for item in montage.get('graphic_overlays', []) if _ms(item['start_seconds']) < end and _ms(item['end_seconds']) > start]
+                for item in inputs.graphic_overlays if _ms(item['start_seconds']) < end and _ms(item['end_seconds']) > start]
     return {'cues': cues, 'clips': [clip_facts(clip) for clip in selected], 'audio_timeline': audio,
-            'normalize_voice_sources': montage.get('narration_linkage_created_audio_timeline', False) or montage.get('audio_timeline') is None,
+            'normalize_voice_sources': inputs.normalize_voice_sources,
             'graphic_overlays': overlays, 'transitions': transitions}

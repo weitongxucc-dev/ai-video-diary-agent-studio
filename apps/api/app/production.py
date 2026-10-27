@@ -4641,6 +4641,23 @@ class ProductionRepository:
         return {'ordinal': row['ordinal'], 'section': section, 'adopted': adopted,
             'audio': self._narration_segment_from_row(audio_rows[0]) if audio_rows else None}
 
+    def creation_section_ids(self, task, script, *, offset, limit, connection):
+        if not connection.in_transaction:
+            raise ValueError('段落读取必须复用已开启的事务')
+        start, stop, _ = slice(offset, offset + limit).indices(script.sections_total_count)
+        return [row[0] for row in connection.execute(
+            'SELECT section_id FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? '
+            'ORDER BY ordinal LIMIT ? OFFSET ?', (task.workspace_id, script.id, max(0,stop-start), start))]
+
+    def creation_section_neighbors(self, task, script, section_id, *, connection):
+        row = connection.execute('SELECT ordinal FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? AND section_id=?',
+            (task.workspace_id,script.id,section_id)).fetchone()
+        ids = [item[0] for item in connection.execute(
+            'SELECT section_id FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? '
+            'AND ordinal BETWEEN ? AND ? AND section_id<>? ORDER BY ordinal',
+            (task.workspace_id,script.id,row[0]-1,row[0]+1,section_id))]
+        return [self.read_creation_section_input(task,script,item,connection=connection)['section'] for item in ids]
+
     def iter_creation_section_planning_inputs(self, task, script, *, connection):
         """Yield effective text once per section, plus scalar clocks; never collect bodies."""
         if not connection.in_transaction:
@@ -5608,8 +5625,8 @@ class ProductionRepository:
                     expected_revision=budget_policy['revision'], connection=conn)
         return job
 
-    def list_segment_revision_requests(self, workspace_id, task_id, member_id, *, limit=30):
-        with self._connect() as conn:
+    def list_segment_revision_requests(self, workspace_id, task_id, member_id, *, limit=30, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             args = (workspace_id, task_id, member_id)
             where = "workspace_id=? AND task_id=? AND event_type='segment_revision_requested' AND json_extract(payload_json,'$.member_id')=?"
             count = conn.execute('SELECT count(*) FROM task_events WHERE '+where, args).fetchone()[0]
@@ -5944,51 +5961,110 @@ class ProductionRepository:
             self.append_task_event(event, connection=conn)
         return event
 
+    def _section_timeline_dependency_inputs(self, conn, task, section_id, adopted):
+        from app.creation.section_timeline import SectionDependencyInputs, _ms, _section_bounds
+        # SQLite traverses the stored document; only target bodies and global clocks
+        # cross into Python. The publication fallback is already section-scoped.
+        params = (task.workspace_id, task.current_timeline_version_id)
+        present = conn.execute("SELECT EXISTS(SELECT 1 FROM json_each(snapshot_json,'$.montage')) "
+            'FROM timeline_versions WHERE workspace_id=? AND id=?', params).fetchone()
+        if present and present[0]:
+            source = "SELECT json_extract(snapshot_json,'$.montage') AS montage FROM timeline_versions WHERE workspace_id=? AND id=?"
+        else:
+            source, params = 'SELECT ? AS montage', (json.dumps((adopted or {}).get('montage') or {}),)
+        def query(sql, values=()):
+            return conn.execute('WITH source AS (' + source + ') ' + sql, (*params, *values))
+        meta = json.loads(query("SELECT json_remove(montage,'$.cues','$.clips','$.graphic_overlays') FROM source").fetchone()[0])
+        cues, order, durations = [], [], []
+        for row in query("SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.duration_seconds'), "
+                "CASE WHEN json_extract(j.value,'$.source_section_id')=? THEN j.value END "
+                "FROM source,json_each(source.montage,'$.cues') j ORDER BY CAST(j.key AS INTEGER)", (section_id,)):
+            order.append(row[0]); durations.append(row[1])
+            if row[2] is not None:
+                cues.append(json.loads(row[2]))
+        clocks = [dict(row) for row in query("SELECT j.key AS _position,json_extract(j.value,'$.cue_id') AS cue_id, "
+            "json_extract(j.value,'$.timeline_start_seconds') AS timeline_start_seconds, "
+            "json_extract(j.value,'$.timeline_end_seconds') AS timeline_end_seconds, "
+            "COALESCE(json_extract(j.value,'$.transition_in_seconds'),0) AS transition_in_seconds "
+            "FROM source,json_each(source.montage,'$.clips') j ORDER BY CAST(j.key AS INTEGER)")]
+        ids = {cue['id'] for cue in cues}
+        selected = [clip for clip in clocks if clip['cue_id'] in ids]
+        wanted = {clip['_position'] for clip in selected}
+        overlays = []
+        if selected:
+            _, start, end = _section_bounds(order, ids, clocks, meta['duration_seconds'])
+            ordered = sorted(clocks, key=lambda clip: clip['timeline_start_seconds'])
+            for left, right in zip(ordered, ordered[1:]):
+                if right['transition_in_seconds'] and (left['cue_id'] in ids or right['cue_id'] in ids):
+                    wanted.update((left['_position'], right['_position']))
+            overlay_ids = [row[0] for row in query("SELECT j.key,json_extract(j.value,'$.start_seconds'), "
+                "json_extract(j.value,'$.end_seconds') FROM source,json_each(source.montage,'$.graphic_overlays') j "
+                "ORDER BY CAST(j.key AS INTEGER)") if _ms(row[1]) < end and _ms(row[2]) > start]
+            overlays = [json.loads(row[0]) for row in query("SELECT j.value FROM source, "
+                "json_each(source.montage,'$.graphic_overlays') j WHERE j.key IN (SELECT value FROM json_each(?)) "
+                "ORDER BY CAST(j.key AS INTEGER)", (json.dumps(overlay_ids),))]
+        facts = {row[0]: json.loads(row[1]) for row in query("SELECT j.key,j.value FROM source, "
+            "json_each(source.montage,'$.clips') j WHERE j.key IN (SELECT value FROM json_each(?)) "
+            "ORDER BY CAST(j.key AS INTEGER)", (json.dumps(sorted(wanted)),))}
+        return SectionDependencyInputs(cues, order, clocks, facts, meta.get('duration_seconds'),
+            meta.get('audio_timeline'), meta.get('narration_audio_path'),
+            sum(durations) if selected and meta.get('audio_timeline') is None and meta.get('narration_audio_path') else 0,
+            meta.get('narration_linkage_created_audio_timeline', False) or meta.get('audio_timeline') is None, overlays)
+
     def section_dependency_snapshot(self,workspace_id,task_id,section_id,*,connection=None):
-        """The section's actual adopted inputs; unrelated publications are not dependencies."""
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
+        """Actual target dependencies, in the owner's snapshot (including uncommitted edits)."""
+        # Historically this entry starts a snapshot on a borrowed idle connection.
+        # Leave its lifetime/commit to that caller, just as effective_creation_script did.
+        if connection is not None and not connection.in_transaction:
+            connection.execute('BEGIN')
+        with self.creation_execution_read(connection) as conn:
             task = self._require_creation_task(conn,workspace_id,task_id)
-            script = self.effective_creation_script(workspace_id,task_id,connection=conn)
-            section = next(item for item in script.sections if item.id==section_id)
-            plan = self.get_creation_plan(workspace_id,task.plan_id)
-            segments = self.list_narration_segments(workspace_id,task_id,script.id,connection=conn)
-            audio = next((item for item in segments if item.source_section_id==section_id),None)
-            version = conn.execute('SELECT snapshot_json FROM timeline_versions WHERE workspace_id=? AND id=?',
-                (workspace_id,task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
-            snapshot = json.loads(version[0]) if version else {}
-            adopted = self.stage_segment_state(workspace_id,task_id,section_id,connection=conn)
-            montage = snapshot.get('montage') or (adopted or {}).get('montage') or {}
-            cues = [item for item in montage.get('cues',[]) if item.get('source_section_id')==section_id]
-            cue_ids = {item['id'] for item in cues}
-            clips = [dict(item) for item in montage.get('clips',[]) if item.get('cue_id') in cue_ids]
+            script, _ = self.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
+            current = self.read_creation_section_input(task,script,section_id,connection=conn)
+            section, audio = current['section'], current['audio']
+            plan = self._read_creation_plan(conn,workspace_id,task.plan_id)
+            inputs = self._section_timeline_dependency_inputs(conn,task,section_id,current['adopted'])
+            cue_ids = {item['id'] for item in inputs.cues}
+            clips = [item for item in inputs.clip_clocks if item['cue_id'] in cue_ids]
             start = min((item['timeline_start_seconds'] for item in clips),default=0)
             end = max((item['timeline_end_seconds'] for item in clips),default=start)
-            for clip in clips:
-                clip['timeline_start_seconds'] -= start
-                clip['timeline_end_seconds'] -= start
-            assets = sorted({item['asset_id'] for item in clips})
+            assets = sorted({inputs.clip_facts[item['_position']]['asset_id'] for item in clips})
             sources = [tuple(row) for row in conn.execute('SELECT id,updated_at FROM material_assets WHERE workspace_id=? '
                 'AND id IN (SELECT value FROM json_each(?)) ORDER BY id',(workspace_id,json.dumps(assets)))]
             tracks = []
-            if cues and task.current_timeline_version_id:
-                for row in conn.execute('SELECT payload_json FROM subtitle_tracks WHERE workspace_id=? AND task_id=? '
+            if inputs.cues and task.current_timeline_version_id:
+                for row in conn.execute("SELECT id,json_remove(payload_json,'$.cues') FROM subtitle_tracks WHERE workspace_id=? AND task_id=? "
                         'AND timeline_version_id=? ORDER BY id',(workspace_id,task_id,task.current_timeline_version_id)):
-                    track = json.loads(row[0])
+                    track = json.loads(row[1])
+                    relevant_ids = [cue[0] for cue in conn.execute("SELECT j.key,json_extract(j.value,'$.source_cue_id'), "
+                        "COALESCE(json_extract(j.value,'$.start_seconds'),0),COALESCE(json_extract(j.value,'$.end_seconds'),0) "
+                        "FROM subtitle_tracks t,json_each(t.payload_json,'$.cues') j WHERE t.workspace_id=? AND t.id=? "
+                        "ORDER BY CAST(j.key AS INTEGER)",(workspace_id,row[0]))
+                        if cue[1] in cue_ids or cue[2]<end and cue[3]>start]
                     relevant = []
-                    for cue in track.get('cues',[]):
-                        if (cue.get('source_cue_id') in cue_ids or
-                                cue.get('start_seconds',0)<end and cue.get('end_seconds',0)>start):
-                            relevant.append({**cue,'start_seconds':cue['start_seconds']-start,'end_seconds':cue['end_seconds']-start})
+                    for value in conn.execute("SELECT j.value FROM subtitle_tracks t,json_each(t.payload_json,'$.cues') j "
+                            "WHERE t.workspace_id=? AND t.id=? AND j.key IN (SELECT value FROM json_each(?)) ORDER BY CAST(j.key AS INTEGER)",
+                            (workspace_id,row[0],json.dumps(relevant_ids))):
+                        cue = json.loads(value[0])
+                        relevant.append({**cue,'start_seconds':cue['start_seconds']-start,'end_seconds':cue['end_seconds']-start})
                     if relevant:
                         tracks.append({'language':track.get('language'),'generation_method':track.get('generation_method'),
                             'source_language':track.get('source_language'),'style':track.get('style'),'cues':relevant})
             tracks.sort(key=lambda track:(track['language'],track['generation_method'],track['source_language'] or ''))
-            from app.creation.section_timeline import section_timeline_dependencies
+            from app.creation.section_timeline import section_dependency_facts
             return {'script_id':script.id,'section':asdict(section),
                 'audio':{key:value for key,value in asdict(audio).items() if key not in {'created_at','updated_at'}} if audio else None,
                 'voice':asdict(plan.selected_voice) if plan.selected_voice else None,
                 'person':asdict(plan.selected_person) if plan.selected_person else None,'aspect_ratio':plan.aspect_ratio,
-                'timeline':section_timeline_dependencies(montage,section_id),'source_versions':sources,'subtitles':tracks}
+                'timeline':section_dependency_facts(inputs),'source_versions':sources,'subtitles':tracks}
+
+    def timeline_sequence(self, workspace_id, version_id, *, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            row = conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND id=?',
+                (workspace_id, version_id)).fetchone()
+            if row is None:
+                raise KeyError(version_id)
+            return row[0]
 
     def stage_section_version(self, workspace_id, task_id, section_id, *, connection=None):
         if connection is None or not connection.in_transaction:
@@ -6885,9 +6961,9 @@ class ProductionRepository:
             return self._artifact_record_from_row(row)
 
     def get_artifact_record(
-        self, workspace_id: str, artifact_id: str
+        self, workspace_id: str, artifact_id: str, *, connection=None
     ) -> ArtifactRecord:
-        with self._connect() as conn:
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM artifact_records WHERE workspace_id = ? AND id = ?",
                 (workspace_id, artifact_id),
@@ -8986,8 +9062,8 @@ class ProductionRepository:
             for row in rows
         ]
 
-    def get_topic_evidence_reference(self, workspace_id, task_id, evidence_id):
-        with self._connect() as conn:
+    def get_topic_evidence_reference(self, workspace_id, task_id, evidence_id, *, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             row = conn.execute('SELECT payload FROM topic_evidence_references WHERE workspace_id=? AND task_id=? AND id=?',
                 (workspace_id, task_id, evidence_id)).fetchone()
         if row is None:
@@ -9155,8 +9231,14 @@ class ProductionRepository:
     def fail_script_generation(self, run_id: str, *, reason: str, impact: str, repair_action: str, retryable: bool, provider_attempted: bool=False, provider_failed: bool=True, connection=None) -> tuple[CreationTask, ScriptGenerationRun]:
         return self.script_records.fail_script_generation(run_id, reason=reason, impact=impact, repair_action=repair_action, retryable=retryable, provider_attempted=provider_attempted, provider_failed=provider_failed, connection=connection)
 
-    def get_script_generation_run(self, workspace_id: str, run_id: str) -> ScriptGenerationRun:
-        return self.script_records.get_script_generation_run(workspace_id, run_id)
+    def get_script_generation_run(self, workspace_id: str, run_id: str, *, connection=None) -> ScriptGenerationRun:
+        if connection is None:
+            return self.script_records.get_script_generation_run(workspace_id, run_id)
+        row = connection.execute('SELECT payload FROM script_generation_runs WHERE workspace_id=? AND id=?',
+            (workspace_id,run_id)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return self._script_generation_run_from_payload(json.loads(row[0]))
 
     def latest_script_generation_run(self, workspace_id: str, task_id: str) -> ScriptGenerationRun | None:
         return self.script_records.latest_script_generation_run(workspace_id, task_id)

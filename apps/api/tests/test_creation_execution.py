@@ -6033,3 +6033,153 @@ def test_bounded_segment_video_new_audio_preparation_precedes_its_original_commi
         case.repo.get_task_event('local', prepared.id)
     assert not case.generated and not case.merged
     case.scheduler.close()
+
+
+def _section_context_projection_case(tmp_path):
+    """Persist section facts without running a renderer, narration worker or model."""
+    from app.creation.contracts import ArtifactRecord, NarrationSegment, SubtitleCue, SubtitleTrack, TaskEvent
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    case = _narration_units_case(tmp_path, section_count=5)
+    repo = case.repo
+    case.segments = SegmentProductionUseCase(repo,narration_stage=None,renderer=None,
+        artifact_store=None,output_root=tmp_path/'unused')
+    clips, cues = [], []
+    for index, (section, start, end) in enumerate([(1,0,1),(2,1,2),(3,2,2.5),(3,2.5,3),(4,3,4),(5,4,5)]):
+        cue_id = f'cue_{index}'
+        cues.append(asdict(NarrationCue(cue_id,f'section_{section}',
+            'FORBIDDEN_CUE_BODY' if section==1 else f'段{section}正文',end-start)))
+        clips.append(asdict(MontageClip(f'clip_{index}',cue_id,f'asset_{section}',f'segment_{section}',
+            f'material://asset_{section}',0,end-start,start,end,1,
+            ['FORBIDDEN_CLIP_BODY'] if section==1 else ['原匹配'],False,
+            transition_in_seconds=.125 if index in (2,4) else 0)))
+    case.montage = {'cues':cues,'clips':clips,'duration_seconds':5,'narration_audio_path':'narration://artifact/original',
+        'graphic_overlays':[{'kind':'text','id':'near','text':'相关标题','start_seconds':1.75,'end_seconds':3.25},
+            {'kind':'text','id':'far','text':'FORBIDDEN_OVERLAY_BODY','start_seconds':0,'end_seconds':.5}]}
+    publications = {}
+    for section in (2,3):
+        ref = f'publication_{section}'
+        publications[f'section_{section}'] = ref
+        repo.create_artifact_record(ArtifactRecord(f'video_{section}','local',case.task_id,'video',
+            f'video://artifact/{section}','a'*64,1,case.job.id,[]))
+        local = {**case.montage,'cues':[cue for cue in cues if cue['source_section_id']==f'section_{section}'],
+            'clips':[clip for clip in clips if clip['cue_id'] in {cue['id'] for cue in cues if cue['source_section_id']==f'section_{section}'}],
+            'graphic_overlays':[]}
+        repo.append_task_event(TaskEvent(ref,'local',case.task_id,case.job.id,'segment_publication',
+            {'section_id':f'section_{section}','script_id':case.script_id,'text':f'已采用段{section}中文\\转义',
+                'adopted':True,'video_artifact_id':f'video_{section}','duration_seconds':1,
+                'narration_reference':f'narration://artifact/audio_{section}','montage':local}))
+    case.snapshot = {'montage':case.montage,'stage_segments':publications,
+        'stage_segment_invalidations':{'section_3':{'publication_id':'publication_3','reason':'changed_source'}},
+        'unrelated_body':'FORBIDDEN_SNAPSHOT_BODY'}
+    repo.create_timeline_version(TimelineVersion('projection_v1','local',case.task_id,None,1,case.snapshot,None),
+        expected_current_version_id=None)
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','FORBIDDEN_AUDIO_BODY') "
+            "WHERE script_id=? AND section_id IN ('section_1','section_5')",(case.script_id,))
+    audio = [NarrationSegment(f'audio_{i}','local',case.task_id,case.script_id,f'section_{i}',
+        f'已采用段{i}中文\\转义' if i in (2,3) else ('原文'*130 if i==4 else 'FORBIDDEN_AUDIO_BODY'),
+        f'narration://artifact/audio_{i}',1,24000,'test','voice_1','v1','zh','original','ready') for i in range(1,6)]
+    repo.save_narration_segments('local',case.task_id,case.script_id,audio)
+    for language in ('zh-CN','en-US'):
+        repo.create_subtitle_track(SubtitleTrack(f'track_{language}','local',case.task_id,'projection_v1',language,
+            None,{'enabled':True},[SubtitleCue(f'far_{language}','cue_0','FORBIDDEN_SUBTITLE_BODY',0,.5),
+                SubtitleCue(f'overlap_{language}','cue_1','相邻重叠字幕',1.75,2.25),
+                SubtitleCue(f'target_{language}','cue_2','目标字幕',2.25,2.5),
+                SubtitleCue(f'linked_{language}','cue_3','来源命中不重叠',3.5,4)],
+            'timeline',None,None,None,'unavailable','fixture_pending','no_file','generate_later'))
+    return case
+
+
+def test_section_context_projection_preserves_facts_without_unrelated_bodies(tmp_path,monkeypatch):
+    from app.creation.section_timeline import section_timeline_dependencies
+    from app.creation.segment_production_use_case import digest
+    case = _section_context_projection_case(tmp_path)
+    expected_timeline = section_timeline_dependencies(case.montage,'section_3')
+    def forbidden(*args,**kwargs):
+        raise AssertionError('whole document reader used')
+    for name in ('effective_creation_script','get_creation_task_script','list_narration_segments','get_timeline_version','get_creation_plan'):
+        monkeypatch.setattr(case.repo,name,forbidden)
+    decode = json.loads
+    def bounded(value,*args,**kwargs):
+        assert 'FORBIDDEN_' not in value
+        return decode(value,*args,**kwargs)
+    monkeypatch.setattr(json,'loads',bounded)
+    context = case.segments.context('local',case.task_id,'section_3',case.actor)
+    dependencies = case.repo.section_dependency_snapshot('local',case.task_id,'section_3')
+    assert dependencies['timeline']==expected_timeline
+    assert context['dependency_digest']==digest(dependencies)
+    assert context['ordinal']==3 and context['segment_version']=='publication_3'
+    assert context['text']=='已采用段3中文\\转义'
+    assert [item['id'] for item in context['adjacent_sections']]==['section_2','section_4']
+    assert context['adjacent_sections'][0]['content']=='已采用段2中文\\转义'
+    assert context['video'] is None and context['historical_video']['artifact_ref']=='video://artifact/3'
+    assert context['adoption']['status']=='invalidated' and context['adoption']['current_timeline_sequence']==1
+    assert [[cue['text'] for cue in track['cues']] for track in dependencies['subtitles']]==[
+        ['相邻重叠字幕','目标字幕','来源命中不重叠']]*2
+    assert len(dependencies['timeline']['transitions'])==2
+    page = case.segments.list_segments('local',case.task_id,case.actor,offset=2,limit=1)
+    assert page['segments']==[context] and page['total_count']==5 and page['truncated']
+    assert case.segments.sources('local',case.task_id,'section_3',case.actor)['segment_version']=='publication_3'
+    assert case.repo.stage_section_version('local',case.task_id,'section_3')=='publication_3'
+
+
+def _section_projection_next_version(case, snapshot, *, connection=None, subtitle_change=False):
+    if connection is None:
+        with case.repo._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            return _section_projection_next_version(case,snapshot,connection=conn,subtitle_change=subtitle_change)
+    case.repo.create_timeline_version(TimelineVersion('projection_v2','local',case.task_id,'projection_v1',2,snapshot,None),
+        connection=connection,expected_current_version_id='projection_v1')
+    for track in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id='projection_v1',connection=connection):
+        cues = [replace(cue,text='changed overlap') if subtitle_change and cue.id=='overlap_zh-CN' else cue for cue in track.cues]
+        case.repo.create_subtitle_track(replace(track,id=track.id+'_v2',timeline_version_id='projection_v2',cues=cues),connection=connection)
+
+
+def test_section_dependency_projection_borrows_transaction_and_preserves_cas(tmp_path):
+    from app.creation.segment_production_use_case import digest
+    case = _section_context_projection_case(tmp_path)
+    repo = case.repo
+    from app.creation.contracts import TaskEvent
+    repo.append_task_event(TaskEvent(case.segments.video_preparation_id(case.job,'section_3'),'local',case.task_id,
+        case.job.id,'segment_video_prepared',{'montage':case.montage}))
+    request = SimpleNamespace(workspace_id='local',owner_id=case.job.id,unit_key='segment_video:section_3:publication_3')
+    before = repo.section_dependency_snapshot('local',case.task_id,'section_3')
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        check = case.segments.capture_local(request,conn,case.owner)
+        snapshot = json.loads(json.dumps(case.snapshot))
+        snapshot['montage']['cues'][0]['text']='unrelated later edit'
+        _section_projection_next_version(case,snapshot,connection=conn)
+        unchanged = repo.section_dependency_snapshot('local',case.task_id,'section_3',connection=conn)
+        assert json.dumps(unchanged,sort_keys=True,default=str)==json.dumps(before,sort_keys=True,default=str)
+        assert check(conn)=='ready'
+        conn.execute("UPDATE creation_plans SET payload=json_set(payload,'$.aspect_ratio','16:9') WHERE workspace_id='local'")
+        changed = repo.section_dependency_snapshot('local',case.task_id,'section_3',connection=conn)
+        assert changed['aspect_ratio']=='16:9' and digest(changed)!=digest(before)
+        assert case.segments.context('local',case.task_id,'section_3',case.actor,connection=conn)['dependency_digest']==digest(changed)
+        assert check(conn)=='stale'
+        assert conn.in_transaction
+        conn.rollback()
+    assert repo.section_dependency_snapshot('local',case.task_id,'section_3')==before
+    # Exercise the durable restore CAS itself, stopping only after that guard.
+    history={'section_id':'section_3','after_publication':'publication_3','before_publication':'missing_history'}
+    arguments=dict(history=history,expected_dependencies=before,redo=False,
+        changed_version_id='changed',restore_version_id='restored',timeline_change=None,job=case.job)
+    with pytest.raises(KeyError,match='missing_history'):
+        repo.restore_script_section('local',case.task_id,**arguments)
+    _section_projection_next_version(case,case.snapshot,subtitle_change=True)
+    with pytest.raises(ValueError,match='实际音画、字幕或来源依赖已变化'):
+        repo.restore_script_section('local',case.task_id,**arguments)
+
+
+@pytest.mark.parametrize('conflict',['cue_order','overlap'])
+def test_section_dependency_projection_keeps_global_conflict_checks(tmp_path,conflict):
+    case = _section_context_projection_case(tmp_path)
+    snapshot = case.snapshot
+    if conflict=='cue_order':
+        snapshot['montage']['cues'][3],snapshot['montage']['cues'][4]=snapshot['montage']['cues'][4],snapshot['montage']['cues'][3]
+    else:
+        snapshot['montage']['clips'][0]['timeline_end_seconds']=2.25
+    _section_projection_next_version(case,snapshot)
+    with pytest.raises(ValueError,match='不连续|交叠'):
+        case.repo.section_dependency_snapshot('local',case.task_id,'section_3')

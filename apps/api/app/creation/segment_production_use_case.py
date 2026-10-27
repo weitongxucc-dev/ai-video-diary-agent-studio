@@ -49,37 +49,38 @@ class SegmentProductionUseCase:
             raise PermissionError('当前成员不能访问此作品段落')
         return task
 
-    def context(self, workspace_id, task_id, section_id, actor, *, connection=None, facts=None):
-        task = self.require_actor(workspace_id, task_id, actor, connection=connection) if facts is None else facts[0]
-        script = self.repository.effective_creation_script(workspace_id, task_id, connection=connection) if facts is None else facts[1]
-        section = next((item for item in script.sections if item.id == section_id), None)
-        if section is None:
-            raise ValueError('稳定段落ID不属于当前确认文案')
-        ordinal = script.sections.index(section)
-        rows = self.repository.list_narration_segments(workspace_id, task_id, script.id, connection=connection) if facts is None else facts[2]
-        audio = next((item for item in rows
-            if item.source_section_id == section_id), None)
-        adopted = self.repository.stage_segment_state(workspace_id, task_id, section_id, connection=connection)
+    def context(self, workspace_id, task_id, section_id, actor, *, connection=None):
+        if connection is None:
+            with self.repository.creation_execution_read() as conn:
+                return self.context(workspace_id,task_id,section_id,actor,connection=conn)
+        if not connection.in_transaction:
+            connection.execute('BEGIN')
+        task = self.require_actor(workspace_id, task_id, actor, connection=connection)
+        script, metadata = self.repository.script_records.read_execution_script_metadata(
+            connection,workspace_id,task.confirmed_script_id)
+        current = self.repository.read_creation_section_input(task,script,section_id,connection=connection)
+        section, audio, adopted = current['section'], current['audio'], current['adopted']
         version = (adopted['segment_version'] if adopted is not None else
             digest_section_version(script.id,section.id,section.content,audio.audio_reference if audio else None))
         text_hash = hashlib.sha256(section.content.encode()).hexdigest()
         dependencies = self.repository.section_dependency_snapshot(workspace_id,task_id,section_id,connection=connection)
         video = None
         if adopted is not None:
-            record = self.repository.get_artifact_record(workspace_id, adopted['video_artifact_id'])
+            record = self.repository.get_artifact_record(workspace_id, adopted['video_artifact_id'], connection=connection)
             video = {'kind': 'video', 'artifact_ref': record.logical_ref, 'sha256': record.sha256,
                 'segment_version': version, 'duration_seconds': adopted['duration_seconds'],
                 'url': f'/api/creation-tasks/{task_id}/segments/{section_id}/versions/{version}/video'}
-        return {'task_id': task_id, 'section_id': section_id, 'ordinal': ordinal + 1, 'script_id': script.id,
+        return {'task_id': task_id, 'section_id': section_id, 'ordinal': current['ordinal'], 'script_id': script.id,
             'base_version_id': task.current_timeline_version_id, 'segment_version': version,
             'title': section.title, 'text': section.content, 'source_text_sha256': text_hash,
             'dependency_digest':digest(dependencies),
             'visual_prompt': section.visual_prompt, 'source_references': section.evidence_reference_ids,
-            'source_bindings': self.source_bindings(script, section, limit=24),
+            'source_bindings': self.source_bindings(metadata, section, limit=24, connection=connection),
             'source_binding_total_count': len(section.evidence_reference_ids),
             'source_bindings_truncated': len(section.evidence_reference_ids) > 24,
-            'locked_body_digest': script.locked_body_digest,
-            'adjacent_sections': [asdict(item) for item in script.sections[max(0, ordinal-1):ordinal+2] if item.id != section_id],
+            'locked_body_digest': metadata['locked_body_digest'],
+            'adjacent_sections': [asdict(item) for item in self.repository.creation_section_neighbors(
+                task,script,section_id,connection=connection)],
             'narration_segment_id': audio.id if audio is not None else None,
             'audio': {'kind': 'audio', 'artifact_ref': audio.audio_reference, 'status': audio.status,
                 'duration_seconds': audio.duration_seconds} if audio is not None else None,
@@ -88,23 +89,23 @@ class SegmentProductionUseCase:
             'adopted': adopted is not None and adopted['current_validity'] == 'current',
             'adoption': self.adoption(task, adopted, connection=connection)}
 
-    def source_bindings(self, script, section, *, offset=0, limit=24):
+    def source_bindings(self, metadata, section, *, offset=0, limit=24, connection=None):
         try:
-            run = self.repository.get_script_generation_run(script.workspace_id, script.run_id)
+            run = self.repository.get_script_generation_run(metadata['workspace_id'], metadata['run_id'], connection=connection)
         except KeyError:
             run = None
         fixed = ({item['reference_id']: item for item in run.input_references}
-            if run is not None and run.task_id == script.task_id else {})
+            if run is not None and run.task_id == metadata['task_id'] else {})
         result = []
         for reference_id in section.evidence_reference_ids[offset:offset+limit]:
             original = fixed.get(reference_id)
             if original is None:
                 # Only an evidence object's exact persisted ID is a fallback binding.
                 try:
-                    evidence = self.repository.get_topic_evidence_reference(script.workspace_id, script.task_id, reference_id)
+                    evidence = self.repository.get_topic_evidence_reference(metadata['workspace_id'], metadata['task_id'], reference_id, connection=connection)
                 except KeyError:
                     evidence = None
-                if evidence is not None and evidence.candidate_id == script.topic_id:
+                if evidence is not None and evidence.candidate_id == metadata['topic_id']:
                     original = {'kind': evidence.kind, 'object_id': evidence.reference_id,
                         'version_or_identity': evidence.version_or_identity}
             known = (original is not None and original.get('kind') in {'knowledge', 'source'}
@@ -119,13 +120,14 @@ class SegmentProductionUseCase:
     def sources(self, workspace_id, task_id, section_id, actor, *, offset=0, limit=8, text_offset=0, max_chars=3000):
         if offset < 0 or not 1 <= limit <= 24 or text_offset < 0 or not 1 <= max_chars <= 8000:
             raise ValueError('段落证据读取范围无效')
-        task = self.require_actor(workspace_id, task_id, actor)
-        script = self.repository.effective_creation_script(workspace_id, task_id)
-        section = next((item for item in script.sections if item.id == section_id), None)
-        if section is None:
-            raise KeyError(section_id)
+        with self.repository.creation_execution_read() as conn:
+            task = self.require_actor(workspace_id, task_id, actor, connection=conn)
+            script, metadata = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
+            section = self.repository.read_creation_section_input(task,script,section_id,connection=conn)['section']
+            bindings = self.source_bindings(metadata, section, offset=offset, limit=limit, connection=conn)
+            version = self.repository.stage_section_version(workspace_id,task_id,section_id,connection=conn)
         items = []
-        for binding in self.source_bindings(script, section, offset=offset, limit=limit):
+        for binding in bindings:
             if binding['binding_status'] == 'unknown':
                 value = {'status': 'unknown', 'reason_code': 'original_source_binding_unavailable',
                     'text_offset': text_offset, 'truncated': False}
@@ -143,13 +145,13 @@ class SegmentProductionUseCase:
             items.append({'binding': binding, **value})
         total = len(section.evidence_reference_ids)
         return {'task_id': task_id, 'section_id': section_id, 'script_id': script.id,
-            'segment_version': self.repository.stage_section_version(workspace_id, task_id, section_id),
+            'segment_version': version,
             'items': items, 'offset': offset, 'limit': limit, 'total_count': total, 'truncated': offset+len(items) < total}
 
     def adoption(self, task, result, *, connection=None):
         current = (self.repository.stage_segment_state(task.workspace_id, task.id, result['section_id'], connection=connection)
             if result is not None else None)
-        version = (self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=connection)
+        sequence = (self.repository.timeline_sequence(task.workspace_id, task.current_timeline_version_id, connection=connection)
             if task.current_timeline_version_id else None)
         result_version = result['segment_version'] if result is not None else None
         current_version = current['segment_version'] if current is not None else None
@@ -164,19 +166,19 @@ class SegmentProductionUseCase:
         else:
             status, reason = 'current', None
         return {'status': status, 'current_timeline_version_id': task.current_timeline_version_id,
-            'current_timeline_sequence': version.sequence if version else None,
+            'current_timeline_sequence': sequence,
             'current_segment_version': current_version, 'result_segment_version': result_version, 'reason': reason}
 
     def list_segments(self, workspace_id, task_id, actor, *, offset=0, limit=30):
-        task = self.require_actor(workspace_id, task_id, actor)
-        script = self.repository.effective_creation_script(workspace_id, task_id)
-        rows = self.repository.list_narration_segments(workspace_id, task_id, script.id)
-        values = [self.context(workspace_id, task_id, item.id, actor, facts=(task, script, rows))
-            for item in script.sections[offset:offset+limit]]
-        receipts = self.repository.list_segment_revision_requests(workspace_id, task_id, actor.member_id, limit=limit)
-        return {'task_id': task_id, 'total_count': len(script.sections), 'offset': offset,
-            'truncated': offset+len(values)<len(script.sections), 'revision_requests': receipts,
-            'available_video_count': sum(item['video'] is not None for item in values), 'segments': values}
+        with self.repository.creation_execution_read() as conn:
+            task = self.require_actor(workspace_id, task_id, actor, connection=conn)
+            script, _ = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
+            ids = self.repository.creation_section_ids(task,script,offset=offset,limit=limit,connection=conn)
+            values = [self.context(workspace_id,task_id,item,actor,connection=conn) for item in ids]
+            receipts = self.repository.list_segment_revision_requests(workspace_id, task_id, actor.member_id, limit=limit, connection=conn)
+            return {'task_id': task_id, 'total_count': script.sections_total_count, 'offset': offset,
+                'truncated': offset+len(values)<script.sections_total_count, 'revision_requests': receipts,
+                'available_video_count': sum(item['video'] is not None for item in values), 'segments': values}
 
     def verify_revision(self, workspace_id, task_id, actor, command, *, connection=None):
         current = self.context(workspace_id, task_id, command.section_id, actor, connection=connection)
@@ -692,7 +694,7 @@ class SegmentProductionUseCase:
             return (tuple(task_row) if task_row else None,tuple(plan_row) if plan_row else None,
                 digest(dependencies),tuple(assets))
         before = read(conn)
-        plan = self.repository.get_creation_plan(request.workspace_id,task.plan_id)
+        plan = self.repository._read_creation_plan(conn,request.workspace_id,task.plan_id)
         profiles = self.repository.capture_profile_local_check(conn,request.workspace_id,
             [('voice',plan.selected_voice.profile_id,plan.selected_voice.version)],
             [(item.id,item.version) for item in plan.pronunciation_references])
