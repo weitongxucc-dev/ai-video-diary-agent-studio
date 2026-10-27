@@ -11,7 +11,8 @@ from app.content_templates import list_content_templates
 from app.creation.contracts import SubtitleTrack
 from app.creation.editing.metadata_use_case import default_subtitle_style
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
-from app.production import CreationPlan, CreationTask, ProductionRepository, VideoTemplate, content_readable
+from app.production import CreationPlan, ProductionRepository, VideoTemplate, content_readable
+from app.creation.contracts import CreationTask
 from app.visual_effects import reusable_color_settings
 
 

@@ -20,10 +20,14 @@ from app.material_ingestion import (
     MaterialIngestionService,
 )
 from app.production import (
-    CreationPlan, CreationTask, CreationTaskScript, CreationTaskScriptSection,
-    JobRun, MaterialProbeDependency, ProductionRepository, ScriptGenerationRun, TaskEvent,
-    _material_hash_candidate, material_probe_unit_key,
+    CreationPlan,
+    MaterialProbeDependency,
+    ProductionRepository,
+    _material_hash_candidate,
+    material_probe_unit_key,
 )
+from app.creation.contracts import CreationTask, JobRun, TaskEvent
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 
 
 def make_repo(tmp_path: Path, duration_reader=None, scene_reader=None) -> tuple[ProductionRepository, Path]:

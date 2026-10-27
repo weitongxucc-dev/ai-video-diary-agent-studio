@@ -30,17 +30,15 @@ from app.device_scheduler import (
 from app.host_resource_probes import NarrationBudget
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import (
-    CreationPlan,
+from app.production import CreationPlan, NarrationArtifactRecord, ProductionRepository
+from app.creation.contracts import (
     CreationPlanVoiceReference,
     CreationTask,
     EditIntent,
     EditOperation,
     EditProposal,
     JobRun,
-    NarrationArtifactRecord,
     NarrationSegment,
-    ProductionRepository,
     TaskEvent,
     TimelineVersion,
 )

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from app.production import JobRun
+from app.creation.contracts import JobRun
 
 
 TerminalJobStatus = Literal["succeeded", "failed", "cancelled", "interrupted"]

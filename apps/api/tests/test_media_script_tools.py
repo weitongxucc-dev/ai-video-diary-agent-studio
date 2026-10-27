@@ -20,8 +20,8 @@ from app.creation_execution import CreationExecutionActor
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
 from app.models import utc_now
-from app.production import (ArtifactRecord, CreationPlan, CreationTask, JobRun,
-                            ProductionRepository, TaskEvent, TransformRun)
+from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TaskEvent, TransformRun
+from app.production import CreationPlan, ProductionRepository
 from app.task_audio import TASK_MEDIA_KIND
 from app.media_script_jobs import script_definition
 from app.media_script import ScriptInputRevision

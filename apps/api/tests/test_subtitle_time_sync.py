@@ -6,7 +6,7 @@ import pytest
 
 import app.main as main_module
 from app.compound_edits import apply_compound_subtitles
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 
 

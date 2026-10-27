@@ -269,13 +269,54 @@ from app.scheduled_tasks import (
     ScheduledTaskUpdateRequest,
 )
 from app.materials.contracts import MediaAuthorityError
-from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_segment_eligible)
+from app.production import (
+    EXACT_EDIT_SOURCE,
+    MaterialVersionConflict,
+    TimelineVersionConflict,
+    content_readable,
+    CreationPlan,
+    VideoTemplate,
+    CreationPlanBlocker,
+    CreationPlanKnowledgeReference,
+    CreationPlanPronunciationReference,
+    CreationPlanSourceReference,
+    MaterialCollection,
+    MaterialAssetNote,
+    MaterialBusinessObject,
+    MaterialLinkProvenanceSink,
+    NarrationArtifactRecord,
+    PersonRender,
+    ProductionBatch,
+    ProductionProfile,
+    ProductionRepository,
+    TopicCandidate as CreationTaskTopicCandidate,
+    TopicEvidenceReference,
+    TopicGenerationRun,
+    effective_segment_usage_role,
+    material_segment_eligible,
+)
+from app.creation.contracts import CreationTask, NarrationSegment
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
     CreationPlanPreflightRejected, CreationPlanPreflightUseCase)
 from app.source_types import source_item_identity
-from app.creation.contracts import (EditCommand, ArtifactRecord, CoverAsset, DependencyEdge, EditIntent, EditOperation, EditProposal, JobRun, TaskEvent, TimelineVersion, SubtitleCue, SubtitleTrack, TransformRun)
+from app.creation.contracts import (
+    EditCommand,
+    ArtifactRecord,
+    CoverAsset,
+    DependencyEdge,
+    EditIntent,
+    EditOperation,
+    EditProposal,
+    JobRun,
+    TaskEvent,
+    TimelineVersion,
+    SubtitleCue,
+    SubtitleTrack,
+    TransformRun,
+)
 from app.task_runtime import JobFailure, JobResult
 from app.quality_inspection import QualityCheckRepository
 from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND

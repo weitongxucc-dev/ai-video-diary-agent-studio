@@ -19,9 +19,20 @@ from app.creation_execution import (CpuRenderLimits, CreationExecution,
                                     cpu_render_facts, next_creation_intent, revision_digest)
 from app.audio_timeline import AudioEditRequest, apply_audio_edit, narration_audio_timeline
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                            MaterialAsset, MaterialSegment,
-                            NarrationArtifactRecord, ProductionRepository, SubtitleCue, SubtitleTrack, TimelineVersion)
+from app.production import (
+    CreationPlan,
+    MaterialAsset,
+    MaterialSegment,
+    NarrationArtifactRecord,
+    ProductionRepository,
+)
+from app.creation.contracts import (
+    CreationPlanVoiceReference,
+    CreationTask,
+    SubtitleCue,
+    SubtitleTrack,
+    TimelineVersion,
+)
 
 
 def wav_bytes(seconds: float = 1) -> bytes:

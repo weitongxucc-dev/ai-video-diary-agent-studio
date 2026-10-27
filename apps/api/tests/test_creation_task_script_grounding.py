@@ -15,10 +15,15 @@ from app.config import Settings, llm_service_verification, record_llm_service_ve
 from app.local_members import LocalMemberService
 from app.creation.script_generation_use_case import ScriptGenerationUseCase, ScriptGenerationRejected
 from app.production import (
-    CreationPlan, CreationPlanKnowledgeReference, CreationTask, CreationTaskScript,
-    CreationTaskScriptSection, ProductionRepository, ScriptGenerationRun, TopicCandidate,
-    TopicEvidenceReference, TopicGenerationRun,
+    CreationPlan,
+    CreationPlanKnowledgeReference,
+    ProductionRepository,
+    TopicCandidate,
+    TopicEvidenceReference,
+    TopicGenerationRun,
 )
+from app.creation.contracts import CreationTask
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem
 from app.topics import (

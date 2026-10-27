@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier
-from app.production import JobRun, MaterialAsset, ProductionRepository, TaskEvent
+from app.creation.contracts import JobRun, TaskEvent
+from app.production import MaterialAsset, ProductionRepository
 from tests.test_creation_execution import _seed
 
 
@@ -199,7 +200,8 @@ def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(
     from app.creation.quality_execution import QualityCheckOwnerVerifier
     from app.creation.output_observation_use_case import OutputObservationUseCase
     from app.quality_inspection import QualityCheckRepository
-    from app.production import CreationPlan, CreationTask
+    from app.production import CreationPlan
+    from app.creation.contracts import CreationTask
     from app.task_audio import TaskAudio
     from tests.test_quality_resource_owner import fixture_budget, seed_source, build_metadata_runtime
     repo = ProductionRepository(tmp_path / "quality.sqlite", tmp_path / "library")
@@ -234,7 +236,7 @@ def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(
 def test_cover_local_check_uses_original_binding_without_reading_source_or_receipt(tmp_path, monkeypatch):
     from app.artifact_store import ArtifactStore
     from app.creation.cover_use_case import CoverCommand, CoverUseCase, COVER_JOB_KIND, COVER_OPERATION, file_identity
-    from app.production import ArtifactRecord, EditIntent, EditProposal, TimelineVersion
+    from app.creation.contracts import ArtifactRecord, EditIntent, EditProposal, TimelineVersion
     from app.host_resource_probes import CoverBudget
     repo, task_id, _, _ = _seed(tmp_path, voice=False)
     workspace = "workspace_a"

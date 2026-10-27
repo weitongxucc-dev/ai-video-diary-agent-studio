@@ -18,13 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import (
-    CreationPlan,
-    CreationTask,
-    MaterialAsset,
-    ProductionRepository,
-    VideoTemplate,
-)
+from app.production import CreationPlan, MaterialAsset, ProductionRepository, VideoTemplate
+from app.creation.contracts import CreationTask
 
 
 WORKSPACE = "workspace_116"

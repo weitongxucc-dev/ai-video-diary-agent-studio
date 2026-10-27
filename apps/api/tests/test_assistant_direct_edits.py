@@ -13,7 +13,8 @@ from pathlib import Path
 from uuid import uuid4
 from types import SimpleNamespace
 from dataclasses import asdict, replace
-from app.production import CreationTaskScript, CreationTaskScriptSection, NarrationSegment
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+from app.creation.contracts import NarrationSegment
 
 import app.main as main
 from app.assistant.result_projection import read_sdk_result

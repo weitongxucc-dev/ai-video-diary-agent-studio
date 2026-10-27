@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from dataclasses import replace
 
-from app.production import SubtitleCue
+from app.creation.contracts import SubtitleCue
 from app.subtitle_alignment import align_subtitle_track, recognize_subtitle_timing, synchronize_translated_subtitles
 
 
@@ -13,7 +13,7 @@ def token(text, start, end, p=.9):
 
 
 def track(*texts):
-    from app.production import SubtitleTrack
+    from app.creation.contracts import SubtitleTrack
     return SubtitleTrack(id="s",workspace_id="w",task_id="t",timeline_version_id="v",language="en-US",
         source_language=None,style={},generation_method="timeline",model_id=None,artifact_ref="old.srt",transform_id="old",status="valid",
         cues=[SubtitleCue(id=str(i),source_cue_id=None,text=text,start_seconds=i,end_seconds=i+1) for i,text in enumerate(texts)])

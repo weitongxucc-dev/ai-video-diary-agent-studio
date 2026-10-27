@@ -10,7 +10,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.materials.contracts import MediaAuthorityError
-from app.production import CreationPlan, CreationPlanBlocker, CreationTask, CreationTaskScript, CreationTaskScriptSection, JobRun, ProductionRepository
+from app.production import CreationPlan, CreationPlanBlocker, ProductionRepository
+from app.creation.contracts import CreationTask, JobRun
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse
 from _media_preview_test_fixtures import register_synthetic_profiles
 

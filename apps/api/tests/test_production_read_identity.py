@@ -10,13 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import (
-    CreationPlan,
-    CreationTask,
-    ProductionRepository,
-    VideoTemplate,
-    content_readable,
-)
+from app.production import CreationPlan, ProductionRepository, VideoTemplate, content_readable
+from app.creation.contracts import CreationTask
 
 ALICE = "member-alice"
 BOB = "member-bob"

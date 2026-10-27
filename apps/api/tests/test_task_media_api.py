@@ -217,7 +217,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     import json
     from app.audio_timeline import narration_audio_timeline
     from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
-    from app.production import TimelineVersion
+    from app.creation.contracts import TimelineVersion
     graph = narration_audio_timeline(result['result']['source_ref'], .1)
     plan = CreationTaskMontagePlan(id='montage',workspace_id='local',task_id='task',script_id='script',
         script_title='fixture',status='ready',cues=[],clips=[],duration_seconds=.1,low_confidence_clip_count=0,

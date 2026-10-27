@@ -14,13 +14,13 @@ from starlette.requests import Request
 from app.production import (
     CreationPlan,
     CreationPlanKnowledgeReference,
-    CreationTask,
-    CreationTaskScriptSection,
     ProductionRepository,
     TopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
 )
+from app.creation.contracts import CreationTask
+from app.creation.script_contracts import CreationTaskScriptSection
 from app import main as main_module
 from app.schemas import AssistantReplyScriptTransferRequest
 

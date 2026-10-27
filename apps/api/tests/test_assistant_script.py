@@ -9,7 +9,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import CreationPlan, CreationPlanKnowledgeReference, CreationTask, ProductionRepository
+from app.production import CreationPlan, CreationPlanKnowledgeReference, ProductionRepository
+from app.creation.contracts import CreationTask
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
 
@@ -116,7 +117,8 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     from app.creation.contracts import TimelineVersion
     from app.creation_execution import CreationExecution, CreationExecutionActor
     from app.montage import MontageClip
-    from app.production import JobRun, MaterialAsset, MaterialSegment, TaskEvent
+    from app.creation.contracts import JobRun, TaskEvent
+    from app.production import MaterialAsset, MaterialSegment
 
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     material_repo = _script_task(tmp_path)

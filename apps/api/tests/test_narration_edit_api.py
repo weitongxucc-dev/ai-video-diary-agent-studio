@@ -86,7 +86,7 @@ def test_other_member_cannot_acquire_local_narration_grant(narration_api, monkey
 @pytest.fixture
 def generator_api(narration_api, tmp_path, monkeypatch):
     from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-    from app.production import SubtitleTrack, TimelineVersion
+    from app.creation.contracts import SubtitleTrack, TimelineVersion
     from test_montage_pipeline import _asset
     from test_narration_edit_execution import wav_bytes
     from app.narration import NarrationArtifact
@@ -165,7 +165,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("with_narration_snapshot", [False, True])
 def test_draft_narration_preview_does_not_require_a_rendered_video(generator_api, with_narration_snapshot):
-    from app.production import TimelineVersion
+    from app.creation.contracts import TimelineVersion
     state = generator_api
     if with_narration_snapshot:
         state.base = state.repo.create_timeline_version(TimelineVersion("with-audio-snapshot", "local", state.task.id,
@@ -265,7 +265,7 @@ def test_rendered_narration_preview_keeps_existing_comparison_contract(generator
 
 @pytest.mark.parametrize("mutation", ["missing_version", "unconfirmed_script", "missing_artifact", "unbound_segment", "missing_file"])
 def test_draft_narration_requires_current_version_script_and_persisted_audio(generator_api, monkeypatch, mutation):
-    from app.production import TimelineVersion
+    from app.creation.contracts import TimelineVersion
     state = generator_api
     if mutation == "missing_version":
         import json

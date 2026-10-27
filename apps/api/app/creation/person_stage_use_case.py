@@ -2,7 +2,7 @@ from __future__ import annotations
 from app.creation.contracts import ArtifactRecord
 from app.avatar_lipsync import AvatarAndLipSyncService
 from app.creation_execution import CreationStageGrantContext
-from app.production import CreationTask
+from app.creation.contracts import CreationTask
 from app.schemas import CreationTaskPersonRenderRequest
 from app.creation.contracts import DependencyEdge
 from app.task_runtime import JobFailure

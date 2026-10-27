@@ -17,7 +17,7 @@ from app.device_runtime import build_device_runtime
 from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe, MontageBudget, NarrationBudget
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
-from app.production import CreationPlanVoiceReference
+from app.creation.contracts import CreationPlanVoiceReference
 from app.task_audio import TASK_MEDIA_KIND
 from _media_preview_test_fixtures import register_synthetic_profiles
 from test_creation_execution import _seed
@@ -26,7 +26,7 @@ import pytest
 
 def _bounded_preview_case(tmp_path):
     from dataclasses import replace
-    from app.production import CreationTaskScriptSection
+    from app.creation.script_contracts import CreationTaskScriptSection
     from app.creation_execution import CreationExecution
     from app.creation.execution_control import CreationExecutionControl
     repo, task_id, script_id, _ = _seed(tmp_path)

@@ -25,7 +25,9 @@ from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, Schedu
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity, audio_resource_refusal
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
-from app.production import (CreationPlan, CreationTask, CreationTaskScript, NarrationSegment)
+from app.production import CreationPlan
+from app.creation.contracts import CreationTask, NarrationSegment
+from app.creation.script_contracts import CreationTaskScript
 from app.creation.contracts import (JobRun, TaskEvent)
 from app.repository import reset_workspace_context, set_workspace_context
 from app.creation.execution_budget import narration_limits, narration_remaining, finite_unit_limit, exhausted

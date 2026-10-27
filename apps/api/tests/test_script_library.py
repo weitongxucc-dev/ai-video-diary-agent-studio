@@ -10,10 +10,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 import app.main as main
-from app.production import (
-    CreationPlan, CreationPlanKnowledgeReference, CreationTask, CreationTaskScript,
-    CreationTaskScriptSection, ProductionRepository,
-)
+from app.production import CreationPlan, CreationPlanKnowledgeReference, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.source_repository import SourceRepository
 from app.knowledge_files import parse_knowledge_file
 from app.sources import KnowledgeItem, SourceConnector, SourceItem

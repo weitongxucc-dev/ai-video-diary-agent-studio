@@ -11,7 +11,8 @@ from app.creation.quality_inspection_use_case import QualityInspectionUseCase
 from app.creation.output_observation_use_case import OutputObservationUseCase
 from app.creation_execution import CreationExecutionActor
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import CreationTask
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
 from test_quality_resource_owner import MetadataResources, build_metadata_runtime, fixture_budget, seed_source

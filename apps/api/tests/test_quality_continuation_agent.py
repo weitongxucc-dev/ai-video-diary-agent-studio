@@ -9,7 +9,7 @@ from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.conversation_repository import ConversationRepository
 from app.creation.task_authorization import TaskAuthorizationUseCase
 from app.creation_execution import CreationExecutionActor
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from test_quality_inspection_api import system, seed_render  # noqa: F401
 from test_quality_resource_owner import metadata_result
 

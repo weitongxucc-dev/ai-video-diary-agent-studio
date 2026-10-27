@@ -13,7 +13,8 @@ from app.device_scheduler import RecoveryBlocked
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import CreationTask
 from app.task_audio import TASK_MEDIA_CONTEXT, TaskMediaJobs, TaskMediaRequired
 from test_device_runtime import Resources, Processes
 
@@ -499,7 +500,8 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack
     from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe
     from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_to_payload
-    from app.production import MaterialAsset, MaterialSegment, SubtitleCue, SubtitleTrack, TimelineVersion
+    from app.production import MaterialAsset, MaterialSegment
+    from app.creation.contracts import SubtitleCue, SubtitleTrack, TimelineVersion
     from app.task_audio import TaskAudio
     from _media_preview_test_fixtures import configure_synthetic_media_budgets, synthetic_wav_bytes
     configure_synthetic_media_budgets(monkeypatch, main)

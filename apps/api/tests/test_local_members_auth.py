@@ -21,7 +21,8 @@ from app.database_migrations import (
     apply_production_migrations,
 )
 from app.local_members import LocalMemberService
-from app.production import CreationTask, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.production import ProductionRepository
 
 client = TestClient(main_module.app)
 

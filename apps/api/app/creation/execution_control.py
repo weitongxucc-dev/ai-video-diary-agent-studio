@@ -17,7 +17,8 @@ from app.creation.render_stage_use_case import RenderRejected
 from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, RecoveryBlocked
-from app.production import CreationPlan, CreationTask
+from app.production import CreationPlan
+from app.creation.contracts import CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
 from app.task_audio import TASK_MEDIA_KIND
 

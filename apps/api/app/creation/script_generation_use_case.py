@@ -20,7 +20,8 @@ from app.topics import (
 )
 
 if TYPE_CHECKING:
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
 
 
 RejectionKind = Literal[

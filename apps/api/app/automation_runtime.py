@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 from app.automation_service import AutomationBlocked, AutomationService, AutomationTrigger, dump, utc_now
 from app.creation_execution import CreationJobOwnerVerifier
 from app.platform_publish.queue import PlatformPublishOwnerVerifier
-from app.production import CreationTask
+from app.creation.contracts import CreationTask
 from app.schemas import CreationPlanPreviewRequest
 from fastapi import HTTPException
 

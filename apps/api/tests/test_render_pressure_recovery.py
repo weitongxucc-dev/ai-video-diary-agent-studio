@@ -18,7 +18,7 @@ from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionInte
 from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision, HostResourceRefusal
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from test_creation_execution import _execution, _seed
 
 

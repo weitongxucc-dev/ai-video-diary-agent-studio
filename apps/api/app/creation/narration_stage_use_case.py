@@ -2,8 +2,8 @@ from __future__ import annotations
 from app.materials.contracts import MediaAuthorityError
 from app.narration import NarrationArtifact, _pronunciation_dictionary, _pronunciation_version
 from app.production import NarrationArtifactRecord
-from app.production import NarrationSegment
-from app.production import CreationTask
+from app.creation.contracts import NarrationSegment
+from app.creation.contracts import CreationTask
 from app.montage import CreationTaskMontagePlan
 from app.voice_clone import VoiceCloneError
 from app.visual_effects import clip_playback_rate

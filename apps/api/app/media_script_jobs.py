@@ -16,7 +16,7 @@ from app.media_script import (
 )
 from app.graphic_sources import resolve_graphic_source
 from app.models import utc_now
-from app.production import ArtifactRecord, DependencyEdge, TaskEvent, TransformRun
+from app.creation.contracts import ArtifactRecord, DependencyEdge, TaskEvent, TransformRun
 from app.task_audio import media_digest
 from app.schemas import MediaScriptPreviewRequest, MediaScriptToolPreviewRequest
 from app.media_script_tools import MediaScriptTools, ScriptToolError

@@ -5,10 +5,16 @@ from fastapi import HTTPException
 
 import app.main as main
 from app.production import (
-    CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference, CreationTask,
-    CreationTaskScript, CreationTaskScriptSection, ProductionRepository, ScriptGenerationRun,
-    TopicCandidate, TopicEvidenceReference, TopicGenerationRun,
+    CreationPlan,
+    CreationPlanKnowledgeReference,
+    CreationPlanSourceReference,
+    ProductionRepository,
+    TopicCandidate,
+    TopicEvidenceReference,
+    TopicGenerationRun,
 )
+from app.creation.contracts import CreationTask
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 

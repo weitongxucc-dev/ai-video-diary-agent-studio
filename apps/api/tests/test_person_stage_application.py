@@ -29,7 +29,8 @@ from app.host_resource_probes import HostBudget,HostProcessProbe,HostResourcePro
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess,creation_job_registration
 from app.montage import CreationTaskMontagePlan,MontageClip,NarrationCue,creation_task_montage_plan_to_payload
-from app.production import CreationPlanPersonReference,CreationPlanVoiceReference,NarrationArtifactRecord,NarrationSegment,PersonRender
+from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, NarrationSegment
+from app.production import NarrationArtifactRecord, PersonRender
 from app.video_jobs import VideoJobRunner
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles,synthetic_wav_bytes,write_synthetic_video

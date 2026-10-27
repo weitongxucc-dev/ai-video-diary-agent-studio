@@ -11,7 +11,8 @@ import pytest
 from app.creation.contracts import EditIntent, TimelineVersion
 from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier
 from app.device_runtime import OwnerRegistration, build_device_runtime
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import CreationTask
 from app.task_audio import TaskMediaJobs
 from test_device_runtime import Access, CompletingExecutor, Processes, Resources
 

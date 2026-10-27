@@ -18,7 +18,9 @@ from app.host_resource_probes import HostProcessProbe
 from app.local_members import LocalMemberService
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
-from app.production import CreationTaskScript, CreationTaskScriptSection, NarrationArtifactRecord, NarrationSegment, ProductionRepository
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+from app.production import NarrationArtifactRecord, ProductionRepository
+from app.creation.contracts import NarrationSegment
 from app.task_audio import TASK_MEDIA_CONTEXT
 from test_cpu_audio_budget import audio_budget
 from test_task_media_grants import case

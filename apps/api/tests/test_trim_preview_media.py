@@ -16,9 +16,14 @@ from app.local_members import LocalMemberService
 from app.artifact_store import ArtifactStore
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.production import (
-    CreationPlan, CreationTask, MaterialAsset, MaterialSegment,
-    MaterialSegmentMatch, NarrationArtifactRecord, ProductionRepository,
+    CreationPlan,
+    MaterialAsset,
+    MaterialSegment,
+    MaterialSegmentMatch,
+    NarrationArtifactRecord,
+    ProductionRepository,
 )
+from app.creation.contracts import CreationTask
 
 
 @pytest.mark.skipif(

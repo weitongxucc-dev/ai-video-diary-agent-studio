@@ -11,7 +11,14 @@ from uuid import uuid4
 from app.creation.duration_requirement import DurationRequirement, DurationConflict
 from app.creation.picture_fragment_layers import PICTURE_LAYER_CONTRACT
 from app.canvas import canvas_size
-from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TaskEvent, TimelineVersion, TransformRun
+from app.creation.contracts import (
+    ArtifactRecord,
+    DependencyEdge,
+    JobRun,
+    TaskEvent,
+    TimelineVersion,
+    TransformRun,
+)
 from app.creation.editing.metadata_use_case import InvalidMontage
 from app.creation.transactions import clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset
 from app.creation_execution import CpuRenderGrantContext
@@ -19,7 +26,7 @@ from app.media.picture_preview import PicturePreviewRejected
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, _validate_rendered_media
 from app.materials.contracts import MediaAuthorityError
-from app.production import CreationTask
+from app.creation.contracts import CreationTask
 from app.task_runtime import JobFailure, JobResult
 
 CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v22"

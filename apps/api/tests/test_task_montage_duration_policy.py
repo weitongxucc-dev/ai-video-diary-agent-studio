@@ -5,13 +5,8 @@ import pytest
 
 from app.montage import MontagePlanner
 from app.subtitle_schedule import narration_schedule
-from app.production import (
-    CreationTaskScript,
-    CreationTaskScriptSection,
-    MaterialAsset,
-    MaterialSegment,
-    ProductionProfile,
-)
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+from app.production import MaterialAsset, MaterialSegment, ProductionProfile
 
 
 @pytest.fixture

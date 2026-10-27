@@ -14,7 +14,7 @@ from app.platform_browser import (
     PublishConfirm, PublishOutcomeUnknown,
 )
 from app.platform_browser.playwright_driver import PlaywrightSessionManager
-from app.production import TaskEvent
+from app.creation.contracts import TaskEvent
 
 logger = logging.getLogger(__name__)
 

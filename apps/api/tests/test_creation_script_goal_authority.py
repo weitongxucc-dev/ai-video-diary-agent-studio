@@ -178,7 +178,7 @@ def consumer_state(api_state, monkeypatch):
     """Keep real HTTP adapters, permissions, sources and request/window storage."""
     import app.main as main
     from app.conversation_repository import ConversationRepository
-    from app.production import CreationTask
+    from app.creation.contracts import CreationTask
 
     def create(*, failure=None, kind="goal_delegation", adoption_kind="delegated_system"):
         state = api_state

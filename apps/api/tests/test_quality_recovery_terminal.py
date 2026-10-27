@@ -15,7 +15,8 @@ from app.artifact_store import ArtifactStore
 from app.creation.quality_inspection_use_case import QualityInspectionUseCase
 from app.creation.output_observation_use_case import OutputObservationUseCase
 from app.creation_execution import CreationExecutionActor
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import CreationTask
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
 from test_quality_resource_owner import build_metadata_runtime, fixture_budget, metadata_result, seed_source, stage_metadata_prefix

@@ -20,7 +20,8 @@ from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceP
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import MontagePlanner
-from app.production import CreationPlanVoiceReference, NarrationArtifactRecord, NarrationSegment
+from app.creation.contracts import CreationPlanVoiceReference, NarrationSegment
+from app.production import NarrationArtifactRecord
 from app.visual_effects import reusable_color_settings
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 from test_creation_execution import _seed

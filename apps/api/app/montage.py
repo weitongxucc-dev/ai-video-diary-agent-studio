@@ -41,13 +41,13 @@ from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
     automatic_segment_eligible,
-    CreationTaskScript,
     MaterialAsset,
     MaterialSegment,
     ProductionBatch,
     ProductionProfile,
     effective_segment_usage_role,
 )
+from app.creation.script_contracts import CreationTaskScript
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import VisualSemanticError, VisualSemanticProvider
 

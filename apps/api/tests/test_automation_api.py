@@ -251,7 +251,7 @@ def test_publishing_guard_preserves_read_history_and_checks_original_run_member(
 
 
 def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automation_state):
-    from app.production import JobRun
+    from app.creation.contracts import JobRun
     production,_,client,actor,payload=automation_state
     definition,run=create_and_due(client,actor,payload)
     fp=client.post(f"/api/automations/runs/{run['id']}/preview").json()['preflight_fingerprint']

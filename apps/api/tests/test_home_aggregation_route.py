@@ -65,7 +65,8 @@ def _counts(body) -> dict[str, int]:
 
 
 def _save_task(production, task_id, name, owner_user_id, visibility, status="created", **overrides):
-    from app.production import CreationPlan, CreationTask
+    from app.production import CreationPlan
+    from app.creation.contracts import CreationTask
 
     plan = CreationPlan(
         id=f"plan-{task_id}", workspace_id=WORKSPACE, goal="做一条真实短视频", name=f"{name}的计划",

@@ -23,7 +23,8 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     from fastapi.encoders import jsonable_encoder
     from app.assistant_goal_continuation import GoalResultProjection
     from app.creation.contracts import JobRun, TaskEvent, TimelineVersion
-    from app.production import CreationPlan, CreationTask, ProductionRepository
+    from app.production import CreationPlan, ProductionRepository
+    from app.creation.contracts import CreationTask
 
     import subprocess
     cold=subprocess.run([sys.executable,"-B","-c",
@@ -827,7 +828,8 @@ def test_host_pending_proposal_gate_can_stop_a_goal_still_waiting_for_preview_re
 
 
 def _adopted_groups_for_resume(tmp_path, *, groups=1):
-    from app.production import CreationPlan,CreationTask,ProductionRepository
+    from app.production import CreationPlan, ProductionRepository
+    from app.creation.contracts import CreationTask
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation_execution import CreationExecutionActor
     production=ProductionRepository(tmp_path/'resume.sqlite3',tmp_path/'library')

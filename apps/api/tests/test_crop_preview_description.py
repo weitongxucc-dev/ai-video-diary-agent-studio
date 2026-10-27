@@ -4,7 +4,7 @@ from dataclasses import asdict
 import pytest
 
 import app.main as main_module
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, prepare_current_presenter_media
 
 

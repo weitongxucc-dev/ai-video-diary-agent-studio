@@ -11,7 +11,8 @@ from app.artifact_store import ArtifactStore
 from app.creation_execution import CreationExecutionActor
 from app.media_script import PngOutputContract, _name
 from app.models import utc_now
-from app.production import ArtifactRecord, JobRun, ProductionRepository, TransformRun
+from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
+from app.production import ProductionRepository
 from app.task_audio import TASK_MEDIA_KIND
 
 

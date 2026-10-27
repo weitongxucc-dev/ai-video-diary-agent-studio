@@ -23,7 +23,8 @@ from datetime import UTC, date, datetime, timedelta
 import psutil
 
 from app.models import utc_now
-from app.production import CreationTask, MaterialAsset, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.production import MaterialAsset, ProductionRepository
 from app.schemas import (
     HomeAggregationResponse,
     HomeCountResponse,

@@ -25,7 +25,7 @@ def permitted_audio_rendering(granted_media, monkeypatch):
 
 def registered_audio(repository, service, workspace, task_id, logical_ref, input_refs=()):
     """Synthetic stored lineage for source-isolation tests, without a media executor."""
-    from app.production import ArtifactRecord, JobRun
+    from app.creation.contracts import ArtifactRecord, JobRun
     source = repository.database_path.parent / (logical_ref.rsplit('/', 1)[-1])
     tone(source, 440)
     published = service.artifact_store.publish_file(logical_ref, source)
@@ -171,7 +171,8 @@ def test_audio_artifact_cannot_cross_workspace_or_task_boundaries(tmp_path):
     import json
     from dataclasses import asdict
     from app.artifact_store import ArtifactStore
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
     from app.task_audio import TaskAudio
     repo=ProductionRepository(tmp_path/"db.sqlite",tmp_path/"library")
     for workspace,task_id in (("a","task-a"),("a","task-other"),("b","task-b")):
@@ -313,7 +314,8 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     from dataclasses import asdict
     from app.artifact_store import ArtifactStore
     from app.models import utc_now
-    from app.production import CreationTask, MaterialAsset, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import MaterialAsset, ProductionRepository
     from app.task_audio import TaskAudio
     repo = ProductionRepository(tmp_path/'db.sqlite', tmp_path/'library')
     task = CreationTask(id='task', workspace_id='workspace', plan_id='plan', name='原声', scenario='test')

@@ -19,7 +19,7 @@ from app.member_permits import MemberDeviceAccess
 from app.media_script import MeasuredScriptOutput
 from app.task_audio import TaskMediaJobs, TaskAudio
 from app.media.clip_preview import ClipPreviewExecutor
-from app.production import ArtifactRecord, JobRun, TransformRun
+from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
 from app.models import utc_now
 from app.conversation_repository import ConversationRepository
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401

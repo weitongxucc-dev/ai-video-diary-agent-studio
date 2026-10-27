@@ -76,7 +76,7 @@ def _task_plan(assets: list[MaterialAsset]):
 
 
 def _script():
-    from app.production import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 
     return CreationTaskScript(
         id="script-gate",

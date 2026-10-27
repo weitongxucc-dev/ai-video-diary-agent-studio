@@ -39,12 +39,8 @@ from app.host_resource_probes import (
     SceneRuntimeLimits,
 )
 from app.granted_subprocess import GrantedCommandCancelled
-from app.production import (
-    CreationPlan,
-    CreationPlanPersonReference,
-    CreationPlanVoiceReference,
-    CreationTask,
-)
+from app.production import CreationPlan
+from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
 from app.avatar_lipsync import AvatarAndLipSyncService, avatar_lipsync_cache_key
 from app.voice_clone import VoiceCloneError, VoiceCloneResult
 

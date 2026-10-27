@@ -16,7 +16,7 @@ from app.montage import creation_task_montage_plan_from_payload
 from app.montage import creation_task_montage_plan_to_payload
 from app.audio_timeline import narration_audio_timeline
 from app.graphic_overlays import TextOverlay
-from app.production import CreationPlanVoiceReference
+from app.creation.contracts import CreationPlanVoiceReference
 from app.schemas import StoryboardRegenerationRequest
 from app.creation.transactions import clone_subtitle_track, clone_cover_asset
 from _media_preview_test_fixtures import register_synthetic_profiles

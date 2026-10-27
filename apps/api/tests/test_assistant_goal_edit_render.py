@@ -19,7 +19,7 @@ from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
 @pytest.mark.parametrize("fast_render", [False, True])
 def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(metadata_http_state, tmp_path, monkeypatch, fast_render):
     state = metadata_http_state
-    from app.production import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
     script = CreationTaskScript("fixed-script", "ws", state.task.id, "fixed-run", "fixed-topic", "已确认文案", "zh-CN",
         [CreationTaskScriptSection("section", "开头", "原字幕", "既有画面", ["fixture-source"])], selection_status="confirmed")
     with state.repo._connect() as conn:

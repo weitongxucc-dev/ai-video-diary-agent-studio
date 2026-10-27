@@ -43,7 +43,8 @@ def _headers(token: str) -> dict[str, str]:
 
 
 def _confirm_task(production, workspace_id: str, owner_user_id: str):
-    from app.production import CreationPlan, CreationTask
+    from app.production import CreationPlan
+    from app.creation.contracts import CreationTask
 
     plan = CreationPlan(
         id="plan-vis", workspace_id=workspace_id, goal="做一条真实短视频", name="计划",

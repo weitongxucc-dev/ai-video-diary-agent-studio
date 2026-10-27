@@ -6,7 +6,7 @@ import pytest
 import app.main as main_module
 from app.creation_execution import CreationExecution, CpuRenderLimits, submit_creation_stage
 from app.host_resource_probes import MontageBudget
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from test_narration_edit_api import generator_api, narration_api  # noqa: F401
 from test_narration_edit_execution import fixture  # noqa: F401
 

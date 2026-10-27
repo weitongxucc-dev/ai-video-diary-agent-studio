@@ -13,7 +13,8 @@ import app.quality_inspection as inspection
 from app.artifact_store import ArtifactStore
 from app.local_members import LocalMemberService
 from app.montage import creation_task_montage_plan_to_payload
-from app.production import ArtifactRecord, CreationPlan, CreationTask, JobRun, ProductionRepository, TimelineVersion
+from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TimelineVersion
+from app.production import CreationPlan, ProductionRepository
 from test_quality_inspection import montage
 from test_quality_resource_owner import (fixture_budget, licensed_native_port, metadata_result,
     build_metadata_runtime)

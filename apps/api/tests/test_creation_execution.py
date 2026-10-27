@@ -30,9 +30,19 @@ from app.device_scheduler import DeviceScheduler, ProcessIdentity
 from app.host_resource_probes import HostCapacity, HostProcessProbe
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                            MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository,
-                            CreationPlanPersonReference, TimelineVersion)
+from app.production import (
+    CreationPlan,
+    MaterialAsset,
+    MaterialSegment,
+    NarrationArtifactRecord,
+    ProductionRepository,
+)
+from app.creation.contracts import (
+    CreationPlanVoiceReference,
+    CreationTask,
+    CreationPlanPersonReference,
+    TimelineVersion,
+)
 from app.artifact_store import ArtifactStore
 from app.config import Settings
 from app.narration import NarrationGenerator
@@ -79,7 +89,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
         "created_at": now, "updated_at": now,
         "confirmed_at": now if confirmed else None,
     }
-    from app.production import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
     seeded_script = CreationTaskScript(**{key: value for key, value in payload.items()
         if key not in {'sections', 'created_at', 'updated_at', 'confirmed_at'}},
         sections=[CreationTaskScriptSection(**section) for section in payload['sections']],
@@ -274,7 +284,7 @@ def test_cpu_render_counts_repeated_source_once_and_preserves_all_clips(tmp_path
 
 @pytest.mark.parametrize("mutation", ["version", "source", "revoked"])
 def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_path, mutation):
-    from app.production import EditIntent, EditProposal, EditOperation
+    from app.creation.contracts import EditIntent, EditProposal, EditOperation
 
     repo, task_id, script_id, digest, actor, execution, owner, scheduler, base, members = _render_version_fixture(tmp_path)
     try:
@@ -368,7 +378,7 @@ def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_cro
 
 
 def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle_mutation(tmp_path):
-    from app.production import ArtifactRecord, JobRun, TransformRun, SubtitleTrack, SubtitleCue
+    from app.creation.contracts import ArtifactRecord, JobRun, TransformRun, SubtitleTrack, SubtitleCue
 
     repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
     try:
@@ -436,7 +446,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
 def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_path, monkeypatch):
     from fastapi import HTTPException
     from app.creation_execution import CpuRenderGrantContext
-    from app.production import EditIntent, EditProposal, EditOperation
+    from app.creation.contracts import EditIntent, EditProposal, EditOperation
 
     repo, task_id, script_id, digest, actor, execution, _, scheduler, base, _ = _render_version_fixture(tmp_path)
     try:
@@ -1976,7 +1986,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
     from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
     from app.member_permits import MemberDeviceAccess
     from _media_preview_test_fixtures import register_synthetic_profiles
-    from app.production import CreationPlanPersonReference
+    from app.creation.contracts import CreationPlanPersonReference
 
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     members = LocalMemberService(repo.database_path)
@@ -2210,7 +2220,8 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
 
 def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_output(tmp_path):
     from app.creation.task_authorization import TaskAuthorizationUseCase
-    from app.production import ArtifactRecord, JobRun, MaterialSegmentMatch
+    from app.creation.contracts import ArtifactRecord, JobRun
+    from app.production import MaterialSegmentMatch
     repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
     task = repo.get_creation_task("local", task_id)
     actor = CreationExecutionActor("local", "original-member")
@@ -2318,7 +2329,7 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     from app.creation.execution_control import CreationExecutionControl
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.conversation_repository import ConversationRepository
-    from app.production import JobRun, TaskEvent
+    from app.creation.contracts import JobRun, TaskEvent
     repo,task_id,_,_=_seed(tmp_path,workspace_id='local',voice=False)
     conversations=ConversationRepository(repo.database_path)
     member='original-member';actor=CreationExecutionActor('local',member)
@@ -2847,7 +2858,7 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
             owned = json.loads(row['payload']); owned['owner_user_id'] = actor.member_id
             conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
         row = conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script_id,)).fetchone()
-        from app.production import CreationTaskScriptSection
+        from app.creation.script_contracts import CreationTaskScriptSection
         seeded = repo._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
         seeded.sections = [CreationTaskScriptSection(**{**asdict(seeded.sections[0]),
             'id': f'section_{ordinal}', 'content': '原文' * 130}) for ordinal in range(1, section_count + 1)]

@@ -58,8 +58,8 @@ def test_registration_and_fixed_selections_survive_new_versions_and_restart(tmp_
     repo, person, voice = case(tmp_path)
     assert isinstance(repo._profile_registration, ProfileRegistrationUseCase)
     assert not hasattr(production, "MediaAuthorityError")
-    assert production.CreationPlanPersonReference is CreationPlanPersonReference
-    assert production.CreationPlanVoiceReference is CreationPlanVoiceReference
+    assert production._CreationPlanPersonReference is CreationPlanPersonReference
+    assert production._CreationPlanVoiceReference is CreationPlanVoiceReference
     assert production.content_owner is content_owner
     saved_person = repo.save_person_profile(person, verified_owner_user_id="member")
     saved_voice = repo.save_versioned_voice_profile(voice, verified_owner_user_id="member")

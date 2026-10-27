@@ -7,15 +7,13 @@ import pytest
 from app.production import (
     CreationPlan,
     CreationPlanKnowledgeReference,
-    CreationTask,
-    CreationTaskScript,
-    CreationTaskScriptSection,
     ProductionRepository,
-    ScriptGenerationRun,
     TopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
 )
+from app.creation.contracts import CreationTask
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 
 
 WORKSPACE = "workspace-cas"

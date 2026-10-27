@@ -53,7 +53,8 @@ from app.subtitle_tracks import (SubtitleTrack as SubtitleExecutionTrack,
 from app.models import utc_now
 
 if TYPE_CHECKING:
-    from app.production import CreationTask, NarrationArtifactRecord, NarrationSegment
+    from app.creation.contracts import CreationTask, NarrationSegment
+    from app.production import NarrationArtifactRecord
     from app.creation.contracts import TimelineVersion
     from app.montage import CreationTaskMontagePlan
     from app.audio_timeline import AudioTimeline
@@ -342,7 +343,7 @@ class MetadataEditUseCase:
     def narration_segments_from_snapshot(
         snapshot: dict[str, object],
     ) -> list[NarrationSegment] | None:
-        from app.production import NarrationSegment
+        from app.creation.contracts import NarrationSegment
 
         raw_segments = snapshot.get("narration_segments")
         if not isinstance(raw_segments, list):

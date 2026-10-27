@@ -355,7 +355,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
     import app.main as main
     from app.creation_execution import CpuRenderGrantContext
     from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-    from app.production import TaskEvent
+    from app.creation.contracts import TaskEvent
     from app.task_audio import TaskMediaJobs, TASK_MEDIA_CONTEXT
     from _media_preview_test_fixtures import configure_synthetic_media_budgets
     repo, task_id, _, _, actor, _, owner, scheduler, _, service, _, _ = case(tmp_path, normalize=True)

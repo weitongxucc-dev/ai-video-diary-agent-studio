@@ -8,7 +8,7 @@ from app.creation.contracts import EditCommand, SubtitleCue, SubtitleTrack
 from app.creation.editing.compound import calculate_compound_edit, apply_compound_proposal
 from app.creation.editing.picture import EditConflict
 from app.montage import CreationTaskMontagePlan, MontageClip
-from app.production import CreationTask
+from app.creation.contracts import CreationTask
 from test_linked_edit_use_cases import linked_state as linked_state
 
 

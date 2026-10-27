@@ -4,7 +4,7 @@ import pytest
 
 from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack
 from app.linked_timeline import splice_audio, splice_intervals, splice_subtitles
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 
 
 def audio():

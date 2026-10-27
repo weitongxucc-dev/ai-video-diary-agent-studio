@@ -564,7 +564,8 @@ def test_creation_task_english_uses_target_language_and_separate_cache(tmp_path)
 def test_creation_task_narration_response_preserves_artifact_and_segment_language(monkeypatch, language):
     from types import SimpleNamespace
     from app import main
-    from app.production import CreationTask, NarrationArtifactRecord, NarrationSegment
+    from app.creation.contracts import CreationTask, NarrationSegment
+    from app.production import NarrationArtifactRecord
 
     task = CreationTask(id="task-language", workspace_id="local", plan_id="plan-language",
         name="Language response", scenario="test")

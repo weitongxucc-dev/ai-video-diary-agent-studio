@@ -25,9 +25,13 @@ from app.montage import (
     creation_task_montage_plan_to_payload,
 )
 from app.production import (
-    ProductionRepository, CreationPlan, CreationTask, MaterialAsset, MaterialSegment,
+    ProductionRepository,
+    CreationPlan,
+    MaterialAsset,
+    MaterialSegment,
     NarrationArtifactRecord,
 )
+from app.creation.contracts import CreationTask
 from app.task_audio import TaskAudio
 
 
@@ -217,7 +221,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
         stream.setparams((1,2,16000,0,'NONE','not compressed'))
         stream.writeframes(b'\x01\x00'*64000)
     s.repo.save_narration_artifact(replace(s.narration,audio_path=str(audio_path),voice_profile_id='fixture-voice'))
-    from app.production import NarrationSegment
+    from app.creation.contracts import NarrationSegment
     now=datetime.now(timezone.utc)
     s.task.confirmed_script_id='fixed-script'
     script={'id':'fixed-script','workspace_id':'ws','task_id':s.task.id,'run_id':'fixture-run','topic_id':'fixture-topic',

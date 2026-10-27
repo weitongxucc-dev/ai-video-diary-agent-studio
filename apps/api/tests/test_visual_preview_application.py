@@ -14,7 +14,7 @@ import pytest
 
 import app.main as main
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import SubtitleTrack, SubtitleCue
+from app.creation.contracts import SubtitleTrack, SubtitleCue
 from app.task_audio import TaskAudio, TASK_MEDIA_CONTEXT
 from test_montage_pipeline import person_render_edit_state, permitted_media_state
 from _media_preview_test_fixtures import write_synthetic_video

@@ -6,7 +6,7 @@ import pytest
 
 from app.creation.duration_requirement import DurationConflict, DurationRequirement, SectionTiming, SectionWindow, measured_section_windows
 from app.montage import MontagePlanner
-from app.production import CreationTaskScriptSection
+from app.creation.script_contracts import CreationTaskScriptSection
 from app.subtitle_schedule import narration_schedule
 from test_task_montage_duration_policy import task_inputs  # noqa: F401
 

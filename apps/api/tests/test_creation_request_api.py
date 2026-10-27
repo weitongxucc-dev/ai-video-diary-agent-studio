@@ -402,7 +402,11 @@ def test_final_copy_failure_rolls_back_entire_window(client_state):
 
 
 def test_delegated_script_adoption_records_real_version_without_fake_human_action(client_state):
-    from app.production import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
+    from app.creation.script_contracts import (
+        CreationTaskScript,
+        CreationTaskScriptSection,
+        ScriptGenerationRun,
+    )
     c = client_state
     _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "明确主题"})
     adopted = c.client.post(url, headers=c.alice, json=confirmation).json()

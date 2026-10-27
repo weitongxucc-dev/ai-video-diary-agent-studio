@@ -3,7 +3,7 @@ import pytest
 from uuid import uuid4
 
 from app import main
-from app.production import CreationTaskScriptSection
+from app.creation.script_contracts import CreationTaskScriptSection
 from test_script_library import library  # noqa: F401
 
 

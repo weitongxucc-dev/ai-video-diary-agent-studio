@@ -15,7 +15,7 @@ from app.models import utc_now
 
 if TYPE_CHECKING:
     from app.montage import CreationTaskMontagePlan, MontageClip
-    from app.production import CreationTask
+    from app.creation.contracts import CreationTask
 
 
 @dataclass(frozen=True)

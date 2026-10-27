@@ -10,7 +10,8 @@ import app.main as main
 from app.assistant_pi import AssistantUnavailable
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
-from app.production import CreationPlan, CreationTask, ProductionRepository, TimelineVersion
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import CreationTask, TimelineVersion
 
 
 @pytest.fixture

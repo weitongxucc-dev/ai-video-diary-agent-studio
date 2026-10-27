@@ -177,7 +177,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     from tempfile import TemporaryDirectory
     from uuid import uuid4
     from app.models import utc_now
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
+    from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TransformRun
     width,height=preview_size(aspect_ratio)
     parameters={"clip":asdict(clip),"width":width,"height":height,"max_seconds":max_seconds}
     effects=VisualEffects.model_validate(clip.visual_effects)

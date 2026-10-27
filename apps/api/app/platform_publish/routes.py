@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.device_scheduler import SchedulePolicy, SubmissionIntent
 from app.platform_auth import CAPABILITIES, PlatformAuthService
-from app.production import JobRun, TaskEvent
+from app.creation.contracts import JobRun, TaskEvent
 
 
 class PublishRequest(BaseModel):

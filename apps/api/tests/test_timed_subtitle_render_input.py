@@ -12,7 +12,7 @@ from PIL import Image
 
 import app.montage as montage
 from app.host_resource_probes import HostCapacity
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 from app.subtitle_schedule import TimedCaption, subtitle_schedule
 
 

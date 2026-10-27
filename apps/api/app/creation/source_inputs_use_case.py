@@ -9,7 +9,8 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from app.creation.source_errors import SourcePreflightError
-from app.production import CreationPlan, CreationTask
+from app.production import CreationPlan
+from app.creation.contracts import CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository

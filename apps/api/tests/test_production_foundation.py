@@ -22,32 +22,34 @@ from app.database_migrations import (
 from app.model_runtime import ModelCatalog
 from app.local_members import LocalMemberService
 from app.materials.contracts import MediaAuthorityError
-from app.production import (
+from app.creation.contracts import (
     ArtifactRecord,
-    CreationPlan,
     CreationPlanPersonReference,
     CreationPlanVoiceReference,
-    CreationPlanBlocker,
     CreationTask,
     DependencyEdge,
     EditIntent,
     EditOperation,
     EditProposal,
     JobRun,
+    NarrationSegment,
+    TaskEvent,
+    TimelineVersion,
+    TransformRun,
+)
+from app.production import (
+    CreationPlan,
+    CreationPlanBlocker,
     MaterialCollection,
     NarrationArtifactRecord,
-    NarrationSegment,
     PersonRender,
     PronunciationEntry,
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
-    ScriptGenerationRun,
-    TaskEvent,
-    TimelineVersion,
-    TransformRun,
     VersionedVoiceProfile,
 )
+from app.creation.script_contracts import ScriptGenerationRun
 from app.repository import LEGACY_WORKSPACE_ID
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
@@ -4173,3 +4175,53 @@ def test_foundation_checks_all_readable_voices_before_reporting_missing_text(fou
     response = state.client.get("/api/production/foundation", headers=state.headers)
     assert response.status_code == 200
     assert response.json()["readiness"]["ready"] is True
+
+
+def test_creation_values_keep_canonical_identity_and_retire_repository_exports():
+    from app import production
+    from app.creation import contracts, script_contracts
+
+    for canonical, names in (
+        (script_contracts, (
+            'ScriptGenerationRunStatus',
+            'ScriptSelectionStatus',
+            'ScriptGenerationRun',
+            'CreationTaskScriptSection',
+            'CreationTaskScript',
+            'ScriptLibrarySection',
+            'ScriptLibraryEntry',
+        )),
+        (contracts, (
+            'ClipSourceSelection',
+            'CreationTask',
+            'NarrationSegment',
+            'NarrationSegmentStatus',
+            'CreationPlanVoiceReference',
+            'CreationPlanPersonReference',
+            'JobRunStatus',
+            'TimelineVersion',
+            'SubtitleTrackStatus',
+            'SubtitleCue',
+            'SubtitleTrack',
+            'CoverAsset',
+            'JobRun',
+            'ArtifactRecord',
+            'TaskEvent',
+            'TransformRunStatus',
+            'TransformRun',
+            'DependencyEdge',
+            'EditIntent',
+            'EditProposalStatus',
+            'EditProposal',
+            'EditOperationStatus',
+            'EditOperationType',
+            'SUPPORTED_EDIT_OPERATION_TYPES',
+            'EditOperation',
+        )),
+    ):
+        for name in names:
+            assert getattr(production, "_" + name) is getattr(canonical, name)
+            assert not hasattr(production, name)
+    # These canonical types were already absent from the repository namespace.
+    for name in ("TaskAuthorization", "TaskAuthorizationConflict", "EditCommand"):
+        assert not hasattr(production, name)

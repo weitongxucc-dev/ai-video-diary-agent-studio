@@ -266,7 +266,8 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
     )
     from app.device_scheduler import DeviceScheduler
     from app.host_resource_probes import NarrationBudget
-    from app.production import CreationPlan, CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
+    from app.production import CreationPlan
+    from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
     from _media_preview_test_fixtures import register_synthetic_profiles
 
     repository = _repository(tmp_path)
@@ -366,9 +367,9 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
     from types import SimpleNamespace
     from app.creation_execution import CreationExecution, revision_digest
     from app.host_resource_probes import MontageBudget, PresenterBudget
-    from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                                NarrationArtifactRecord, NarrationSegment)
-    from app.production import CreationPlanPersonReference
+    from app.production import CreationPlan, NarrationArtifactRecord
+    from app.creation.contracts import CreationPlanVoiceReference, CreationTask, NarrationSegment
+    from app.creation.contracts import CreationPlanPersonReference
     from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 
     import psutil
@@ -586,7 +587,8 @@ def _complete_presenter_fixture(case, context=None):
     from datetime import datetime, timezone
     from app.avatar_lipsync import avatar_lipsync_cache_key
     from app.creation_execution import presenter_inputs, presenter_input_facts
-    from app.production import ArtifactRecord, JobRun, PersonRender, TransformRun
+    from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
+    from app.production import PersonRender
     from app.task_runtime import TaskRuntime, JobResult
     task = case.repo.get_creation_task(WORKSPACE, case.task.id)
     script = case.repo.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
@@ -759,7 +761,8 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
     from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
     from app.creation_execution import CreationStageGrantContext, presenter_inputs, presenter_input_facts, current_presenter_render, montage_waiting_for_confirmation, submit_creation_stage
     from app.materials.contracts import MediaAuthorityError
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, PersonRender, TransformRun, utc_now
+    from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TransformRun
+    from app.production import PersonRender, utc_now
     from app.schemas import CreationTaskPersonRenderRequest
     from app.task_runtime import JobFailure, JobResult
     from app.video_jobs import VideoJobRunner

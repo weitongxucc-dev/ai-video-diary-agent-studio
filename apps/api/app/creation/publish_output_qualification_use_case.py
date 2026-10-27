@@ -4,7 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.creation.contracts import TimelineVersion
-from app.production import CreationTask, ProductionRepository, content_readable
+from app.creation.contracts import CreationTask
+from app.production import ProductionRepository, content_readable
 
 
 class PublishOutputQualificationUseCase:

@@ -13,7 +13,8 @@ from app.creation.editing.timeline_restore_use_case import (
 )
 from app.creation.transactions import clone_subtitle_track, clone_cover_asset
 from app.models import utc_now
-from app.production import NarrationSegment, CreationTaskScript, CreationTaskScriptSection
+from app.creation.contracts import NarrationSegment
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from test_metadata_edit_use_case import editorial_rows
 from test_subtitle_application import subtitle_state
 

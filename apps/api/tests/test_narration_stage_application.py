@@ -23,7 +23,14 @@ from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.narration import NarrationArtifact, NarrationGenerator, _pronunciation_version
-from app.production import CreationPlanPersonReference, CreationPlanVoiceReference, NarrationArtifactRecord, NarrationSegment, PronunciationEntry, SubtitleCue, SubtitleTrack
+from app.creation.contracts import (
+    CreationPlanPersonReference,
+    CreationPlanVoiceReference,
+    NarrationSegment,
+    SubtitleCue,
+    SubtitleTrack,
+)
+from app.production import NarrationArtifactRecord, PronunciationEntry
 from app.voice_clone import Qwen3TTSSubprocessProvider
 from app.creation.narration_stage_use_case import NarrationStageUseCase
 from app.audio_timeline import narration_audio_timeline

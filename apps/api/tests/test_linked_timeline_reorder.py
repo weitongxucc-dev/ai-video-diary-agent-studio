@@ -17,7 +17,7 @@ import app.audio_timeline as audio_timeline
 import app.main as main_module
 from app.audio_timeline import AudioTimeline, build_audio_mix_command, render_audio_mix
 from app.montage import MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 
 

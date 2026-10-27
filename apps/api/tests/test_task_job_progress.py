@@ -11,13 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import (
-    CreationPlan,
-    CreationPlanVoiceReference,
-    CreationTask,
-    JobRun,
-    ProductionRepository,
-)
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import CreationPlanVoiceReference, CreationTask, JobRun
 
 WORKSPACE = "workspace-job"
 

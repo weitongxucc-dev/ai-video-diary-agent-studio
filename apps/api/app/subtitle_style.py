@@ -64,7 +64,7 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
     from uuid import uuid4
     from app.montage import _write_subtitle_image
     from app.models import utc_now
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
+    from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TransformRun
     parameters = {**asdict(caption),"canvas":size}
     identity = uuid4().hex
     digest = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()

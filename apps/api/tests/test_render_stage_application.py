@@ -22,7 +22,8 @@ from app.local_members import LocalMemberService
 from app.media.picture_preview import PicturePreviewRenderer
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import CreationPlanVoiceReference, NarrationArtifactRecord, NarrationSegment, SubtitleCue, SubtitleTrack
+from app.creation.contracts import CreationPlanVoiceReference, NarrationSegment, SubtitleCue, SubtitleTrack
+from app.production import NarrationArtifactRecord
 from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 from test_creation_execution import _seed

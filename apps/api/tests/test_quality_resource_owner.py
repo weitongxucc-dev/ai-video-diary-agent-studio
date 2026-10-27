@@ -15,7 +15,8 @@ from app.device_runtime import build_device_runtime
 from app.device_scheduler import ProcessIdentity, RecoveryBlocked, VerifiedSession
 from app.host_resource_probes import HostResourceDecision
 from app.montage import CreationTaskMontagePlan, MontageClip, creation_task_montage_plan_to_payload
-from app.production import ArtifactRecord, CreationPlan, CreationTask, JobRun, ProductionRepository, TimelineVersion
+from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TimelineVersion
+from app.production import CreationPlan, ProductionRepository
 from app.quality_checks import QualityReport, QualityUnavailable, quality_report_evidence
 from app.quality_inspection import QualityCheckRepository
 from app.quality_worker_runtime import (QualityBudget, source_receipt, QUALITY_PHASES,

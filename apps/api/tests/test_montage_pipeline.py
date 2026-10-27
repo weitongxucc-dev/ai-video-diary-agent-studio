@@ -53,27 +53,28 @@ from app.montage import (
     creation_task_montage_plan_to_payload,
     select_presenter_sections,
 )
-from app.production import (
+from app.creation.contracts import (
     CoverAsset,
-    CreationPlan,
     CreationPlanPersonReference,
     CreationPlanVoiceReference,
     CreationTask,
-    CreationTaskScript,
-    CreationTaskScriptSection,
-    MaterialAsset,
-    MaterialSegment,
-    MaterialSegmentMatch,
-    NarrationArtifactRecord,
     NarrationSegment,
-    PersonRender,
-    ProductionBatch,
-    ProductionProfile,
-    ProductionRepository,
     SubtitleCue as ProductionSubtitleCue,
     SubtitleTrack,
     TimelineVersion,
 )
+from app.production import (
+    CreationPlan,
+    MaterialAsset,
+    MaterialSegment,
+    MaterialSegmentMatch,
+    NarrationArtifactRecord,
+    PersonRender,
+    ProductionBatch,
+    ProductionProfile,
+    ProductionRepository,
+)
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import register_synthetic_profiles, synthetic_wav_bytes, write_synthetic_video
 
@@ -1073,7 +1074,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     path = main_module._person_render_media_path(state.old_render)
     write_synthetic_video(path, seconds=4)
     from app.creation_execution import presenter_inputs, presenter_input_facts
-    from app.production import ArtifactRecord, JobRun, TransformRun
+    from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
     from app.avatar_lipsync import avatar_lipsync_cache_key
     monkeypatch.setattr(main_module, "_presenter_model_ids", lambda: {"high": state.provider.model_id, "fast": state.provider.model_id})
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
@@ -4581,7 +4582,7 @@ def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_s
     foreign=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
         'graphic_overlay':{**result,'source_ref':'artifacts/other-task/private.png'}})
     assert foreign.status_code==422
-    from app.production import CreationTask
+    from app.creation.contracts import CreationTask
     from dataclasses import replace
     other_plan=replace(state.production.get_creation_plan(state.workspace_id,state.task.plan_id),id='other-image-plan')
     other=CreationTask(id='other-image-task',workspace_id=state.workspace_id,
@@ -5568,7 +5569,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
 
 
 def test_v3_exact_draft_persists_and_restores_only_registered_output(person_render_edit_state, monkeypatch, tmp_path):
-    from app.production import ArtifactRecord, JobRun, TimelineVersion, TransformRun
+    from app.creation.contracts import ArtifactRecord, JobRun, TimelineVersion, TransformRun
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     # Seal this fixture's existing person clip with the current, authorized

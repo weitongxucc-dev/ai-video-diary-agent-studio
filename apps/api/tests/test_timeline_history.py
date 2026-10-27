@@ -11,8 +11,14 @@ import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
                          creation_task_montage_plan_to_payload)
-from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                            ProductionRepository, SubtitleCue, SubtitleTrack, TimelineVersion)
+from app.production import CreationPlan, ProductionRepository
+from app.creation.contracts import (
+    CreationPlanVoiceReference,
+    CreationTask,
+    SubtitleCue,
+    SubtitleTrack,
+    TimelineVersion,
+)
 
 WORKSPACE_ID = "local"
 

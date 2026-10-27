@@ -18,9 +18,8 @@ from app.device_runtime import build_device_runtime
 from app.device_scheduler import ProcessIdentity, VerifiedSession
 from app.platform_publish.queue import platform_publish_registration, recover_platform_publish_jobs
 from app.platform_publish.routes import build_platform_publish_router
-from app.production import (
-    CreationPlan, CreationTask, ProductionRepository, TimelineVersion, _json_payload,
-)
+from app.production import CreationPlan, ProductionRepository, _json_payload
+from app.creation.contracts import CreationTask, TimelineVersion
 
 
 class _Driver:

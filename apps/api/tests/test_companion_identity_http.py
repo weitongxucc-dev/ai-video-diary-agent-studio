@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.auth import SupabaseAuthContext
-from app.production import CreationTask, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.production import ProductionRepository
 from test_device_invite_accept_entry import _auth_enabled_settings, _fake_jwks_client, _make_rsa_keypair
 from test_reply_script_transfer import make_plan
 from test_voice_sampling import pcm

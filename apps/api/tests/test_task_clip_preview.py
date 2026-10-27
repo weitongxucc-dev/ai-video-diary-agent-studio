@@ -14,7 +14,8 @@ import app.main as main
 from app.artifact_store import ArtifactStore
 from app.host_resource_probes import CpuRenderBudget, HostProcessProbe, HostBudget, HostResourceProbe
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import MaterialAsset, MaterialSegment, TimelineVersion
+from app.production import MaterialAsset, MaterialSegment
+from app.creation.contracts import TimelineVersion
 from test_task_media_grants import case
 
 

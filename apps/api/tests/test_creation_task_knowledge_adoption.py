@@ -8,7 +8,8 @@ from uuid import uuid4
 import pytest
 
 import app.main as main
-from app.production import CreationTaskScriptSection, JobRun, ScriptGenerationRun
+from app.creation.script_contracts import CreationTaskScriptSection, ScriptGenerationRun
+from app.creation.contracts import JobRun
 from app.source_types import KnowledgeItem
 from test_creation_task_script_grounding import (
     api_state, draft, reviewed, saved_agent_draft, set_api_provider,

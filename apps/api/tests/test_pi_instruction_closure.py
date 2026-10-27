@@ -16,7 +16,7 @@ from starlette.requests import Request
 import app.assistant_pi as pi
 import app.main as main
 from app.config import Settings
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from app.schemas import CreationTaskEditPreviewRequest, CreationTaskExactEditRequest, MediaScriptPreviewRequest, EXACT_EDIT_FIELDS, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest
 from app.visual_effects import compile_crop_command
 from test_assistant_task_context_tools import task_workspace

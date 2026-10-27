@@ -11,9 +11,12 @@ from app.creation.script_draft_use_case import ScriptDraftRejected, script_failu
 from app.creation.source_errors import SourcePreflightError
 from app.creation.source_inputs_use_case import CreationSourceInputs
 from app.production import (
-    CreationPlan, CreationTask, ProductionRepository,
-    TopicCandidate as CreationTaskTopicCandidate, content_readable,
+    CreationPlan,
+    ProductionRepository,
+    TopicCandidate as CreationTaskTopicCandidate,
+    content_readable,
 )
+from app.creation.contracts import CreationTask
 
 
 class ScriptContextUseCase:

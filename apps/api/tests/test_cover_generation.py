@@ -299,7 +299,8 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     from app.host_resource_probes import CoverBudget, HostResourceDecision
     from app.member_permits import creation_job_registration
     from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
-    from app.production import CreationPlan, CreationTask, ProductionRepository
+    from app.production import CreationPlan, ProductionRepository
+    from app.creation.contracts import CreationTask
 
     assert "app.main" not in sys.modules
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("metadata node invoked native"))

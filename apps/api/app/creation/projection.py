@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 from app.creation.contracts import EditOperation, TimelineVersion
 
 if TYPE_CHECKING:
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
 
 
 def history_edit_head(

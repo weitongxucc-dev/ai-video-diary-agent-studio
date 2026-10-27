@@ -203,7 +203,8 @@ def test_main_consumers_read_original_space_and_recheck_fixed_reference_grants(t
     from fastapi.testclient import TestClient
     import app.main as main
     from app.creation.script_library_use_case import ScriptLibrarySource
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
 
     ctx = build_granted_pair(tmp_path)
     repo, item = ctx["repo"], ctx["item"]

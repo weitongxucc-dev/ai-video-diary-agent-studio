@@ -6,7 +6,15 @@ from copy import deepcopy
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from app.creation.contracts import EditIntent, EditProposal, SubtitleTrack, SubtitleCue, CoverAsset, TimelineVersion, TaskEvent
+from app.creation.contracts import (
+    EditIntent,
+    EditProposal,
+    SubtitleTrack,
+    SubtitleCue,
+    CoverAsset,
+    TimelineVersion,
+    TaskEvent,
+)
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditResult, prepare_changed_montage, logical_montage_output_refs,
 )
@@ -17,7 +25,8 @@ from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
 
 if TYPE_CHECKING:
-    from app.production import CreationTask, NarrationSegment, NarrationArtifactRecord, ProductionRepository
+    from app.creation.contracts import CreationTask, NarrationSegment
+    from app.production import NarrationArtifactRecord, ProductionRepository
 
 
 @dataclass(frozen=True)

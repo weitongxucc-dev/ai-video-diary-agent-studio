@@ -6,8 +6,15 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.production import (CreationPlan, CreationTask, CreationRequestConflict,
-                            MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionRepository)
+from app.production import (
+    CreationPlan,
+    CreationRequestConflict,
+    MaterialAsset,
+    MaterialSegment,
+    MaterialSegmentMatch,
+    ProductionRepository,
+)
+from app.creation.contracts import CreationTask
 import app.database_migrations as migrations
 
 WORKSPACE = "request-test"

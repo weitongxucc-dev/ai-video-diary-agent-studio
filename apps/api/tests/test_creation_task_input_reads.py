@@ -35,9 +35,9 @@ def records():
 
 
 def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction(tmp_path):
-    assert production.CreationTask is contracts.CreationTask
-    assert production.NarrationSegment is contracts.NarrationSegment
-    assert production.NarrationSegmentStatus is contracts.NarrationSegmentStatus
+    assert production._CreationTask is contracts.CreationTask
+    assert production._NarrationSegment is contracts.NarrationSegment
+    assert production._NarrationSegmentStatus is contracts.NarrationSegmentStatus
     assert production._validate_logical_reference is contracts.validate_logical_reference
     task, segment = records()
     payload = asdict(task)
