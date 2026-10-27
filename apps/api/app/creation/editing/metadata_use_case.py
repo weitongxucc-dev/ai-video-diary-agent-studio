@@ -322,13 +322,21 @@ class MetadataEditUseCase:
         except (ValueError, OSError) as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
 
-    def current_narration_snapshot(self, workspace_id: str, task: CreationTask) -> dict[str, object]:
+    def current_narration_snapshot(self, workspace_id: str, task: CreationTask, *, connection=None) -> dict[str, object]:
         if not task.confirmed_script_id:
             return {}
-        segments = self.repository.list_narration_segments(workspace_id, task.id, task.confirmed_script_id)
-        version = self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
-        return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False, default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value))) for segment in segments], 'narration_cache_key': task.narration_cache_key,
-            **({'stage_segments':version.snapshot['stage_segments']} if version and 'stage_segments' in version.snapshot else {})}
+        if connection is None:
+            with self.repository.creation_execution_read() as conn:
+                current = self.repository.get_creation_task(workspace_id, task.id, connection=conn)
+                return self.current_narration_snapshot(workspace_id, current, connection=conn)
+        version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id,
+            connection=connection) if task.current_timeline_version_id else None
+        # This complete immutable output is necessary; the input rows stream.
+        return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False,
+            default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value)))
+            for segment in self.repository.iter_narration_segments(workspace_id, task.id,
+                task.confirmed_script_id, connection=connection)], 'narration_cache_key': task.narration_cache_key,
+            **({'stage_segments': version.snapshot['stage_segments']} if version and 'stage_segments' in version.snapshot else {})}
 
     @staticmethod
     def narration_segments_from_snapshot(
@@ -351,7 +359,7 @@ class MetadataEditUseCase:
         return segments
 
 
-    def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan, *, source=None) -> TimelineVersion:
+    def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan, *, source=None, verify_inputs=None) -> TimelineVersion:
         if task.current_timeline_version_id:
             current = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
             if isinstance(current.snapshot.get('montage'), dict):
@@ -361,6 +369,8 @@ class MetadataEditUseCase:
             if self.write_guard is not None:
                 self.write_guard(conn)
             current_task=self.repository.get_creation_task(workspace_id,task.id,connection=conn)
+            if verify_inputs is not None:
+                verify_inputs(conn, current_task)
             expected=source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id
             if current_task.current_timeline_version_id != expected:
                 raise EditConflict('时间线已变化，未创建基础版本')
@@ -382,14 +392,14 @@ class MetadataEditUseCase:
                         raise PermissionError(f'原任务授权不可用于创建基础版本：{status}')
             if current is not None:
                 snapshot={**current.snapshot,'montage':creation_task_montage_plan_to_payload(plan),
-                    **self.current_narration_snapshot(workspace_id,current_task)}
+                    **self.current_narration_snapshot(workspace_id,current_task,connection=conn)}
                 version=TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=workspace_id,task_id=task.id,
                     sequence=current.sequence+1,parent_version_id=current.id,created_by_operation_id=None,snapshot=snapshot)
             else:
                 version=TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=workspace_id,task_id=task.id,sequence=1,
                     parent_version_id=None,created_by_operation_id=None,
                     snapshot={'montage':creation_task_montage_plan_to_payload(plan),
-                            **self.current_narration_snapshot(workspace_id,current_task)})
+                            **self.current_narration_snapshot(workspace_id,current_task,connection=conn)})
             self.repository.create_timeline_version(version,connection=conn,expected_current_version_id=expected)
         return self.repository.get_timeline_version(workspace_id,version.id)
 

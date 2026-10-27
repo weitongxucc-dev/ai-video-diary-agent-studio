@@ -105,28 +105,44 @@ def move_preserved_subtitles(previous, candidate, tracks):
     return result
 
 
-def narration_signature(repository, task) -> str:
-    artifact = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key)
+def narration_signature(repository, task, *, connection=None) -> str:
+    if connection is None:
+        with repository.creation_execution_read() as conn:
+            return narration_signature(repository, task, connection=conn)
+    artifact = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=connection)
     if artifact is None or artifact.task_id != task.id or artifact.script_id != task.confirmed_script_id:
         raise ValueError("故事板必须复用当前文案的真实配音")
-    segments = repository.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id)
-    if not segments or any(item.status != "ready" or not item.audio_reference or not item.duration_seconds for item in segments):
-        raise ValueError("当前文案缺少可用的真实分段配音")
+    references = dict.fromkeys([repository.narration_artifact_reference(artifact.cache_key)])
+    count = 0
+    for item in repository.iter_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=connection):
+        if item.status != 'ready' or not item.audio_reference or not item.duration_seconds:
+            raise ValueError('当前文案缺少可用的真实分段配音')
+        references[item.audio_reference] = None
+        count += 1
+    if not count:
+        raise ValueError('当前文案缺少可用的真实分段配音')
     files = []
-    for reference in dict.fromkeys([repository.narration_artifact_reference(artifact.cache_key),
-            *(item.audio_reference for item in segments)]):
+    for reference in references:
         path = repository.resolve_authorized_narration_audio_reference(task.workspace_id, reference)
         info = path.stat()
         if info.st_size <= 0:
-            raise ValueError("故事板配音文件为空")
+            raise ValueError('故事板配音文件为空')
         files.append((reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
-    manifest = [asdict(artifact), [asdict(item) for item in segments], files]
-    return hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
+    checksum = hashlib.sha256()
+    encode = lambda value: json.dumps(value, sort_keys=True, default=str).encode()
+    checksum.update(b'[' + encode(asdict(artifact)) + b', [')
+    for index, item in enumerate(repository.iter_narration_segments(task.workspace_id, task.id,
+            task.confirmed_script_id, connection=connection)):
+        if index:
+            checksum.update(b', ')
+        checksum.update(encode(asdict(item)))
+    checksum.update(b'], ' + encode(files) + b']')
+    return checksum.hexdigest()
 
 
-def material_signature(repository, task) -> str:
+def material_signature(repository, task, *, connection=None) -> str:
     assets = {asset.id: asset for asset, _segment in repository.automatic_material_segments(
-        task.workspace_id, viewer_user_id=task.owner_user_id)}
+        task.workspace_id, viewer_user_id=task.owner_user_id, connection=connection)}
     manifest = []
     for asset_id in sorted(assets):
         reference = repository.workspace_media_reference_for_asset(task.workspace_id, asset_id)
@@ -136,16 +152,20 @@ def material_signature(repository, task) -> str:
     return hashlib.sha256(json.dumps(manifest).encode()).hexdigest()
 
 
-def request_current(repository, task, event) -> bool:
+def request_current(repository, task, event, *, connection=None) -> bool:
+    if connection is None:
+        with repository.creation_execution_read() as conn:
+            current = repository.get_creation_task(task.workspace_id, task.id, connection=conn)
+            return request_current(repository, current, event, connection=conn)
     inputs = event["request_inputs"]
     if (task.current_timeline_version_id != inputs["expected_timeline_version_id"]
             or task.confirmed_script_id != inputs["script_id"]
             or task.narration_cache_key != event["narration_cache_key"]):
         return False
-    version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+    version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=connection)
     return (version.sequence == inputs["expected_timeline_sequence"]
-            and narration_signature(repository, task) == event["narration_signature"]
-            and material_signature(repository, task) == event["material_signature"])
+            and narration_signature(repository, task, connection=connection) == event["narration_signature"]
+            and material_signature(repository, task, connection=connection) == event["material_signature"])
 
 
 @dataclass(frozen=True)
@@ -172,12 +192,13 @@ class StoryboardRegeneration:
             member = actor.user_id or actor.member_id
             if current.owner_user_id and current.owner_user_id != member:
                 raise PermissionError("当前成员不能重新生成此任务的故事板")
-            script, plan = validate_input(current.workspace_id, current, inputs["script_id"], inputs["input_digest"])
+            snapshot = validate_input(current.workspace_id, current.id, inputs["script_id"], inputs["input_digest"], connection=conn)
+            script, plan = snapshot.script_header, snapshot.plan
             payload.update(plan_id=current.plan_id, narration_cache_key=current.narration_cache_key,
-                narration_signature=narration_signature(self.repository, current),
-                material_signature=material_signature(self.repository, current),
-                stage_key=stage_facts(current, script, plan))
-            if not request_current(self.repository, current, payload):
+                narration_signature=narration_signature(self.repository, current, connection=conn),
+                material_signature=material_signature(self.repository, current, connection=conn),
+                stage_key=stage_facts(current, script, plan, connection=conn))
+            if not request_current(self.repository, current, payload, connection=conn):
                 raise ValueError("时间线、已采用文案或配音已变化，请重新读取当前任务")
         return self.repository.claim_storyboard_regeneration(run, payload, verify_inputs=verify)
 
@@ -209,10 +230,11 @@ class StoryboardRegeneration:
             "result_url": f"/api/creation-tasks/{task_id}/montage/plan/requests/{request_id}"}
 
     def prepare(self, job, event, context):
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id)
-        if not request_current(self.repository, task, event):
-            raise ValueError("故事板原请求的时间线、文案或配音已变化")
-        base = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+        with self.repository.creation_execution_read() as conn:
+            task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+            if not request_current(self.repository, task, event, connection=conn):
+                raise ValueError('故事板原请求的时间线、文案或配音已变化')
+            base = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=conn)
         previous = creation_task_montage_plan_from_payload(base.snapshot["montage"])
         candidate = self.montage_stage.build_candidate(job.workspace_id, job.task_id, grant_context=context)
         from app.creation.duration_requirement import DurationRequirement
@@ -270,7 +292,7 @@ class StoryboardRegeneration:
             if row is None or row["status"] != "running":
                 raise ValueError("故事板原作业已停止，不能提交新版本")
             task = self.repository._require_creation_task(connection, job.workspace_id, job.task_id)
-            if not request_current(self.repository, task, event):
+            if not request_current(self.repository, task, event, connection=connection):
                 raise ValueError("故事板生成期间时间线、文案或配音已变化")
             self.montage_stage.metadata.picture_renderer.validate_material_use(job.workspace_id,
                 creation_task_montage_plan_from_payload(prepared.change.montage_payload))

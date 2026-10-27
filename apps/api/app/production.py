@@ -1430,9 +1430,9 @@ class ProductionRepository:
     def creation_plan_voice_reference(self, workspace_id, profile_id, version, *, viewer_user_id=None, local_diagnostic=False):
         return self._profile_registration.creation_plan_voice_reference(workspace_id, profile_id, version, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
 
-    def automatic_material_segments(self, workspace_id, *, viewer_user_id=None, local_diagnostic=False, asset_ids=None):
+    def automatic_material_segments(self, workspace_id, *, viewer_user_id=None, local_diagnostic=False, asset_ids=None, connection=None):
         result = []
-        for asset in self.list_assets(workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic):
+        for asset in self.list_assets(workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, connection=connection):
             if asset_ids is not None and asset.id not in asset_ids:
                 continue
             try:
@@ -3466,8 +3466,9 @@ class ProductionRepository:
         include_private: bool = True,
         viewer_user_id: str | None = None,
         local_diagnostic: bool = False,
+        connection=None,
     ) -> list[MaterialAsset]:
-        return self._material_assets.list_assets(workspace_id, include_private=include_private, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        return self._material_assets.list_assets(workspace_id, include_private=include_private, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, connection=connection)
 
     def list_assets_page(
         self,
@@ -9765,6 +9766,7 @@ class ProductionRepository:
         plan_id: str,
         payload: dict[str, object],
         *, connection: sqlite3.Connection | None = None,
+        verify_inputs=None,
         expected_current_version_id: str | None | Literal[False] = False,
     ) -> tuple[CreationTask, dict[str, object]]:
         status = str(payload.get("status", ""))
@@ -9774,7 +9776,7 @@ class ProductionRepository:
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 self.save_creation_task_montage_plan(workspace_id, task_id, plan_id, payload,
-                    connection=conn, expected_current_version_id=expected_current_version_id)
+                    connection=conn, expected_current_version_id=expected_current_version_id, verify_inputs=verify_inputs)
             return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(workspace_id, task_id)
         conn = connection
         task_row = conn.execute(
@@ -9784,6 +9786,8 @@ class ProductionRepository:
         if task_row is None:
             raise KeyError(task_id)
         task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+        if verify_inputs is not None:
+            verify_inputs(conn, task)
         if (expected_current_version_id is not False
                 and task.current_timeline_version_id != expected_current_version_id):
             raise ValueError("当前时间线已变化，不能覆盖新确认的剪辑计划")

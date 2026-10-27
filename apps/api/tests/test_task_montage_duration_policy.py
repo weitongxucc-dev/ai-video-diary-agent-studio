@@ -151,3 +151,42 @@ def test_semantic_shot_cannot_use_caption_fragments_to_hide_insufficient_source(
         segments=[replace(segment, end_seconds=segment.start_seconds + 7) for segment in asset.segments])]}
     with pytest.raises(ValueError, match="B-roll 镜头时长不足"):
         MontagePlanner().build_for_creation_task(**values)
+
+
+@pytest.mark.parametrize('presenter', [0, 40])
+def test_row_prepared_whole_planner_matches_complete_entry_without_changing_global_allocation(task_inputs, monkeypatch, presenter):
+    from itertools import count
+    from types import SimpleNamespace
+    from app.creation.execution_input import ExecutionScriptHeader
+    from app.creation.duration_requirement import SectionWindow
+    from app.montage import creation_task_montage_plan_to_payload
+    import app.montage as module
+    script = task_inputs['script']
+    header = ExecutionScriptHeader(script.id, script.task_id, script.title, script.selection_status,
+        script.updated_at, len(script.sections), script.workspace_id, script.language)
+    common = dict(task_inputs, duration_target_seconds=12, narration_duration_seconds=12,
+        narration_segment_durations_by_section={'first': 6, 'second': 6},
+        person_render_by_section={'first': ('paid-person', 6)} if presenter else None,
+        presenter_share_target=presenter,
+        delivery_windows=[SectionWindow('first', 0, 6), SectionWindow('second', 6, 12)])
+    def fixed_ids():
+        values = count()
+        monkeypatch.setattr(module, 'uuid4', lambda: SimpleNamespace(hex=f'{next(values):032x}'))
+    fixed_ids()
+    legacy = MontagePlanner().build_for_creation_task(**common)
+    planner = MontagePlanner()
+    prepared = planner.prepare_creation_inputs(lambda: iter(script.sections), profile=task_inputs['profile'],
+        duration_target_seconds=12, narration_duration_seconds=12,
+        narration_segment_ids_by_section=task_inputs['narration_segment_ids_by_section'],
+        narration_segment_durations_by_section=common['narration_segment_durations_by_section'])
+    fixed_ids()
+    row = planner.build_for_creation_inputs(workspace_id=header.workspace_id, task_id=header.task_id,
+        script_header=header, prepared=prepared, assets=task_inputs['assets'],
+        media_reference_for_asset=task_inputs['media_reference_for_asset'],
+        narration_audio_path=task_inputs['narration_audio_path'],
+        person_render_by_section=common['person_render_by_section'], presenter_share_target=presenter,
+        delivery_windows=common['delivery_windows'])
+    row = replace(row, created_at=legacy.created_at, updated_at=legacy.updated_at)
+    assert creation_task_montage_plan_to_payload(row) == creation_task_montage_plan_to_payload(legacy)
+    assert row.duration_seconds == 12
+    assert [cue.timeline_start_seconds for cue in row.cues] == [0, 6]

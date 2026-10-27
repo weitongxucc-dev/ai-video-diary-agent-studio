@@ -431,18 +431,47 @@ class MontagePlanner:
         presenter_share_target: int = 0,
         delivery_windows=None,
     ) -> CreationTaskMontagePlan:
-        self._validate_creation_planning_source(workspace_id, task_id, script, narration_audio_path)
-        cues = _build_creation_task_cues(
-            script,
-            min_seconds=profile.target_duration_min_seconds,
-            max_seconds=duration_target_seconds,
+        prepared = self.prepare_creation_inputs(
+            lambda: iter(script.sections), profile=profile, duration_target_seconds=duration_target_seconds,
             narration_duration_seconds=narration_duration_seconds,
             narration_segment_ids_by_section=narration_segment_ids_by_section,
-            narration_segment_durations_by_section=narration_segment_durations_by_section,
-        )
+            narration_segment_durations_by_section=narration_segment_durations_by_section)
+        return self.build_for_creation_inputs(workspace_id=workspace_id, task_id=task_id,
+            script_header=script, prepared=prepared, assets=assets,
+            media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
+            person_render_by_section=person_render_by_section, presenter_share_target=presenter_share_target,
+            delivery_windows=delivery_windows)
+
+    @staticmethod
+    def prepare_creation_inputs(section_reader, *, profile, duration_target_seconds,
+                                narration_duration_seconds, narration_segment_ids_by_section,
+                                narration_segment_durations_by_section):
+        """Prepare real captions and semantic queries inside the source snapshot."""
+        cues = _build_creation_section_cues(None, section_reader=section_reader,
+            min_seconds=profile.target_duration_min_seconds, max_seconds=duration_target_seconds,
+            narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section=narration_segment_ids_by_section,
+            narration_segment_durations_by_section=narration_segment_durations_by_section)
+        grouped = {}
+        for cue in cues:
+            grouped.setdefault(cue.source_section_id, []).append(cue)
+        visual_cues, visual_requirements = [], {}
+        for section in section_reader():
+            section_cues = grouped.get(section.id)
+            if section_cues:
+                visual_cues.append(replace(section_cues[0], text=section.content,
+                    duration_seconds=round(sum(cue.duration_seconds for cue in section_cues), 3)))
+                visual_requirements[section.id] = section.visual_prompt.strip()
+        return cues, visual_cues, visual_requirements
+
+    def build_for_creation_inputs(self, *, workspace_id, task_id, script_header, prepared,
+                                  assets, media_reference_for_asset, narration_audio_path,
+                                  person_render_by_section=None, presenter_share_target=0, delivery_windows=None):
+        self._validate_creation_planning_source(workspace_id, task_id, script_header, narration_audio_path)
+        cues, visual_cues, visual_requirements = prepared
         return self._build_creation_plan(
-            workspace_id=workspace_id, task_id=task_id, script_id=script.id, script_title=script.title,
-            sections=script.sections, cues=cues, assets=assets,
+            workspace_id=workspace_id, task_id=task_id, script_id=script_header.id, script_title=script_header.title,
+            cues=cues, visual_cues=visual_cues, visual_requirements=visual_requirements, assets=assets,
             media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
             person_render_by_section=person_render_by_section, presenter_share_target=presenter_share_target,
             delivery_windows=delivery_windows)
@@ -455,17 +484,14 @@ class MontagePlanner:
         narration_segment_id: str, delivery_window: SectionWindow,
     ) -> CreationTaskMontagePlan:
         """Plan one selected section; the header still describes the real script."""
-        self._validate_creation_planning_source(workspace_id, task_id, script_header, narration_audio_path)
-        cues = _build_creation_section_cues(
-            (section,), min_seconds=profile.target_duration_min_seconds, max_seconds=duration_target_seconds,
-            narration_duration_seconds=narration_duration_seconds,
+        prepared = self.prepare_creation_inputs(lambda: iter((section,)), profile=profile,
+            duration_target_seconds=duration_target_seconds, narration_duration_seconds=narration_duration_seconds,
             narration_segment_ids_by_section={section.id: narration_segment_id},
             narration_segment_durations_by_section={section.id: narration_duration_seconds})
-        return self._build_creation_plan(
-            workspace_id=workspace_id, task_id=task_id, script_id=script_header.id, script_title=script_header.title,
-            sections=(section,), cues=cues, assets=assets,
+        return self.build_for_creation_inputs(workspace_id=workspace_id, task_id=task_id,
+            script_header=script_header, prepared=prepared, assets=assets,
             media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
-            person_render_by_section=None, presenter_share_target=0, delivery_windows=(delivery_window,))
+            delivery_windows=(delivery_window,))
 
     @staticmethod
     def _validate_creation_planning_source(workspace_id, task_id, script, narration_audio_path):
@@ -477,7 +503,7 @@ class MontagePlanner:
             raise ValueError("剪辑计划必须引用已持久化的创作任务配音")
 
     def _build_creation_plan(
-        self, *, workspace_id, task_id, script_id, script_title, sections, cues, assets,
+        self, *, workspace_id, task_id, script_id, script_title, cues, visual_cues, visual_requirements, assets,
         media_reference_for_asset, narration_audio_path, person_render_by_section,
         presenter_share_target, delivery_windows,
     ) -> CreationTaskMontagePlan:
@@ -493,12 +519,6 @@ class MontagePlanner:
         cues_by_section: dict[str, list[NarrationCue]] = {}
         for cue in cues:
             cues_by_section.setdefault(cue.source_section_id, []).append(cue)
-        sections_by_id = {section.id: section for section in sections}
-        # Captions keep their own clock. A shot covers the adopted semantic
-        # section's measured narration span, anchored to its first display cue.
-        visual_cues = [replace(section_cues[0], text=sections_by_id[section_id].content,
-            duration_seconds=round(sum(cue.duration_seconds for cue in section_cues), 3))
-            for section_id, section_cues in cues_by_section.items()]
         if delivery_windows is not None:
             windows = {window.section_id: window for window in delivery_windows}
             shifted = []
@@ -522,7 +542,6 @@ class MontagePlanner:
             raise error("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
-        visual_requirements = {section.id: section.visual_prompt.strip() for section in sections}
         retrieval_cues = {
             cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
             for cue in visual_cues
@@ -1195,26 +1214,27 @@ def _build_creation_section_cues(
     sections, *, min_seconds: int, max_seconds: int, narration_duration_seconds: float,
     narration_segment_ids_by_section: dict[str, str] | None = None,
     narration_segment_durations_by_section: dict[str, float] | None = None,
+    section_reader=None,
 ) -> list[NarrationCue]:
+    if section_reader is None:
+        section_reader = lambda: iter(sections)
     if narration_duration_seconds > max_seconds:
         raise ValueError(
             f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"
         )
     if not math.isfinite(narration_duration_seconds) or narration_duration_seconds <= 0:
         raise ValueError("旁白时长无效")
-    entries: list[tuple[str, str, float]] = []
-    for section in sections:
-        parts = _split_narration(section.content)
-        for part in parts:
-            entries.append((section.id, part, max(1.0, float(len(part)))))
-    if not entries:
+    raw_total = 0.0
+    weights_by_section: dict[str, float] = {}
+    for section in section_reader():
+        for part in _split_narration(section.content):
+            weight = max(1.0, float(len(part)))
+            raw_total += weight
+            weights_by_section[section.id] = weights_by_section.get(section.id, 0.0) + weight
+    if not weights_by_section:
         raise ValueError("文案没有可用于时间线的旁白内容")
-    raw_total = sum(weight for _, _, weight in entries)
     requested_total = narration_duration_seconds
     scale = requested_total / raw_total
-    weights_by_section: dict[str, float] = {}
-    for section_id, _text, weight in entries:
-        weights_by_section[section_id] = weights_by_section.get(section_id, 0.0) + weight
     if narration_segment_durations_by_section is not None:
         durations = [narration_segment_durations_by_section.get(section_id) for section_id in weights_by_section]
         if any(value is None or not math.isfinite(value) or value <= 0 for value in durations):
@@ -1224,40 +1244,42 @@ def _build_creation_section_cues(
     cues: list[NarrationCue] = []
     cursor = 0.0
     rounded_cursor = 0.0
-    for section_id, text, weight in entries:
-        section_duration = (
-            narration_segment_durations_by_section.get(section_id)
-            if narration_segment_durations_by_section
-            else None
-        )
-        scaled_duration = (
-            section_duration * weight / weights_by_section[section_id]
-            if section_duration is not None
-            else weight * scale
-        )
-        part_count = max(1, math.ceil(scaled_duration / 8.0))
-        text_parts = _split_text_evenly(text, part_count)
-        part_duration = scaled_duration / len(text_parts)
-        for text_part in text_parts:
-            cursor += part_duration
-            rounded_end = round(cursor, 3)
-            cue_duration = round(rounded_end - rounded_cursor, 3)
-            if cue_duration <= 0:
-                raise ValueError("配音时长不足以为字幕分配有效时间区间")
-            rounded_cursor = rounded_end
-            cues.append(
-                NarrationCue(
-                    id=f"cue_{len(cues) + 1:03d}",
-                    source_section_id=section_id,
-                    text=text_part,
-                    duration_seconds=cue_duration,
-                    narration_segment_id=(
-                        narration_segment_ids_by_section.get(section_id, "")
-                        if narration_segment_ids_by_section
-                        else ""
-                    ),
-                )
+    for section in section_reader():
+        for text in _split_narration(section.content):
+            section_id, weight = section.id, max(1.0, float(len(text)))
+            section_duration = (
+                narration_segment_durations_by_section.get(section_id)
+                if narration_segment_durations_by_section
+                else None
             )
+            scaled_duration = (
+                section_duration * weight / weights_by_section[section_id]
+                if section_duration is not None
+                else weight * scale
+            )
+            part_count = max(1, math.ceil(scaled_duration / 8.0))
+            text_parts = _split_text_evenly(text, part_count)
+            part_duration = scaled_duration / len(text_parts)
+            for text_part in text_parts:
+                cursor += part_duration
+                rounded_end = round(cursor, 3)
+                cue_duration = round(rounded_end - rounded_cursor, 3)
+                if cue_duration <= 0:
+                    raise ValueError("配音时长不足以为字幕分配有效时间区间")
+                rounded_cursor = rounded_end
+                cues.append(
+                    NarrationCue(
+                        id=f"cue_{len(cues) + 1:03d}",
+                        source_section_id=section_id,
+                        text=text_part,
+                        duration_seconds=cue_duration,
+                        narration_segment_id=(
+                            narration_segment_ids_by_section.get(section_id, "")
+                            if narration_segment_ids_by_section
+                            else ""
+                        ),
+                    )
+                )
     return cues
 
 

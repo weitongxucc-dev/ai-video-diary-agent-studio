@@ -353,7 +353,8 @@ class CreationExecutionControl:
             if hasattr(owner, "registrations"):
                 owner = owner.registrations["creation_job"].owner
             job, fresh = self.execution.regenerate_storyboard(workspace_id, task_id, inputs, actor,
-                stage_facts=lambda current, script, plan: owner.stage_facts(current, script, plan, "montage_plan")[0])
+                stage_facts=lambda current, script, plan, *, connection=None: owner.stage_facts(
+                    current, script, plan, "montage_plan", connection=connection)[0])
             if fresh:
                 submit_creation_stage(self.execution, runtime.scheduler, job, actor)
                 runtime.wake()

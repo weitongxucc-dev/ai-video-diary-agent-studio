@@ -449,6 +449,7 @@ class MaterialAssetStore:
         include_private: bool = True,
         viewer_user_id: str | None = None,
         local_diagnostic: bool = False,
+        connection: sqlite3.Connection | None = None,
     ) -> list[MaterialAsset]:
         """列出素材。与分页同一判据：可信身份下私有素材只对上传者本人可见。"""
         clauses = ["workspace_id = ?"]
@@ -462,7 +463,7 @@ class MaterialAssetStore:
             parameters.append(viewer_user_id)
         elif not include_private:
             clauses.append("visibility = 'shared'")
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             rows = conn.execute(
                 f"""
                 SELECT payload, visibility FROM material_assets

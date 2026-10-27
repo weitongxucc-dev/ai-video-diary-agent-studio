@@ -482,3 +482,141 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     assert state.repo.read_storyboard_regeneration_receipt('ws', task.id, receipt['request_id'])[2] == completed['result']
     assert state.repo.creation_narration_usage('ws', job.id) == usage
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
+
+
+def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+    from app.creation_execution import creation_stage_facts
+    import app.creation_execution as execution_module
+    from app.creation.storyboard_regeneration import narration_signature
+    from app.creation.person_renders import PersonRender
+    from app.avatar_lipsync import AvatarAndLipSyncRequest
+    from test_montage_stage_application import _montage_stream_case
+    case = _montage_stream_case(tmp_path, monkeypatch)
+    try:
+        rows = case.repo.list_narration_segments('local', case.task.id, case.script.id)
+        references = dict.fromkeys([case.repo.narration_artifact_reference(case.record.cache_key),
+            *(row.audio_reference for row in rows)])
+        files = []
+        for reference in references:
+            path = case.repo.resolve_authorized_narration_audio_reference('local', reference)
+            info = path.stat()
+            files.append((reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+        signature = hashlib.sha256(json.dumps([asdict(case.record), [asdict(row) for row in rows], files],
+            sort_keys=True, default=str).encode()).hexdigest()
+        person, voice, *_ = register_synthetic_profiles(case.repo, workspace_id='local', member_id=case.actor.member_id)
+        request = AvatarAndLipSyncRequest('local', person, voice, case.record.audio_path, rows[0].audio_reference,
+            'zh', 'natural', 'neutral', person.authorization, 'fixture')
+        render = PersonRender('paid-person', 'local', case.task.id, person.id, person.version, voice.id, voice.version,
+            rows[0].id, 'paid-visual', 'fixture', 'natural', 'neutral', 'paid-person-key', 'ready',
+            output_path=case.record.audio_path, duration_seconds=2)
+        assets = case.repo.list_assets('local')
+        expected = json.dumps({'assets': [asdict(asset) for asset in assets], 'narration': asdict(case.record),
+            'script': asdict(case.script)}, sort_keys=True, default=str).encode()
+        base_key = 'montage_plan:' + hashlib.sha256(expected).hexdigest()
+        for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                     'effective_creation_script', 'list_narration_segments'):
+            monkeypatch.setattr(case.repo, name, case.forbidden)
+        with case.repo.creation_execution_read() as conn:
+            snapshot = case.repo.read_creation_execution_snapshot('local', case.task.id, connection=conn)
+            key, resources = creation_stage_facts(case.repo, snapshot.task, snapshot.script_header, snapshot.plan,
+                'montage_plan', None, case.owner.montage_budget, connection=conn)
+            assert key == base_key and resources['input_bytes'] == len(expected)
+            assert narration_signature(case.repo, snapshot.task, connection=conn) == signature
+            # Encoding oracle for already-qualified paid person facts; no avatar provider runs.
+            monkeypatch.setattr(execution_module, 'iter_presenter_inputs', lambda *args, **kwargs: iter([(rows[0], request)]))
+            monkeypatch.setattr(execution_module, 'current_presenter_render', lambda *args, **kwargs: render)
+            case.owner.resolve_presenter_output = lambda _: Path(case.record.audio_path)
+            info = Path(case.record.audio_path).stat()
+            extra = [[asdict(render), asdict(request), [info.st_size, info.st_mtime_ns, info.st_ctime_ns]]]
+            expected_person = 'montage_plan:' + hashlib.sha256(json.dumps([base_key, extra], sort_keys=True, default=str).encode()).hexdigest()
+            actual, unchanged = case.owner.stage_facts(snapshot.task, snapshot.script_header,
+                replace(snapshot.plan, presenter_share_target=40), 'montage_plan', connection=conn)
+            assert actual == expected_person and unchanged == resources and conn.in_transaction
+    finally:
+        case.scheduler.close()
+
+
+@pytest.mark.parametrize('outcome', ['normal', 'unknown_commit', 'tail', 'source', 'revoked', 'head'])
+def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_path, monkeypatch, outcome):
+    from app.creation.contracts import TimelineVersion
+    from app.creation.storyboard_regeneration import StoryboardRegeneration
+    from test_montage_stage_application import _montage_stream_case
+    case = _montage_stream_case(tmp_path, monkeypatch)
+    repo = case.repo
+    try:
+        case.control.start('local', case.task.id, case.script.id, case.digest, case.actor, case.runtime, verify_media=False)
+        first = case.scheduler.pick_and_grant(); assert first is not None
+        case.executor.execute(first, case.scheduler)
+        case.control.cancel('local', case.task.id, case.actor, case.runtime, verify_media=False)
+        task = repo.get_creation_task('local', case.task.id)
+        base = repo.get_timeline_version('local', task.current_timeline_version_id)
+        before = repo.get_creation_task_montage_plan('local', task.id)
+        payload = StoryboardRegenerationRequest.model_validate({'request_id': str(uuid4()),
+            'script_id': case.script.id, 'input_digest': case.digest,
+            'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence})
+        for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                     'effective_creation_script', 'list_narration_segments'):
+            monkeypatch.setattr(repo, name, case.forbidden)
+        monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
+        observed = []
+        original_build = case.stage.build_candidate
+        def build(*args, **kwargs):
+            observed.append(True)
+            return original_build(*args, **kwargs)
+        monkeypatch.setattr(case.stage, 'build_candidate', build)
+        receipt = case.control.regenerate_storyboard('local', task.id, payload, case.actor, case.runtime)
+        grant = case.scheduler.pick_and_grant(); assert grant is not None
+        changed = []
+        if outcome in {'tail', 'source', 'revoked', 'head'}:
+            released = case.scheduler._released_for_commit
+            def inject(conn, current):
+                result = released(conn, current)
+                if not changed and current.request_id == grant.request_id:
+                    changed.append(True)
+                    if outcome == 'tail':
+                        conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','changed tail') WHERE script_id=? AND section_id='second'", (case.script.id,))
+                    elif outcome == 'source':
+                        from pathlib import Path
+                        path = Path(case.record.audio_path); path.write_bytes(path.read_bytes()+b'changed')
+                    elif outcome == 'revoked':
+                        monkeypatch.setattr(case.owner, 'verify_identity', lambda _: 'unauthorized')
+                    else:
+                        repo.create_timeline_version(TimelineVersion('later-storyboard-head', 'local', task.id,
+                            base.id, base.sequence+1, base.snapshot, None), connection=conn)
+                return result
+            monkeypatch.setattr(case.scheduler, '_released_for_commit', inject)
+        elif outcome == 'unknown_commit':
+            complete = case.scheduler.complete_unit
+            def lost(*args, **kwargs):
+                result = complete(*args, **kwargs)
+                raise KeyboardInterrupt('transport exits after original complete transaction')
+            monkeypatch.setattr(case.scheduler, 'complete_unit', lost)
+        if outcome == 'unknown_commit':
+            with pytest.raises(KeyboardInterrupt):
+                case.executor.execute(grant, case.scheduler)
+        else:
+            case.executor.execute(grant, case.scheduler)
+        assert len(observed) == 1
+        current = repo.get_creation_task('local', task.id)
+        if outcome in {'normal', 'unknown_commit'}:
+            assert current.current_timeline_version_id != base.id, repo.get_job_run('local', receipt['job_id']).failure_reason
+            result = case.control.regenerate_storyboard('local', task.id, payload, case.actor, case.runtime)
+            assert result['job_id'] == receipt['job_id'] and result['status'] == 'succeeded'
+            assert case.scheduler._get(grant.request_id).state == 'done'
+            assert len(repo.list_edit_operations('local', task.id)) == 1
+            after = repo.get_creation_task_montage_plan('local', task.id)
+            assert after['audio_timeline'] == before['audio_timeline']
+            assert after['graphic_overlays'] == before['graphic_overlays']
+            assert repo.get_timeline_version('local', current.current_timeline_version_id).snapshot['narration_segments'] == base.snapshot['narration_segments']
+            assert len(observed) == 1
+        else:
+            assert changed
+            assert current.current_timeline_version_id == base.id
+            assert repo.get_creation_task_montage_plan('local', task.id) == before
+            assert not repo.list_edit_operations('local', task.id)
+            assert not [e for e in repo.list_task_events('local', task.id)
+                if e.event_type == 'storyboard_regenerated']
+    finally:
+        case.scheduler.close()
