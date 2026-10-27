@@ -18,6 +18,8 @@ from app.production import (
     CreationPlan,
     CreationPlanKnowledgeReference,
     ProductionRepository,
+)
+from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
@@ -616,14 +618,14 @@ def _script_domain_state(tmp_path, monkeypatch):
     _, input_refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     run = TopicGenerationRun(id='topic-run', workspace_id='local', task_id=task.id, plan_id=plan.id,
         status='running', route_snapshot={}, prompt_schema_version='isolated', input_references=input_refs)
-    repository.start_topic_generation(run)
+    repository.topic_records.start_topic_generation(run)
     topic = TopicCandidate(id='topic', workspace_id='local', task_id=task.id, run_id=run.id,
         title='本机工作区导览', angle='讲清入口', audience='创作者', outline=['素材用途', '计划自动备份'], score=90)
     evidence = [TopicEvidenceReference(id='topic-evidence', workspace_id='local', task_id=task.id,
         candidate_id=topic.id, kind='knowledge', reference_id=knowledge.id, version_or_identity=knowledge.version,
         title=knowledge.title, authorization_or_license='authorized', source_url=None)]
-    repository.complete_topic_generation(run.id, [topic], evidence)
-    repository.confirm_topic_candidate('local', task.id, topic.id)
+    repository.topic_records.complete_topic_generation(run.id, [topic], evidence)
+    repository.topic_records.confirm_topic_candidate('local', task.id, topic.id)
     return SimpleNamespace(repository=repository, owner=owner, task=task, plan=plan, refs=input_refs,
         token=token, verifications=verifications, settings=settings, sources=sources)
 

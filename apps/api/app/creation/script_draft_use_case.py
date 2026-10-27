@@ -5,7 +5,11 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import hashlib
 import json
 from app.creation.script_contracts import CreationTaskScriptSection, CreationTaskScript, ScriptGenerationRun
-from app.production import TopicGenerationRun, TopicEvidenceReference, TopicCandidate as CreationTaskTopicCandidate
+from app.creation.topic_contracts import (
+    TopicGenerationRun,
+    TopicEvidenceReference,
+    TopicCandidate as CreationTaskTopicCandidate,
+)
 from app.topics import CreationTaskScriptInput, CreationTaskGeneratedScript, CreationTaskScriptGenerationError, CreationTaskTopicInput, CreationTaskTopicSource, CreationTaskTopicGenerationError
 
 
@@ -675,7 +679,7 @@ class ScriptDraftUseCase:
             input_references=input_references,
         )
         try:
-            task, run = self.repository.start_topic_generation(run,write_guard=write_guard)
+            task, run = self.repository.topic_records.start_topic_generation(run,write_guard=write_guard)
         except KeyError as exc:
             raise ScriptDraftRejected(status_code=404, detail="creation task not found") from exc
         except ValueError as exc:
@@ -689,7 +693,7 @@ class ScriptDraftUseCase:
             ) from exc
 
         if preflight_error is not None:
-            task, _ = self.repository.fail_topic_generation(
+            task, _ = self.repository.topic_records.fail_topic_generation(
                 run.id,
                 reason=preflight_error.reason,
                 impact=preflight_error.impact,
@@ -721,7 +725,7 @@ class ScriptDraftUseCase:
                     detail=exc.reason, repair_action=exc.repair_action,
                     workspace_id=workspace_id,
                 )
-            self.repository.fail_topic_generation(
+            self.repository.topic_records.fail_topic_generation(
                 run.id,
                 reason=exc.reason,
                 impact=exc.impact,
@@ -779,13 +783,13 @@ class ScriptDraftUseCase:
                             ),
                         )
                     )
-            task, run, _, _ = self.repository.complete_topic_generation(
+            task, run, _, _ = self.repository.topic_records.complete_topic_generation(
                 run.id,
                 candidates,
                 evidence_references,write_guard=write_guard,
             )
         except ValueError as exc:
-            self.repository.fail_topic_generation(
+            self.repository.topic_records.fail_topic_generation(
                 run.id,
                 reason="provider_output_invalid",
                 impact="文字模型输出未通过选题和证据持久化校验，未生成候选。",

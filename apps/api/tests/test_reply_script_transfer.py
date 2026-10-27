@@ -15,6 +15,8 @@ from app.production import (
     CreationPlan,
     CreationPlanKnowledgeReference,
     ProductionRepository,
+)
+from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
@@ -112,7 +114,7 @@ def ready_task_for_transfer(tmp_path: Path, *, from_reply: bool = True):
         prompt_schema_version="topic-test/v1",
         input_references=INPUT_REFERENCES,
     )
-    repo.start_topic_generation(run)
+    repo.topic_records.start_topic_generation(run)
     topic = TopicCandidate(
         id="topic-one",
         workspace_id=WORKSPACE,
@@ -136,8 +138,8 @@ def ready_task_for_transfer(tmp_path: Path, *, from_reply: bool = True):
         authorization_or_license="available",
         source_url=None,
     )
-    repo.complete_topic_generation(run.id, [topic], [evidence])
-    repo.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
+    repo.topic_records.complete_topic_generation(run.id, [topic], [evidence])
+    repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
     plan = repo.get_creation_plan(WORKSPACE, plan.id)
     task = repo.get_creation_task(WORKSPACE, task.id)
     return repo, plan, task
@@ -555,22 +557,22 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         status="running", route_snapshot={"provider": "test-double"},
         prompt_schema_version="topic-test/v1", input_references=INPUT_REFERENCES,
     )
-    repo.start_topic_generation(topic_run)
+    repo.topic_records.start_topic_generation(topic_run)
     topic = TopicCandidate(
         id="http-topic", workspace_id=WORKSPACE, task_id=task.id, run_id=topic_run.id,
         title="当前资料的核心功能", angle="讲清实际用途", audience="普通创作者",
         outline=["需求", "结果"], score=90,
     )
-    repo.complete_topic_generation(topic_run.id, [topic], [TopicEvidenceReference(
+    repo.topic_records.complete_topic_generation(topic_run.id, [topic], [TopicEvidenceReference(
         id="http-topic-evidence", workspace_id=WORKSPACE, task_id=task.id,
         candidate_id=topic.id, kind="knowledge", reference_id="knowledge-one",
         version_or_identity="v3", title="当前知识资料", authorization_or_license="available",
         source_url=None,
     )])
-    repo.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
+    repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
     plan = repo.get_creation_plan(WORKSPACE, plan.id)
     task = repo.get_creation_task(WORKSPACE, task.id)
-    topic = repo.list_topic_candidates(WORKSPACE, task.id)[0]
+    topic = repo.topic_records.list_topic_candidates(WORKSPACE, task.id)[0]
     readable = SimpleNamespace(
         version="v3", title="当前知识资料", use_state="available",
         authorization="available", ownership="workspace",

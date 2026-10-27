@@ -102,7 +102,7 @@ class SegmentProductionUseCase:
             if original is None:
                 # Only an evidence object's exact persisted ID is a fallback binding.
                 try:
-                    evidence = self.repository.get_topic_evidence_reference(metadata['workspace_id'], metadata['task_id'], reference_id, connection=connection)
+                    evidence = self.repository.topic_records.get_topic_evidence_reference(metadata['workspace_id'], metadata['task_id'], reference_id, connection=connection)
                 except KeyError:
                     evidence = None
                 if evidence is not None and evidence.candidate_id == metadata['topic_id']:

@@ -6,6 +6,15 @@ from app.creation.script_contracts import (
     _validated_assistant_reply_reference as _validated_assistant_reply_reference, _assistant_reply_input_references as _assistant_reply_input_references, _assistant_reply_request_event_id as _assistant_reply_request_event_id,
 )
 from app.creation.script_records import ScriptRecordStore
+from app.creation.topic_records import TopicRecordStore
+from app.creation.topic_contracts import (
+    TopicCandidate as _TopicCandidate,
+    TopicEvidenceKind as _TopicEvidenceKind,
+    TopicEvidenceReference as _TopicEvidenceReference,
+    TopicGenerationRun as _TopicGenerationRun,
+    TopicGenerationRunStatus as _TopicGenerationRunStatus,
+    TopicSelectionStatus as _TopicSelectionStatus,
+)
 
 import hashlib
 import io
@@ -538,57 +547,12 @@ class VideoTemplate:
 
 
 
-TopicGenerationRunStatus = Literal["running", "succeeded", "failed"]
-TopicSelectionStatus = Literal["unselected", "confirmed"]
-TopicEvidenceKind = Literal["knowledge", "source"]
 
 
-@dataclass
-class TopicGenerationRun:
-    id: str
-    workspace_id: str
-    task_id: str
-    plan_id: str
-    status: TopicGenerationRunStatus
-    route_snapshot: dict[str, object]
-    prompt_schema_version: str
-    input_references: list[dict[str, object]]
-    reason: str | None = None
-    impact: str | None = None
-    repair_action: str | None = None
-    retryable: bool | None = None
-    started_at: datetime = field(default_factory=utc_now)
-    finished_at: datetime | None = None
 
 
-@dataclass
-class TopicCandidate:
-    id: str
-    workspace_id: str
-    task_id: str
-    run_id: str
-    title: str
-    angle: str
-    audience: str
-    outline: list[str]
-    score: int
-    selection_status: TopicSelectionStatus = "unselected"
-    created_at: datetime = field(default_factory=utc_now)
 
 
-@dataclass
-class TopicEvidenceReference:
-    id: str
-    workspace_id: str
-    task_id: str
-    candidate_id: str
-    kind: TopicEvidenceKind
-    reference_id: str
-    version_or_identity: str
-    title: str
-    authorization_or_license: str
-    source_url: str | None
-    created_at: datetime = field(default_factory=utc_now)
 
 
 
@@ -725,9 +689,13 @@ class ProductionRepository:
         """Bind only profile owners; do not open connections or provision schema."""
         self._media_authorizations = MediaAuthorizationStore(self._connect)
         self._profile_records = ProfileRecordStore(self._connect, self._media_authorizations)
+        self.topic_records = TopicRecordStore(self._connect,
+            read_task=self.get_creation_task, require_task=self._require_creation_task,
+            write_task=self._write_topic_task, read_plan_intent=self._topic_plan_intent,
+            append_event=self.append_task_event)
         self.script_records = ScriptRecordStore(self._connect,
             read_task=self.get_creation_task, require_task=self._require_creation_task,
-            decode_plan=self._creation_plan_from_payload, decode_topic=self._topic_candidate_from_payload,
+            decode_plan=self._creation_plan_from_payload, read_topic=self.topic_records.get_topic_candidate,
             transition_task=self._script_task_transition, create_library_task=self._create_script_library_task,
             knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.append_task_event,
             get_event=self.get_task_event, decode_event=self._task_event_from_row)
@@ -4328,14 +4296,11 @@ class ProductionRepository:
         title = (intent.get("topic_title") or (final["title"] if final else None)) if intent else None
         now = utc_now()
         if title and not task.selected_topic_id:
-            topic_run = TopicGenerationRun(f"provided_topic_run_{task.id}", task.workspace_id, task.id, plan.id,
+            topic_run = _TopicGenerationRun(f"provided_topic_run_{task.id}", task.workspace_id, task.id, plan.id,
                 "succeeded", {"operation": "provided_topic", "provider": "none"}, "provided-topic/v1", [], started_at=now, finished_at=now)
-            topic = TopicCandidate(f"provided_topic_{task.id}", task.workspace_id, task.id, topic_run.id,
+            topic = _TopicCandidate(f"provided_topic_{task.id}", task.workspace_id, task.id, topic_run.id,
                 title, "", "", [], 0, selection_status="confirmed", created_at=now)
-            conn.execute("INSERT INTO topic_generation_runs VALUES(?,?,?,?,?,?,?)", (topic_run.id, task.workspace_id,
-                task.id, plan.id, _json_payload(topic_run), now.isoformat(), now.isoformat()))
-            conn.execute("INSERT INTO topic_candidates VALUES(?,?,?,?,?,?)", (topic.id, task.workspace_id,
-                task.id, topic_run.id, _json_payload(topic), now.isoformat()))
+            self.topic_records.save_provided_topic(conn, topic_run, topic)
             task.selected_topic_id = topic.id
             task.stage, task.stage_status, task.recovery_point = "script", "not_started", "script"
             task.status, task.progress = "running", max(task.progress, 20)
@@ -8868,450 +8833,30 @@ class ProductionRepository:
                 ),
             )
 
-    def start_topic_generation(
-        self,
-        run: TopicGenerationRun, *, write_guard=None) -> tuple[_CreationTask, TopicGenerationRun]:
-        """Persist the running attempt before the provider boundary is crossed."""
-        if run.status != "running":
-            raise ValueError("选题运行必须以 running 状态开始")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if write_guard is not None:
-                write_guard(conn)
-            row = conn.execute(
-                """
-                SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (run.workspace_id, run.task_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(run.task_id)
-            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
-            if task.plan_id != run.plan_id:
-                raise ValueError("选题运行关联的方案与创作任务不一致")
-            if task.stage != "topic" or task.stage_status not in {"not_started", "failed"}:
-                raise ValueError("当前创作任务不允许再次开始选题")
-            now = utc_now()
-            task.stage_status = "running"
-            task.status = "running"
-            task.stage_reason = None
-            task.stage_impact = None
-            task.stage_repair_action = None
-            task.stage_retryable = None
-            task.updated_at = now
-            conn.execute(
-                """
-                INSERT INTO topic_generation_runs
-                    (id, workspace_id, task_id, plan_id, payload, started_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run.id,
-                    run.workspace_id,
-                    run.task_id,
-                    run.plan_id,
-                    _json_payload(run),
-                    run.started_at.isoformat(),
-                    now.isoformat(),
-                ),
-            )
-            conn.execute(
-                """
-                UPDATE creation_tasks SET payload = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (
-                    _json_payload(task),
-                    task.updated_at.isoformat(),
-                    task.workspace_id,
-                    task.id,
-                ),
-            )
-        return (
-            self.get_creation_task(run.workspace_id, run.task_id),
-            self.get_topic_generation_run(run.workspace_id, run.id),
+
+
+
+
+
+
+
+
+
+    def _write_topic_task(self, connection, task):
+        if not connection.in_transaction:
+            raise ValueError("选题任务状态保存必须属于原事务")
+        connection.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+            (_json_payload(task), task.updated_at.isoformat(), task.workspace_id, task.id),
         )
 
-    def complete_topic_generation(
-        self,
-        run_id: str,
-        candidates: list[TopicCandidate],
-        evidence_references: list[TopicEvidenceReference], *, write_guard=None) -> tuple[_CreationTask, TopicGenerationRun, list[TopicCandidate], list[TopicEvidenceReference]]:
-        """Commit validated candidates, their evidence, and the stage transition together."""
-        if not candidates:
-            raise ValueError("选题生成没有返回候选")
-        candidate_ids = {candidate.id for candidate in candidates}
-        if len(candidate_ids) != len(candidates):
-            raise ValueError("选题候选标识重复")
-        if any(reference.candidate_id not in candidate_ids for reference in evidence_references):
-            raise ValueError("选题证据关联了不存在的候选")
-        if any(
-            not any(reference.candidate_id == candidate.id for reference in evidence_references)
-            for candidate in candidates
-        ):
-            raise ValueError("每个选题候选都必须保留来源证据")
-
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if write_guard is not None:
-                write_guard(conn)
-            row = conn.execute(
-                """
-                SELECT payload FROM topic_generation_runs
-                WHERE id = ?
-                """,
-                (run_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(run_id)
-            run = self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
-            if run.status != "running":
-                raise ValueError("选题运行不是可完成状态")
-            task_row = conn.execute(
-                """
-                SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (run.workspace_id, run.task_id),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(run.task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
-            if task.stage_status != "running":
-                raise ValueError("创作任务的选题阶段不是运行中")
-            for candidate in candidates:
-                if (
-                    candidate.workspace_id != run.workspace_id
-                    or candidate.task_id != run.task_id
-                    or candidate.run_id != run.id
-                    or not candidate.title.strip()
-                    or not candidate.angle.strip()
-                    or not candidate.audience.strip()
-                    or not candidate.outline
-                    or not 0 <= candidate.score <= 100
-                ):
-                    raise ValueError("选题候选不符合当前任务的持久化契约")
-            for reference in evidence_references:
-                if (
-                    reference.workspace_id != run.workspace_id
-                    or reference.task_id != run.task_id
-                    or not reference.reference_id.strip()
-                    or not reference.version_or_identity.strip()
-                ):
-                    raise ValueError("选题证据不符合当前任务的持久化契约")
-
-            now = utc_now()
-            run.status = "succeeded"
-            run.route_snapshot = {
-                **run.route_snapshot,
-                "availability": "succeeded",
-                "checked_at": now,
-            }
-            run.finished_at = now
-            task.stage_status = "waiting_for_user"
-            task.status = "waiting_for_user"
-            task.progress = max(task.progress, 15)
-            task.updated_at = now
-            conn.execute(
-                """
-                UPDATE topic_generation_runs SET payload = ?, updated_at = ? WHERE id = ?
-                """,
-                (_json_payload(run), now.isoformat(), run.id),
-            )
-            conn.executemany(
-                """
-                INSERT INTO topic_candidates
-                    (id, workspace_id, task_id, run_id, payload, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        candidate.id,
-                        candidate.workspace_id,
-                        candidate.task_id,
-                        candidate.run_id,
-                        _json_payload(candidate),
-                        candidate.created_at.isoformat(),
-                    )
-                    for candidate in candidates
-                ],
-            )
-            conn.executemany(
-                """
-                INSERT INTO topic_evidence_references
-                    (id, workspace_id, task_id, candidate_id, payload, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        reference.id,
-                        reference.workspace_id,
-                        reference.task_id,
-                        reference.candidate_id,
-                        _json_payload(reference),
-                        reference.created_at.isoformat(),
-                    )
-                    for reference in evidence_references
-                ],
-            )
-            conn.execute(
-                """
-                UPDATE creation_tasks SET payload = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (
-                    _json_payload(task),
-                    task.updated_at.isoformat(),
-                    task.workspace_id,
-                    task.id,
-                ),
-            )
-        return (
-            self.get_creation_task(run.workspace_id, run.task_id),
-            self.get_topic_generation_run(run.workspace_id, run.id),
-            self.list_topic_candidates(run.workspace_id, run.task_id),
-            self.list_topic_evidence_references(run.workspace_id, run.task_id),
-        )
-
-    def fail_topic_generation(
-        self,
-        run_id: str,
-        *,
-        reason: str,
-        impact: str,
-        repair_action: str,
-        retryable: bool,
-        provider_attempted: bool = False,
-    ) -> tuple[_CreationTask, TopicGenerationRun]:
-        if not all(value.strip() for value in (reason, impact, repair_action)):
-            raise ValueError("选题失败必须包含原因、影响和修复动作")
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM topic_generation_runs WHERE id = ?", (run_id,)
-            ).fetchone()
-            if row is None:
-                raise KeyError(run_id)
-            run = self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
-            if run.status != "running":
-                raise ValueError("选题运行不是可失败状态")
-            task_row = conn.execute(
-                """
-                SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (run.workspace_id, run.task_id),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(run.task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
-            now = utc_now()
-            run.status = "failed"
-            run.reason = reason
-            run.impact = impact
-            run.repair_action = repair_action
-            run.retryable = retryable
-            if provider_attempted:
-                run.route_snapshot = {
-                    **run.route_snapshot,
-                    "availability": "failed",
-                    "checked_at": now,
-                }
-            run.finished_at = now
-            task.stage_status = "failed"
-            task.status = "failed"
-            task.recovery_point = "topic"
-            task.stage_reason = reason
-            task.stage_impact = impact
-            task.stage_repair_action = repair_action
-            task.stage_retryable = retryable
-            task.updated_at = now
-            conn.execute(
-                "UPDATE topic_generation_runs SET payload = ?, updated_at = ? WHERE id = ?",
-                (_json_payload(run), now.isoformat(), run.id),
-            )
-            conn.execute(
-                """
-                UPDATE creation_tasks SET payload = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (
-                    _json_payload(task),
-                    task.updated_at.isoformat(),
-                    task.workspace_id,
-                    task.id,
-                ),
-            )
-        return (
-            self.get_creation_task(run.workspace_id, run.task_id),
-            self.get_topic_generation_run(run.workspace_id, run.id),
-        )
-
-    def get_topic_generation_run(
-        self, workspace_id: str, run_id: str
-    ) -> TopicGenerationRun:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT payload FROM topic_generation_runs
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (workspace_id, run_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(run_id)
-        return self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
-
-    def latest_topic_generation_run(
-        self, workspace_id: str, task_id: str
-    ) -> TopicGenerationRun | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT payload FROM topic_generation_runs
-                WHERE workspace_id = ? AND task_id = ?
-                ORDER BY started_at DESC LIMIT 1
-                """,
-                (workspace_id, task_id),
-            ).fetchone()
-        return (
-            self._topic_generation_run_from_payload(json.loads(str(row["payload"])))
-            if row is not None
-            else None
-        )
-
-    def list_topic_candidates(
-        self, workspace_id: str, task_id: str
-    ) -> list[TopicCandidate]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload FROM topic_candidates
-                WHERE workspace_id = ? AND task_id = ?
-                ORDER BY created_at ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [
-            self._topic_candidate_from_payload(json.loads(str(row["payload"])))
-            for row in rows
-        ]
-
-    def list_topic_evidence_references(
-        self, workspace_id: str, task_id: str
-    ) -> list[TopicEvidenceReference]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT payload FROM topic_evidence_references
-                WHERE workspace_id = ? AND task_id = ?
-                ORDER BY created_at ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [
-            self._topic_evidence_reference_from_payload(json.loads(str(row["payload"])))
-            for row in rows
-        ]
-
-    def get_topic_evidence_reference(self, workspace_id, task_id, evidence_id, *, connection=None):
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            row = conn.execute('SELECT payload FROM topic_evidence_references WHERE workspace_id=? AND task_id=? AND id=?',
-                (workspace_id, task_id, evidence_id)).fetchone()
-        if row is None:
-            raise KeyError(evidence_id)
-        return self._topic_evidence_reference_from_payload(json.loads(row['payload']))
-
-    def confirm_topic_candidate(
-        self, workspace_id: str, task_id: str, candidate_id: str, *, title: str | None = None,
-        adoption_kind: Literal["manual", "delegated_system"] = "manual", verified_owner_user_id: str | None = None, write_guard=None) -> tuple[_CreationTask, TopicCandidate]:
-        if title is not None:
-            title = title.strip()
-            if not 1 <= len(title) <= 80:
-                raise ValueError("选题标题需要填写 1–80 个字符")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if write_guard is not None:
-                write_guard(conn)
-            task_row = conn.execute(
-                """
-                SELECT payload FROM creation_tasks
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (workspace_id, task_id),
-            ).fetchone()
-            if task_row is None:
-                raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
-            from app.creation.intent_use_case import CreationIntentUseCase
-            plan_row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
-            plan = self._creation_plan_from_payload(json.loads(plan_row["payload"]))
-            adoption = CreationIntentUseCase.adoption(plan.creation_intent, kind=adoption_kind,
-                member_id=content_owner(verified_owner_user_id) or task.owner_user_id, version=candidate_id)
-            candidate_row = conn.execute(
-                """
-                SELECT payload FROM topic_candidates
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (workspace_id, task_id, candidate_id),
-            ).fetchone()
-            if candidate_row is None:
-                raise KeyError(candidate_id)
-            candidate = self._topic_candidate_from_payload(
-                json.loads(str(candidate_row["payload"]))
-            )
-            if (
-                task.selected_topic_id == candidate_id
-                and candidate.selection_status == "confirmed"
-            ):
-                if title is not None and title != candidate.title:
-                    raise ValueError("选题已经确认，不能通过重复确认改写标题")
-                return task, candidate
-            if task.selected_topic_id is not None:
-                raise ValueError("当前创作任务已经确认了另一个选题")
-            if task.stage != "topic" or task.stage_status != "waiting_for_user":
-                raise ValueError("当前创作任务不在等待确认选题状态")
-            now = utc_now()
-            candidate.selection_status = "confirmed"
-            if title is not None:
-                candidate.title = title
-            task.selected_topic_id = candidate.id
-            task.stage = "script"
-            task.stage_status = "not_started"
-            task.status = "running"
-            task.progress = max(task.progress, 20)
-            task.recovery_point = "script"
-            task.stage_reason = None
-            task.stage_impact = None
-            task.stage_repair_action = None
-            task.stage_retryable = None
-            task.updated_at = now
-            conn.execute(
-                "UPDATE topic_candidates SET payload = ? WHERE id = ?",
-                (_json_payload(candidate), candidate.id),
-            )
-            self.append_task_event(_TaskEvent(f"topic_adopted_{candidate.id}", workspace_id, task_id, None,
-                "topic_adopted", {"topic_id": candidate.id, "title": candidate.title, "adoption": adoption}), connection=conn)
-            conn.execute(
-                """
-                UPDATE creation_tasks SET payload = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (
-                    _json_payload(task),
-                    task.updated_at.isoformat(),
-                    task.workspace_id,
-                    task.id,
-                ),
-            )
-        return (
-            self.get_creation_task(workspace_id, task_id),
-            next(
-                candidate
-                for candidate in self.list_topic_candidates(workspace_id, task_id)
-                if candidate.id == candidate_id
-            ),
-        )
+    def _topic_plan_intent(self, connection, workspace_id, plan_id):
+        row = connection.execute(
+            "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
+            (workspace_id, plan_id),
+        ).fetchone()
+        plan = self._creation_plan_from_payload(json.loads(row["payload"]))
+        return plan.creation_intent
 
     def _script_task_transition(self, conn, task, transition, now, *, script_id=None,
                                 reason=None, impact=None, repair_action=None, retryable=None):
@@ -10600,21 +10145,8 @@ class ProductionRepository:
             ),
         )
 
-    @staticmethod
-    def _topic_generation_run_from_payload(data: dict[str, object]) -> TopicGenerationRun:
-        return TopicGenerationRun(
-            **_with_datetime(data, "started_at", "finished_at")
-        )
 
-    @staticmethod
-    def _topic_candidate_from_payload(data: dict[str, object]) -> TopicCandidate:
-        return TopicCandidate(**_with_datetime(data, "created_at"))
 
-    @staticmethod
-    def _topic_evidence_reference_from_payload(
-        data: dict[str, object],
-    ) -> TopicEvidenceReference:
-        return TopicEvidenceReference(**_with_datetime(data, "created_at"))
 
     @staticmethod
     def _script_generation_run_from_payload(data: dict[str, object]):

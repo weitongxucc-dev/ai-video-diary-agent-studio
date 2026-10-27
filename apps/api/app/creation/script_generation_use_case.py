@@ -80,7 +80,7 @@ class ScriptGenerationUseCase:
                 retryable=False,
             ) from exc
         selected_topic = next(
-            (candidate for candidate in self.repository.list_topic_candidates(workspace_id, task.id)
+            (candidate for candidate in self.repository.topic_records.list_topic_candidates(workspace_id, task.id)
              if candidate.id == task.selected_topic_id), None,
         )
         if selected_topic is None:
@@ -211,5 +211,5 @@ class ScriptGenerationUseCase:
         intent = plan.creation_intent
         if not intent or not (intent.get("topic_title") or intent.get("final_script")):
             return "generated"
-        run = self.repository.get_topic_generation_run(workspace_id, topic.run_id)
+        run = self.repository.topic_records.get_topic_generation_run(workspace_id, topic.run_id)
         return "provided" if run.task_id == topic.task_id and run.route_snapshot.get("operation") == "provided_topic" else "generated"

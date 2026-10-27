@@ -2766,10 +2766,28 @@ def _configure_workspace_text_service(
         workspace_settings_module.save_workspace_secret(workspace_id, "llm_api_key", api_key)
 
 
+@pytest.fixture
+def topic_facts_without_media(monkeypatch):
+    import subprocess
+    import _media_preview_test_fixtures as media_fixtures
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("topic record verification must not run media or subprocesses")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    # The existing preflight still uses stable on-disk material facts.
+    monkeypatch.setitem(globals(), "write_synthetic_video",
+        lambda path, **_kwargs: path.write_bytes(b"isolated-topic-material-fact"))
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
+
+
 def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     tmp_path,
     monkeypatch,
     plan_owner,
+    topic_facts_without_media,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
@@ -2883,7 +2901,7 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     second_topic_id = generated_body["candidates"][1]["id"]
     for invalid_title in ("  ", "字" * 81):
         with pytest.raises(ValueError, match="1–80"):
-            production.confirm_topic_candidate("workspace_a", task_id, first_topic_id, title=invalid_title)
+            production.topic_records.confirm_topic_candidate("workspace_a", task_id, first_topic_id, title=invalid_title)
     assert production.get_creation_task("workspace_a", task_id).selected_topic_id is None
     confirmed = client.post(
         f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={"title": "  用户编辑的真实标题  "}
@@ -2925,15 +2943,15 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     saved_task = reloaded.get_creation_task("workspace_a", task_id)
     assert saved_task.selected_topic_id == first_topic_id
     assert saved_task.stage == "script"
-    assert next(item for item in reloaded.list_topic_candidates("workspace_a", task_id) if item.id == first_topic_id).title == "用户编辑的真实标题"
+    assert next(item for item in reloaded.topic_records.list_topic_candidates("workspace_a", task_id) if item.id == first_topic_id).title == "用户编辑的真实标题"
     assert saved_task.stage_status == "not_started"
-    assert len(reloaded.list_topic_candidates("workspace_a", task_id)) == 2
-    reloaded_evidence = reloaded.list_topic_evidence_references("workspace_a", task_id)
+    assert len(reloaded.topic_records.list_topic_candidates("workspace_a", task_id)) == 2
+    reloaded_evidence = reloaded.topic_records.list_topic_evidence_references("workspace_a", task_id)
     assert len(reloaded_evidence) == 2
     assert next(
         item for item in reloaded_evidence if item.kind == "source"
     ).version_or_identity == confirmed_plan.source_references[0].identity
-    reloaded_run = reloaded.latest_topic_generation_run("workspace_a", task_id)
+    reloaded_run = reloaded.topic_records.latest_topic_generation_run("workspace_a", task_id)
     assert reloaded_run is not None
     assert next(
         item for item in reloaded_run.input_references if item["kind"] == "source"
@@ -3380,6 +3398,7 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
     tmp_path,
     monkeypatch,
     plan_owner,
+    topic_facts_without_media,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)

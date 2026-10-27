@@ -13,8 +13,10 @@ from app.creation.source_inputs_use_case import CreationSourceInputs
 from app.production import (
     CreationPlan,
     ProductionRepository,
-    TopicCandidate as CreationTaskTopicCandidate,
     content_readable,
+)
+from app.creation.topic_contracts import (
+    TopicCandidate as CreationTaskTopicCandidate,
 )
 from app.creation.contracts import CreationTask
 
@@ -51,7 +53,7 @@ class ScriptContextUseCase:
         elif task.stage != "script" or task.confirmed_script_id:
             raise ScriptDraftRejected(status_code=409, detail="当前任务不在待确认文案阶段")
         plan = self._plan(workspace_id, task)
-        topic = next((item for item in self.repository.list_topic_candidates(workspace_id, task_id)
+        topic = next((item for item in self.repository.topic_records.list_topic_candidates(workspace_id, task_id)
                       if item.id == task.selected_topic_id), None)
         if topic is None:
             raise ScriptDraftRejected(status_code=409, detail="请先确认本次选题")
@@ -69,7 +71,7 @@ class ScriptContextUseCase:
         intent = plan.creation_intent
         if not intent or not (intent.get("topic_title") or intent.get("final_script")):
             return "generated"
-        run = self.repository.get_topic_generation_run(workspace_id, topic.run_id)
+        run = self.repository.topic_records.get_topic_generation_run(workspace_id, topic.run_id)
         return "provided" if run.task_id == topic.task_id and run.route_snapshot.get("operation") == "provided_topic" else "generated"
 
     def goal(self, plan: CreationPlan, task: CreationTask, viewer_user_id: str | None) -> str:

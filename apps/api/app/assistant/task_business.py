@@ -653,7 +653,7 @@ class TaskBusiness:
         if operation=='generate_creation_task_topics': return self.generate_topics(ws,task,guard)
         if operation=='confirm_creation_task_topic':
             payload=CreationTaskTopicConfirmRequest.model_validate(args['payload']);self._adoption_origin(origin,False)
-            task,_=self.production.confirm_topic_candidate(ws,task_id,args['candidate_id'],title=payload.title,
+            task,_=self.production.topic_records.confirm_topic_candidate(ws,task_id,args['candidate_id'],title=payload.title,
                 adoption_kind='delegated_system',verified_owner_user_id=goal['member_id'],write_guard=guard)
             return self.topic_facts(ws,task)
         if operation in {'start_creation_execution','resume_creation_execution','cancel_creation_execution'}:

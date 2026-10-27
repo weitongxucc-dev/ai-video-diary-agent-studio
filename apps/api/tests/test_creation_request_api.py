@@ -339,9 +339,9 @@ def test_delegated_existing_topic_is_adopted_without_topic_generation(client_sta
     assert entry["plan"]["adoption"]["operator"] == "system"
     task = c.repository.get_creation_task("request-test", entry["task_id"])
     assert task.stage == "script" and task.selected_topic_id
-    topics = c.repository.list_topic_candidates("request-test", task.id)
+    topics = c.repository.topic_records.list_topic_candidates("request-test", task.id)
     assert len(topics) == 1 and topics[0].title == "用户已有主题"
-    run = c.repository.latest_topic_generation_run("request-test", task.id)
+    run = c.repository.topic_records.latest_topic_generation_run("request-test", task.id)
     assert run.route_snapshot == {"operation": "provided_topic", "provider": "none"}
     route = {"provider_kind": "openai_compatible", "execution_location": "cloud", "model_id": "test-model",
         "endpoint_identity": "https://models.invalid", "connection_version": "test-connection",

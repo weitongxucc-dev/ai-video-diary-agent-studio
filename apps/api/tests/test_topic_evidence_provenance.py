@@ -9,6 +9,8 @@ from app.production import (
     CreationPlanKnowledgeReference,
     CreationPlanSourceReference,
     ProductionRepository,
+)
+from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
@@ -66,7 +68,7 @@ def start_topic(context):
         status="running", route_snapshot={"provider": "controlled"},
         prompt_schema_version="fixture", input_references=inputs,
     )
-    production.start_topic_generation(run)
+    production.topic_records.start_topic_generation(run)
     candidate = TopicCandidate(
         id="candidate", workspace_id="qa", task_id=task.id, run_id=run.id,
         title="介绍事实", angle="说明事实", audience="创作者", outline=["事实"], score=90,
@@ -83,12 +85,12 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     sources, production, plan, task = evidence_context
     run, candidate, references = start_topic(evidence_context)
     assert references[0].authorization_or_license == ""
-    _, completed, _, persisted = production.complete_topic_generation(run.id, [candidate], references)
+    _, completed, _, persisted = production.topic_records.complete_topic_generation(run.id, [candidate], references)
     assert completed.status == "succeeded"
     assert [(item.version_or_identity, item.authorization_or_license) for item in persisted] == [
         ("1", ""), (plan.source_references[0].identity, "unknown"),
     ]
-    production.confirm_topic_candidate("qa", task.id, candidate.id)
+    production.topic_records.confirm_topic_candidate("qa", task.id, candidate.id)
     sources.set_knowledge_item_use_state("qa", "knowledge", "excluded")
     with pytest.raises(main.ScriptDraftRejected) as blocked:
         main._script_context_use_case().read_inputs("qa", task.id)
@@ -161,16 +163,16 @@ def test_empty_provenance_keeps_evidence_identity_and_association_checks(evidenc
     _, production, _, _ = evidence_context
     run, candidate, references = start_topic(evidence_context)
     with pytest.raises(ValueError, match="选题证据"):
-        production.complete_topic_generation(run.id, [candidate], [replace(references[0], **change), references[1]])
-    assert production.list_topic_candidates("qa", "task") == []
+        production.topic_records.complete_topic_generation(run.id, [candidate], [replace(references[0], **change), references[1]])
+    assert production.topic_records.list_topic_candidates("qa", "task") == []
 
 
 def test_empty_provenance_keeps_topic_score_hard_limit(evidence_context):
     _, production, _, _ = evidence_context
     run, candidate, references = start_topic(evidence_context)
     with pytest.raises(ValueError, match="选题候选"):
-        production.complete_topic_generation(run.id, [replace(candidate, score=101)], references)
-    assert production.list_topic_candidates("qa", "task") == []
+        production.topic_records.complete_topic_generation(run.id, [replace(candidate, score=101)], references)
+    assert production.topic_records.list_topic_candidates("qa", "task") == []
 
 
 def test_source_inputs_keep_owner_reads_separate_from_current_reader_authority(evidence_context):
@@ -188,3 +190,48 @@ def test_source_inputs_keep_owner_reads_separate_from_current_reader_authority(e
     assert rejected.value.reason == 'assistant_reply_source_changed'
     # The task owner's readable snapshot does not grant the caller access.
     assert task.owner_user_id == 'owner'
+
+
+def test_topic_record_owner_rolls_back_event_refusal_and_guards_confirmed_reentry(evidence_context):
+    import sqlite3
+    from app.creation.topic_records import TopicRecordStore
+
+    _, production, _, task = evidence_context
+    assert isinstance(production.topic_records, TopicRecordStore)
+    run, candidate, references = start_topic(evidence_context)
+    production.topic_records.complete_topic_generation(run.id, [candidate], references)
+    guards = []
+
+    def guard(connection):
+        assert connection.in_transaction
+        guards.append(connection)
+
+    with production._connect() as connection:
+        connection.execute("""CREATE TRIGGER refuse_topic_event BEFORE INSERT ON task_events
+            WHEN NEW.event_type = 'topic_adopted'
+            BEGIN SELECT RAISE(ABORT, 'isolated topic event refusal'); END""")
+    with pytest.raises(ValueError, match="任务事件 ID 已存在") as refused:
+        production.topic_records.confirm_topic_candidate(
+            "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=guard,
+        )
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert str(refused.value.__cause__) == "isolated topic event refusal"
+    assert production.get_creation_task("qa", task.id).selected_topic_id is None
+    assert production.topic_records.get_topic_candidate("qa", task.id, candidate.id).selection_status == "unselected"
+    assert not [event for event in production.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]
+    with production._connect() as connection:
+        connection.execute("DROP TRIGGER refuse_topic_event")
+    production.topic_records.confirm_topic_candidate(
+        "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=guard,
+    )
+
+    def revoked(connection):
+        assert connection.in_transaction
+        raise ValueError("original owner revoked")
+
+    with pytest.raises(ValueError, match="original owner revoked"):
+        production.topic_records.confirm_topic_candidate(
+            "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=revoked,
+        )
+    assert len(guards) == 2
+    assert len([event for event in production.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]) == 1

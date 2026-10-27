@@ -66,7 +66,7 @@ class ScriptGenerationIntent:
         if plan.creation_task_id != task.id:
             raise ValueError("当前任务与制作要求不匹配")
         goal = CreationIntentUseCase.script_goal(self.repository, plan, task, viewer_user_id=member_id)
-        topic = next((item for item in self.repository.list_topic_candidates(task.workspace_id, task.id)
+        topic = next((item for item in self.repository.topic_records.list_topic_candidates(task.workspace_id, task.id)
                       if item.id == task.selected_topic_id), None)
         if topic is None:
             raise ValueError("当前任务还没有已确认选题")

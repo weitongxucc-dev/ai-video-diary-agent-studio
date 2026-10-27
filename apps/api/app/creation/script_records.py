@@ -60,7 +60,7 @@ class ScriptRecordStore:
         read_task,
         require_task,
         decode_plan,
-        decode_topic,
+        read_topic,
         transition_task,
         create_library_task,
         knowledge_inputs_current,
@@ -72,7 +72,7 @@ class ScriptRecordStore:
         self.get_creation_task = read_task
         self._require_creation_task = require_task
         self._creation_plan_from_payload = decode_plan
-        self._topic_candidate_from_payload = decode_topic
+        self._read_topic = read_topic
         self._transition_task = transition_task
         self._create_library_task = create_library_task
         self._knowledge_inputs_current = knowledge_inputs_current
@@ -418,15 +418,12 @@ class ScriptRecordStore:
                     raise ValueError("回复移交的已确认选题已变化")
                 if task.confirmed_script_id is not None:
                     raise ValueError("已确认文案不能被对话回复移交覆盖")
-                topic_row = conn.execute(
-                    "SELECT payload FROM topic_candidates WHERE workspace_id = ? AND task_id = ? AND id = ?",
-                    (workspace_id, task_id, expected_topic_id),
-                ).fetchone()
-                if topic_row is None:
-                    raise ValueError("回复移交选题不属于当前任务")
-                topic = self._topic_candidate_from_payload(
-                    json.loads(str(topic_row["payload"]))
-                )
+                try:
+                    topic = self._read_topic(
+                        workspace_id, task_id, expected_topic_id, connection=conn,
+                    )
+                except KeyError as exc:
+                    raise ValueError("回复移交选题不属于当前任务") from exc
                 if topic.selection_status != "confirmed":
                     raise ValueError("回复移交前必须确认当前选题")
                 if task.stage != "script" or task.stage_status not in {

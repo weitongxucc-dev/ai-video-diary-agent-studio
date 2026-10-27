@@ -67,7 +67,7 @@ def test_script_turn_rejects_missing_authorized_sources_before_pi(tmp_path, monk
     repo = _script_task(tmp_path)
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(repo, "list_topic_candidates", lambda _workspace_id, _task_id: [
+    monkeypatch.setattr(repo.topic_records, "list_topic_candidates", lambda _workspace_id, _task_id: [
         SimpleNamespace(id="topic-one", title="测试主题", angle="讲清楚", audience="普通人", outline=["开头"]),
     ])
     monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
@@ -89,7 +89,7 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
     repo = _script_task(tmp_path)
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(repo, "list_topic_candidates", lambda _workspace_id, _task_id: [
+    monkeypatch.setattr(repo.topic_records, "list_topic_candidates", lambda _workspace_id, _task_id: [
         SimpleNamespace(id="topic-one"),
     ])
     def stale_sources(*_args, **_kwargs):
@@ -287,7 +287,9 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     import json
     import httpx
     from test_creation_task_topic_provider import _review_tool_response
-    from app.production import TopicCandidate
+    from app.creation.topic_contracts import (
+        TopicCandidate,
+    )
     from app.topics import CreationTaskTopicSource, OpenAICompatibleCreationTaskScriptGenerator
 
     repo = _script_task(tmp_path)

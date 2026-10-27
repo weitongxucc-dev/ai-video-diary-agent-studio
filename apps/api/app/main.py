@@ -288,11 +288,13 @@ from app.production import (
     ProductionBatch,
     ProductionProfile,
     ProductionRepository,
+    effective_segment_usage_role,
+    material_segment_eligible,
+)
+from app.creation.topic_contracts import (
     TopicCandidate as CreationTaskTopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
-    effective_segment_usage_role,
-    material_segment_eligible,
 )
 from app.creation.contracts import CreationTask, NarrationSegment
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
@@ -3241,10 +3243,10 @@ def _creation_task_topic_response(
     preflight_input_count: int = 0,
 ) -> CreationTaskTopicsResponse:
     route_snapshot = route_snapshot or _topic_route_snapshot(workspace_id)
-    latest_run = production_repo.latest_topic_generation_run(workspace_id, task.id)
+    latest_run = production_repo.topic_records.latest_topic_generation_run(workspace_id, task.id)
     route_snapshot = _projected_topic_route_snapshot(route_snapshot, latest_run)
-    candidates = production_repo.list_topic_candidates(workspace_id, task.id)
-    evidence_references = production_repo.list_topic_evidence_references(workspace_id, task.id)
+    candidates = production_repo.topic_records.list_topic_candidates(workspace_id, task.id)
+    evidence_references = production_repo.topic_records.list_topic_evidence_references(workspace_id, task.id)
     cloud_egress = route_snapshot["execution_location"] == "cloud"
     return CreationTaskTopicsResponse.model_validate(
         {
@@ -4835,14 +4837,14 @@ def _creation_task_workspace_response(
     selected_topic = next(
         (
             candidate
-            for candidate in production_repo.list_topic_candidates(workspace_id, task.id)
+            for candidate in production_repo.topic_records.list_topic_candidates(workspace_id, task.id)
             if candidate.id == task.selected_topic_id
         ),
         None,
     )
     topic_evidence = [
         reference
-        for reference in production_repo.list_topic_evidence_references(workspace_id, task.id)
+        for reference in production_repo.topic_records.list_topic_evidence_references(workspace_id, task.id)
         if selected_topic is not None and reference.candidate_id == selected_topic.id
     ]
     artifact = (
@@ -6538,7 +6540,7 @@ def confirm_creation_task_topic(
     if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
         _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
     try:
-        task, _ = production_repo.confirm_topic_candidate(
+        task, _ = production_repo.topic_records.confirm_topic_candidate(
             workspace_id,
             task_id,
             topic_id,

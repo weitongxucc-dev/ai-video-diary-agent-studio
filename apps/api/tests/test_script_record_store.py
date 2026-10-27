@@ -56,7 +56,7 @@ def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp
         read_task=unavailable,
         require_task=unavailable,
         decode_plan=unavailable,
-        decode_topic=unavailable,
+        read_topic=unavailable,
         transition_task=unavailable,
         create_library_task=unavailable,
         knowledge_inputs_current=unavailable,

@@ -210,7 +210,7 @@ def test_header_list_filters_in_sql_and_uses_a_stable_browse_cursor():
         read_task=absent,
         require_task=absent,
         decode_plan=absent,
-        decode_topic=absent,
+        read_topic=absent,
         transition_task=absent,
         create_library_task=absent,
         knowledge_inputs_current=absent,

@@ -8,6 +8,8 @@ from app.production import (
     CreationPlan,
     CreationPlanKnowledgeReference,
     ProductionRepository,
+)
+from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
     TopicGenerationRun,
@@ -60,7 +62,7 @@ def ready_script(tmp_path: Path) -> tuple[ProductionRepository, CreationTaskScri
         input_references=[{"reference_id": REFERENCE_ID, "kind": "knowledge", "object_id": "source-one",
                            "version_or_identity": "v1", "title": "资料"}],
     )
-    repo.start_topic_generation(topic_run)
+    repo.topic_records.start_topic_generation(topic_run)
     topic = TopicCandidate(
         id="topic-cas", workspace_id=WORKSPACE, task_id=task.id, run_id=topic_run.id,
         title="资料介绍", angle="说明核心内容", audience="创作者", outline=["内容"], score=90,
@@ -70,8 +72,8 @@ def ready_script(tmp_path: Path) -> tuple[ProductionRepository, CreationTaskScri
         candidate_id=topic.id, kind="knowledge", reference_id="source-one",
         version_or_identity="v1", title="资料", authorization_or_license="available", source_url=None,
     )
-    repo.complete_topic_generation(topic_run.id, [topic], [evidence])
-    repo.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
+    repo.topic_records.complete_topic_generation(topic_run.id, [topic], [evidence])
+    repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
     script_run = ScriptGenerationRun(
         id="script-run-cas", workspace_id=WORKSPACE, task_id=task.id, plan_id=plan.id,
         topic_id=topic.id, status="running", route_snapshot={"provider": "test-double"},
