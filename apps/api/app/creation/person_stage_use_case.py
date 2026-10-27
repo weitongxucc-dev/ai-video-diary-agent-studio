@@ -8,7 +8,7 @@ from app.creation.contracts import DependencyEdge
 from app.task_runtime import JobFailure
 from app.task_runtime import JobResult
 from app.creation.contracts import JobRun
-from app.production import MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError
 from pathlib import Path
 from app.production import PersonRender
 from app.creation.contracts import TransformRun

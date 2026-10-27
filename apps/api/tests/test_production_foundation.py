@@ -21,6 +21,7 @@ from app.database_migrations import (
 )
 from app.model_runtime import ModelCatalog
 from app.local_members import LocalMemberService
+from app.materials.contracts import MediaAuthorityError
 from app.production import (
     ArtifactRecord,
     CreationPlan,
@@ -34,7 +35,6 @@ from app.production import (
     EditProposal,
     JobRun,
     MaterialCollection,
-    MediaAuthorityError,
     NarrationArtifactRecord,
     NarrationSegment,
     PersonRender,
@@ -3805,8 +3805,17 @@ def test_persisted_narration_reference_is_workspace_scoped_and_never_an_absolute
     assert production.resolve_authorized_narration_audio_reference(
         "workspace_a", reference
     ) == audio
-    with pytest.raises(MediaAuthorityError):
+    with pytest.raises(MediaAuthorityError) as rejected:
         production.resolve_authorized_narration_audio_reference("workspace_b", reference)
+    assert type(rejected.value) is MediaAuthorityError
+    response = main_module._media_authority_http_error(rejected.value)
+    assert response.status_code == 409
+    assert response.detail == {
+        "error": rejected.value.reason,
+        "impact": rejected.value.impact,
+        "repair_action": rejected.value.repair_action,
+        "retryable": False,
+    }
     with pytest.raises(MediaAuthorityError):
         production.resolve_authorized_narration_audio_reference("workspace_a", str(audio))
 

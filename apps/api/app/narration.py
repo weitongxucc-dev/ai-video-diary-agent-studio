@@ -587,7 +587,8 @@ class VoicePreviewService:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
     ):
-        from app.production import MediaAuthorityError, MediaPreviewRunRecord
+        from app.materials.contracts import MediaAuthorityError
+        from app.production import MediaPreviewRunRecord
 
         inputs = repository.resolve_narration_inputs(
             workspace_id=workspace_id,

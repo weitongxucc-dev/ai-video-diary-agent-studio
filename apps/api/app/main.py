@@ -268,7 +268,8 @@ from app.scheduled_tasks import (
     ScheduledTaskService,
     ScheduledTaskUpdateRequest,
 )
-from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MediaAuthorityError, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_segment_eligible)
+from app.materials.contracts import MediaAuthorityError
+from app.production import (EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, content_readable, CreationPlan, VideoTemplate, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference, CreationTask, CreationTaskScript, CreationTaskScriptSection, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, NarrationSegment, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, ScriptGenerationRun, TopicCandidate as CreationTaskTopicCandidate, TopicEvidenceReference, TopicGenerationRun, effective_segment_usage_role, material_segment_eligible)
 from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,

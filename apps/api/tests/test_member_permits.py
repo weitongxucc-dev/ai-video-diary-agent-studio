@@ -719,7 +719,8 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
     from app.artifact_store import ArtifactStore
     from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
     from app.creation_execution import CreationStageGrantContext, presenter_inputs, presenter_input_facts, current_presenter_render, montage_waiting_for_confirmation, submit_creation_stage
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, PersonRender, TransformRun, MediaAuthorityError, utc_now
+    from app.materials.contracts import MediaAuthorityError
+    from app.production import ArtifactRecord, DependencyEdge, JobRun, PersonRender, TransformRun, utc_now
     from app.schemas import CreationTaskPersonRenderRequest
     from app.task_runtime import JobFailure, JobResult
     from app.video_jobs import VideoJobRunner

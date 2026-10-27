@@ -8,7 +8,7 @@ import pytest
 
 from app import production
 from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference
-from app.materials.contracts import MaterialAsset, MediaAuthorityError
+from app.materials.contracts import MaterialAsset
 from app.profiles.contracts import Authorization, PersonProfile, ProfileReference, VoiceProfile
 from app.profiles.registration import ProfileRegistrationUseCase
 from app.source_policy import content_owner
@@ -57,7 +57,7 @@ def case(tmp_path):
 def test_registration_and_fixed_selections_survive_new_versions_and_restart(tmp_path):
     repo, person, voice = case(tmp_path)
     assert isinstance(repo._profile_registration, ProfileRegistrationUseCase)
-    assert production.MediaAuthorityError is MediaAuthorityError
+    assert not hasattr(production, "MediaAuthorityError")
     assert production.CreationPlanPersonReference is CreationPlanPersonReference
     assert production.CreationPlanVoiceReference is CreationPlanVoiceReference
     assert production.content_owner is content_owner

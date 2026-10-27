@@ -9,7 +9,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.production import CreationPlan, CreationPlanBlocker, CreationTask, CreationTaskScript, CreationTaskScriptSection, JobRun, MediaAuthorityError, ProductionRepository
+from app.materials.contracts import MediaAuthorityError
+from app.production import CreationPlan, CreationPlanBlocker, CreationTask, CreationTaskScript, CreationTaskScriptSection, JobRun, ProductionRepository
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse
 from _media_preview_test_fixtures import register_synthetic_profiles
 

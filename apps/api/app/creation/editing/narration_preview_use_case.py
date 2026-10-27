@@ -5,7 +5,7 @@ import re
 
 from app.creation.contracts import EditIntent
 from app.creation.contracts import EditProposal
-from app.production import MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError
 from app.narration import compile_narration_command
 from app.montage import creation_task_montage_plan_from_payload
 from app.models import utc_now

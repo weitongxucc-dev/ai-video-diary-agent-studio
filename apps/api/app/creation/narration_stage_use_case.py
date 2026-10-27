@@ -1,5 +1,5 @@
 from __future__ import annotations
-from app.production import MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError
 from app.narration import NarrationArtifact, _pronunciation_dictionary, _pronunciation_version
 from app.production import NarrationArtifactRecord
 from app.production import NarrationSegment

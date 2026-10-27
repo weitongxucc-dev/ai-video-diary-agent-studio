@@ -18,7 +18,8 @@ from app.creation_execution import CpuRenderGrantContext
 from app.media.picture_preview import PicturePreviewRejected
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, _validate_rendered_media
-from app.production import CreationTask, MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError
+from app.production import CreationTask
 from app.task_runtime import JobFailure, JobResult
 
 CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v22"

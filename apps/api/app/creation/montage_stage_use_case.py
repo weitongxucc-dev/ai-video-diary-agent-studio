@@ -6,7 +6,8 @@ from dataclasses import replace
 
 from app.creation_execution import CreationStageGrantContext, current_presenter_render, presenter_inputs
 from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
-from app.production import CreationPlan, CreationTask, MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError
+from app.production import CreationPlan, CreationTask
 from app.visual_effects import reusable_color_settings
 
 

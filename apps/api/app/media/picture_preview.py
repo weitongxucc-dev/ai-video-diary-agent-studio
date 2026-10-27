@@ -11,7 +11,8 @@ from app.graphic_sources import graphic_source_facts
 from app.linked_timeline import remove_time_ranges
 from app.local_portrait import LocalPortrait
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import PersonRender, MediaAuthorityError, SubtitleTrack, SubtitleCue, content_readable, material_allows_footage
+from app.materials.contracts import MediaAuthorityError
+from app.production import PersonRender, SubtitleTrack, SubtitleCue, content_readable, material_allows_footage
 from app.task_audio import TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
 from app.canvas import canvas_size
 from app.transitions import extend_dissolve_sources

@@ -70,7 +70,7 @@ from app.materials.discovery import MaterialDiscoveryService
 from app.materials.discovery_store import DiscoveryStore
 from app.materials.discovery_intake import DiscoveryIntake
 from app.source_policy import content_owner
-from app.materials.contracts import MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError as _MediaAuthorityError
 from app.creation.contracts import CreationPlanVoiceReference, CreationPlanPersonReference
 from app.persistence_json import (
     _json_payload, _json_object, _json_default, _with_datetime,
@@ -942,7 +942,7 @@ class ProductionRepository:
             or parsed.fragment
             or not re.fullmatch(r"/[a-zA-Z0-9_-]{1,128}", parsed.path)
         ):
-            raise MediaAuthorityError(
+            raise _MediaAuthorityError(
                 reason="logical_media_reference_required",
                 impact="任意本机路径不能作为旁白或渲染输入。",
                 repair_action="从当前工作区选择 workspace:// 媒体，或使用已有 narration://artifact 资源。",
@@ -952,7 +952,7 @@ class ProductionRepository:
             parsed.path.removeprefix("/"),
         )
         if artifact is None:
-            raise MediaAuthorityError(
+            raise _MediaAuthorityError(
                 reason="narration_audio_unavailable",
                 impact="当前工作区不存在可用的旁白产物，未调用渲染器。",
                 repair_action="重新生成旁白，或选择当前工作区已授权的媒体引用。",
@@ -977,14 +977,14 @@ class ProductionRepository:
         asset = self.get_asset(workspace_id, asset_id, connection=connection)
         eligibility=material_usage_eligibility(asset,purpose='manual')
         if not eligibility.eligible:
-            raise MediaAuthorityError(reason=f'material_{eligibility.status}',
+            raise _MediaAuthorityError(reason=f'material_{eligibility.status}',
                 impact=eligibility.reason,repair_action=eligibility.repair_action)
         expected_reference = self.workspace_media_reference_for_asset(
             workspace_id,
             asset_id, connection=connection,
         )
         if reference != expected_reference:
-            raise MediaAuthorityError(
+            raise _MediaAuthorityError(
                 reason="clip_media_reference_mismatch",
                 impact="剪辑计划中的素材引用与当前工作区资产不匹配，未调用渲染器。",
                 repair_action="重新从当前工作区素材库生成剪辑计划。",
@@ -1758,7 +1758,7 @@ class ProductionRepository:
             return None
         version = row["voice_version"]
         if not isinstance(version, str) or not version.strip():
-            raise MediaAuthorityError(
+            raise _MediaAuthorityError(
                 reason="legacy_voice_selection_requires_migration",
                 impact="历史未版本化声音选择不会用于新的配音或渲染。",
                 repair_action="在人物与声音中选择已授权的声音版本后重新开始该步骤。",
@@ -1775,7 +1775,7 @@ class ProductionRepository:
             episode_id,
         )
         if identity is None:
-            raise MediaAuthorityError(
+            raise _MediaAuthorityError(
                 reason="voice_selection_required",
                 impact="当前创作任务未生成配音，未调用声音模型。",
                 repair_action="为该创作任务选择已授权的声音版本后重试。",
@@ -1792,7 +1792,7 @@ class ProductionRepository:
             usage_scope="narration",
         )
         if authorization_failure is not None:
-            raise MediaAuthorityError(
+            raise _MediaAuthorityError(
                 reason=f"voice_authorization_{authorization_failure}",
                 impact="声音授权当前不可用，未调用声音模型或复用旧配音。",
                 repair_action="恢复或更新该声音的 narration 授权后重试。",
@@ -9545,10 +9545,10 @@ class ProductionRepository:
                 entries = self.list_applicable_pronunciation_entries(workspace_id=workspace_id,
                     person_profile_id=selected_voice.person_profile_id, episode_id=task.id)
             except (KeyError, ValueError, PermissionError, OSError) as exc:
-                raise MediaAuthorityError(reason="voice_reference_unavailable", impact="声音引用未更新，未调用模型。",
+                raise _MediaAuthorityError(reason="voice_reference_unavailable", impact="声音引用未更新，未调用模型。",
                     repair_action=str(exc)) from exc
             if selected_voice.language not in {{"zh-CN":"zh", "en-US":"en", "zh-CN/en-US":"zh-en"}[plan.language], "zh-en"}:
-                raise MediaAuthorityError(reason="voice_language_unavailable", impact="声音语言不匹配。",
+                raise _MediaAuthorityError(reason="voice_language_unavailable", impact="声音语言不匹配。",
                     repair_action="选择匹配方案语言的声音。")
             pronunciation_references = [CreationPlanPronunciationReference(id=entry.id, version=entry.version,
                 scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language) for entry in entries]
