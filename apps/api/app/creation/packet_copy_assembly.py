@@ -48,7 +48,7 @@ class PacketCopyAssembly:
         if (record.task_id != job.task_id or record.producer_job_id != job.id
                 or record.kind not in {'picture_fragment', 'picture_packet_copy'}):
             raise ValueError('画面父产物不属于原任务与原producer Job')
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         facts = transform.parameters.get('picture_fragment', {})
         if (transform.task_id != job.task_id or transform.job_id != job.id or transform.status != 'succeeded'
                 or transform.output_refs != [record.logical_ref] or transform.input_refs != record.input_refs
@@ -167,7 +167,7 @@ class PacketCopyAssembly:
             record, _path, _facts = self._parent(job, unit['artifact_id'], manifest['recipe_digest'], connection=connection)
         except KeyError:
             return None
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         if transform.parameters.get('packet_copy_manifest_digest') != manifest['manifest_digest']:
             raise ValueError('画面归约检查点不属于原manifest')
         return record
@@ -339,9 +339,9 @@ class PacketCopyAssembly:
                 for identity in unit['parents']:
                     self._parent(job, identity, manifest['recipe_digest'], connection=conn)
                 self.repository.create_artifact_record(record, connection=conn)
-                self.repository.create_transform_run(transform, connection=conn)
+                self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 for reference in record.input_refs:
-                    self.repository.create_dependency_edge(DependencyEdge(f'edge_{_digest([record.id, reference])}',
+                    self.repository.lineage_records.create_dependency_edge(DependencyEdge(f'edge_{_digest([record.id, reference])}',
                         job.workspace_id, job.task_id, reference, logical, transform.id), connection=conn)
             return record
         finally:

@@ -89,7 +89,7 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
             with state.repo._connect() as conn:
                 conn.execute("UPDATE job_runs SET status='failed' WHERE id=?", (record.producer_job_id,))
         else:
-            transform = state.repo.list_transform_runs(state.task.workspace_id, state.task.id)[0]
+            transform = state.repo.lineage_records.list_transform_runs(state.task.workspace_id, state.task.id)[0]
             with state.repo._connect() as conn:
                 conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
                     (json.dumps({**transform.parameters, 'width': None}), transform.id))
@@ -157,7 +157,7 @@ def test_grant_verifies_actual_png_digest_and_dimensions_before_renderer(state, 
         main._granted_graphic_source_paths(state.task.workspace_id, state.task.id, state.montage.graphic_overlays, context)
     monkeypatch.setattr(state.store, 'describe', original_describe)
     before, _ = facts(state)
-    transform = state.repo.list_transform_runs(state.task.workspace_id, state.task.id)[0]
+    transform = state.repo.lineage_records.list_transform_runs(state.task.workspace_id, state.task.id)[0]
     with state.repo._connect() as conn:
         conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
             (json.dumps({**transform.parameters, 'width': 32}), transform.id))

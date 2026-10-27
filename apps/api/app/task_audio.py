@@ -192,7 +192,7 @@ class TaskAudio:
             return None
         unit = manifest.final
         record = self.repository.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
         if (record.task_id != job.task_id or record.producer_job_id != job.id or transform.job_id != job.id
                 or transform.task_id != job.task_id or record.logical_ref != unit.output_ref(job.task_id)
                 or transform.status != 'succeeded' or transform.input_digest != unit.id
@@ -219,7 +219,7 @@ class TaskAudio:
             manifest.validate_scope(job.workspace_id, job.task_id, job.id)
             unit = manifest.final
             record = self.repository.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
-            transform = self.repository.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
+            transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
             if (not unit.master or record.task_id != job.task_id or record.producer_job_id != job.id
                     or record.logical_ref != unit.output_ref(job.task_id) or transform.job_id != job.id
                     or transform.task_id != job.task_id or transform.status != 'succeeded'
@@ -288,7 +288,7 @@ class TaskAudio:
         manifest.validate_unit(unit)
         for dependency in unit.dependencies:
             record = self.repository.get_artifact_record(workspace_id, f'artifact_audio_assembly_{dependency}')
-            transform = self.repository.get_transform_run(workspace_id, f'transform_audio_assembly_{dependency}')
+            transform = self.repository.lineage_records.get_transform_run(workspace_id, f'transform_audio_assembly_{dependency}')
             if (record.task_id != task_id or record.producer_job_id != job_id or transform.task_id != task_id
                     or transform.parameters.get('manifest_digest') != manifest.digest or transform.status != 'succeeded'
                     or transform.input_digest != dependency or record.logical_ref not in transform.output_refs
@@ -332,7 +332,7 @@ class TaskAudio:
             if (existing.task_id != task_id or existing.producer_job_id != job.id or existing.logical_ref != unit.output_ref(task_id)
                     or (published.sha256, published.size_bytes) != (existing.sha256, existing.size_bytes)):
                 raise ValueError('已完成音频组装内容发生变化，不能静默重用')
-            transform = self.repository.get_transform_run(workspace_id, f'transform_audio_assembly_{unit.id}')
+            transform = self.repository.lineage_records.get_transform_run(workspace_id, f'transform_audio_assembly_{unit.id}')
             if (transform.status != 'succeeded' or transform.input_digest != unit.id or transform.job_id != job.id
                     or transform.parameters.get('manifest_digest') != manifest.digest or existing.logical_ref not in transform.output_refs):
                 raise ValueError('音频组装成果缺少完整变换回执')
@@ -516,7 +516,7 @@ class TaskAudio:
                     raise ValueError("音频片段超出成片范围")
 
     def _transform_for(self, workspace_id, task_id, record):
-        transform = next((item for item in self.repository.list_transform_runs(workspace_id, task_id)
+        transform = next((item for item in self.repository.lineage_records.list_transform_runs(workspace_id, task_id)
                           if item.job_id == record.producer_job_id and record.logical_ref in item.output_refs), None)
         if transform is None:
             raise ValueError("媒体产物尚无完整变换回执")

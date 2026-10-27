@@ -892,7 +892,22 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
         )
 
 
-def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path):
+@pytest.fixture
+def lineage_no_execution(monkeypatch):
+    import subprocess
+    import _media_preview_test_fixtures as media_fixtures
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("lineage verification must not execute media or subprocesses")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    monkeypatch.setitem(globals(), "write_synthetic_video", forbidden)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
+
+
+def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path, lineage_no_execution):
     production = _repository(tmp_path)
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
@@ -931,7 +946,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
             )
         )
     started_at = datetime.now(timezone.utc)
-    transform = production.create_transform_run(
+    transform = production.lineage_records.create_transform_run(
         TransformRun(
             id="transform-render",
             workspace_id="workspace_a",
@@ -948,7 +963,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
             finished_at=datetime.now(timezone.utc),
         )
     )
-    edge = production.create_dependency_edge(
+    edge = production.lineage_records.create_dependency_edge(
         DependencyEdge(
             id="dependency-preview",
             workspace_id="workspace_a",
@@ -960,7 +975,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
     )
 
     with pytest.raises(ValueError, match="JobRun"):
-        production.create_transform_run(
+        production.lineage_records.create_transform_run(
             replace(
                 transform,
                 id="transform-cross-workspace",
@@ -969,7 +984,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
             )
         )
     with pytest.raises(ValueError, match="已登记的产物"):
-        production.create_transform_run(
+        production.lineage_records.create_transform_run(
             replace(
                 transform,
                 id="transform-missing-artifact",
@@ -977,7 +992,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
             )
         )
     with pytest.raises(ValueError, match="上游"):
-        production.create_dependency_edge(
+        production.lineage_records.create_dependency_edge(
             replace(
                 edge,
                 id="dependency-unrelated-input",
@@ -985,7 +1000,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
             )
         )
     with pytest.raises(ValueError, match="绝对路径"):
-        production.create_dependency_edge(
+        production.lineage_records.create_dependency_edge(
             replace(edge, id="dependency-absolute", upstream_ref="/tmp/input.mp4")
         )
 
@@ -993,19 +1008,19 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.get_transform_run("workspace_a", transform.id) == transform
-    assert reloaded.get_dependency_edge("workspace_a", edge.id) == edge
-    assert reloaded.list_transform_runs("workspace_a", "task-a") == [transform]
-    assert reloaded.list_dependency_edges("workspace_a", "task-a") == [edge]
+    assert reloaded.lineage_records.get_transform_run("workspace_a", transform.id) == transform
+    assert reloaded.lineage_records.get_dependency_edge("workspace_a", edge.id) == edge
+    assert reloaded.lineage_records.list_transform_runs("workspace_a", "task-a") == [transform]
+    assert reloaded.lineage_records.list_dependency_edges("workspace_a", "task-a") == [edge]
     with pytest.raises(KeyError):
-        reloaded.get_transform_run("workspace_b", transform.id)
+        reloaded.lineage_records.get_transform_run("workspace_b", transform.id)
     with sqlite3.connect(production.database_path) as conn:
         assert conn.execute(
             "SELECT version FROM production_schema_migrations ORDER BY version"
         ).fetchall() == [(version,) for version in range(1, PRODUCTION_SCHEMA_VERSION + 1)]
 
 
-def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
+def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lineage_no_execution):
     production = _repository(tmp_path)
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
@@ -1048,7 +1063,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
     )
-    production.create_transform_run(transform)
+    production.lineage_records.create_transform_run(transform)
     edge = DependencyEdge(
         id="dependency-replay",
         workspace_id="workspace_a",
@@ -1057,7 +1072,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
         downstream_ref=artifact.logical_ref,
         created_by_transform_id=transform.id,
     )
-    production.create_dependency_edge(edge)
+    production.lineage_records.create_dependency_edge(edge)
     event = TaskEvent(
         id="event-replay",
         workspace_id="workspace_a",
@@ -1085,8 +1100,8 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
     )
 
     assert production.create_artifact_record(artifact) == artifact
-    assert production.create_transform_run(transform) == transform
-    assert production.create_dependency_edge(edge) == edge
+    assert production.lineage_records.create_transform_run(transform) == transform
+    assert production.lineage_records.create_dependency_edge(edge) == edge
     assert production.append_task_event(event) == event
     assert production.create_timeline_version(version) == version
     assert (
@@ -1101,9 +1116,9 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path):
             replace(artifact, id="artifact-same-logical-ref")
         )
     with pytest.raises(ValueError, match="领域字段不一致"):
-        production.create_transform_run(replace(transform, engine="other-engine"))
+        production.lineage_records.create_transform_run(replace(transform, engine="other-engine"))
     with pytest.raises(ValueError, match="领域字段不一致"):
-        production.create_dependency_edge(
+        production.lineage_records.create_dependency_edge(
             replace(edge, created_at=datetime.now(timezone.utc))
         )
     with pytest.raises(ValueError, match="领域字段不一致"):
@@ -4244,3 +4259,53 @@ def test_creation_values_keep_canonical_identity_and_retire_repository_exports()
     # These canonical types were already absent from the repository namespace.
     for name in ("TaskAuthorization", "TaskAuthorizationConflict", "EditCommand"):
         assert not hasattr(production, name)
+
+
+def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_atomic(tmp_path, lineage_no_execution):
+    from app.creation.lineage_records import LineageRecordStore
+
+    production = _repository(tmp_path)
+    _save_creation_task(production, workspace_id="workspace_a", task_id="task-a")
+    assert isinstance(production.lineage_records, LineageRecordStore)
+    job = JobRun(id="job-lineage", workspace_id="workspace_a", task_id="task-a",
+        kind="render_preview", idempotency_key="lineage-pending", input_digest="lineage-input")
+    artifact = ArtifactRecord(id="lineage-artifact", workspace_id="workspace_a", task_id="task-a",
+        kind="preview", logical_ref="artifacts/task-a/job-lineage/preview.mp4",
+        sha256=hashlib.sha256(b"isolated-lineage").hexdigest(), size_bytes=len(b"isolated-lineage"),
+        producer_job_id=job.id, input_refs=["timeline://task-a/base"])
+    transform = TransformRun(id="lineage-transform", workspace_id="workspace_a", task_id="task-a",
+        job_id=job.id, transform_type="timeline_render", input_digest=job.input_digest,
+        input_refs=["timeline://task-a/base", "timeline://task-a/base-two"], output_refs=[artifact.logical_ref],
+        engine="isolated-record-facts", parameters={"label": "中文", "ordered": [2, 1]},
+        status="succeeded", started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc))
+    edge = DependencyEdge(id="lineage-edge", workspace_id="workspace_a", task_id="task-a",
+        upstream_ref=transform.input_refs[0], downstream_ref=artifact.logical_ref,
+        created_by_transform_id=transform.id)
+    with production._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        production.create_job_run(job, connection=connection)
+        production.create_artifact_record(artifact, connection=connection)
+        assert production.lineage_records.create_transform_run(transform, connection=connection) == transform
+        assert production.lineage_records.create_dependency_edge(edge, connection=connection) == edge
+        assert connection.in_transaction
+        assert connection.execute("SELECT COUNT(*) FROM transform_runs").fetchone()[0] == 1
+        with sqlite3.connect(production.database_path) as observer:
+            assert observer.execute("SELECT COUNT(*) FROM transform_runs").fetchone()[0] == 0
+        connection.rollback()
+    assert production.list_job_runs("workspace_a", "task-a") == []
+    assert production.list_artifact_records("workspace_a", "task-a") == []
+    assert production.lineage_records.list_transform_runs("workspace_a", "task-a") == []
+    production.create_job_run(job)
+    tail = replace(edge, id="lineage-tail", upstream_ref=transform.input_refs[1])
+    with production._connect() as connection:
+        connection.execute("""CREATE TRIGGER refuse_lineage_tail BEFORE INSERT ON dependency_edges
+            WHEN NEW.id = 'lineage-tail'
+            BEGIN SELECT RAISE(ABORT, 'isolated lineage tail refusal'); END""")
+    with pytest.raises(ValueError, match="依赖边 ID 或同一变换中的边已存在") as refused:
+        production.record_task_media_publication(artifact, transform, [edge, tail])
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert str(refused.value.__cause__) == "isolated lineage tail refusal"
+    assert production.get_job_run("workspace_a", job.id) == job
+    assert production.list_artifact_records("workspace_a", "task-a") == []
+    assert production.lineage_records.list_transform_runs("workspace_a", "task-a") == []
+    assert production.lineage_records.list_dependency_edges("workspace_a", "task-a") == []

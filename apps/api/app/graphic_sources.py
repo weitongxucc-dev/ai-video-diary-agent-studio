@@ -46,7 +46,7 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
             record=repository.create_artifact_record(ArtifactRecord(id=f'artifact_{identity}',workspace_id=workspace_id,task_id=task_id,
                 kind='graphic_source',logical_ref=published.logical_ref,sha256=published.sha256,size_bytes=published.size_bytes,
                 producer_job_id=job.id,input_refs=[]))
-            repository.create_transform_run(TransformRun(id=f'transform_{identity}',workspace_id=workspace_id,task_id=task_id,job_id=job.id,
+            repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{identity}',workspace_id=workspace_id,task_id=task_id,job_id=job.id,
                 transform_type='graphic_import',input_digest=digest.hexdigest(),input_refs=[],output_refs=[record.logical_ref],engine='local-pillow-v1',
                 parameters=parameters,status='succeeded',started_at=running.started_at,finished_at=utc_now()))
             repository.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[record.logical_ref])
@@ -61,7 +61,7 @@ def _successful_graphic_transform(repository,workspace_id,task_id,record):
     job=repository.get_job_run(workspace_id,record.producer_job_id)
     if job.task_id!=task_id or job.status!='succeeded' or record.logical_ref not in job.output_refs:
         raise ValueError('图片生产作业尚未成功，不作为可编辑来源')
-    transform=next((item for item in repository.list_transform_runs(workspace_id,task_id)
+    transform=next((item for item in repository.lineage_records.list_transform_runs(workspace_id,task_id)
         if item.job_id==job.id and item.status=='succeeded' and item.transform_type in {'graphic_import','media_script'}
         and record.logical_ref in item.output_refs),None)
     if transform is None:

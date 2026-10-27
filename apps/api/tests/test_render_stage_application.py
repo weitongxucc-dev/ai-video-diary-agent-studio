@@ -180,7 +180,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         rendered=repo.get_creation_task_montage_plan('local',task_id)
         version=repo.get_timeline_version('local',task.current_timeline_version_id)
         child=next(j for j in repo.list_job_runs('local',task_id) if j.kind=='creation_task_montage_render')
-        transform=repo.get_transform_run('local','transform_'+child.id)
+        transform=repo.lineage_records.get_transform_run('local','transform_'+child.id)
         assert child.status==transform.status=='succeeded' and version.id=='timeline_'+child.id and version.parent_version_id==base.id
         assert task.output_ready and task.stage=='review' and rendered['status']=='rendered'
         assert version.snapshot['render_input_timeline_version_id']==base.id
@@ -198,7 +198,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         assert rendered['cues'][0]['duration_seconds'] == 2
         assert rendered['audio_timeline']['tracks'][0]['clips'][0]['source_end_ms'] == 2000
         assert hashlib.sha256(audio.read_bytes()).hexdigest() == voice_hash
-        edges=[e for e in repo.list_dependency_edges('local',task_id) if e.created_by_transform_id==transform.id]
+        edges=[e for e in repo.lineage_records.list_dependency_edges('local',task_id) if e.created_by_transform_id==transform.id]
         assert {(e.upstream_ref,e.downstream_ref) for e in edges}=={(u,d) for u in transform.input_refs for d in transform.output_refs}
         event=repo.get_task_event('local',f'event_{outer.id}_render_succeeded')
         assert event.payload['stage']=='render' and event.payload['status']=='completed'
@@ -213,13 +213,13 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
             time.sleep(.1)
             quality=client.get(url+'/quality-check')
         assert quality.status_code==200 and quality.json()['check_state'] in {'done','failed'},quality.text
-        counts=(len(repo.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.list_transform_runs('local',task_id)))
+        counts=(len(repo.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
         before=json.dumps(observations,sort_keys=True)
         queries=[client.get(url+'/execution',params={'job_id':outer.id}),client.get(url)]
         assert all(q.status_code==200 for q in queries),[q.text for q in queries]
         assert not runtime.run_once()
         assert json.dumps(observations,sort_keys=True)==before
-        assert counts==(len(repo.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.list_transform_runs('local',task_id)))
+        assert counts==(len(repo.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
         assert not repo.list_person_renders('local',task_id)
         if destination:
             Path(destination,'NORMAL_SUMMARY.json').write_text(json.dumps({'task':asdict(task),'outer_job':asdict(outer),

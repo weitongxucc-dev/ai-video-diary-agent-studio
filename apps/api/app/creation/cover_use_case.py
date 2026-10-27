@@ -366,12 +366,12 @@ class CoverUseCase:
                 logical_ref=evidence.output_ref, sha256=evidence.output_sha256,
                 size_bytes=evidence.output_size_bytes, producer_job_id=job.id,
                 input_refs=[cover.source_video_ref], created_at=receipt.generated_at), connection=connection)
-            self.repository.create_transform_run(TransformRun(id=transform_id, workspace_id=command.workspace_id,
+            self.repository.lineage_records.create_transform_run(TransformRun(id=transform_id, workspace_id=command.workspace_id,
                 task_id=command.task_id, job_id=job.id, transform_type="cover_from_frame",
                 input_digest=job.input_digest, input_refs=[cover.source_video_ref], output_refs=[evidence.output_ref],
                 engine=cover.model_or_engine, parameters=evidence.parameters, status="succeeded",
                 started_at=job.started_at or job.created_at, finished_at=receipt.generated_at), connection=connection)
-            self.repository.create_dependency_edge(DependencyEdge(id=f"edge_{job.id}_cover",
+            self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{job.id}_cover",
                 workspace_id=command.workspace_id, task_id=command.task_id,
                 upstream_ref=cover.source_video_ref, downstream_ref=evidence.output_ref,
                 created_by_transform_id=transform_id, created_at=receipt.generated_at), connection=connection)

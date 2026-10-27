@@ -152,7 +152,7 @@ def instantiate_adoption_candidate(plan, grant):
 
 def apply_delivery_adoption(repo, conn, job, candidate):
     version, transform = candidate['version'], candidate['transform']
-    repo.create_transform_run(transform, connection=conn)
+    repo.lineage_records.create_transform_run(transform, connection=conn)
     repo.save_creation_task_montage_plan(job.workspace_id, job.task_id, candidate['plan_id'], candidate['montage'],
         connection=conn, expected_current_version_id=candidate['head'])
     repo.create_timeline_version(version, connection=conn, expected_current_version_id=candidate['head'])
@@ -169,7 +169,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     from app.creation.audio_delivery_assembly import _identity
     saved = version.snapshot['audio_delivery']
     job = repository.get_job_run(task.workspace_id, saved['job_id'])
-    transform = repository.get_transform_run(task.workspace_id, version.snapshot['transform_run_id'])
+    transform = repository.lineage_records.get_transform_run(task.workspace_id, version.snapshot['transform_run_id'])
     if (job.task_id != task.id or job.kind != 'creation_task_execution' or job.status != 'succeeded'
             or transform.transform_type != 'montage_delivery' or transform.job_id != job.id or transform.status != 'succeeded'
             or job.output_refs != version.snapshot['output_refs'] or transform.output_refs != job.output_refs
@@ -190,7 +190,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
             or transform.parameters['render_input_digest'] != saved['render_input_digest']
             or version.parent_version_id != original_input['timeline_version_id']):
         return False
-    final_transform = repository.get_transform_run(task.workspace_id, saved['video_parent']['binding']['transform_id'])
+    final_transform = repository.lineage_records.get_transform_run(task.workspace_id, saved['video_parent']['binding']['transform_id'])
     video = repository.get_artifact_record(task.workspace_id, saved['video_artifact_id'])
     if (video.producer_job_id != job.id or video.task_id != task.id or video.kind != 'rendered_video'
             or video.logical_ref != plan['output_path'] or video.sha256 != saved['video_parent']['binding']['sha256']
@@ -253,7 +253,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
         return False
     if saved['subtitle_artifact_id'] is not None:
         subtitle = repository.get_artifact_record(task.workspace_id, saved['subtitle_artifact_id'])
-        st = repository.get_transform_run(task.workspace_id, f'transform_{subtitle.id}')
+        st = repository.lineage_records.get_transform_run(task.workspace_id, f'transform_{subtitle.id}')
         if (subtitle.producer_job_id != job.id or subtitle.task_id != task.id or subtitle.logical_ref != plan['subtitle_path']
                 or st.status != 'succeeded' or st.job_id != job.id or st.output_refs != [subtitle.logical_ref]
                 or _identity(store.resolve_file(subtitle.logical_ref)) != st.parameters['file_identity']):

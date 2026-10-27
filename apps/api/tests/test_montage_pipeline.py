@@ -1095,7 +1095,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     state.production.create_artifact_record(ArtifactRecord(id="synthetic-presenter-artifact", workspace_id=state.workspace_id,
         task_id=task.id, kind="person_render", logical_ref=published.logical_ref, sha256=published.sha256,
         size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=[segment.audio_reference]))
-    state.production.create_transform_run(TransformRun(id="synthetic-presenter-transform", workspace_id=state.workspace_id,
+    state.production.lineage_records.create_transform_run(TransformRun(id="synthetic-presenter-transform", workspace_id=state.workspace_id,
         task_id=task.id, job_id=job.id, transform_type="person_render", input_digest=key, input_refs=[segment.audio_reference],
         output_refs=[published.logical_ref], engine="synthetic-presenter", parameters={"language":segment.language,
         "presenter_input_facts":inputs}, status="succeeded", started_at=job.created_at, finished_at=job.created_at))
@@ -2392,10 +2392,10 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         "rendered_video",
         "subtitle_track",
     }
-    transforms = production.list_transform_runs(workspace_id, task.id)
+    transforms = production.lineage_records.list_transform_runs(workspace_id, task.id)
     assert len(transforms) == 1 and transforms[0].status == "succeeded"
     assert transforms[0].output_refs == jobs[0].output_refs
-    assert len(production.list_dependency_edges(workspace_id, task.id)) == 6
+    assert len(production.lineage_records.list_dependency_edges(workspace_id, task.id)) == 6
     versions = production.list_timeline_versions(workspace_id, task.id)
     assert len(versions) == 1
     saved_plan = creation_task_montage_plan_from_payload(
@@ -4956,7 +4956,7 @@ def test_person_cache_rejects_same_path_mutation(permitted_person_edit_state, ro
     assert preview.status_code == 200, preview.text
     proposal = preview.json()["proposal"]
     assert proposal["operation"]["payload"]["reuse_person_render_id"] == generated.id
-    transform = next(t for t in state.production.list_transform_runs(state.workspace_id, state.task.id)
+    transform = next(t for t in state.production.lineage_records.list_transform_runs(state.workspace_id, state.task.id)
                      if t.input_digest == generated.cache_key and t.status == "succeeded")
     fact = next(f for f in transform.parameters["presenter_input_facts"] if f["role"] == role)
     path = Path(fact["path"])
@@ -5612,7 +5612,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     state.production.finish_job_run(state.workspace_id, person_job.id, status="succeeded", output_refs=[person_artifact_ref])
     state.production.bind_person_render_artifact(state.workspace_id, state.task.id, state.old_render.id, person_artifact_ref)
     state.old_render = state.production.get_person_render(state.workspace_id, state.task.id, state.old_render.id)
-    state.production.create_transform_run(TransformRun(
+    state.production.lineage_records.create_transform_run(TransformRun(
         id="transform_job_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
         job_id=person_job.id, transform_type="person_render", input_digest=state.old_render.cache_key,
         input_refs=person_input_refs, output_refs=[person_artifact_ref], engine=state.old_render.model_id,
@@ -5659,7 +5659,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     state.production.finish_job_run(state.workspace_id, job.id, status="succeeded", output_refs=[published.logical_ref])
     transform_id = "transform_job_v3_fixture"
     now = main_module.utc_now()
-    state.production.create_transform_run(TransformRun(id=transform_id, workspace_id=state.workspace_id,
+    state.production.lineage_records.create_transform_run(TransformRun(id=transform_id, workspace_id=state.workspace_id,
         task_id=state.task.id, job_id=job.id, transform_type="montage_render", input_digest=render_input_digest,
         input_refs=input_refs, output_refs=[published.logical_ref], engine="fixture", parameters={}, status="succeeded",
         started_at=now, finished_at=now))

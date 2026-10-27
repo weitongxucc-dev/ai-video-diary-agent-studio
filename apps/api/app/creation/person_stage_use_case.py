@@ -113,17 +113,17 @@ class PersonStageUseCase:
                         self.repository.create_artifact_record(ArtifactRecord(id=artifact_id, workspace_id=context.workspace_id, task_id=task_id, kind='person_render', logical_ref=logical_ref, sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=context.job_id, input_refs=input_refs))
                     transform_id = f'transform_{context.job_id}'
                     try:
-                        transform = self.repository.get_transform_run(context.workspace_id, transform_id)
+                        transform = self.repository.lineage_records.get_transform_run(context.workspace_id, transform_id)
                     except KeyError:
                         running_job = self.repository.get_job_run(context.workspace_id, context.job_id)
-                        transform = self.repository.create_transform_run(TransformRun(id=transform_id, workspace_id=context.workspace_id, task_id=task_id, job_id=context.job_id, transform_type='person_render', input_digest=cache_key, input_refs=input_refs, output_refs=[logical_ref], engine=provider.model_id, parameters={'motion': payload.motion, 'expression': payload.expression, 'language': segment.language, 'presenter_input_facts': input_facts}, status='succeeded', started_at=running_job.started_at or utc_now(), finished_at=utc_now()))
+                        transform = self.repository.lineage_records.create_transform_run(TransformRun(id=transform_id, workspace_id=context.workspace_id, task_id=task_id, job_id=context.job_id, transform_type='person_render', input_digest=cache_key, input_refs=input_refs, output_refs=[logical_ref], engine=provider.model_id, parameters={'motion': payload.motion, 'expression': payload.expression, 'language': segment.language, 'presenter_input_facts': input_facts}, status='succeeded', started_at=running_job.started_at or utc_now(), finished_at=utc_now()))
                     for upstream_ref in input_refs:
                         edge_digest = hashlib.sha256(f'{upstream_ref}\n{logical_ref}'.encode('utf-8')).hexdigest()[:24]
                         edge_id = f'edge_{context.job_id}_{edge_digest}'
                         try:
-                            self.repository.get_dependency_edge(context.workspace_id, edge_id)
+                            self.repository.lineage_records.get_dependency_edge(context.workspace_id, edge_id)
                         except KeyError:
-                            self.repository.create_dependency_edge(DependencyEdge(id=edge_id, workspace_id=context.workspace_id, task_id=task_id, upstream_ref=upstream_ref, downstream_ref=logical_ref, created_by_transform_id=transform.id))
+                            self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=edge_id, workspace_id=context.workspace_id, task_id=task_id, upstream_ref=upstream_ref, downstream_ref=logical_ref, created_by_transform_id=transform.id))
                     grant_context.check()
                     if claimed:
                         current = self.repository.finish_person_render(context.workspace_id, task_id, current.id, status='ready', output_path=str(self.metadata.artifact_store.resolve_file(logical_ref)), duration_seconds=duration_seconds, alignment_evidence=alignment_evidence)
@@ -229,7 +229,7 @@ class PersonStageUseCase:
                 render = self.repository.get_person_render(workspace_id, task.id, reuse_person_render_id)
             except KeyError as exc:
                 raise PersonStageRejected(status_code=409, detail='person render reuse target no longer exists') from exc
-            if render.status != 'ready' or render.person_profile_id != required_strings['person_profile_id'] or render.person_version != required_strings['person_version'] or (render.narration_segment_id != required_strings['narration_segment_id']) or (render.voice_profile_id != segment.voice_profile_id) or (render.voice_version != segment.voice_version) or (render.model_id != person_provider.model_id) or (not self.person_preview.render_matches_narration(render, segment, self.repository.list_transform_runs(workspace_id, task.id))) or (render.motion != required_strings['motion']) or (render.expression != required_strings['expression']) or (self.metadata.picture_renderer.person_path(render) is None):
+            if render.status != 'ready' or render.person_profile_id != required_strings['person_profile_id'] or render.person_version != required_strings['person_version'] or (render.narration_segment_id != required_strings['narration_segment_id']) or (render.voice_profile_id != segment.voice_profile_id) or (render.voice_version != segment.voice_version) or (render.model_id != person_provider.model_id) or (not self.person_preview.render_matches_narration(render, segment, self.repository.lineage_records.list_transform_runs(workspace_id, task.id))) or (render.motion != required_strings['motion']) or (render.expression != required_strings['expression']) or (self.metadata.picture_renderer.person_path(render) is None):
                 raise PersonStageRejected(status_code=409, detail='person render reuse target has changed')
         else:
             if grant_context is None:

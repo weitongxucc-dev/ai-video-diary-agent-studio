@@ -198,11 +198,11 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
         record=repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind=kind,logical_ref=publication.logical_ref,sha256=publication.sha256,
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=[clip.source_path]))
-        transform=repository.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
+        transform=repository.lineage_records.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
             task_id=task_id,job_id=job.id,transform_type=kind,input_digest=digest,input_refs=[clip.source_path],
             output_refs=[record.logical_ref],engine="local-visual-v3",parameters=parameters,status="succeeded",
             started_at=running.started_at,finished_at=utc_now()))
-        repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
+        repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
             upstream_ref=clip.source_path,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
         repository.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
         return record

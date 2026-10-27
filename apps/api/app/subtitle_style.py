@@ -80,12 +80,12 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
         record = repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind="subtitle_style_preview",logical_ref=publication.logical_ref,sha256=publication.sha256,
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=input_refs))
-        transform = repository.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
+        transform = repository.lineage_records.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
             task_id=task_id,job_id=job.id,transform_type="subtitle_style_preview",input_digest=digest,input_refs=input_refs,
             output_refs=[record.logical_ref],engine="local-subtitle-style-v1",parameters=parameters,status="succeeded",
             started_at=running.started_at,finished_at=utc_now()))
         for index, reference in enumerate(input_refs):
-            repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,
+            repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,
                 task_id=task_id,upstream_ref=reference,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
         repository.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
         return record

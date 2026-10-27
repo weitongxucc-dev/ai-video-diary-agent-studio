@@ -91,7 +91,17 @@ def test_schema_is_closed_and_bounded_not_full_jsonschema():
 
 
 @pytest.fixture
-def case(tmp_path):
+def case(tmp_path, monkeypatch):
+    import subprocess
+    import _media_preview_test_fixtures as media_fixtures
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("recipe metadata verification must not execute media or subprocesses")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
     repository = ProductionRepository(tmp_path / "metadata.sqlite", tmp_path / "library")
     members = LocalMemberService(repository.database_path)
     member = members.whoami(None)[0]
@@ -144,7 +154,7 @@ def case(tmp_path):
             kind="graphic_source", logical_ref=png.logical_ref, sha256=png.sha256, size_bytes=png.size_bytes,
             producer_job_id=job.id, input_refs=[]))
         now = utc_now()
-        repository.create_transform_run(TransformRun(id=f"script-transform-{number}", workspace_id="local", task_id=task_id,
+        repository.lineage_records.create_transform_run(TransformRun(id=f"script-transform-{number}", workspace_id="local", task_id=task_id,
             job_id=job.id, transform_type="media_script", input_digest=digest, input_refs=[],
             output_refs=[record.logical_ref,picture.logical_ref], engine="fixture-python-pillow",
             parameters={"definition_ref":record.logical_ref,"script_digest":digest,"owner_member_id":owner or actor.member_id},
@@ -299,7 +309,7 @@ def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
     repository,store,members,actor,tools,producer = case
     job,_ = producer()
     before = (repository.list_job_runs("local","task"),repository.list_artifact_records("local","task"),
-              repository.list_transform_runs("local","task"))
+              repository.lineage_records.list_transform_runs("local","task"))
     with repository._connect() as conn:
         conn.execute("""CREATE TRIGGER reject_fixture_recipe BEFORE INSERT ON transform_runs
             WHEN NEW.transform_type='media_script_tool_recipe'
@@ -307,7 +317,7 @@ def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
     with pytest.raises(ValueError):
         tools().create_from_job(actor,job,name="fixture",description="fixture",parameter_schema=SCHEMA,request_id="12345678-1234-4321-8123-123456789abc")
     after = (repository.list_job_runs("local","task"),repository.list_artifact_records("local","task"),
-             repository.list_transform_runs("local","task"))
+             repository.lineage_records.list_transform_runs("local","task"))
     assert after == before
     assert tools().list(actor) == []
 
@@ -390,7 +400,7 @@ def test_definition_must_be_an_actual_output_of_the_successful_producer_job(case
     job,definition = producer(include_definition=False)
     source = repository.get_job_run("local",job)
     assert source.status == "succeeded" and definition.logical_ref not in source.output_refs
-    assert definition.logical_ref in repository.get_transform_run("local","script-transform-1").output_refs
+    assert definition.logical_ref in repository.lineage_records.get_transform_run("local","script-transform-1").output_refs
     with pytest.raises(ScriptToolError,match="missing or unbound"):
         tools().create_from_job(actor,job,request_id="12345678-1234-4321-8123-123456789abc",
             name="fixture",description="fixture",parameter_schema=SCHEMA)

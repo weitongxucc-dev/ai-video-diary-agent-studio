@@ -279,10 +279,10 @@ def execute_script(repository, store, temporary_root, task, payload, toolchain, 
         "script_digest": sealed.digest, "toolchain_digest": toolchain.digest,
         "definition_ref": definition_record.logical_ref, "owner_member_id": actor.user_id or actor.member_id,
         "file_revision": {"size_bytes": metadata.st_size, "mtime_ns": metadata.st_mtime_ns, "ctime_ns": metadata.st_ctime_ns}}
-    transform = next((item for item in repository.list_transform_runs(task.workspace_id, task.id)
+    transform = next((item for item in repository.lineage_records.list_transform_runs(task.workspace_id, task.id)
                       if item.id == f"transform_{job.id}_script"), None)
     if transform is None:
-        transform = repository.create_transform_run(TransformRun(id=f"transform_{job.id}_script", workspace_id=task.workspace_id,
+        transform = repository.lineage_records.create_transform_run(TransformRun(id=f"transform_{job.id}_script", workspace_id=task.workspace_id,
         task_id=task.id, job_id=job.id, transform_type="media_script", input_digest=sealed.digest,
         input_refs=input_refs, output_refs=[record.logical_ref, definition_record.logical_ref], engine=f"python-pillow:{toolchain.version}",
         parameters=transform_parameters,
@@ -293,7 +293,7 @@ def execute_script(repository, store, temporary_root, task, payload, toolchain, 
             or transform.engine != f"python-pillow:{toolchain.version}" or transform.parameters != transform_parameters):
         raise MediaScriptError("既有成功来源定义与原脚本不一致")
     for index, ref in enumerate(input_refs):
-        repository.create_dependency_edge(DependencyEdge(id=f"edge_{job.id}_script_{index}", workspace_id=task.workspace_id,
+        repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{job.id}_script_{index}", workspace_id=task.workspace_id,
             task_id=task.id, upstream_ref=ref, downstream_ref=record.logical_ref,
             created_by_transform_id=f"transform_{job.id}_script", created_at=job.created_at))
     return {"source_ref": record.logical_ref, "artifact_id": record.id, "sha256": record.sha256,

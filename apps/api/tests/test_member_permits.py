@@ -611,7 +611,7 @@ def _complete_presenter_fixture(case, context=None):
         case.repo.create_artifact_record(ArtifactRecord("person-artifact", WORKSPACE, task.id, "person_render",
             logical_ref, hashlib.sha256(output.read_bytes()).hexdigest(), output.stat().st_size,
             job_context.job_id, [segment.audio_reference]))
-        case.repo.create_transform_run(TransformRun("person-transform", WORKSPACE, task.id, job_context.job_id,
+        case.repo.lineage_records.create_transform_run(TransformRun("person-transform", WORKSPACE, task.id, job_context.job_id,
             "person_render", cache, [segment.audio_reference], [logical_ref], "synthetic-provider",
             {"language": segment.language, "presenter_input_facts": input_facts}, "succeeded", datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
         return JobResult((logical_ref,))

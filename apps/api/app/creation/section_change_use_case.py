@@ -160,9 +160,9 @@ class SectionTimelineChange:
                     output_refs=[publication.logical_ref], engine='subtitle-srt/v1', parameters={'section_id': section_id,
                     'timeline_version_id': version_id, 'language': track.language}, status='succeeded',
                     started_at=utc_now(), finished_at=utc_now())
-                self.repository.create_transform_run(transform, connection=connection)
+                self.repository.lineage_records.create_transform_run(transform, connection=connection)
                 for index, upstream in enumerate(inputs):
-                    self.repository.create_dependency_edge(DependencyEdge(id=f'edge_{artifact.id}_{index}',
+                    self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f'edge_{artifact.id}_{index}',
                         workspace_id=task.workspace_id, task_id=task.id, upstream_ref=upstream,
                         downstream_ref=publication.logical_ref, created_by_transform_id=transform.id), connection=connection)
                 track = replace(track, artifact_ref=publication.logical_ref, transform_id=transform.id, status='valid',

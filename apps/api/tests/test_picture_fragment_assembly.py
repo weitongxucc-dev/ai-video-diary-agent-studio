@@ -104,7 +104,7 @@ def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tm
         record = service.execute(job, actor=case.actor, context=context, publication_guard=guard)
         case.scheduler.complete_unit(grant, checkpoint_database_path=case.repo.database_path,
             checkpoint_write=lambda conn, current: record.logical_ref)
-        transform = case.repo.get_transform_run('local', f'transform_{record.id}')
+        transform = case.repo.lineage_records.get_transform_run('local', f'transform_{record.id}')
         assert transform.parameters['picture_fragment_recipe'] == resources['picture_fragment_recipe']
         assert packet._parent(job, record.id, packet.recipe(job))[0] == record
     ids = service.completed_artifact_ids(job, actor=case.actor)

@@ -69,7 +69,7 @@ class DeliveryAdoptionRecovery:
             raise ValueError('原封装单元身份不匹配')
         try:
             record = self.repository.get_artifact_record(job.workspace_id, f'artifact_final_mux_{unit_id}')
-            transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+            transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         except KeyError as exc:
             raise RecoveryBlocked('原最终媒体登记未完成，仅可查询原回执，不能采用或重做') from exc
         facts = transform.parameters
@@ -97,7 +97,7 @@ class DeliveryAdoptionRecovery:
         record = owner.picture_fragments.subtitle_artifact(job, actor=actor, connection=conn)
         if record is None:
             return None
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         request = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND id=? AND owner_id=? "
             "AND owner_type='creation_job' AND state='done' AND last_grant_generation=?",
             (job.workspace_id, transform.parameters['producer_request_id'], job.id, transform.parameters['producer_generation'])).fetchone()

@@ -588,9 +588,9 @@ class MetadataEditUseCase:
                 staged.write_text(content, encoding='utf-8')
                 publication = self.artifact_store.publish_file(logical_ref, staged)
             artifact = self.repository.create_artifact_record(ArtifactRecord(id=f'artifact_{job.id}_subtitles', workspace_id=workspace_id, task_id=task_id, kind='subtitle_track', logical_ref=publication.logical_ref, sha256=publication.sha256, size_bytes=publication.size_bytes, producer_job_id=job.id, input_refs=input_refs))
-            transform = self.repository.create_transform_run(TransformRun(id=f'transform_{job.id}', workspace_id=workspace_id, task_id=task_id, job_id=job.id, transform_type=kind, input_digest=input_digest, input_refs=input_refs, output_refs=[artifact.logical_ref], engine=engine, parameters=parameters, status='succeeded', started_at=running.started_at or utc_now(), finished_at=utc_now()))
+            transform = self.repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{job.id}', workspace_id=workspace_id, task_id=task_id, job_id=job.id, transform_type=kind, input_digest=input_digest, input_refs=input_refs, output_refs=[artifact.logical_ref], engine=engine, parameters=parameters, status='succeeded', started_at=running.started_at or utc_now(), finished_at=utc_now()))
             for upstream in input_refs:
-                self.repository.create_dependency_edge(DependencyEdge(id=f'edge_{job.id}_{hashlib.sha256(upstream.encode()).hexdigest()[:20]}', workspace_id=workspace_id, task_id=task_id, upstream_ref=upstream, downstream_ref=artifact.logical_ref, created_by_transform_id=transform.id))
+                self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f'edge_{job.id}_{hashlib.sha256(upstream.encode()).hexdigest()[:20]}', workspace_id=workspace_id, task_id=task_id, upstream_ref=upstream, downstream_ref=artifact.logical_ref, created_by_transform_id=transform.id))
             self.repository.finish_job_run(workspace_id, job.id, status='succeeded', output_refs=[artifact.logical_ref])
             return (artifact.logical_ref, transform.id)
         except Exception as exc:

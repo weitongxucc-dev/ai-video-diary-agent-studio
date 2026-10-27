@@ -401,7 +401,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
             repo.create_artifact_record(ArtifactRecord(f"fixture_artifact_{index}", "local", task_id,
                 "rendered_video" if index == 0 else "subtitle_track", ref, "0" * 64, 1, inner.id, []))
         repo.finish_job_run("local", inner.id, status="succeeded", output_refs=refs)
-        transform = repo.create_transform_run(TransformRun(f"transform_{inner.id}", "local", task_id,
+        transform = repo.lineage_records.create_transform_run(TransformRun(f"transform_{inner.id}", "local", task_id,
             inner.id, "montage_render", inner.input_digest, [], refs, "fixture", {}, "succeeded",
             datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
         rendered = repo.get_creation_task_montage_plan("local", task_id)
@@ -1560,7 +1560,7 @@ def _render_validity_fixture(tmp_path, monkeypatch):
         list_artifact_records=lambda *_: [record],
         get_job_run=lambda *_: SimpleNamespace(status="succeeded", task_id="task_1",
             output_refs=[published.logical_ref], input_digest="render-input"),
-        get_transform_run=lambda *_: transform,
+        lineage_records=SimpleNamespace(get_transform_run=lambda *_: transform),
     )
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "artifact_store", store)

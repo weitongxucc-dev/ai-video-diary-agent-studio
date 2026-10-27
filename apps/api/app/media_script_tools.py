@@ -194,7 +194,7 @@ class MediaScriptTools:
             raise PermissionError("current creator cannot write the producer task")
         if job.kind != TASK_MEDIA_KIND or job.status != "succeeded":
             raise ScriptToolError("source must be a successful canonical script job")
-        transforms = [run for run in self.repository.list_transform_runs(actor.workspace_id, task.id)
+        transforms = [run for run in self.repository.lineage_records.list_transform_runs(actor.workspace_id, task.id)
                       if run.job_id == job.id and run.transform_type == "media_script" and run.status == "succeeded"]
         if len(transforms) != 1:
             raise ScriptToolError("successful job has no unique script definition transform")
@@ -254,11 +254,9 @@ class MediaScriptTools:
         owner = self._identity(actor)
         if self.task_id is not None and tool_id is None:
             raise PermissionError("任务授权不能浏览通用配方库")
-        rows = conn.execute("""SELECT * FROM transform_runs
-            WHERE workspace_id=? AND transform_type='media_script_tool_recipe'
-              AND json_extract(parameters_json,'$.owner_member_id')=?
-              AND (? IS NULL OR json_extract(parameters_json,'$.tool_id')=?)""", (actor.workspace_id, owner, tool_id, tool_id)).fetchall()
-        runs = [self.repository._transform_run_from_row(row) for row in rows]
+        runs = self.repository.lineage_records.list_recipe_runs(
+            conn, actor.workspace_id, owner, tool_id,
+        )
         return [run for run in runs if tool_id is None or run.parameters["tool_id"] == tool_id]
 
     def _head(self, conn, actor, tool_id):
@@ -335,7 +333,7 @@ class MediaScriptTools:
             logical_ref=published.logical_ref, sha256=published.sha256, size_bytes=published.size_bytes,
             producer_job_id=registration.id, input_refs=[record.logical_ref]), connection=conn)
         now = utc_now()
-        self.repository.create_transform_run(TransformRun(id="transform_"+registration.id,
+        self.repository.lineage_records.create_transform_run(TransformRun(id="transform_"+registration.id,
             workspace_id=actor.workspace_id, task_id=job.task_id, job_id=registration.id,
             transform_type="media_script_tool_recipe", input_digest=registration.input_digest,
             input_refs=[record.logical_ref], output_refs=[artifact.logical_ref], engine="trusted-recipe-metadata",
@@ -400,8 +398,7 @@ class MediaScriptTools:
             head = self._head(conn,actor,tool_id)
             if type(expected_version) is not int or head.parameters["version"] != expected_version:
                 raise ScriptToolConflict("recipe current version changed")
-            conn.execute("UPDATE transform_runs SET parameters_json=? WHERE workspace_id=? AND id=?",
-                         (_json({**head.parameters,"active":False}),actor.workspace_id,head.id))
+            self.repository.lineage_records.deactivate_recipe_run(conn, actor.workspace_id, head)
         return self.get(actor,tool_id)
 
     def instantiate_request(self, actor, tool_id, *, version, parameters):

@@ -119,7 +119,7 @@ class AudioDeliveryAssembly:
         record, path, facts = self.picture._parent(job, record.id, manifest['recipe_digest'], connection=connection)
         if facts['first_frame'] != 0:
             raise ValueError('最终picture master没有覆盖完整原时钟')
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         return {'parent': {'binding': {'artifact_id': record.id, 'sha256': record.sha256, 'size_bytes': record.size_bytes,
             'producer_request_id': facts['producer_request_id'], 'producer_generation': facts['producer_generation'],
             'transform_id': transform.id, 'transform_digest': media_digest(asdict(transform))}, 'clock': {
@@ -170,7 +170,7 @@ class AudioDeliveryAssembly:
             record = self.repository.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}')
         except KeyError:
             return None
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         facts = transform.parameters
         if (record.kind != ('rendered_video' if phase == 'final_mux' else phase) or transform.transform_type != phase or transform.engine != 'ffmpeg-audio-delivery/v1'
                 or record.producer_job_id != job.id or record.task_id != job.task_id or transform.job_id != job.id
@@ -367,9 +367,9 @@ class AudioDeliveryAssembly:
                 publication_guard(conn)
                 self.manifest(job, actor=actor, connection=conn)
                 self.repository.create_artifact_record(record, connection=conn)
-                self.repository.create_transform_run(transform, connection=conn)
+                self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 for index, reference in enumerate(record.input_refs):
-                    self.repository.create_dependency_edge(DependencyEdge(f'edge_{record.id}_{index}', job.workspace_id,
+                    self.repository.lineage_records.create_dependency_edge(DependencyEdge(f'edge_{record.id}_{index}', job.workspace_id,
                         job.task_id, reference, logical, transform.id), connection=conn)
             return record
         finally:

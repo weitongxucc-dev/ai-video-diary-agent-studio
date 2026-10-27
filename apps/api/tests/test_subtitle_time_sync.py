@@ -269,7 +269,7 @@ def test_bilingual_merge_publishes_both_tracks_exports_and_undoes(person_render_
         assert track["timeline_version_id"] == after["task"]["current_timeline_version_id"]
         assert (track["cues"][0]["start_seconds"], track["cues"][0]["end_seconds"]) == (0, 5)
         assert main_module.artifact_store.resolve_file(track["artifact_ref"]).read_text().strip()
-        transform = state.production.get_transform_run(state.workspace_id, track["transform_id"])
+        transform = state.production.lineage_records.get_transform_run(state.workspace_id, track["transform_id"])
         assert transform.status == "succeeded" and transform.output_refs == [track["artifact_ref"]]
     exported = state.client.get(base + "/output/selected-subtitles", params={
         "expected_version_id": after["task"]["current_timeline_version_id"], "mode": "zh-en",

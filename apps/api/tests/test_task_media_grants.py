@@ -343,7 +343,7 @@ def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_
     with repo._connect() as conn:
         permit = conn.execute('SELECT children_json,state FROM device_permit').fetchone()
         assert permit['state'] == 'free' and permit['children_json'] == '[]'
-    assert repo.list_transform_runs('local','task')[0].parameters['duration_ms'] == 100
+    assert repo.lineage_records.list_transform_runs('local','task')[0].parameters['duration_ms'] == 100
     runtime.stop(0)
 
 
@@ -485,7 +485,7 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
     assert saved.status == 'succeeded', saved.failure_reason
     assert state['picture_calls'] == 1
     assert store.resolve_file(saved.output_refs[0]).stat().st_size > 0
-    assert repo.list_transform_runs('local','task')[0].parameters['duration_ms'] == 1000
+    assert repo.lineage_records.list_transform_runs('local','task')[0].parameters['duration_ms'] == 1000
     runtime.stop(0)
 
 
@@ -701,7 +701,7 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
                 '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'])
             assert len(raw) == 180*3
             event_input = next(item for item in inputs if item.payload['parameters']['side'] ==
-                next(transform.parameters['side'] for transform in repo.list_transform_runs('local', 'task')
+                next(transform.parameters['side'] for transform in repo.lineage_records.list_transform_runs('local', 'task')
                      if record.logical_ref in transform.output_refs))
             has_fade = event_input.payload['media_input']['plan']['clips'][0]['visual_effects'].get('fade_out_seconds', 0) > 0
             assert (max(raw[-3:]) < 8) if has_fade else (raw[-1] > 240)
@@ -762,14 +762,14 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
         record=audio.publish('local','task',kind='audio_preview',parameters={'side':'after'},input_refs=[],
             operation='picture_preview',media_input=inputs,execution=(context,job,event,actor))
         return {'artifact_id':record.id}
-    original_transform=repo.create_transform_run
+    original_transform=repo.lineage_records.create_transform_run
     attempts={'count':0}
     def transform(value, **kwargs):
         attempts['count']+=1
         if attempts['count']==1:
             raise ValueError('synthetic crash after immutable artifact receipt')
         return original_transform(value, **kwargs)
-    monkeypatch.setattr(repo,'create_transform_run',transform)
+    monkeypatch.setattr(repo.lineage_records,'create_transform_run',transform)
     media.visual_preview=SimpleNamespace(execute=operation,validate_result=media.audio_ingress.validate_result)
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
@@ -777,12 +777,12 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
     assert runtime.run_once()
     assert repo.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
     assert repo.list_artifact_records('local','task') == []
-    assert repo.list_transform_runs('local','task') == []
+    assert repo.lineage_records.list_transform_runs('local','task') == []
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
     assert runtime.run_once()
     assert repo.get_job_run('local',job.id).status=='succeeded' and state['render_calls']==1
     assert len(repo.list_artifact_records('local','task'))==1
-    assert len(repo.list_transform_runs('local','task'))==1
+    assert len(repo.lineage_records.list_transform_runs('local','task'))==1
     runtime.stop(0)

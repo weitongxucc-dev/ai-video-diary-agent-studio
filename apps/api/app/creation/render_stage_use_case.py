@@ -178,7 +178,7 @@ class RenderStageUseCase:
                 raise ValueError("成片恢复缺少内层渲染记录")
             inner_id = transform_id.removeprefix("transform_")
             inner_job = self.repository.get_job_run(workspace_id, inner_id)
-            transform = self.repository.get_transform_run(workspace_id, transform_id)
+            transform = self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             output_refs = [plan.output_path, plan.subtitle_path]
             if (input_digest != original_digest or inner_job.task_id != task.id
                     or inner_job.kind != "creation_task_montage_render"
@@ -417,11 +417,11 @@ class RenderStageUseCase:
                 output_refs = [video_ref, subtitle_ref]
                 active_transform_id = f"transform_{context.job_id}"
                 try:
-                    transform = self.repository.get_transform_run(
+                    transform = self.repository.lineage_records.get_transform_run(
                         workspace_id, active_transform_id
                     )
                 except KeyError:
-                    transform = self.repository.create_transform_run(
+                    transform = self.repository.lineage_records.create_transform_run(
                         TransformRun(
                             id=active_transform_id,
                             workspace_id=workspace_id,
@@ -449,9 +449,9 @@ class RenderStageUseCase:
                         ).hexdigest()[:24]
                         edge_id = f"edge_{context.job_id}_{edge_digest}"
                         try:
-                            self.repository.get_dependency_edge(workspace_id, edge_id)
+                            self.repository.lineage_records.get_dependency_edge(workspace_id, edge_id)
                         except KeyError:
-                            self.repository.create_dependency_edge(
+                            self.repository.lineage_records.create_dependency_edge(
                                 DependencyEdge(
                                     id=edge_id,
                                     workspace_id=workspace_id,
@@ -584,9 +584,9 @@ class RenderStageUseCase:
         if result.status != "succeeded":
             transform_id = f"transform_{result.id}"
             try:
-                self.repository.get_transform_run(workspace_id, transform_id)
+                self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             except KeyError:
-                self.repository.create_transform_run(
+                self.repository.lineage_records.create_transform_run(
                     TransformRun(
                         id=transform_id,
                         workspace_id=workspace_id,
@@ -654,7 +654,7 @@ class RenderStageUseCase:
             transform_id = version.snapshot.get("transform_run_id")
             if not isinstance(transform_id, str):
                 return False
-            transform = self.repository.get_transform_run(workspace_id, transform_id)
+            transform = self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             if (transform.task_id != task_id or transform.status != "succeeded"
                     or ref not in transform.output_refs
                     or transform.output_refs != version.snapshot.get("output_refs")):
@@ -714,7 +714,7 @@ class RenderStageUseCase:
                         return False
                     segments_by_id = {segment.id: segment for segment in narration_segments}
                     cues_by_id = {cue.id: cue for cue in input_plan.cues}
-                    person_transforms = self.repository.list_transform_runs(workspace_id, task_id)
+                    person_transforms = self.repository.lineage_records.list_transform_runs(workspace_id, task_id)
                     for clip in person_clips:
                         cue = cues_by_id.get(clip.cue_id)
                         segment = segments_by_id.get(cue.narration_segment_id) if cue and cue.narration_segment_id else None

@@ -7,6 +7,7 @@ from app.creation.script_contracts import (
 )
 from app.creation.script_records import ScriptRecordStore
 from app.creation.topic_records import TopicRecordStore
+from app.creation.lineage_records import LineageRecordStore
 from app.creation.topic_contracts import (
     TopicCandidate as _TopicCandidate,
     TopicEvidenceKind as _TopicEvidenceKind,
@@ -686,9 +687,13 @@ class ProductionRepository:
         self._material_analysis.visual_understanding = value
 
     def _initialize_profile_stores(self) -> None:
-        """Bind only profile owners; do not open connections or provision schema."""
+        """Bind record owners; do not open connections or provision schema."""
         self._media_authorizations = MediaAuthorizationStore(self._connect)
         self._profile_records = ProfileRecordStore(self._connect, self._media_authorizations)
+        self.lineage_records = LineageRecordStore(self._connect,
+            require_task=self._require_creation_task,
+            job_belongs=self._lineage_job_belongs, output_producers=self._lineage_output_producers,
+            decode_reference_list=_string_list_from_text, decode_parameter_object=_json_object_from_text)
         self.topic_records = TopicRecordStore(self._connect,
             read_task=self.get_creation_task, require_task=self._require_creation_task,
             write_task=self._write_topic_task, read_plan_intent=self._topic_plan_intent,
@@ -1811,7 +1816,7 @@ class ProductionRepository:
                 return False
             try:
                 job = self.get_job_run(artifact.workspace_id, source.producer_job_id)
-                transform = next((item for item in self.list_transform_runs(artifact.workspace_id, artifact.task_id)
+                transform = next((item for item in self.lineage_records.list_transform_runs(artifact.workspace_id, artifact.task_id)
                     if item.job_id == source.producer_job_id and item.output_refs == [source.logical_ref]), None)
             except KeyError:
                 return False
@@ -5775,9 +5780,9 @@ class ProductionRepository:
             raise ValueError('发布前段落或时间线已变化；原采用版本保留')
         for artifact in artifacts:
             self.create_artifact_record(artifact,connection=connection)
-        self.create_transform_run(transform,connection=connection)
+        self.lineage_records.create_transform_run(transform,connection=connection)
         for edge in edges:
-            self.create_dependency_edge(edge,connection=connection)
+            self.lineage_records.create_dependency_edge(edge,connection=connection)
         self.append_task_event(event,connection=connection)
         if adopted:
             row = connection.execute('SELECT snapshot_json,sequence FROM timeline_versions WHERE workspace_id=? AND id=?',
@@ -7149,204 +7154,11 @@ class ProductionRepository:
             ).fetchall()
         return [self._task_event_from_row(row) for row in rows]
 
-    def create_transform_run(self, run: _TransformRun, *, connection: sqlite3.Connection | None = None) -> _TransformRun:
-        _validate_transform_run(run)
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, run.workspace_id, run.task_id)
-            job = conn.execute(
-                """
-                SELECT task_id FROM job_runs
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (run.workspace_id, run.job_id),
-            ).fetchone()
-            if job is None or str(job["task_id"]) != run.task_id:
-                raise ValueError("变换运行关联的 JobRun 不属于当前工作区与任务")
-            if run.status == "succeeded":
-                placeholders = ", ".join("?" for _ in run.output_refs)
-                rows = conn.execute(
-                    f"""
-                    SELECT logical_ref, producer_job_id FROM artifact_records
-                    WHERE workspace_id = ? AND task_id = ?
-                      AND logical_ref IN ({placeholders})
-                    """,
-                    (run.workspace_id, run.task_id, *run.output_refs),
-                ).fetchall()
-                artifacts = {
-                    str(row["logical_ref"]): str(row["producer_job_id"])
-                    for row in rows
-                }
-                if any(
-                    artifacts.get(reference) != run.job_id
-                    for reference in run.output_refs
-                ):
-                    raise ValueError("成功变换的输出必须是该 JobRun 已登记的产物")
-            existing_row = conn.execute(
-                "SELECT * FROM transform_runs WHERE id = ?",
-                (run.id,),
-            ).fetchone()
-            if existing_row is not None:
-                persisted = self._transform_run_from_row(existing_row)
-                if persisted != run:
-                    raise ValueError("变换运行记录 ID 已存在，且领域字段不一致")
-                return persisted
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO transform_runs
-                        (id, workspace_id, task_id, job_id, transform_type,
-                         input_digest, input_refs_json, output_refs_json, engine,
-                         parameters_json, status, started_at, finished_at,
-                         failure_reason, remediation)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        run.id,
-                        run.workspace_id,
-                        run.task_id,
-                        run.job_id,
-                        run.transform_type,
-                        run.input_digest,
-                        json.dumps(run.input_refs, ensure_ascii=False),
-                        json.dumps(run.output_refs, ensure_ascii=False),
-                        run.engine,
-                        _json_object(run.parameters),
-                        run.status,
-                        run.started_at.isoformat(),
-                        run.finished_at.isoformat() if run.finished_at else None,
-                        run.failure_reason,
-                        run.remediation,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("变换运行记录 ID 已存在") from exc
-            row = conn.execute("SELECT * FROM transform_runs WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
-            return self._transform_run_from_row(row)
 
-    def get_transform_run(self, workspace_id: str, transform_id: str) -> _TransformRun:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM transform_runs WHERE workspace_id = ? AND id = ?",
-                (workspace_id, transform_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(transform_id)
-        return self._transform_run_from_row(row)
 
-    def list_transform_runs(
-        self, workspace_id: str, task_id: str
-    ) -> list[_TransformRun]:
-        with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM transform_runs
-                WHERE workspace_id = ? AND task_id = ? ORDER BY started_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._transform_run_from_row(row) for row in rows]
 
-    def create_dependency_edge(self, edge: _DependencyEdge, *, connection: sqlite3.Connection | None = None) -> _DependencyEdge:
-        _validate_dependency_edge(edge)
-        if connection is None:
-            with self._connect() as conn:
-                self.create_dependency_edge(edge, connection=conn)
-            return self.get_dependency_edge(edge.workspace_id, edge.id)
-        conn = connection
-        self._require_creation_task(conn, edge.workspace_id, edge.task_id)
-        transform_row = conn.execute(
-            """
-            SELECT * FROM transform_runs
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
-            """,
-            (
-                edge.workspace_id,
-                edge.task_id,
-                edge.created_by_transform_id,
-            ),
-        ).fetchone()
-        if transform_row is None:
-            raise ValueError("依赖边关联的变换不属于当前工作区与任务")
-        transform = self._transform_run_from_row(transform_row)
-        if transform.status != "succeeded":
-            raise ValueError("只能为成功变换登记依赖边")
-        if edge.upstream_ref not in transform.input_refs:
-            raise ValueError("依赖边上游不在变换输入引用中")
-        if edge.downstream_ref not in transform.output_refs:
-            raise ValueError("依赖边下游不在变换输出引用中")
-        existing_row = conn.execute(
-            "SELECT * FROM dependency_edges WHERE id = ?",
-            (edge.id,),
-        ).fetchone()
-        if existing_row is None:
-            existing_row = conn.execute(
-                """
-                SELECT * FROM dependency_edges
-                WHERE workspace_id = ? AND task_id = ?
-                  AND upstream_ref = ? AND downstream_ref = ?
-                  AND created_by_transform_id = ?
-                """,
-                (
-                    edge.workspace_id,
-                    edge.task_id,
-                    edge.upstream_ref,
-                    edge.downstream_ref,
-                    edge.created_by_transform_id,
-                ),
-            ).fetchone()
-        if existing_row is not None:
-            persisted = self._dependency_edge_from_row(existing_row)
-            if persisted != edge:
-                raise ValueError("依赖边 ID 或逻辑唯一键已存在，且领域字段不一致")
-            return persisted
-        try:
-            conn.execute(
-                """
-                INSERT INTO dependency_edges
-                    (id, workspace_id, task_id, upstream_ref, downstream_ref,
-                     created_by_transform_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    edge.id,
-                    edge.workspace_id,
-                    edge.task_id,
-                    edge.upstream_ref,
-                    edge.downstream_ref,
-                    edge.created_by_transform_id,
-                    edge.created_at.isoformat(),
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("依赖边 ID 或同一变换中的边已存在") from exc
-        return edge
 
-    def get_dependency_edge(
-        self, workspace_id: str, edge_id: str
-    ) -> _DependencyEdge:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM dependency_edges WHERE workspace_id = ? AND id = ?",
-                (workspace_id, edge_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(edge_id)
-        return self._dependency_edge_from_row(row)
 
-    def list_dependency_edges(
-        self, workspace_id: str, task_id: str
-    ) -> list[_DependencyEdge]:
-        with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM dependency_edges
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._dependency_edge_from_row(row) for row in rows]
 
     def save_narration_segments(
         self,
@@ -7687,9 +7499,9 @@ class ProductionRepository:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self.create_artifact_record(artifact, connection=conn)
-            self.create_transform_run(transform, connection=conn)
+            self.lineage_records.create_transform_run(transform, connection=conn)
             for edge in edges:
-                self.create_dependency_edge(edge, connection=conn)
+                self.lineage_records.create_dependency_edge(edge, connection=conn)
         return artifact
 
     def create_edit_intent(self, intent: _EditIntent, *, connection: sqlite3.Connection | None = None, source: dict | None | Literal[False] = False) -> _EditIntent:
@@ -8841,6 +8653,23 @@ class ProductionRepository:
 
 
 
+
+    @staticmethod
+    def _lineage_job_belongs(connection, workspace_id, task_id, job_id):
+        row = connection.execute(
+            "SELECT task_id FROM job_runs WHERE workspace_id = ? AND id = ?",
+            (workspace_id, job_id),
+        ).fetchone()
+        return row is not None and str(row["task_id"]) == task_id
+
+    @staticmethod
+    def _lineage_output_producers(connection, workspace_id, task_id, references):
+        placeholders = ", ".join("?" for _ in references)
+        rows = connection.execute(
+            f"SELECT logical_ref, producer_job_id FROM artifact_records WHERE workspace_id = ? AND task_id = ? AND logical_ref IN ({placeholders})",
+            (workspace_id, task_id, *references),
+        ).fetchall()
+        return {str(row["logical_ref"]): str(row["producer_job_id"]) for row in rows}
 
     def _write_topic_task(self, connection, task):
         if not connection.in_transaction:
@@ -10026,49 +9855,7 @@ class ProductionRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
 
-    @staticmethod
-    def _transform_run_from_row(row: sqlite3.Row) -> _TransformRun:
-        return _TransformRun(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            job_id=str(row["job_id"]),
-            transform_type=str(row["transform_type"]),
-            input_digest=str(row["input_digest"]),
-            input_refs=_string_list_from_text(str(row["input_refs_json"])),
-            output_refs=_string_list_from_text(str(row["output_refs_json"])),
-            engine=str(row["engine"]),
-            parameters=_json_object_from_text(str(row["parameters_json"])),
-            status=str(row["status"]),  # type: ignore[arg-type]
-            started_at=datetime.fromisoformat(str(row["started_at"])),
-            finished_at=(
-                datetime.fromisoformat(str(row["finished_at"]))
-                if row["finished_at"] is not None
-                else None
-            ),
-            failure_reason=(
-                str(row["failure_reason"])
-                if row["failure_reason"] is not None
-                else None
-            ),
-            remediation=(
-                str(row["remediation"])
-                if row["remediation"] is not None
-                else None
-            ),
-        )
 
-    @staticmethod
-    def _dependency_edge_from_row(row: sqlite3.Row) -> _DependencyEdge:
-        return _DependencyEdge(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            upstream_ref=str(row["upstream_ref"]),
-            downstream_ref=str(row["downstream_ref"]),
-            created_by_transform_id=str(row["created_by_transform_id"]),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-        )
 
     @staticmethod
     def _edit_intent_from_row(row: sqlite3.Row) -> _EditIntent:
@@ -10696,70 +10483,8 @@ def _validate_task_event(event: _TaskEvent) -> None:
     _json_object(event.payload)
 
 
-def _validate_transform_run(run: _TransformRun) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            run.id,
-            run.workspace_id,
-            run.task_id,
-            run.job_id,
-            run.transform_type,
-            run.input_digest,
-            run.engine,
-        )
-    ):
-        raise ValueError("变换运行缺少必要标识、输入摘要或引擎")
-    for reference in (*run.input_refs, *run.output_refs):
-        _validate_logical_reference(reference, "变换输入输出引用")
-    if len(set(run.input_refs)) != len(run.input_refs) or len(
-        set(run.output_refs)
-    ) != len(run.output_refs):
-        raise ValueError("变换输入输出引用不能重复")
-    _json_object(run.parameters)
-    if run.finished_at is not None and run.finished_at < run.started_at:
-        raise ValueError("变换结束时间不能早于开始时间")
-    if run.status == "running":
-        if (
-            run.finished_at is not None
-            or run.output_refs
-            or run.failure_reason is not None
-            or run.remediation is not None
-        ):
-            raise ValueError("运行中变换不能已有输出或终态信息")
-    elif run.status == "succeeded":
-        if run.finished_at is None or not run.output_refs:
-            raise ValueError("成功变换必须包含结束时间和输出引用")
-        if run.failure_reason is not None or run.remediation is not None:
-            raise ValueError("成功变换不能包含失败信息")
-    elif run.status == "failed":
-        if (
-            run.finished_at is None
-            or not (run.failure_reason or "").strip()
-            or not (run.remediation or "").strip()
-        ):
-            raise ValueError("失败变换必须包含结束时间、原因和修复动作")
-        if run.output_refs:
-            raise ValueError("失败变换不能登记成功输出")
-    else:
-        raise ValueError("变换运行状态无效")
 
 
-def _validate_dependency_edge(edge: _DependencyEdge) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            edge.id,
-            edge.workspace_id,
-            edge.task_id,
-            edge.created_by_transform_id,
-        )
-    ):
-        raise ValueError("依赖边缺少必要标识或变换引用")
-    _validate_logical_reference(edge.upstream_ref, "依赖边上游引用")
-    _validate_logical_reference(edge.downstream_ref, "依赖边下游引用")
-    if edge.upstream_ref == edge.downstream_ref:
-        raise ValueError("依赖边不能指向自身")
 
 
 def _validate_edit_intent(intent: _EditIntent) -> None:

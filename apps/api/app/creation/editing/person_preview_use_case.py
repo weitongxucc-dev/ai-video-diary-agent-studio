@@ -64,7 +64,7 @@ class PersonPreviewUseCase:
             person_source_start, person_source_end = self.source_range(workspace_id, task, montage, clip, segment)
         except ValueError as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
-        person_transforms = self.repository.list_transform_runs(workspace_id, task.id)
+        person_transforms = self.repository.lineage_records.list_transform_runs(workspace_id, task.id)
         existing_render = next((item for item in reversed(self.repository.list_person_renders(workspace_id, task.id)) if item.narration_segment_id == segment.id and item.person_profile_id == person.id and (item.person_version == person.version) and (item.voice_profile_id == segment.voice_profile_id) and (item.voice_version == segment.voice_version) and (item.model_id == person_provider.model_id) and (item.motion == 'natural') and (item.expression == 'neutral') and (item.status == 'ready') and self.render_matches_narration(item, segment, person_transforms) and (self.metadata.picture_renderer.person_path(item) is not None)), None)
         operation_type = 'RegeneratePersonRender' if regenerate_requested else 'ChangePersonSegment'
         intent_type = 'regenerate_person_render' if regenerate_requested else 'change_person_segment'

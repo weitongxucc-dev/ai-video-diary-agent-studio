@@ -525,7 +525,7 @@ def test_recordings_list_excludes_incomplete_and_other_workspace(recording_task,
     second = client.post(route, files={"audio": ("second.wav", wav_bytes(), "audio/wav")}).json()
     assert [item["source_ref"] for item in client.get(route).json()["items"]] == [
         second["source_ref"], first["source_ref"]]
-    transform_id = next(run.id for run in repo.list_transform_runs("local", task_id) if second["source_ref"] in run.output_refs)
+    transform_id = next(run.id for run in repo.lineage_records.list_transform_runs("local", task_id) if second["source_ref"] in run.output_refs)
     with repo._connect() as conn:
         conn.execute("UPDATE transform_runs SET status='failed' WHERE workspace_id=? AND id=?",
                      ("local", transform_id))

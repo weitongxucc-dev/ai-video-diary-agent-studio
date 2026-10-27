@@ -162,7 +162,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert montage_public.json()['montage']['id'] == montage['id'] and montage_public.json()['montage']['status'] == 'waiting_for_user'
         assert not runtime.run_once()
         assert calls == before_queries and len(repo.list_timeline_versions('local', task_id)) == 1
-        assert not repo.list_person_renders('local', task_id) and not repo.list_transform_runs('local', task_id)
+        assert not repo.list_person_renders('local', task_id) and not repo.lineage_records.list_transform_runs('local', task_id)
         assert not repo.list_artifact_records('local', task_id)
         stopped = client.post(url + '/execution/cancel')
         assert stopped.status_code == 200, stopped.text

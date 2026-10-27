@@ -314,7 +314,7 @@ def current_presenter_render(repository, task, segment, request, resolve_output)
         return None
     if render.duration_seconds + .001 < segment.duration_seconds:
         return None
-    transforms = repository.list_transform_runs(task.workspace_id, task.id)
+    transforms = repository.lineage_records.list_transform_runs(task.workspace_id, task.id)
     if not any(item.transform_type == "person_render" and item.status == "succeeded"
                and item.input_digest == key and render.artifact_ref in item.output_refs
                and segment.audio_reference in item.input_refs
@@ -636,7 +636,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                     or version.parent_version_id != version.snapshot["render_input_timeline_version_id"]):
                 raise ValueError("当前成片版本缺少本次许可的原始输入")
             inner = repository.get_job_run(task.workspace_id, transform_id.removeprefix("transform_"))
-            transform = repository.get_transform_run(task.workspace_id, transform_id)
+            transform = repository.lineage_records.get_transform_run(task.workspace_id, transform_id)
             if (inner.task_id != task.id or inner.kind != "creation_task_montage_render"
                     or inner.status != "succeeded" or transform.status != "succeeded"
                     or transform.job_id != inner.id or transform.task_id != task.id

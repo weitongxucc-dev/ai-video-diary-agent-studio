@@ -156,7 +156,7 @@ def seed_narration(repo, media, tmp_path):
     running=repo.claim_job_run('local',job.id)
     artifact=repo.create_artifact_record(ArtifactRecord('fixture-source-artifact','local','task','task_recording',ref,
         publication.sha256,publication.size_bytes,job.id,[]))
-    repo.create_transform_run(TransformRun('fixture-source-transform','local','task',job.id,'task_recording',publication.sha256,
+    repo.lineage_records.create_transform_run(TransformRun('fixture-source-transform','local','task',job.id,'task_recording',publication.sha256,
         [],[ref],'synthetic-fixture-input/v1',{'duration_ms':200,'sample_rate':16000,'channels':1,'script_id':script.id,'script_digest':digest},'succeeded',running.started_at,utc_now()))
     repo.finish_job_run('local',job.id,status='succeeded',output_refs=[ref])
     path=store.resolve_file(ref)

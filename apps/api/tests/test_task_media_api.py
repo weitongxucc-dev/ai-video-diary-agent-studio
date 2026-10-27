@@ -210,7 +210,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     result = client.get(receipt['result_url']).json()
     assert result['status'] == 'succeeded', result
     assert result['result']['duration_ms'] == 100
-    transform = repo.list_transform_runs('local','task')[0]
+    transform = repo.lineage_records.list_transform_runs('local','task')[0]
     assert transform.parameters['sample_rate'] == 24000 and transform.parameters['channels'] == 1
     assert client.get('/api/creation-tasks/task/media-jobs').json()['items'][0]['job_id'] == receipt['job_id']
     # The imported source survives later timeline edits; drafts stay synchronous and do no DSP.

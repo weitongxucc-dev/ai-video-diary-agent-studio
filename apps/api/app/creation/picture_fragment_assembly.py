@@ -282,14 +282,14 @@ class PictureFragmentAssembly:
                 publication_guard(conn)
                 self.manifest(job, actor=actor, connection=conn)
                 self.repository.create_artifact_record(record, connection=conn)
-                self.repository.create_transform_run(transform, connection=conn)
+                self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 if published_subtitles is not None:
                     subtitle_id = f'artifact_subtitles_{unit["id"]}'
                     subtitle_record = ArtifactRecord(subtitle_id, job.workspace_id, job.task_id, 'subtitle_track',
                         subtitle_logical, published_subtitles.sha256, published_subtitles.size_bytes, job.id,
                         [f'montage-plan://{job.task_id}/{self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn)["id"]}'])
                     self.repository.create_artifact_record(subtitle_record, connection=conn)
-                    self.repository.create_transform_run(TransformRun(id=f'transform_{subtitle_id}',
+                    self.repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{subtitle_id}',
                         workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                         transform_type='subtitle_render', input_digest=unit['id'], input_refs=subtitle_record.input_refs,
                         output_refs=[subtitle_logical], engine='subtitle-sidecar/v1', parameters={
@@ -297,10 +297,10 @@ class PictureFragmentAssembly:
                             'producer_generation': context.grant.generation, 'file_identity': _identity(self.store.resolve_file(subtitle_logical))},
                         status='succeeded', started_at=utc_now(), finished_at=utc_now()), connection=conn)
                     for index, reference in enumerate(subtitle_record.input_refs):
-                        self.repository.create_dependency_edge(DependencyEdge(f'edge_{subtitle_id}_{index}',
+                        self.repository.lineage_records.create_dependency_edge(DependencyEdge(f'edge_{subtitle_id}_{index}',
                             job.workspace_id, job.task_id, reference, subtitle_logical, f'transform_{subtitle_id}'), connection=conn)
                 for index, reference in enumerate(record.input_refs):
-                    self.repository.create_dependency_edge(DependencyEdge(f'edge_{record.id}_{index}', job.workspace_id,
+                    self.repository.lineage_records.create_dependency_edge(DependencyEdge(f'edge_{record.id}_{index}', job.workspace_id,
                         job.task_id, reference, logical, transform.id), connection=conn)
             return record
         finally:
@@ -351,7 +351,7 @@ class PictureFragmentAssembly:
             return None
         self.packet._parent(job, unit['artifact_id'], manifest['picture_recipe'], connection=connection)
         record = self.repository.get_artifact_record(job.workspace_id, f'artifact_subtitles_{unit["id"]}')
-        transform = self.repository.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         if (record.producer_job_id != job.id or record.task_id != job.task_id or record.kind != 'subtitle_track'
                 or record.sha256 != unit['subtitle_sha256'] or record.size_bytes != unit['subtitle_bytes']
                 or transform.input_digest != unit['id'] or transform.status != 'succeeded'

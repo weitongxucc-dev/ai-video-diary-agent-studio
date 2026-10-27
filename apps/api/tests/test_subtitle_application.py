@@ -58,7 +58,7 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
         running = state.repo.claim_job_run('ws', 'fixture-cover-job')
         state.repo.create_artifact_record(ArtifactRecord('fixture-cover-artifact', 'ws', state.task.id, 'cover',
             cover_ref, digest, cover_file.stat().st_size, 'fixture-cover-job', []))
-        state.repo.create_transform_run(TransformRun('fixture-cover-transform', 'ws', state.task.id,
+        state.repo.lineage_records.create_transform_run(TransformRun('fixture-cover-transform', 'ws', state.task.id,
             'fixture-cover-job', 'fixture_input', digest, [], [cover_ref], 'synthetic-fixture-input/v1',
             {}, 'succeeded', running.started_at, utc_now()))
         state.repo.finish_job_run('ws', 'fixture-cover-job', status='succeeded', output_refs=[cover_ref])

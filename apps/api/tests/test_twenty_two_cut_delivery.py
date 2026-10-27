@@ -90,7 +90,7 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
         source_task, plan, source_path, registered = outputs.quality_source_metadata(workspace_id, task_id)
         assert source_task.current_timeline_version_id == version.id and source_path == downloaded.path
         assert registered.kind == 'rendered_video' and registered.producer_job_id == job_id
-        final_transform = case.repo.get_transform_run(workspace_id, f'transform_{registered.id}')
+        final_transform = case.repo.lineage_records.get_transform_run(workspace_id, f'transform_{registered.id}')
         assert final_transform.transform_type == 'final_mux' and final_transform.job_id == job_id
         assert final_transform.parameters['clock']['picture']['packet_count'] == 60
         assert final_transform.parameters['clock']['audio']['sample_count'] == 96000

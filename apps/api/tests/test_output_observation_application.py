@@ -88,7 +88,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     running = repo.claim_job_run('local', producer.id)
     artifact = repo.create_artifact_record(ArtifactRecord('fixture-output-artifact', 'local', 'task', 'rendered_video',
         publication.logical_ref, publication.sha256, publication.size_bytes, producer.id, [source_ref]))
-    repo.create_transform_run(TransformRun('fixture-output-transform', 'local', 'task', producer.id,
+    repo.lineage_records.create_transform_run(TransformRun('fixture-output-transform', 'local', 'task', producer.id,
         'rendered_video', producer.input_digest, [source_ref], [publication.logical_ref], 'synthetic-fixture-input/v1',
         {'width':width,'height':height,'duration_ms':2000}, 'succeeded', running.started_at, utc_now()))
     repo.finish_job_run('local', producer.id, status='succeeded', output_refs=[publication.logical_ref])

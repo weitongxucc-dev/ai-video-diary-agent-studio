@@ -138,7 +138,7 @@ def test_script_job_publishes_editable_png_and_actual_definition_only_after_succ
     assert content["script_source"] == state.payload["script_source"] and content["input_slots"] == []
     assert set(content["toolchain"]) == {"version", "digest"}
     assert str(state.root) not in json.dumps(content)
-    transform = next(item for item in state.production.list_transform_runs(state.workspace_id, state.task.id) if item.transform_type == "media_script")
+    transform = next(item for item in state.production.lineage_records.list_transform_runs(state.workspace_id, state.task.id) if item.transform_type == "media_script")
     assert transform.parameters["definition_ref"] == definition.logical_ref
     assert transform.parameters["owner_member_id"] == state.member.member_id
     assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
@@ -262,12 +262,12 @@ def test_shared_artifact_transform_connection_is_one_rollback_transaction(state)
         with state.production._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             assert state.production.create_artifact_record(artifact, connection=conn) == artifact
-            assert state.production.create_transform_run(transform, connection=conn) == transform
+            assert state.production.lineage_records.create_transform_run(transform, connection=conn) == transform
             raise RuntimeError("rollback")
     with pytest.raises(KeyError):
         state.production.get_artifact_record(state.workspace_id, artifact.id)
     with pytest.raises(KeyError):
-        state.production.get_transform_run(state.workspace_id, transform.id)
+        state.production.lineage_records.get_transform_run(state.workspace_id, transform.id)
 
 
 def test_crash_after_graphic_record_recovers_definition_without_rerunning_python(state, monkeypatch):
@@ -326,7 +326,7 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
             artifact = state.production.create_artifact_record(ArtifactRecord(id="artifact-all-rollback", workspace_id=state.workspace_id,
                 task_id=state.task.id, kind="media_script_definition", logical_ref="artifacts/all-rollback.json", sha256="f" * 64,
                 size_bytes=2, producer_job_id=job.id, input_refs=[]), connection=conn)
-            state.production.create_transform_run(TransformRun(id="transform-all-rollback", workspace_id=state.workspace_id,
+            state.production.lineage_records.create_transform_run(TransformRun(id="transform-all-rollback", workspace_id=state.workspace_id,
                 task_id=state.task.id, job_id=job.id, transform_type="fixture_metadata", input_digest=job.input_digest,
                 input_refs=[], output_refs=[artifact.logical_ref], engine="fixture", parameters={}, status="succeeded",
                 started_at=running.started_at, finished_at=utc_now()), connection=conn)
@@ -339,7 +339,7 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
     with pytest.raises(KeyError):
         state.production.get_artifact_record(state.workspace_id, "artifact-all-rollback")
     with pytest.raises(KeyError):
-        state.production.get_transform_run(state.workspace_id, "transform-all-rollback")
+        state.production.lineage_records.get_transform_run(state.workspace_id, "transform-all-rollback")
 
 
 def test_script_success_continuation_is_source_ready_without_applying_a_version(state, tmp_path, monkeypatch):
@@ -375,15 +375,15 @@ def test_partial_metadata_recovery_reuses_identical_records_without_rerunning(st
     record = state.production.get_artifact_record(state.workspace_id, source["artifact_id"])
     inputs = [{"name": "input.png", "source_ref": record.logical_ref, "expected_artifact_id": record.id, "expected_sha256": record.sha256}]
     method = "create_transform_run" if boundary == "definition_record" else "create_dependency_edge"
-    original = getattr(state.production, method)
-    monkeypatch.setattr(state.production, method, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("partial metadata boundary")))
+    original = getattr(state.production.lineage_records, method)
+    monkeypatch.setattr(state.production.lineage_records, method, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("partial metadata boundary")))
     queued = submit(state, input_refs=inputs)
     assert queued.status_code == 202 and state.runtime.run_once()
     job_id = queued.json()["job_id"]
     assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
     definition = next(item for item in state.production.list_artifact_records(state.workspace_id, state.task.id)
                       if item.producer_job_id == job_id and item.kind == "media_script_definition")
-    monkeypatch.setattr(state.production, method, original)
+    monkeypatch.setattr(state.production.lineage_records, method, original)
     assert state.client.post(state.base_url + f"/media-jobs/{job_id}/retry").status_code == 202
     assert state.runtime.run_once()
     result = state.client.get(queued.json()["result_url"])
