@@ -16,6 +16,8 @@ from test_creation_requests import entries
 
 @pytest.fixture
 def client_state(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
     path = tmp_path / "api.sqlite3"
     repo = ProductionRepository(path, tmp_path / "library")
     members = LocalMemberService(path)
@@ -28,12 +30,13 @@ def client_state(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "auth_context", SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, "current_workspace_id", lambda _request: "request-test")
     live_fingerprint = ["a" * 64]
-    def preflight(_request, workspace_id, payload, **_dependencies):
+    def preflight(_case, workspace_id, payload, **_dependencies):
         return replace(entries(count=1)[0][0], goal=payload.goal, name=payload.name or payload.goal,
             language=payload.language, aspect_ratio=payload.aspect_ratio,
             presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
-            duration_target_seconds=payload.duration_target_seconds, preflight_fingerprint=live_fingerprint[0])
-    monkeypatch.setattr(main, "_creation_plan_preflight", preflight)
+            duration_target_seconds=payload.duration_target_seconds, duration_mode=payload.duration_mode,
+            duration_range_seconds=payload.duration_range_seconds, preflight_fingerprint=live_fingerprint[0])
+    monkeypatch.setattr(main.CreationPlanPreflightUseCase, "prepare", preflight)
     app = FastAPI()
     for path, handler, methods in [
         ("/api/creation-requests", main.create_creation_request, ["POST"]),
@@ -138,7 +141,7 @@ def test_original_creation_request_can_be_read_by_trusted_input_without_server_i
     ("做一万条视频", 10000, None), ("做成一个2分钟的短视频", None, 120),
 ])
 def test_explicit_user_numbers_are_program_facts(goal, count, duration):
-    assert main._explicit_creation_constraints(goal) == (count, duration)
+    assert main.request_workflow.explicit_creation_constraints(goal) == (count, duration)
 
 
 def test_stale_external_preflight_cannot_partially_confirm_window(client_state):
@@ -223,11 +226,11 @@ def test_confirm_checks_live_blocking_condition_even_when_digest_is_unchanged(cl
     from app.creation.plan_contracts import CreationPlanBlocker
     c = client_state
     base, data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "原主题"})
-    prepare = main._creation_plan_preflight
+    prepare = main.CreationPlanPreflightUseCase.prepare
     def blocked(*args, **kwargs):
         return replace(prepare(*args, **kwargs), blockers=[CreationPlanBlocker(reason="content_sources_missing",
             impact="当前所选资料已不可使用", repair_action="恢复资料", stage="topic", blocks_confirmation=True)])
-    monkeypatch.setattr(main, "_creation_plan_preflight", blocked)
+    monkeypatch.setattr(main.CreationPlanPreflightUseCase, "prepare", blocked)
     response = c.client.post(url, headers=c.alice, json=confirmation)
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "creation_window_blocked"
@@ -268,9 +271,11 @@ def test_resource_change_at_adoption_is_safe_and_does_not_create_tasks(client_st
 
 
 def test_language_variants_keep_individual_requirements_through_replan_and_adoption(client_state):
+    import json
     c = client_state
     saved = create(c, goal="产品介绍中英文各一条", target_count=2, output_relation="variants",
-        language="zh-CN", duration_target_seconds=60).json()
+        language="zh-CN", duration_target_seconds=60, duration_mode="approximate",
+        duration_range_seconds=[20, 90]).json()
     base = "/api/creation-requests/" + saved["id"]
     planned = c.client.post(base + "/windows", headers=c.alice, json={"expected_revision": saved["revision"],
         "goals": [{"goal": "同一产品介绍"}, {"goal": "同一产品介绍", "requirements": {
@@ -278,12 +283,24 @@ def test_language_variants_keep_individual_requirements_through_replan_and_adopt
             "presenter_share_target": 0, "lipsync_quality": "fast"}}]})
     assert planned.status_code == 200, planned.text
     data = planned.json()
+    # Declare frozen per-delivery agreements, distinct from the parent's defaults.
+    agreements = [("approximate", [50, 70]), ("exact", None)]
+    with c.repository._connect() as conn:
+        for entry, (mode, bounds) in zip(data["current_window"]["entries"], agreements):
+            row = conn.execute("SELECT plan_payload FROM creation_request_items WHERE window_id=? AND plan_id=?",
+                (data["current_window"]["id"], entry["plan_id"])).fetchone()
+            plan = {**json.loads(row[0]), "duration_mode": mode, "duration_range_seconds": bounds}
+            conn.execute("UPDATE creation_request_items SET plan_payload=? WHERE window_id=? AND plan_id=?",
+                (json.dumps(plan), data["current_window"]["id"], entry["plan_id"]))
+    frozen = c.client.get(base, headers=c.alice).json()["current_window"]["entries"]
+    assert [(item["plan"]["duration_mode"], item["plan"]["duration_range_seconds"]) for item in frozen] == agreements
     c.live_fingerprint[0] = "b" * 64
     replanned = c.client.post(base + "/windows/" + data["current_window"]["id"] + "/replan", headers=c.alice,
         json={"expected_revision": data["revision"]})
     assert replanned.status_code == 200, replanned.text
     data = replanned.json()
     window = data["current_window"]
+    assert [(item["plan"]["duration_mode"], item["plan"]["duration_range_seconds"]) for item in window["entries"]] == agreements
     confirmation = {"expected_revision": data["revision"], "input_fingerprint": window["input_fingerprint"]}
     for _ in range(2):
         confirmed = c.client.post(base + "/windows/" + window["id"] + "/confirm", headers=c.alice, json=confirmation)
@@ -292,6 +309,7 @@ def test_language_variants_keep_individual_requirements_through_replan_and_adopt
     plans = [entry["plan"] for entry in c.client.get(base + "/items", headers=c.alice).json()["items"]]
     assert [(p["language"], p["duration_target_seconds"], p["aspect_ratio"]) for p in plans] == [
         ("zh-CN", 60, "9:16"), ("en-US", 30, "16:9")]
+    assert [(plan["duration_mode"], plan["duration_range_seconds"]) for plan in plans] == agreements
     assert plans[1]["presenter_share_target"] == 0 and plans[1]["lipsync_quality"] == "fast"
     assert len(c.repository.list_creation_tasks("request-test")) == 2
 
