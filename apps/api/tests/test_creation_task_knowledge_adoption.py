@@ -95,7 +95,7 @@ def test_new_script_consumes_new_fixed_inputs_and_old_draft_cannot_be_adopted(st
         state.repository.confirm_creation_task_script('local', 'task', old.id,
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     with pytest.raises(ValueError, match='旧稿仅保留'):
-        state.repository.update_assistant_script_draft('local', 'task', old.id,
+        state.repository.script_records.update_assistant_script_draft('local', 'task', old.id,
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     assert rows(state, historical) == historical
     document, calls = draft(), []

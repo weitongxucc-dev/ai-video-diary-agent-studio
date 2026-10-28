@@ -326,7 +326,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
         )
 
     changed_section = replace(original.sections[0], content="用户修订的回复草稿")
-    revised = repo.update_assistant_script_draft(
+    revised = repo.script_records.update_assistant_script_draft(
         WORKSPACE, task.id, original.id,
         title="用户已修订", sections=[changed_section],
         expected_updated_at=original.updated_at,
@@ -367,7 +367,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
             expected_updated_at=replacement.updated_at,
         )
     with pytest.raises(ValueError, match="本次模型输入之外"):
-        repo.update_assistant_script_draft(
+        repo.script_records.update_assistant_script_draft(
             WORKSPACE, task.id, replacement.id,
             title="不能编造来源", sections=[replace(
                 replacement.sections[0],
@@ -380,7 +380,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
         visual_prompt="展示当前资料中的核心功能。",
         evidence_reference_ids=[INPUT_REFERENCES[0]["reference_id"]],
     )
-    replacement = repo.update_assistant_script_draft(
+    replacement = repo.script_records.update_assistant_script_draft(
         WORKSPACE, task.id, replacement.id,
         title="补齐有效来源与画面建议", sections=[completed_section],
         expected_updated_at=replacement.updated_at,

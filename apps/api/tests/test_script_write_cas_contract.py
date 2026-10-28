@@ -93,7 +93,7 @@ def ready_script(tmp_path: Path) -> tuple[ProductionRepository, CreationTaskScri
 
 
 def update(repo: ProductionRepository, script: CreationTaskScript, token: str | None):
-    return repo.update_assistant_script_draft(
+    return repo.script_records.update_assistant_script_draft(
         WORKSPACE, script.task_id, script.id, title="更新后", sections=script.sections,
         expected_updated_at=token,
     )

@@ -953,7 +953,7 @@ def test_agent_concurrent_edit_during_check_preserves_newer_draft(api_state, mon
     body = agent_payload(api_state, original)
     concurrent = []
     def change_draft():
-        concurrent.append(api_state.repository.update_assistant_script_draft('local', 'task', original.id,
+        concurrent.append(api_state.repository.script_records.update_assistant_script_draft('local', 'task', original.id,
             title='另一个明确修订', sections=original.sections, expected_updated_at=original.updated_at))
     calls = []
     set_agent_reviewer(monkeypatch, reviewed(draft()), calls, change_draft)
@@ -2266,7 +2266,7 @@ def test_public_script_repository_reads_updates_and_confirms_all_25_rows(api_sta
     assert second['next_after_ordinal'] is None
     revised = copy.deepcopy(script.sections)
     revised[-1].content += '从这里讲起。'
-    saved = state.repository.update_assistant_script_draft('local', 'task', script.id, title=script.title,
+    saved = state.repository.script_records.update_assistant_script_draft('local', 'task', script.id, title=script.title,
         sections=revised, expected_updated_at=script.updated_at)
     with pytest.raises(ScriptWindowConflict):
         state.repository.script_records.read_creation_task_script_sections('local', 'task', script.id, expected_updated_at=version, after_ordinal=20)

@@ -872,7 +872,7 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
     )
     repo.script_records.complete_script_generation(run.id, initial)
     revised_sections = [CreationTaskScriptSection("section-one", "开头", "用户改过的内容", "产品画面", ["ref-one"])]
-    revised = repo.update_assistant_script_draft(
+    revised = repo.script_records.update_assistant_script_draft(
         "one", "task-one", initial.id, title="新版草稿", sections=revised_sections,
         expected_updated_at=initial.updated_at,
     )
@@ -883,9 +883,9 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
     restarted = ProductionRepository(tmp_path / "production.sqlite", repo.video_library_path)
     assert restarted.script_records.get_creation_task_script("one", initial.id).title == "新版草稿"
     with pytest.raises(KeyError):
-        restarted.update_assistant_script_draft("other", "task-one", initial.id, title="越界", sections=revised_sections)
+        restarted.script_records.update_assistant_script_draft("other", "task-one", initial.id, title="越界", sections=revised_sections)
     with pytest.raises(ValueError, match="模型输入之外"):
-        restarted.update_assistant_script_draft(
+        restarted.script_records.update_assistant_script_draft(
             "one", "task-one", initial.id, title="伪来源",
             sections=[replace(revised_sections[0], evidence_reference_ids=["unknown"])],
             expected_updated_at=revised.updated_at,
@@ -896,7 +896,7 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
     )
     confirmed = restarted.script_records.get_creation_task_script("one", initial.id)
     with pytest.raises(ValueError, match="不允许修改"):
-        restarted.update_assistant_script_draft(
+        restarted.script_records.update_assistant_script_draft(
             "one", "task-one", initial.id, title="越过确认", sections=revised_sections,
             expected_updated_at=confirmed.updated_at,
         )

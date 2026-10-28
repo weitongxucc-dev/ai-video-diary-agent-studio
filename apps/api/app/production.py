@@ -5266,15 +5266,6 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
-    def record_assistant_script_save(self, script, source, request_digest, *, connection):
-        return self.script_records.record_assistant_script_save(script, source, request_digest, connection=connection)
-
-    def _mutable_assistant_script_metadata(self, conn, workspace_id, task_id, script_id, sections, expected_updated_at):
-        return self.script_records._mutable_assistant_script_metadata(conn, workspace_id, task_id, script_id, sections, expected_updated_at)
-
-    def update_assistant_script_draft(self, workspace_id: str, task_id: str, script_id: str, *, title: str, sections: list[_CreationTaskScriptSection], expected_updated_at: datetime | str | None=None, write_guard=None, result_write=None) -> _CreationTaskScript:
-        return self.script_records.update_assistant_script_draft(workspace_id, task_id, script_id, title=title, sections=sections, expected_updated_at=expected_updated_at, write_guard=write_guard, result_write=result_write)
-
     @staticmethod
     def _window_claim_key(task_id, script_id, operation, request_id, member_id):
         return ScriptRecordStore._window_claim_key(task_id, script_id, operation, request_id, member_id)
