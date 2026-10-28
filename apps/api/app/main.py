@@ -5,6 +5,7 @@ from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
 from app.assistant import home_plan_turn_use_case as home_plan
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
+from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
     StoryboardResultRejected, UnknownStoryboardReference)
 from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
@@ -8722,27 +8723,30 @@ def _task_execution_capability_facts(task):
 
 
 
+def _edit_capability_read_use_case():
+    return EditCapabilityReadUseCase(
+        read_montage=lambda ws, task_id: production_repo.get_creation_task_montage_plan(ws, task_id),
+        read_subtitles=lambda ws, task_id, **values: production_repo.subtitle_records.list_subtitle_tracks(ws, task_id, **values),
+        read_version=lambda ws, version_id: production_repo.timeline_records.get_timeline_version(ws, version_id),
+    )
+
+
 def _task_edit_capability_facts(task):
-    payload = production_repo.get_creation_task_montage_plan(task.workspace_id, task.id) if task.montage_plan_id else None
-    clips = payload.get("clips", []) if payload else []
-    tracks = production_repo.subtitle_records.list_subtitle_tracks(task.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if task.current_timeline_version_id else []
-    version = production_repo.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    reader = _edit_capability_read_use_case()
+    facts = reader.read(task)
+    version = facts.version
+    reason_text = {
+        "no_storyboard": "当前任务没有故事板",
+        "no_timeline_version": "先保留当前故事板并建立可撤销版本",
+        "no_clip": "当前任务没有可编辑镜头",
+        "no_visual_clip": "当前任务没有可调整画面的镜头",
+        "no_audio_clip": "当前任务没有可修改的真实音轨片段",
+        "no_subtitle_tracks": "当前版本没有字幕轨",
+    }
     operations = []
     for operation, fields in EXACT_EDIT_FIELDS.items():
-        reason = None
-        if payload is None:
-            reason = "当前任务没有故事板"
-        elif version is None:
-            reason = "先保留当前故事板并建立可撤销版本"
-        elif "clip_id" in fields and not clips:
-            reason = "当前任务没有可编辑镜头"
-        elif operation == "AdjustVisualEffects" and not clips:
-            reason = "当前任务没有可调整画面的镜头"
-        elif operation == "EditAudioTimeline" and not any(track.clips for track in
-                _effective_audio_timeline(creation_task_montage_plan_from_payload(payload)).tracks):
-            reason = "当前任务没有可修改的真实音轨片段"
-        elif operation in {"UpdateSubtitleCue", "ReplaceSubtitleText", "SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue", "ConfigureSubtitleTrack"} and not tracks:
-            reason = "当前版本没有字幕轨"
+        reason_code = reader.reason_for(facts, operation, requires_clip="clip_id" in fields)
+        reason = reason_text[reason_code] if reason_code is not None else None
         operations.append({"operation_type": operation, "available": reason is None, "reason": reason,
             "parameter_fields": sorted(fields), "required_fields": sorted(EXACT_MONTAGE_REQUIRED_FIELDS.get(operation, set()) | ({"clip_id"} if "clip_id" in fields else set())),
             "requires_target_validation": True})

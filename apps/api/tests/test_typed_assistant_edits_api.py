@@ -37,11 +37,11 @@ def replace_action(state):
 def metadata_http_state(tmp_path, monkeypatch, request):
     from fastapi.testclient import TestClient
     from test_metadata_edit_use_case import metadata_state
-    if {"workspace_metadata_state", "scope_metadata_state"}.intersection(request.fixturenames):
+    if {"workspace_metadata_state", "scope_metadata_state", "capability_metadata_state"}.intersection(request.fixturenames):
         from test_production_foundation import edit_adoption_no_execution
         forbidden = edit_adoption_no_execution(monkeypatch)
         monkeypatch.setattr(main, "_lipsync_provider", forbidden)
-        if "scope_metadata_state" in request.fixturenames:
+        if {"scope_metadata_state", "capability_metadata_state"}.intersection(request.fixturenames):
             from app.local_portrait import LocalPortrait
             from app.subtitle_tracks import OpenAICompatibleSubtitleTranslationProvider, UnavailableSubtitleTranslationProvider
             monkeypatch.setattr(LocalPortrait, "process", forbidden)
@@ -554,8 +554,15 @@ def test_metadata_http_refuses_stale_or_foreign_inputs(metadata_http_state):
     assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == []
 
 
-def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(material_edit_state):
-    state = material_edit_state
+@pytest.fixture
+def capability_metadata_state(metadata_http_state):
+    metadata_http_state.base_url = metadata_http_state.url
+    return metadata_http_state
+
+
+def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(capability_metadata_state, monkeypatch):
+    state = capability_metadata_state
+    monkeypatch.setattr(main, "device_runtime", None)
     response = state.client.get(state.base_url + "/assistant/edit-capabilities")
     assert response.status_code == 200, response.text
     value = response.json()
@@ -568,6 +575,17 @@ def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(material_ed
     assert "ChangeLinkedSpeed：相对当前速度倍率" in value["units"]["playback_rate"]
     assert "source_span=timeline_span*rate" in value["schema"]["properties"]["playback_rate"]["description"]
     assert state.client.get("/api/creation-tasks/missing/assistant/edit-capabilities").status_code == 404
+    direct = {item["operation_type"]: item for item in value["direct_apply"]["operations"]}
+    assert "GenerateCoverFromFrame" not in direct
+    assert direct["UpdateSubtitleCue"]["parameter_fields"] == ["cue_id", "text"]
+    assert direct["UpdateSubtitleCue"]["required_fields"] == ["cue_id", "text"]
+    assert direct["ConfigureSubtitleTrack"]["parameter_fields"] == ["subtitle_display"]
+    assert direct["ConfigureSubtitleTrack"]["required_fields"] == ["subtitle_display"]
+    assert all(item["requires_target_validation"] for item in value["operations"])
+    assert value["timeline_version_id"] == state.base.id and value["timeline_sequence"] == state.base.sequence
+    # Same actual factory read port, without invoking an Agent turn or asserting write authority.
+    business = main._task_business(generation_case=object())
+    assert business.edit_capabilities(state.task) == value
 
 
 def test_typed_replace_replay_lost_receipt_and_undo_keep_narration(material_edit_state):
