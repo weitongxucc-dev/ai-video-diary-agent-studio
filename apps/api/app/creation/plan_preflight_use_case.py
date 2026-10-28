@@ -154,7 +154,7 @@ class CreationPlanPreflightUseCase:
         approved_clips = [segment for asset, segment in usable if effective_segment_usage_role(asset, segment) == "b_roll"]
         eligible_material_pairs = {(asset.id, segment.id) for asset, segment in usable}
         eligible_material_ids = sorted({asset_id for asset_id, _ in eligible_material_pairs})
-        material_matches = self.production.search_material_segments(
+        material_matches = self.production.material_search.search_material_segments(
             workspace_id,
             query=payload.goal,
             asset_ids=eligible_material_ids,
@@ -166,7 +166,7 @@ class CreationPlanPreflightUseCase:
         ) if eligible_material_ids else []
         material_matches = [match for match in material_matches if (match.asset_ref.removeprefix("asset:"), match.segment_ref.removeprefix("segment:")) in eligible_material_pairs]
         if not material_matches and template is None:
-            material_matches = self.production.search_material_segments(
+            material_matches = self.production.material_search.search_material_segments(
                 workspace_id,
                 asset_ids=eligible_material_ids,
             eligible_segment_refs=eligible_material_pairs,

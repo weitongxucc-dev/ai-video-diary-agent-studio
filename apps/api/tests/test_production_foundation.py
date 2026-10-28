@@ -425,7 +425,7 @@ def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use
     production._save_asset(stale,analysis_only=True)
     restarted=ProductionRepository(database_path=production.database_path,video_library_path=production.video_library_path)
     assert restarted.get_asset('workspace_a',asset.id).use_state==use_state
-    assert bool(restarted.search_material_segments(
+    assert bool(restarted.material_search.search_material_segments(
         'workspace_a', usage_roles=['b_roll'], viewer_user_id=member.member_id
     ))==usable
     if usable:
@@ -503,7 +503,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     )
     segment = next(item for item in asset.segments if item.id == segment.id)
 
-    structured = production.search_material_segments(
+    structured = production.material_search.search_material_segments(
         "workspace_a",
         usage_roles=["b_roll"],
         tags=["动作:打字"],
@@ -511,7 +511,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         max_duration_seconds=6,
         viewer_user_id=member.member_id,
     )
-    natural = production.search_material_segments(
+    natural = production.material_search.search_material_segments(
         "workspace_a", query="我想找办公室打字镜头", viewer_user_id=member.member_id
     )
     assert structured[0].segment_ref == f"segment:{segment.id}"
@@ -520,7 +520,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     assert structured[0].reasons
     assert any("标签匹配" in reason for reason in structured[0].reasons)
     assert any("自然语言匹配" in reason for reason in natural[0].reasons)
-    assert production.search_material_segments("workspace_b", query="打字") == []
+    assert production.material_search.search_material_segments("workspace_b", query="打字") == []
 
     plan = CreationPlan(
         id="plan-material-match",
@@ -601,7 +601,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     assert reloaded.plan_records.get_creation_plan("workspace_a", plan.id).material_matches == [
         structured[0]
     ]
-    assert reloaded.search_material_segments(
+    assert reloaded.material_search.search_material_segments(
         "workspace_a", query="办公室打字", viewer_user_id=member.member_id
     )[0].segment_ref == structured[0].segment_ref
     assert (

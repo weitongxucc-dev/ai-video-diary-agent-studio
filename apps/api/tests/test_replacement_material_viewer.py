@@ -33,7 +33,7 @@ def test_replacement_search_keeps_private_candidate_for_owner_only(tmp_path):
     repo._save_asset(replace(asset, visibility="private", owner_user_id="member-owner"))
 
     def search(viewer: str | None):
-        return repo.search_material_segments(
+        return repo.material_search.search_material_segments(
             workspace_id, query="户外画面", usage_roles=["a_roll", "b_roll"],
             min_duration_seconds=5, limit=24, viewer_user_id=viewer,
             local_diagnostic=False,

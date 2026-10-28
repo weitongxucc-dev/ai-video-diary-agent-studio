@@ -1066,7 +1066,7 @@ class MetadataEditUseCase:
         material_constraint = '' if payload.replacement_asset_id is not None else edit_material_constraint(command)
         if material_constraint:
             slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
-            matched_refs = self.repository.search_material_segments(workspace_id, query=material_constraint, usage_roles=['a_roll', 'b_roll'], min_duration_seconds=slot_duration, limit=24, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            matched_refs = self.repository.material_search.search_material_segments(workspace_id, query=material_constraint, usage_roles=['a_roll', 'b_roll'], min_duration_seconds=slot_duration, limit=24, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
             candidate_by_ref = {(f'asset:{candidate.asset_id}', f'segment:{candidate.segment_id}'): candidate for candidate in candidates}
             candidates = [candidate_by_ref[match.asset_ref, match.segment_ref] for match in matched_refs if (match.asset_ref, match.segment_ref) in candidate_by_ref]
         if not candidates:

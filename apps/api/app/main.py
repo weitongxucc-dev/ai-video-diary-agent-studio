@@ -10168,7 +10168,7 @@ def search_production_material_segments(
     workspace_id = current_workspace_id(request)
     viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
     try:
-        matches = production_repo.search_material_segments(
+        matches = production_repo.material_search.search_material_segments(
             workspace_id,
             query=q,
             usage_roles=[usage_role] if usage_role else ["a_roll", "b_roll"],

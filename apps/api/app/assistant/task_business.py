@@ -599,7 +599,7 @@ class TaskBusiness:
             if args.get('include_eligibility'):
                 purpose=args.get('purpose','manual')
                 if purpose not in {'manual','automatic'}: raise ValueError('镜头检索用途无效')
-                return self.production.search_material_segments(ws,query=query,asset_ids=sorted(allowed),
+                return self.production.material_search.search_material_segments(ws,query=query,asset_ids=sorted(allowed),
                     usage_roles=['a_roll','b_roll'],limit=limit,viewer_user_id=actor.user_id or actor.member_id,
                     purpose=purpose,include_eligibility=True)
             assets=[asset for asset in self.production.list_assets(ws,viewer_user_id=actor.user_id or actor.member_id)

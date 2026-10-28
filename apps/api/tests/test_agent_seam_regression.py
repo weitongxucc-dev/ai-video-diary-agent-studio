@@ -101,7 +101,7 @@ def _workspace(tmp_path: Path) -> tuple[ProductionRepository, MaterialAsset]:
 def test_real_search_produces_all_evidence_fields(tmp_path):
     """前提校验：真实检索结果 asdict 后，10 个证据字段确实都存在。"""
     production, _asset = _workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a", query="城市夜景", usage_roles=["b_roll"],
     )
     assert results, "真实检索必须返回候选"
@@ -114,7 +114,7 @@ def test_real_search_produces_all_evidence_fields(tmp_path):
 def test_evidence_fields_survive_the_real_seam(tmp_path):
     """接缝本体：production → asdict → MaterialSegmentMatchResponse，10 个字段一个不丢、值不被改。"""
     production, _asset = _workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a", query="城市夜景", usage_roles=["b_roll"],
     )
     assert results, "真实检索必须返回候选"
@@ -132,7 +132,7 @@ def test_evidence_fields_survive_the_real_seam(tmp_path):
 def test_evidence_has_real_values_on_a_text_hit(tmp_path):
     """文字命中档的证据不是空壳：rank / tier / time_range / 命中词都要有内容。"""
     production, _asset = _workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a", query="城市夜景", usage_roles=["b_roll"],
     )
     assert results, "文字查询应命中"
@@ -154,7 +154,7 @@ def test_evidence_has_real_values_on_a_text_hit(tmp_path):
 def test_structural_only_query_does_not_422(tmp_path):
     """只给结构化条件（无文字命中）→ structural 档，证据更少，但必须正常返回。"""
     production, _asset = _workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a", usage_roles=["b_roll"],  # 没有 query
     )
     assert results, "结构化条件也应返回候选"

@@ -151,7 +151,7 @@ def test_invalid_or_extra_reorder_does_not_create_partial_proposal(storyboard, c
 @pytest.mark.parametrize("command", ["把这个镜头换成另一个镜头", "给当前选中的镜头换一段其他素材", "替换当前镜头", "把这个镜头换成另一个镜头，保留当前配音", "换一个更好的镜头吧", "你现在就任意帮我换一条"])
 def test_generic_replacement_selects_real_candidate_in_unrendered_draft(material_edit_state, monkeypatch, command):
     state = material_edit_state
-    monkeypatch.setattr(state.production, "search_material_segments", lambda *_a, **_kw: pytest.fail("typed candidate must not re-search the raw sentence"))
+    monkeypatch.setattr(state.production.material_search, "search_material_segments", lambda *_a, **_kw: pytest.fail("typed candidate must not re-search the raw sentence"))
     montage = replace(state.montage, status="ready", output_path=None, subtitle_path=None)
     state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, montage.id,
         creation_task_montage_plan_to_payload(montage))
@@ -214,7 +214,7 @@ def test_untyped_replacement_keeps_objective_description_search(material_edit_st
     def no_matching_description(_workspace, **kwargs):
         queries.append(kwargs["query"])
         return []
-    monkeypatch.setattr(state.production, "search_material_segments", no_matching_description)
+    monkeypatch.setattr(state.production.material_search, "search_material_segments", no_matching_description)
     before = current(state)
     response = preview(state, "把这个镜头换成完全不存在的景象", selected_object_refs=[f"clip:{state.clip.id}"])
     assert response.status_code == 409, response.text

@@ -126,7 +126,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     monkeypatch.setattr(main, "_video_template_or_404", observe_resolver)
     monkeypatch.setattr(CreationPlanPreflightUseCase, "prepare", observe_prepare)
     monkeypatch.setattr(production, "automatic_material_segments", material_facts)
-    monkeypatch.setattr(production, "search_material_segments", search_facts)
+    monkeypatch.setattr(production.material_search, "search_material_segments", search_facts)
     for obj, name, label in [(sources, "list_knowledge_items_for_use", "knowledge.list"),
         (sources, "get_knowledge_reference_readable_by", "knowledge.pin"),
         (sources, "list_source_items_for_use", "sources"),
@@ -222,7 +222,7 @@ def selected_dependencies():
         if not state.voice_allowed:
             raise PermissionError("profile_excluded")
         return SimpleNamespace(profile_id="voice", version="v1", model_id="voice-model")
-    production = SimpleNamespace(automatic_material_segments=materials, search_material_segments=search,
+    production = SimpleNamespace(automatic_material_segments=materials, material_search=SimpleNamespace(search_material_segments=search),
         get_versioned_voice_profile=lambda *_:SimpleNamespace(id="voice", version="v1", language="zh-en", person_profile_id=""),
         creation_plan_voice_reference=voice_reference, list_applicable_pronunciation_entries=lambda **_:[])
     sources = SimpleNamespace(list_knowledge_items_for_use=lambda *_, **__: [knowledge] + ([SimpleNamespace(

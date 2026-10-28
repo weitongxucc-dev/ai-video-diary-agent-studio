@@ -46,7 +46,11 @@ def wav_bytes():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch, request):
+    if request.node.originalname == "test_material_search_reader_filters_private_before_limit":
+        from test_production_foundation import edit_adoption_no_execution
+        forbidden = edit_adoption_no_execution(monkeypatch)
+        monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
     return ProductionRepository(
         database_path=tmp_path / "db.sqlite3",
         video_library_path=tmp_path / "library",
@@ -702,27 +706,59 @@ def test_material_search_reader_filters_private_before_limit(
     repo, private_search_assets, reader, owned
 ):
     args = {"query": "预算", "usage_roles": ["b_roll"], "viewer_user_id": reader}
-    first = repo.search_material_segments("ws", limit=1, **args)
+    first = repo.material_search.search_material_segments("ws", limit=1, **args)
     assert [item.asset_ref for item in first] == ["asset:" + owned]
     assert first[0].rank == 1
     assert {
         item.asset_ref
-        for item in repo.search_material_segments("ws", limit=100, **args)
+        for item in repo.material_search.search_material_segments("ws", limit=100, **args)
     } == {"asset:" + owned, "asset:shared"}
+
+    # The same readable rows feed explanatory ranking; private rows cannot
+    # influence qualification counts, the limit, or the reported candidate total.
+    search = repo.material_search.search_material_segments
+    report = search("ws", query="没有字面交集", usage_roles=["b_roll"],
+                    viewer_user_id=reader, limit=1, include_eligibility=True)
+    assert set(report) == {"matches", "qualification_message", "total_count", "truncated"}
+    assert report["total_count"] == 2 and report["truncated"] is True
+    match = report["matches"][0]
+    assert match.asset_ref == min("asset:" + owned, "asset:shared")
+    assert match.rank == 1 and match.match_tier == "structural"
+    assert match.needs_confirmation and match.matched_conditions == ["用途 b_roll"]
+    assert "文字未匹配，按结构化条件返回" in match.reasons
+    assert match.reasons[-1] == "综合排第 1 名（本次候选 1 条）"
+    assert match.duration_seconds == 2 and match.time_range == "00:00 – 00:02"
+    assert match.evidence_excerpt and len(match.evidence_excerpt) <= 900
+    assert "人工用途返回1条候选" in report["qualification_message"]
+    assert "未提交画面语义推理" in report["qualification_message"]
+    assert search("ws", viewer_user_id=reader, asset_ids=[], usage_roles=["b_roll"]) == []
+    # IDs/pairs restrict scope but do not authorize structural fallback.
+    assert search("ws", viewer_user_id=reader, asset_ids=[owned],
+                  eligible_segment_refs={(owned, owned + "-segment")}, query="没有字面交集") == []
+    current = repo.get_asset("ws", owned)
+    repo._save_asset(replace(current, use_state="not_for_automation"))
+    manual = search("ws", asset_ids=[owned], viewer_user_id=reader, purpose="manual",
+                    include_eligibility=True)
+    automatic = search("ws", asset_ids=[owned], viewer_user_id=reader, purpose="automatic",
+                       include_eligibility=True)
+    assert [item.asset_ref for item in manual["matches"]] == ["asset:" + owned]
+    assert automatic["matches"] == [] and automatic["total_count"] == 0
+    assert automatic["truncated"] is False
+    assert "1项受本次用途限制" in automatic["qualification_message"]
 
 
 def test_material_search_missing_reader_keeps_only_legacy_shared(
     repo, private_search_assets
 ):
     args = {"query": "预算", "usage_roles": ["b_roll"], "limit": 1}
-    assert [item.asset_ref for item in repo.search_material_segments("ws", **args)] == [
+    assert [item.asset_ref for item in repo.material_search.search_material_segments("ws", **args)] == [
         "asset:shared"
     ]
-    assert repo.search_material_segments("other", **args) == []
+    assert repo.material_search.search_material_segments("other", **args) == []
     # Explicit existing local diagnostics are a different, controlled caller.
     assert [
         item.asset_ref
-        for item in repo.search_material_segments("ws", local_diagnostic=True, **args)
+        for item in repo.material_search.search_material_segments("ws", local_diagnostic=True, **args)
     ] == ["asset:a-two"]
 
 

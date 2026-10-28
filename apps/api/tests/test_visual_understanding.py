@@ -133,9 +133,9 @@ def test_low_confidence_ocr_is_retained_but_not_searchable(tmp_path):
         ]}])
     repo._save_asset(asset)
     repo.set_asset_visibility("workspace", asset.id, "shared")
-    assert not repo.search_material_segments("workspace", query="uncertain")
+    assert not repo.material_search.search_material_segments("workspace", query="uncertain")
     assert repo.list_assets_page("workspace", limit=20, offset=0, query="uncertain")[1] == 0
-    assert repo.search_material_segments("workspace", query="verifiedword")
+    assert repo.material_search.search_material_segments("workspace", query="verifiedword")
     from app.schemas import OCRTextResponse
     response = OCRTextResponse.model_validate(asset.segments[0].understanding.ocr_frames[0]["observations"][0])
     assert response.model_dump()["retrieval_eligible"] is False

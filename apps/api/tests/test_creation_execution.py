@@ -1947,7 +1947,7 @@ def test_raw_material_qualification_agrees_for_search_preflight_and_edit(tmp_pat
     repo.update_segment('local',asset.id,original.id,description=original.description,transcript=original.transcript,
         review_status='raw',usage_role='b_roll')
     def matches():
-        return repo.search_material_segments('local',asset_ids=[asset.id],usage_roles=['b_roll'],viewer_user_id='owner')
+        return repo.material_search.search_material_segments('local',asset_ids=[asset.id],usage_roles=['b_roll'],viewer_user_id='owner')
     asset=repo.get_asset('local',asset.id);segment=asset.segments[0]
     assert matches() and repo.automatic_material_segments('local',viewer_user_id='owner')
     assert material_segment_eligible(asset,segment,'local')

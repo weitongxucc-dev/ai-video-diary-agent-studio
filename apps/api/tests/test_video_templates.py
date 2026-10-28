@@ -193,7 +193,7 @@ def test_template_preflight_does_not_substitute_unrelated_materials(state, monke
     def search(workspace_id, **kwargs):
         calls.append(kwargs)
         return []
-    monkeypatch.setattr(production, "search_material_segments", search)
+    monkeypatch.setattr(production.material_search, "search_material_segments", search)
     result = client.post("/api/creation-plans/preview", json={"goal": "新主题没有匹配片段", "template_id": template.id, "template_version": 1}).json()
     assert len(calls) == 1 and calls[0]["query"] == "新主题没有匹配片段"
     assert result["material_matches"] == []

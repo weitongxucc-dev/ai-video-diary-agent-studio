@@ -412,7 +412,7 @@ def test_unbound_copy_confirmation_restart_and_changed_content(tmp_path: Path) -
     assert len(analyzed) == 1 and analyzed[0].analysis_status == "ready"
     assert analyzed[0].review_status == "raw"
     repo.set_asset_visibility("one", analyzed[0].id, "shared")
-    assert repo.search_material_segments("one")
+    assert repo.material_search.search_material_segments("one")
     assert duration.call_count == 1
     assert service.scan_once() == []
 
@@ -699,7 +699,7 @@ def test_asset_tags_are_atomic_workspace_scoped_and_searchable(tmp_path: Path) -
     for asset_id in ids:
         repo.set_asset_visibility("one", asset_id, "shared")
     repo.update_asset_tags("one", ids[0], ["客户现场"])
-    assert repo.search_material_segments("one", tags=["客户现场"])
+    assert repo.material_search.search_material_segments("one", tags=["客户现场"])
     assert repo.list_assets_page("one", limit=10, offset=0, query="客户现场")[1] == 1
     with pytest.raises(KeyError):
         repo.update_assets_tags_batch("one", [ids[0], "foreign"], add=["新品"], remove=[])
@@ -746,10 +746,10 @@ def test_segment_usage_change_updates_persisted_tags_and_search(tmp_path: Path) 
         original.description, original.transcript, original.user_tags,
     )
     assert repo.get_asset("one", other.id) == other
-    assert [match.segment_ref for match in repo.search_material_segments(
+    assert [match.segment_ref for match in repo.material_search.search_material_segments(
         "one", tags=["用途:a_roll"],
     )] == [f"segment:{original.id}"]
-    assert [match.segment_ref for match in repo.search_material_segments(
+    assert [match.segment_ref for match in repo.material_search.search_material_segments(
         "one", tags=["用途:b_roll"],
     )] == [f"segment:{other.segments[0].id}"]
 

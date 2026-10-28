@@ -154,11 +154,11 @@ def test_scope_is_filtered_before_high_scoring_other_assets_truncate_result(auto
             segment.description=payload['goal']
             segment.system_tags=[payload['goal']]
         production._save_asset(other)
-    ordinary=production.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,viewer_user_id=actor.member_id)
+    ordinary=production.material_search.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,viewer_user_id=actor.member_id)
     assert ordinary and all(match.asset_ref!=f'asset:{selected.id}' for match in ordinary)
-    scoped=production.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,asset_ids=[selected.id],viewer_user_id=actor.member_id)
+    scoped=production.material_search.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,asset_ids=[selected.id],viewer_user_id=actor.member_id)
     assert scoped and all(match.asset_ref==f'asset:{selected.id}' for match in scoped)
-    assert production.search_material_segments(actor.workspace_id,usage_roles=['b_roll'],asset_ids=[],viewer_user_id=actor.member_id)==[]
+    assert production.material_search.search_material_segments(actor.workspace_id,usage_roles=['b_roll'],asset_ids=[],viewer_user_id=actor.member_id)==[]
     definition,run=create_and_due(client,actor,payload)
     preview=client.post(f"/api/automations/runs/{run['id']}/preview").json()
     assert preview['approved_asset_count']==1
