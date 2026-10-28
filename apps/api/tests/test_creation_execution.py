@@ -305,7 +305,7 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
             "crop", ["clip_1"], {"operation_type": "ChangeCrop"}, [], {}, []))
         version = TimelineVersion("timeline_crop", "local", task_id, base.id, 2, {"montage": edited}, "operation_crop")
         now = datetime.now(timezone.utc)
-        repo.confirm_edit_proposal("local", task_id, proposal.id,
+        repo.edit_adoption.confirm("local", task_id, proposal.id,
             operation=EditOperation("operation_crop", "local", task_id, proposal.id, "ChangeCrop",
                                     {"clip_id": "clip_1", "fit_mode": "fill", "crop_x": 0, "crop_y": 0.5},
                                     base.id, version.id, "applied", created_at=now, applied_at=now),
@@ -468,7 +468,7 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
             repo.create_job_run(inner)
             repo.claim_job_run("local", inner.id)
             now = datetime.now(timezone.utc)
-            repo.confirm_edit_proposal("local", task_id, proposal.id,
+            repo.edit_adoption.confirm("local", task_id, proposal.id,
                 operation=EditOperation("concurrent_operation", "local", task_id, proposal.id, "ChangeCrop",
                     {"clip_id": "clip_1", "crop_x": 0}, base.id, version.id, "applied", created_at=now, applied_at=now),
                 result_version=version, montage_plan_id="montage_1", montage_payload=cropped)
@@ -6097,12 +6097,12 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
         assert checkpoint['section_ids'] == ['section_1', 'section_2']
         final = case.scheduler.pick_and_grant()
         assert final is not None
-        original_commit = repo.confirm_edit_proposal
+        original_commit = repo.edit_adoption.confirm
         if outcome in {'unknown', 'source_blocked'}:
             def interrupted(*args, **kwargs):
                 original_commit(*args, **kwargs)
                 raise RuntimeError('lose final edit commit after sealing')
-            monkeypatch.setattr(repo, 'confirm_edit_proposal', interrupted)
+            monkeypatch.setattr(repo.edit_adoption, 'confirm', interrupted)
         elif outcome in {'head', 'tail', 'revoked'}:
             released = case.scheduler._released_for_commit
             changed = []
@@ -6129,7 +6129,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
             assert not repo.list_edit_operations('local', case.task.id)
             assert repo.creation_narration_usage('local', job.id)['unsettled']
             if outcome in {'unknown', 'source_blocked'}:
-                monkeypatch.setattr(repo, 'confirm_edit_proposal', original_commit)
+                monkeypatch.setattr(repo.edit_adoption, 'confirm', original_commit)
                 if outcome == 'source_blocked':
                     def rejected(*args, **kwargs):
                         raise PermissionError('original edit source no longer authorized')

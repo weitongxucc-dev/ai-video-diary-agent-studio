@@ -172,7 +172,7 @@ def test_actual_linked_http_adoption_rechecks_neighbour_revoked_at_commit(linked
     proposal = preview.json()["proposal"]
     intent = repo.get_edit_intent("local", proposal["intent_id"])
     assert "clip_2" in intent.constraints["affected_source_scope"]["clip_ids"]
-    commit = repo.confirm_edit_proposal
+    commit = repo.edit_adoption.confirm
 
     def revoke_before_commit(*args, **kwargs):
         assert kwargs["verify_sources"] is not None
@@ -180,7 +180,7 @@ def test_actual_linked_http_adoption_rechecks_neighbour_revoked_at_commit(linked
             owner_user_id="another-member", visibility="private"))
         return commit(*args, **kwargs)
 
-    monkeypatch.setattr(repo, "confirm_edit_proposal", revoke_before_commit)
+    monkeypatch.setattr(repo.edit_adoption, "confirm", revoke_before_commit)
     result = client.post(f"/api/creation-tasks/task/edits/{proposal['id']}/confirm")
     assert result.status_code == 403, result.text
     assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"

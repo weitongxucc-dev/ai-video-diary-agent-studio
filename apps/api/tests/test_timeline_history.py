@@ -261,7 +261,7 @@ def test_history_detail_preserves_original_operation_from_list(history_task):
     operation=EditOperation('history-overlay-operation',WORKSPACE_ID,task_id,proposal.id,'EditGraphicOverlay',payload,
         base.id,'timeline_history_overlay','applied',created_at=now,applied_at=now)
     version=TimelineVersion(operation.result_version_id,WORKSPACE_ID,task_id,base.id,3,snapshot,operation.id)
-    repo.confirm_edit_proposal(WORKSPACE_ID,task_id,proposal.id,operation=operation,result_version=version,
+    repo.edit_adoption.confirm(WORKSPACE_ID,task_id,proposal.id,operation=operation,result_version=version,
         montage_plan_id=snapshot['montage']['id'],montage_payload=snapshot['montage'])
     later=replace(version,id='timeline_history_after_overlay',sequence=4,parent_version_id=version.id,created_by_operation_id=None)
     repo.create_timeline_version(later)

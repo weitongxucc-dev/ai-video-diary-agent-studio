@@ -191,12 +191,12 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         proposal=prepared.json()['proposal']
         bound=repo.get_edit_intent('local',proposal['intent_id']).constraints['affected_source_scope']
         assert bound['clip_ids']==['clip_1','clip_2']
-        commit=repo.confirm_edit_proposal
+        commit=repo.edit_adoption.confirm
         def revoke_before_commit(*args,**kwargs):
             if kwargs.get('verify_sources') is not None:
                 repo._save_asset(replace(repo.get_asset('local','predecessor'),owner_user_id='other-member',visibility='private'))
             return commit(*args,**kwargs)
-        monkeypatch.setattr(repo,'confirm_edit_proposal',revoke_before_commit)
+        monkeypatch.setattr(repo.edit_adoption, 'confirm',revoke_before_commit)
         response=client.post('/api/creation-tasks/task/edits/'+proposal['id']+'/confirm')
         assert response.status_code==403,response.text
         assert repo.get_creation_task('local','task').current_timeline_version_id=='transition-base'

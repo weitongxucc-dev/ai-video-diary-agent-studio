@@ -1127,7 +1127,29 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
         production.create_timeline_version(replace(version, snapshot={"changed": True}))
 
 
-def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
+def edit_adoption_no_execution(monkeypatch):
+    import subprocess
+    from app.device_runtime import DeviceRuntime
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    def forbidden(*args, **kwargs):
+        pytest.fail('edit adoption evidence forbids provider/wave/Popen/helper/runtime/model/driver')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    monkeypatch.setattr(main_module.narration_generator, 'generate_for_creation_task', forbidden)
+    monkeypatch.setattr(main_module.montage_renderer, 'render', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset', 'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    return forbidden
+
+
+def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkeypatch):
+    edit_adoption_no_execution(monkeypatch)
     production = _repository(tmp_path)
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
@@ -1273,7 +1295,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
         "status": "ready",
         "clips": [{"id": "clip-2", "asset_ref": "asset://two"}],
     }
-    confirmed, applied, persisted_version, task = production.confirm_edit_proposal(
+    confirmed, applied, persisted_version, task = production.edit_adoption.confirm(
         "workspace_a",
         "task-a",
         proposal.id,
@@ -1295,7 +1317,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path):
     assert "subtitle_path" not in saved_montage
 
     with pytest.raises(ValueError, match="proposed"):
-        production.confirm_edit_proposal(
+        production.edit_adoption.confirm(
             "workspace_a",
             "task-a",
             proposal.id,
@@ -1439,7 +1461,7 @@ def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
             created_at=datetime.now(timezone.utc),
             applied_at=datetime.now(timezone.utc),
         )
-        confirmed, applied, current_version, task = production.confirm_edit_proposal(
+        confirmed, applied, current_version, task = production.edit_adoption.confirm(
             "workspace_a",
             "task-a",
             proposal.id,
@@ -1694,7 +1716,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         result_snapshot=snapshot(pending_segments, initial_cues, pending_montage),
     )
     _, applied_regenerate, current_version, pending_task = (
-        production.confirm_edit_proposal(
+        production.edit_adoption.confirm(
             "workspace_a",
             "task-narration",
             regenerate_proposal.id,
@@ -1759,7 +1781,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         ),
     )
     with pytest.raises(ValueError, match="每个段落"):
-        production.confirm_edit_proposal(
+        production.edit_adoption.confirm(
             "workspace_a",
             "task-narration",
             subtitle_proposal.id,
@@ -1779,7 +1801,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     ).current_timeline_version_id == current_version.id
 
     _, applied_subtitle, current_version, subtitle_task = (
-        production.confirm_edit_proposal(
+        production.edit_adoption.confirm(
             "workspace_a",
             "task-narration",
             subtitle_proposal.id,
@@ -1808,7 +1830,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         sequence=4,
         result_snapshot=snapshot(restored_segments, initial_cues, initial_montage),
     )
-    _, applied_undo, restored_version, restored_task = production.confirm_edit_proposal(
+    _, applied_undo, restored_version, restored_task = production.edit_adoption.confirm(
         "workspace_a",
         "task-narration",
         undo_proposal.id,
@@ -4360,3 +4382,57 @@ def test_execution_records_borrow_pending_job_and_rollback_artifact_event_tail(t
     assert production.list_job_runs("workspace_a", "task-a") == []
     assert records.list_artifact_records("workspace_a", "task-a") == []
     assert records.list_task_events("workspace_a", "task-a") == []
+
+
+def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(tmp_path, monkeypatch):
+    from app.creation.contracts import SubtitleTrack, SubtitleCue
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    repo = _repository(tmp_path)
+    _save_creation_task(repo, workspace_id='workspace_a', task_id='task-a')
+    base = repo.create_timeline_version(TimelineVersion('adoption-base','workspace_a','task-a',None,1,{},None))
+    intent = EditIntent('adoption-intent','workspace_a','task-a','declared metadata','montage',[],None,
+        'replace_visual',{}, {},1,'interpreted')
+    proposal = EditProposal('adoption-proposal','workspace_a','task-a',intent.id,'declared adoption',['clip:clip-1'],
+        {'operation_type':'ReplaceClip'},[],{},[])
+    now = datetime.now(timezone.utc)
+    operation = EditOperation('adoption-operation','workspace_a','task-a',proposal.id,'ReplaceClip',{'target_clip_id':'clip-1','replacement_clip_id':'clip-2'},base.id,
+        'adoption-result','applied',created_at=now,applied_at=now)
+    version = TimelineVersion(operation.result_version_id,'workspace_a','task-a',base.id,2,
+        {'subtitle_track_ids':['adoption-track']},operation.id)
+    track = SubtitleTrack('adoption-track','workspace_a','task-a',version.id,'zh-CN',None,{},
+        [SubtitleCue('declared-cue',None,'declared metadata',0,1)],
+        'timeline',None,'artifacts/task-a/declared.srt','declared-transform','valid')
+    checked = []
+    with repo._connect() as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        repo.create_edit_intent(intent,connection=writer)
+        repo.create_edit_proposal(proposal,connection=writer)
+        def verify(connection):
+            assert connection is writer and connection.in_transaction
+            assert connection.execute('SELECT id FROM edit_proposals WHERE id=?',(proposal.id,)).fetchone() is not None
+            checked.append('source')
+        with monkeypatch.context() as readers:
+            for name in ('read_task','read_proposal','read_operation','read_version'):
+                readers.setattr(repo.edit_adoption,name,forbidden)
+            confirmed, applied, adopted, current = repo.edit_adoption.confirm('workspace_a','task-a',proposal.id,
+                operation=operation,result_version=version,subtitle_tracks=[track],connection=writer,verify_sources=verify)
+        assert writer.in_transaction and checked==['source']
+        assert confirmed.status=='confirmed' and applied==operation and adopted==version and current.current_timeline_version_id==version.id
+        assert repo.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
+        assert repo.list_edit_operations('workspace_a','task-a')==[]
+        writer.rollback()
+    assert repo.list_edit_proposals('workspace_a','task-a')==[]
+    assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
+    repo.create_edit_intent(intent)
+    repo.create_edit_proposal(proposal)
+    with repo._connect() as conn:
+        conn.execute("CREATE TRIGGER reject_adoption_task_tail BEFORE UPDATE ON creation_tasks "
+            "WHEN NEW.id='task-a' BEGIN SELECT RAISE(ABORT,'adoption task tail refused'); END")
+    with pytest.raises(sqlite3.IntegrityError,match='task tail refused'):
+        repo.edit_adoption.confirm('workspace_a','task-a',proposal.id,operation=operation,
+            result_version=version,subtitle_tracks=[track])
+    assert repo.get_edit_proposal('workspace_a',proposal.id).status=='proposed'
+    assert repo.list_edit_operations('workspace_a','task-a')==[]
+    assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
+    assert repo.list_timeline_versions('workspace_a','task-a')==[base]
+    assert repo.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id

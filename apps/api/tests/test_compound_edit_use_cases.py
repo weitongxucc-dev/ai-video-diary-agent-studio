@@ -149,7 +149,7 @@ def test_real_compound_adoption_rechecks_all_original_sources_at_commit(linked_s
     frozen = repo.get_edit_intent("local", proposal["intent_id"]).constraints["affected_source_scope"]
     assert frozen["clip_ids"] == ["clip_2"]
     assert frozen["input_source_facts"][0]["reference"] == plan.audio_timeline.tracks[0].clips[0].source_ref
-    commit = repo.confirm_edit_proposal
+    commit = repo.edit_adoption.confirm
 
     def revoke(*args, **kwargs):
         assert kwargs["verify_sources"] is not None
@@ -158,7 +158,7 @@ def test_real_compound_adoption_rechecks_all_original_sources_at_commit(linked_s
             visibility="private", owner_user_id="another-member"))
         return commit(*args, **kwargs)
 
-    monkeypatch.setattr(repo, "confirm_edit_proposal", revoke)
+    monkeypatch.setattr(repo.edit_adoption, "confirm", revoke)
     rejected = client.post(f"/api/creation-tasks/task/edits/{proposal['id']}/confirm")
     assert rejected.status_code == 403, rejected.text
     assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"

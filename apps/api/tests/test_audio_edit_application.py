@@ -60,13 +60,13 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
         audio=client.get(proposal['preview'][side]['audio_url']);assert audio.status_code==200
         with wave.open(io.BytesIO(audio.content)) as stream:assert stream.getframerate()==48000
     assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
-    confirms=[];original=repo.confirm_edit_proposal
+    confirms=[];original=repo.edit_adoption.confirm
     def observed_confirm(*args,**kwargs):
         if kwargs.get('operation').operation_type=='EditAudioTimeline':
             assert kwargs.get('verify_sources') is not None
             confirms.append(kwargs['operation'].id)
         return original(*args,**kwargs)
-    monkeypatch.setattr(repo,'confirm_edit_proposal',observed_confirm)
+    monkeypatch.setattr(repo.edit_adoption, 'confirm',observed_confirm)
     request={'request_id':str(uuid4())}
     endpoint='/api/creation-tasks/task/edits/'+proposal['id']+'/confirm'
     applied=client.post(endpoint,json=request);assert applied.status_code==200,applied.text

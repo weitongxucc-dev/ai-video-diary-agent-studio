@@ -373,7 +373,7 @@ def fixture(tmp_path):
         )
 
         def commit(conn):
-            repo.confirm_edit_proposal(
+            repo.edit_adoption.confirm(
                 "local",
                 task.id,
                 proposal.id,

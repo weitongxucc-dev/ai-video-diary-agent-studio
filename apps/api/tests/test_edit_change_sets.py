@@ -90,11 +90,12 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
                 return original_commit(command, *args, **kwargs)
             monkeypatch.setattr(repo, 'confirm_direct_edit', commit)
         else:
-            write = repo.create_edit_proposal if failure == 'after_proposal' else repo.confirm_edit_proposal
+            write = repo.create_edit_proposal if failure == 'after_proposal' else repo.edit_adoption.confirm
             def crash(*args, **kwargs):
                 write(*args, **kwargs)
                 raise ValueError('injected atomic commit failure')
-            monkeypatch.setattr(repo, 'create_edit_proposal' if failure == 'after_proposal' else 'confirm_edit_proposal', crash)
+            monkeypatch.setattr(repo if failure == 'after_proposal' else repo.edit_adoption,
+                'create_edit_proposal' if failure == 'after_proposal' else 'confirm', crash)
         jobs = len(repo.list_job_runs('local', 'task'))
         response = client.post('/api/creation-tasks/task/edits/exact', json={
             'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}})
@@ -199,3 +200,50 @@ def test_source_change_after_binding_before_direct_transaction_creates_no_lineag
         assert repo.get_creation_task_montage_plan('local', 'task') == original
     finally:
         runtime.stop(0)
+
+
+def test_direct_adoption_tail_failure_preserves_verify_order_and_rolls_back_lineage(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from app.creation.contracts import EditIntent, EditProposal, EditOperation, EditCommand, TimelineVersion
+    from app.creation.transactions import EditChangeSet
+    from test_production_foundation import _repository, _save_creation_task, edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
+    repo = _repository(tmp_path)
+    _save_creation_task(repo,workspace_id='workspace_a',task_id='task-a')
+    base = repo.create_timeline_version(TimelineVersion('direct-base','workspace_a','task-a',None,1,{},None))
+    intent = EditIntent('direct-intent','workspace_a','task-a','declared direct edit','montage',[],None,
+        'replace_visual',{}, {},1,'interpreted')
+    proposal = EditProposal('direct-proposal','workspace_a','task-a',intent.id,'declared direct adoption',['clip:clip-1'],
+        {'operation_type':'ReplaceClip'},[],{},[])
+    now = datetime.now(timezone.utc)
+    operation = EditOperation('direct-operation','workspace_a','task-a',proposal.id,'ReplaceClip',{'target_clip_id':'clip-1','replacement_clip_id':'clip-2'},base.id,
+        'direct-result','applied',created_at=now,applied_at=now)
+    version = TimelineVersion(operation.result_version_id,'workspace_a','task-a',base.id,2,{},operation.id)
+    change = EditChangeSet(operation,version,None,None,[],None)
+    command = EditCommand('workspace_a','task-a',{'member_id':'declared-member','local_diagnostic':True},
+        base.id,'ReplaceClip',{})
+    sources = []
+    def verify(original, connection):
+        assert original is command and connection.in_transaction
+        assert connection.execute('SELECT 1 FROM edit_intents WHERE id=?',(intent.id,)).fetchone() is None
+        assert connection.execute('SELECT 1 FROM edit_proposals WHERE id=?',(proposal.id,)).fetchone() is None
+        sources.append('before-lineage')
+    original = repo.edit_adoption.confirm
+    def refuse_after_adoption(*args, **kwargs):
+        assert kwargs['connection'].in_transaction
+        result = original(*args, **kwargs)
+        assert result[3].current_timeline_version_id==version.id
+        raise ValueError('injected adoption tail failure')
+    with monkeypatch.context() as tail:
+        tail.setattr(repo.edit_adoption,'confirm',refuse_after_adoption)
+        with pytest.raises(ValueError,match='adoption tail failure'):
+            repo.confirm_direct_edit(command,intent,proposal,change,verify_sources=verify)
+    assert sources==['before-lineage']
+    assert repo.list_edit_intents('workspace_a','task-a')==[]
+    assert repo.list_edit_proposals('workspace_a','task-a')==[]
+    assert repo.list_edit_operations('workspace_a','task-a')==[]
+    assert repo.list_timeline_versions('workspace_a','task-a')==[base]
+    assert repo.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
+    confirmed, applied, saved, task = repo.confirm_direct_edit(command,intent,proposal,change,verify_sources=verify)
+    assert sources==['before-lineage','before-lineage']
+    assert confirmed.status=='confirmed' and applied==operation and saved==version and task.current_timeline_version_id==version.id

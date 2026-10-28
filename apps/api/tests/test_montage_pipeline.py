@@ -5884,12 +5884,12 @@ def test_person_edit_publication_rolls_back_with_failed_job(permitted_person_edi
     state = permitted_person_edit_state
     queued, proposal_id = _queued_person_edit(state)
     before = [asdict(version) for version in _person_edit_versions(state)]
-    original = state.production.confirm_edit_proposal
+    original = state.production.edit_adoption.confirm
     def fail_after_write(*args, **kwargs):
         original(*args, **kwargs)
         assert kwargs["connection"] is not None
         raise RuntimeError("synthetic checkpoint publication failed")
-    monkeypatch.setattr(state.production, "confirm_edit_proposal", fail_after_write)
+    monkeypatch.setattr(state.production.edit_adoption, "confirm", fail_after_write)
     assert state.runtime.run_once()
     assert len(state.provider.output_cache_keys) == 1
     assert [asdict(version) for version in _person_edit_versions(state)] == before
