@@ -2318,7 +2318,7 @@ def test_atomic_section_patch_preserves_unloaded_rows_and_replays_original_recei
     monkeypatch.setattr(state.repository.script_records, '_creation_task_script_from_payload', lambda *a, **k: pytest.fail('patch must not hydrate the complete script'))
     args = dict(sections=[existing, inserted], expected_updated_at=script.updated_at, request_id='patch-1', member_id=member,
                 insert_after_section_id=before[0].id)
-    receipt = state.repository.patch_assistant_script_sections('local', 'task', script.id, **args)
+    receipt = state.repository.script_records.patch_assistant_script_sections('local', 'task', script.id, **args)
     assert receipt['total_count'] == 26 and receipt['affected_section_ids'] == [existing.id, inserted.id]
     first = state.repository.script_records.read_creation_task_script_sections('local', 'task', script.id)
     second = state.repository.script_records.read_creation_task_script_sections('local', 'task', script.id,
@@ -2326,11 +2326,11 @@ def test_atomic_section_patch_preserves_unloaded_rows_and_replays_original_recei
     actual = [item['section'] for item in first['items'] + second['items']]
     expected = [vars(part) for part in before[:1] + [inserted] + before[1:-1] + [existing]]
     assert actual == expected
-    assert state.repository.patch_assistant_script_sections('local', 'task', script.id, **args) == receipt
+    assert state.repository.script_records.patch_assistant_script_sections('local', 'task', script.id, **args) == receipt
     with pytest.raises(ValueError, match='同一文案请求'):
-        state.repository.patch_assistant_script_sections('local', 'task', script.id, **{**args, 'sections': [inserted]})
+        state.repository.script_records.patch_assistant_script_sections('local', 'task', script.id, **{**args, 'sections': [inserted]})
     with pytest.raises(ValueError, match='修订已变化'):
-        state.repository.patch_assistant_script_sections('local', 'task', script.id, **{**args, 'request_id': 'another-request'})
+        state.repository.script_records.patch_assistant_script_sections('local', 'task', script.id, **{**args, 'request_id': 'another-request'})
     with state.repository._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='assistant_script_window_saved'").fetchone()[0] == 1
 
@@ -2342,7 +2342,7 @@ def test_section_patch_receipt_failure_rolls_back_body_order_and_header(api_stat
     def fail_receipt(*args, **kwargs): raise RuntimeError('receipt persistence failed')
     monkeypatch.setattr(state.repository.script_records, 'append_task_event', fail_receipt)
     with pytest.raises(RuntimeError, match='receipt persistence'):
-        state.repository.patch_assistant_script_sections('local', 'task', script.id, sections=[added],
+        state.repository.script_records.patch_assistant_script_sections('local', 'task', script.id, sections=[added],
             expected_updated_at=script.updated_at, request_id='patch-1', member_id=state.owner.member_id,
             insert_after_section_id=script.sections[0].id)
     assert state.repository.script_records.get_creation_task_script('local', script.id) == script
@@ -2360,7 +2360,7 @@ def test_section_patch_keeps_existing_write_protections(api_state, rejection):
     elif rejection == 'duplicates': sections *= 2
     elif rejection == 'oversize': sections *= 21
     with pytest.raises(KeyError if rejection == 'wrong_task' else ValueError):
-        state.repository.patch_assistant_script_sections('local', 'other-task' if rejection == 'wrong_task' else 'task', script.id,
+        state.repository.script_records.patch_assistant_script_sections('local', 'other-task' if rejection == 'wrong_task' else 'task', script.id,
             sections=sections, expected_updated_at=script.updated_at, request_id='patch-1', member_id=state.owner.member_id)
     assert state.repository.script_records.get_creation_task_script('local', script.id) == script
 
@@ -2525,10 +2525,10 @@ def test_partial_review_coverage_cannot_be_adopted_as_a_complete_script(api_stat
     script=saved_row_draft(state)
     with state.repository._connect() as conn:
         layout=script_layout_digest(conn,'local',script.id)
-    state.repository.record_saved_script_section_review('local','task',script.id,script.sections[:1],script.updated_at,
+    state.repository.script_records.record_saved_script_section_review('local','task',script.id,script.sections[:1],script.updated_at,
         binding_digest='binding',layout_digest=layout)
     with pytest.raises(ScriptWindowConflict,match='未完成'):
-        state.repository.confirm_reviewed_script('local','task',script.id,expected_updated_at=script.updated_at,
+        state.repository.script_records.confirm_reviewed_script('local','task',script.id,expected_updated_at=script.updated_at,
             request_id=str(uuid4()),member_id=state.owner.member_id,binding_digest='binding',layout_digest=layout)
     assert state.repository.task_records.get_creation_task('local','task').confirmed_script_id is None
     assert state.repository.script_records.get_creation_task_script('local',script.id)==script

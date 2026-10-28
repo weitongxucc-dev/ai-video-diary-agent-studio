@@ -5266,52 +5266,6 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
-    @staticmethod
-    def _window_claim_key(task_id, script_id, operation, request_id, member_id):
-        return ScriptRecordStore._window_claim_key(task_id, script_id, operation, request_id, member_id)
-
-    def claim_script_window_request(self, workspace_id, task_id, script_id, operation, request_id, member_id, input_digest, *, submitted_input, write_guard=None):
-        return self.script_records.claim_script_window_request(workspace_id, task_id, script_id, operation, request_id, member_id, input_digest, submitted_input=submitted_input, write_guard=write_guard)
-
-    def end_script_window_request_with_error(self, workspace_id, task_id, script_id, operation, request_id, member_id, *, error_detail=None):
-        return self.script_records.end_script_window_request_with_error(workspace_id, task_id, script_id, operation, request_id, member_id, error_detail=error_detail)
-
-    def pending_script_window_request(self, workspace_id, task_id, script_id, operation, request_id, member_id, *, include_input=False):
-        return self.script_records.pending_script_window_request(workspace_id, task_id, script_id, operation, request_id, member_id, include_input=include_input)
-
-    def script_window_start_result(self, workspace_id, task_id, request_id, member_id):
-        return self.script_records.script_window_start_result(workspace_id, task_id, request_id, member_id)
-
-    def record_script_window_start(self, script, request_id, member_id, request_digest, binding_digest, *, connection):
-        return self.script_records.record_script_window_start(script, request_id, member_id, request_digest, binding_digest, connection=connection)
-
-    def saved_script_review_context(self, workspace_id, task_id, script_id, expected_updated_at):
-        return self.script_records.saved_script_review_context(workspace_id, task_id, script_id, expected_updated_at)
-
-    def record_saved_script_section_review(self, workspace_id, task_id, script_id, sections, expected_updated_at, *, binding_digest, layout_digest, write_guard=None):
-        return self.script_records.record_saved_script_section_review(workspace_id, task_id, script_id, sections, expected_updated_at, binding_digest=binding_digest, layout_digest=layout_digest, write_guard=write_guard)
-
-    def script_confirm_saved_result(self, workspace_id, task_id, script_id, request_id, member_id):
-        return self.script_records.script_confirm_saved_result(workspace_id, task_id, script_id, request_id, member_id)
-
-    def confirm_reviewed_script(self, workspace_id, task_id, script_id, *, expected_updated_at, request_id, member_id, binding_digest, layout_digest, adoption_kind='manual', write_guard=None):
-        return self.script_records.confirm_reviewed_script(workspace_id, task_id, script_id, expected_updated_at=expected_updated_at, request_id=request_id, member_id=member_id, binding_digest=binding_digest, layout_digest=layout_digest, adoption_kind=adoption_kind, write_guard=write_guard)
-
-    def script_patch_request_result(self, workspace_id, task_id, script_id, request_id, member_id):
-        return self.script_records.script_patch_request_result(workspace_id, task_id, script_id, request_id, member_id)
-
-    def script_section_patch_context(self, workspace_id, task_id, script_id, sections, expected_updated_at, *, insert_after_section_id=None):
-        return self.script_records.script_section_patch_context(workspace_id, task_id, script_id, sections, expected_updated_at, insert_after_section_id=insert_after_section_id)
-
-    def _record_script_section_review(self, conn, workspace_id, task_id, script_id, sections, *, binding_digest, layout_digest):
-        return self.script_records._record_script_section_review(conn, workspace_id, task_id, script_id, sections, binding_digest=binding_digest, layout_digest=layout_digest)
-
-    def script_sections_have_review(self, workspace_id, task_id, script_id, sections, *, binding_digest, layout_digest):
-        return self.script_records.script_sections_have_review(workspace_id, task_id, script_id, sections, binding_digest=binding_digest, layout_digest=layout_digest)
-
-    def patch_assistant_script_sections(self, workspace_id, task_id, script_id, *, sections, expected_updated_at, request_id, member_id, insert_after_section_id=None, write_guard=None, review_binding=None):
-        return self.script_records.patch_assistant_script_sections(workspace_id, task_id, script_id, sections=sections, expected_updated_at=expected_updated_at, request_id=request_id, member_id=member_id, insert_after_section_id=insert_after_section_id, write_guard=write_guard, review_binding=review_binding)
-
     def save_script_library_entry(self, workspace_id: str, *, source_script_id: str, name: str, category: str) -> _ScriptLibraryEntry:
         return self.script_records.save_script_library_entry(workspace_id, source_script_id=source_script_id, name=name, category=category)
 
