@@ -17,7 +17,12 @@ from test_creation_requests import entries
 @pytest.fixture
 def client_state(tmp_path, monkeypatch):
     from test_production_foundation import edit_adoption_no_execution
-    edit_adoption_no_execution(monkeypatch)
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    from app.local_portrait import LocalPortrait
+    from app.subtitle_tracks import OpenAICompatibleSubtitleTranslationProvider, UnavailableSubtitleTranslationProvider
+    monkeypatch.setattr(LocalPortrait, "process", forbidden)
+    monkeypatch.setattr(OpenAICompatibleSubtitleTranslationProvider, "translate", forbidden)
+    monkeypatch.setattr(UnavailableSubtitleTranslationProvider, "translate", forbidden)
     path = tmp_path / "api.sqlite3"
     repo = ProductionRepository(path, tmp_path / "library")
     members = LocalMemberService(path)
@@ -592,8 +597,12 @@ def test_material_tag_receipt_still_requires_exact_bound_object(client_state, mo
     if expected_status == 200:
         assert response.json()["material_result"]["asset_ref"] == "asset:asset-a"
         assert c.client.post("/api/assistant/material/turn", headers=c.alice, json=payload).json() == response.json()
+        saved = c.conversations.get_turn(response.json()["turn_id"])
+        assert saved["result"]["kind"] == "material_result"
+        assert saved["result"]["response"]["material_result"] == response.json()["material_result"]
     else:
         assert c.conversations.list_turns(chat["id"])[0]["status"] == "failed"
+        assert c.conversations.list_turns(chat["id"])[0]["result"]["kind"] == "failure"
 
 
 def test_interrupted_follow_up_does_not_restore_original_creation_request(client_state):

@@ -3,6 +3,7 @@ from app.creation.task_input_reads import creation_task_from_payload
 from app.creation.media_result_use_case import MediaResultUseCase, MediaResultRejected
 from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
+from app.assistant import home_plan_turn_use_case as home_plan
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
     StoryboardResultRejected, UnknownStoryboardReference)
 from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
@@ -4833,19 +4834,27 @@ def assistant_knowledge_reference(knowledge_item_id: str, request: Request, vers
     return _assistant_knowledge_snapshot(request, knowledge_item_id, version, locator, include_content=True)
 
 
+def _home_plan_turn_use_case():
+    return home_plan.HomePlanTurnUseCase(
+        get_turn=conversation_repo.get_turn,
+        finish_turn=conversation_repo.finish_turn,
+        find_request_by_key=production_repo.creation_requests.find_creation_request_by_key)
+
+
 def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict | None:
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, turn["conversation_id"])
-    from app.assistant.inputs import active_input, latest_consumed_input
-    current_turn = conversation_repo.get_turn(turn["id"])
-    latest = latest_consumed_input(current_turn["events"])
-    if latest and latest["status"] == "interrupted":
-        return None
-    active = active_input(current_turn["events"])
-    request_key = active["input_id"] if active else turn["id"]
-    owner, diagnostic = _content_reader(request, workspace_id)
-    if not owner:
-        return None
-    return production_repo.creation_requests.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
+    steps = _home_plan_turn_use_case().recover_request(turn)
+    stage = next(steps)
+    while True:
+        if isinstance(stage, home_plan.ReadConversationOwner):
+            answer = _assistant_conversation_for_request(request, stage.conversation_id)[0]
+        elif isinstance(stage, home_plan.ReadCurrentReader):
+            answer = _content_reader(request, stage.workspace_id)[0]
+        else:
+            raise TypeError(f"Unsupported home request recovery stage: {type(stage).__name__}")
+        try:
+            stage = steps.send(answer)
+        except StopIteration as completed:
+            return completed.value
 
 
 def _assistant_conversation_response(row: dict, request: Request) -> dict:
@@ -5413,32 +5422,32 @@ def _workspace_assistant_plan_turn(
         )
         _register_adopted_creation_goals(request, turn_id, response.creation_request)
         return response
-    preview = None
+    case = _home_plan_turn_use_case()
+    steps = case.execute(turn_id, payload.message, material_selection=material_selection)
     try:
-        reply, preview = run_plan_turn(
-            workspace_settings_for_turn,
-            workspace_id=workspace_id,
-            local_member_token=_local_member_token(request) or None,
-            caller_user_id=caller_user_id if not local_diagnostic else None,
-            conversation_id=str(payload.conversation_id),
-            message=payload.message.strip(),
-            authorization=request.headers.get("authorization"),
-            cookie=request.headers.get("cookie"),
-            on_event=on_event,
-            turn_id=turn_id,
-            selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
-            input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
-            profile_reference=profile_reference,
-            knowledge_reference=knowledge_reference,
-            keep_turn_control=True, material_selection=material_selection,
-        )
-        if isinstance(preview, dict) and preview.get("kind") == "creation_request":
-            saved_request = preview["request"]
-            save_only = re.search(r"只(?:先)?保存|仅保存|不(?:要|用)(?:准备|规划|出)(?:方案|计划)", payload.message)
-            if saved_request["status"] == "awaiting_plan" and not saved_request["clarification_questions"] and not save_only:
-                latest = _creation_request_or_404(request, saved_request["id"])
-                try:
-                    next_reply, next_preview = run_plan_turn(
+        stage = next(steps)
+        while True:
+            try:
+                if isinstance(stage, home_plan.RunPlanning):
+                    answer = run_plan_turn(
+                        workspace_settings_for_turn,
+                        workspace_id=workspace_id,
+                        local_member_token=_local_member_token(request) or None,
+                        caller_user_id=caller_user_id if not local_diagnostic else None,
+                        conversation_id=str(payload.conversation_id),
+                        message=payload.message.strip(),
+                        authorization=request.headers.get("authorization"),
+                        cookie=request.headers.get("cookie"),
+                        on_event=on_event,
+                        turn_id=turn_id,
+                        selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
+                        input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
+                        profile_reference=profile_reference,
+                        knowledge_reference=knowledge_reference,
+                        keep_turn_control=True, material_selection=material_selection,
+                    )
+                elif isinstance(stage, home_plan.ContinuePlanning):
+                    answer = run_plan_turn(
                         workspace_settings_for_turn, workspace_id=workspace_id,
                         local_member_token=_local_member_token(request) or None,
                         caller_user_id=caller_user_id if not local_diagnostic else None,
@@ -5448,76 +5457,62 @@ def _workspace_assistant_plan_turn(
                         selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
                         input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
                         knowledge_reference=knowledge_reference,
-                        creation_request=_creation_request_response(latest).model_dump(mode="json"),
+                        creation_request=_creation_request_response(stage.latest_request).model_dump(mode="json"),
                         keep_turn_control=True, material_selection=material_selection,
                     )
-                    if isinstance(next_preview, dict) and next_preview.get("kind") == "creation_request":
-                        reply, preview = next_reply, next_preview
-                except AssistantUnavailable as exc:
-                    reply = "制作目标已保存，当前这组方案尚未完成。" + _assistant_stream_safe_text(str(exc), workspace_id)
-    except AssistantStopped:
-        saved = conversation_repo.get_turn(turn_id)
-        saved_goal = preview.get("request") if isinstance(preview, dict) and preview.get("kind") == "creation_request" else None
-        response = WorkspaceAssistantPlanTurnResponse(
-            reply=saved["assistant_text"] if saved else "", provider=workspace_settings_for_turn.effective_llm_provider,
-            model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
-            draft_version=payload.expected_draft_version + 1,
-            creation_request=CreationRequestResponse.model_validate(saved_goal) if saved_goal else None,
-        )
-        forget_turn_control(turn_id)
-        conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "creation_request" if saved_goal else "conversation",
-            "creation_request_id": saved_goal["id"] if saved_goal else None, "response": response.model_dump(mode="json")})
-        return response
-    except AssistantUnavailable as exc:
-        forget_turn_control(turn_id)
-        conversation_repo.finish_turn(turn_id, "failed", result={
-            "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
-        })
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    material_result = None
-    if isinstance(preview, dict) and preview.get("kind") == "material_result":
-        try:
-            material_result = MaterialAssistantResultResponse.model_validate(preview.get("material_result"))
-        except ValidationError as exc:
-            forget_turn_control(turn_id)
-            conversation_repo.finish_turn(turn_id, "failed", result={"kind": "failure", "message": "素材结果格式不可核验，未宣称保存。"})
-            raise HTTPException(status_code=502, detail="素材结果格式不可核验，未宣称保存。") from exc
-    if material_result is not None:
-        materials = [item["selection"] for item in _frozen_assistant_references(request, str(payload.conversation_id), turn_id)
-                     if item["kind"] == "material"]
-        bound = materials[0] if len(materials) == 1 else material_selection if not materials else None
-        if (bound is None or material_result.scope != bound["scope"]
-                or material_result.asset_ref != f"asset:{bound['asset_id']}"
-                or material_result.segment_ref != (f"segment:{bound['segment_id']}" if bound["scope"] == "segment" else None)):
-            forget_turn_control(turn_id)
-            conversation_repo.finish_turn(turn_id, "failed", result={"kind": "failure", "message": "素材结果没有通过当前选择核对，未宣称保存。"})
-            raise HTTPException(status_code=502, detail="素材结果没有通过当前选择核对，未宣称保存。")
-        preview = None
-    request_result = preview.get("request") if isinstance(preview, dict) and preview.get("kind") == "creation_request" else None
-    if request_result is None and material_result is None:
-        request_result = _assistant_creation_request_for_turn(request, conversation_repo.get_turn(turn_id))
-        if request_result is not None:
-            preview = None
-    creation_request = CreationRequestResponse.model_validate(request_result) if request_result is not None else None
-    plan_preview = CreationPlanPreviewResponse.model_validate(preview) if preview is not None and creation_request is None else None
-    forget_turn_control(turn_id)
-    safe_reply = _assistant_text_without_credentials(reply, workspace_id)
-    response = WorkspaceAssistantPlanTurnResponse(
-        reply=safe_reply,
-        provider=workspace_settings_for_turn.effective_llm_provider,
-        model=workspace_settings_for_turn.effective_llm_model,
-        plan_preview=plan_preview,
-        creation_request=creation_request, material_result=material_result,
-        turn_id=turn_id,
-        draft_version=payload.expected_draft_version + 1,
-    )
-    conversation_repo.finish_turn(turn_id, "completed", safe_reply, {
-        "kind": "creation_request" if creation_request else "plan_preview" if plan_preview else "material_result" if material_result else "conversation",
-        "creation_request_id": creation_request.id if creation_request else None,
-        "plan_preview": plan_preview.model_dump(mode="json") if plan_preview else None,
-        "response": response.model_dump(mode="json"),
-    })
-    _register_adopted_creation_goals(request, turn_id, creation_request)
+                elif isinstance(stage, home_plan.ReadOwnedRequest):
+                    answer = _creation_request_or_404(request, stage.request_id)
+                elif isinstance(stage, home_plan.SafeFailureText):
+                    answer = _assistant_stream_safe_text(stage.text, workspace_id)
+                elif isinstance(stage, home_plan.ForgetTurnControl):
+                    answer = forget_turn_control(turn_id)
+                elif isinstance(stage, home_plan.BuildStoppedResponse):
+                    response = WorkspaceAssistantPlanTurnResponse(
+                        reply=stage.assistant_text, provider=workspace_settings_for_turn.effective_llm_provider,
+                        model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
+                        draft_version=payload.expected_draft_version + 1,
+                        creation_request=CreationRequestResponse.model_validate(stage.saved_goal) if stage.saved_goal else None)
+                    answer = home_plan.RenderedResponse(response, response.model_dump(mode="json"))
+                elif isinstance(stage, home_plan.NormalizeMaterial):
+                    material = MaterialAssistantResultResponse.model_validate(stage.value)
+                    answer = home_plan.MaterialResult(material.scope, material.asset_ref, material.segment_ref, material)
+                elif isinstance(stage, home_plan.ReadFrozenSelections):
+                    answer = _frozen_assistant_references(request, str(payload.conversation_id), turn_id)
+                elif isinstance(stage, home_plan.RecoverSavedRequest):
+                    answer = _assistant_creation_request_for_turn(request, stage.turn)
+                elif isinstance(stage, home_plan.BuildCompletedResponse):
+                    creation_request = CreationRequestResponse.model_validate(stage.request_result) if stage.request_result is not None else None
+                    plan_preview = CreationPlanPreviewResponse.model_validate(stage.preview) if stage.preview is not None and creation_request is None else None
+                    forget_turn_control(turn_id)
+                    safe_reply = _assistant_text_without_credentials(stage.reply, workspace_id)
+                    response = WorkspaceAssistantPlanTurnResponse(
+                        reply=safe_reply, provider=workspace_settings_for_turn.effective_llm_provider,
+                        model=workspace_settings_for_turn.effective_llm_model, plan_preview=plan_preview,
+                        creation_request=creation_request,
+                        material_result=stage.material_result.response if stage.material_result is not None else None,
+                        turn_id=turn_id, draft_version=payload.expected_draft_version + 1)
+                    answer = home_plan.RenderedResponse(response, response.model_dump(mode="json"))
+                else:
+                    raise TypeError(f"Unsupported home planning stage: {type(stage).__name__}")
+            except Exception as exc:
+                # Return only this checkpoint's exception to its original business try block.
+                try:
+                    stage = steps.throw(exc)
+                except StopIteration as completed:
+                    result = completed.value
+                    break
+            else:
+                try:
+                    stage = steps.send(answer)
+                except StopIteration as completed:
+                    result = completed.value
+                    break
+    except home_plan.HomePlanTurnRejected as exc:
+        failure = HTTPException(status_code=exc.status_code, detail=exc.detail)
+        raise failure from (exc.__cause__ or exc)
+    response = result.rendered.response
+    if result.completed:
+        _register_adopted_creation_goals(request, turn_id, response.creation_request)
     return response
 
 

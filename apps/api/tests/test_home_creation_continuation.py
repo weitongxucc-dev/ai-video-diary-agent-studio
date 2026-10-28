@@ -118,6 +118,10 @@ def test_home_boundary_reads_owner_receipt_instead_of_returned_task_ids(client_s
 
 def test_home_response_and_live_replay_register_the_same_actual_tasks(client_state, monkeypatch):
     c = client_state
+    # Bind the isolated workspace to the real local roster and the same DB;
+    # retain actual Goal authorization/context persistence instead of bypassing it.
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "request-test")
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(c.repository.database_path)))
     chat, source, saved, message = adopted(c, finish=False)
     created = [True]
     monkeypatch.setattr(main, "_begin_assistant_turn", lambda *args, **kwargs: (source["id"], created[0], source))
@@ -139,6 +143,64 @@ def test_home_response_and_live_replay_register_the_same_actual_tasks(client_sta
     assert replay.creation_request.id == saved["id"] and model_boundary.call_count == 1
     assert [item["root"]["id"] for item in c.conversations.goal_event_candidates()] == [candidates[0]["root"]["id"]]
 
+
+
+def test_home_saved_request_planning_keeps_save_only_and_second_unavailable(client_state, monkeypatch):
+    """Three bounded metadata scenarios, no SDK/model or production execution."""
+    from app.assistant.failures import AssistantUnavailable
+    c = client_state
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _: Settings(deepseek_api_key="test-only"))
+    monkeypatch.setattr(main, "_frozen_assistant_references", lambda *_: [])
+    monkeypatch.setattr(main, "_assistant_input_delivery", lambda *_: None)
+    monkeypatch.setattr(main, "_wake_assistant_continuations", Mock())
+    request = Request({"type": "http", "headers": [(key.lower().encode(), value.encode()) for key, value in c.alice.items()]})
+    for mode in ("continue", "save_only", "second_unavailable"):
+        message = "请制作1条玉米介绍视频，文案和剪辑由你完成。" + ("只先保存，不要规划方案。" if mode == "save_only" else "")
+        chat = c.conversations.create("request-test", c.member.member_id, "home", "home", mode)
+        c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, message, 0)
+        calls, original = [], []
+
+        def model(_settings, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                response = create(c, goal=message, target_count=1, assistant_turn_id=kwargs["turn_id"],
+                    request_key=kwargs["turn_id"], intent={"kind": "goal_delegation", "topic_title": "玉米介绍"})
+                # client_state registers the handler on its own FastAPI app (HTTP 200).
+                # The production route's explicit HTTP 201 declaration is unchanged.
+                assert response.status_code == 200, response.text
+                original.append(response.json())
+                assert original[0]["status"] == "awaiting_plan" and original[0]["clarification_questions"] == []
+                return "目标已保存。", {"kind": "creation_request", "request": original[0]}
+            assert len(calls) == 2 and kwargs["turn_id"] == calls[0]["turn_id"]
+            assert kwargs["creation_request"]["id"] == original[0]["id"]
+            if mode == "second_unavailable":
+                raise AssistantUnavailable("声明的第二轮不可用，未执行模型")
+            response = c.client.post("/api/creation-requests/" + original[0]["id"] + "/windows", headers=c.alice,
+                json={"expected_revision": original[0]["revision"], "goals": [{"goal": "玉米介绍"}]})
+            assert response.status_code == 200, response.text
+            return "已准备原目标的方案。", {"kind": "creation_request", "request": response.json()}
+
+        monkeypatch.setattr(main, "run_plan_turn", model)
+        payload = WorkspaceAssistantPlanTurnRequest(conversation_id=chat["id"], message=message,
+            client_request_id=uuid4(), expected_draft_version=1)
+        response = main._workspace_assistant_plan_turn(request, payload, None)
+        assert len(calls) == (1 if mode == "save_only" else 2)
+        assert response.creation_request.id == original[0]["id"]
+        saved = c.conversations.get_turn(str(response.turn_id))
+        assert saved["status"] == "completed"
+        assert saved["result"]["response"] == response.model_dump(mode="json")
+        assert saved["result"]["creation_request_id"] == original[0]["id"]
+        if mode == "continue":
+            assert response.creation_request.current_window.status == "proposed"
+            assert response.reply == "已准备原目标的方案。"
+        else:
+            assert response.creation_request.current_window is None
+            assert response.creation_request.status == "awaiting_plan"
+            assert ("制作目标已保存，当前这组方案尚未完成。" in response.reply) == (mode == "second_unavailable")
+        replay = main._workspace_assistant_plan_turn(request, payload, None)
+        assert replay.model_dump(mode="json") == response.model_dump(mode="json")
+        assert len(calls) == (1 if mode == "save_only" else 2)
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_state, monkeypatch):
     c = client_state
