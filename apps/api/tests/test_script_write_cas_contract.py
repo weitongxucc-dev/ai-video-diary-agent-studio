@@ -77,12 +77,12 @@ def ready_script(tmp_path: Path) -> tuple[ProductionRepository, CreationTaskScri
         prompt_schema_version="script-test/v1",
         input_references=[{"reference_id": REFERENCE_ID}],
     )
-    repo.start_script_generation(script_run)
+    repo.script_records.start_script_generation(script_run)
     section = CreationTaskScriptSection(
         id="section-cas", title="核心内容", content="资料说明正文。", visual_prompt="展示资料中的核心内容。",
         evidence_reference_ids=[REFERENCE_ID],
     )
-    _, _, script = repo.complete_script_generation(
+    _, _, script = repo.script_records.complete_script_generation(
         script_run.id,
         CreationTaskScript(
             id="script-cas", workspace_id=WORKSPACE, task_id=task.id, run_id=script_run.id,

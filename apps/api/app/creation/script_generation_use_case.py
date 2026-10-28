@@ -115,7 +115,7 @@ class ScriptGenerationUseCase:
             prompt_schema_version="creation-task-script/v2", input_references=input_references,
         )
         try:
-            task, run = self.repository.start_script_generation(run)
+            task, run = self.repository.script_records.start_script_generation(run)
         except (KeyError, ValueError) as exc:
             raise ScriptGenerationRejected(
                 kind="stage_conflict", error="creation_task_script_stage_conflict",
@@ -129,7 +129,7 @@ class ScriptGenerationUseCase:
                 reason=preflight_error.reason, impact=preflight_error.impact,
                 repair_action=preflight_error.repair_action, retryable=preflight_error.retryable,
             )
-            self.repository.fail_script_generation(run.id, **failure)
+            self.repository.script_records.fail_script_generation(run.id, **failure)
             raise ScriptGenerationRejected(
                 kind="preflight_failed", error="capability_unavailable", **failure,
             )
@@ -159,7 +159,7 @@ class ScriptGenerationUseCase:
                 self.record_service(
                     ok=False, cause=exc.code, detail=exc.reason, repair_action=exc.repair_action,
                 )
-            self.repository.fail_script_generation(
+            self.repository.script_records.fail_script_generation(
                 run.id, reason=exc.reason, impact=exc.impact,
                 repair_action=exc.repair_action, retryable=exc.retryable,
                 provider_attempted=not provider_not_attempted,
@@ -192,9 +192,9 @@ class ScriptGenerationUseCase:
             ],
         )
         try:
-            task, _, _ = self.repository.complete_script_generation(run.id, script)
+            task, _, _ = self.repository.script_records.complete_script_generation(run.id, script)
         except ValueError as exc:
-            self.repository.fail_script_generation(
+            self.repository.script_records.fail_script_generation(
                 run.id, reason="provider_output_invalid",
                 impact="文字模型输出未通过文案与证据持久化校验，未保存文案。",
                 repair_action="检查模型 JSON 输出与来源引用后重试。",

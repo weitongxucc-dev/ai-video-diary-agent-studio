@@ -5266,9 +5266,6 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
-    def start_script_generation(self, run: _ScriptGenerationRun, *, write_guard=None, connection=None) -> tuple[_CreationTask, _ScriptGenerationRun]:
-        return self.script_records.start_script_generation(run, write_guard=write_guard, connection=connection)
-
     def transfer_completed_assistant_reply_to_script(self, workspace_id: str, task_id: str, *, request_id: str, reply_reference: dict[str, str], plan_conversion_request_id: str | None=None, reply_text: str, expected_plan_id: str, expected_plan_updated_at: datetime | str, expected_topic_id: str, expected_task_updated_at: datetime | str, input_references: list[dict[str, object]], script_id: str, run_id: str, title: str, language: Literal['zh-CN', 'en-US', 'zh-CN/en-US'], sections: list[_CreationTaskScriptSection], replace_existing_script_id: str | None=None, expected_script_updated_at: datetime | str | None=None, verified_owner_user_id: str | None=None) -> tuple[_CreationTask, _ScriptGenerationRun, _CreationTaskScript]:
         return self.script_records.transfer_completed_assistant_reply_to_script(workspace_id, task_id, request_id=request_id, reply_reference=reply_reference, plan_conversion_request_id=plan_conversion_request_id, reply_text=reply_text, expected_plan_id=expected_plan_id, expected_plan_updated_at=expected_plan_updated_at, expected_topic_id=expected_topic_id, expected_task_updated_at=expected_task_updated_at, input_references=input_references, script_id=script_id, run_id=run_id, title=title, language=language, sections=sections, replace_existing_script_id=replace_existing_script_id, expected_script_updated_at=expected_script_updated_at, verified_owner_user_id=verified_owner_user_id)
 
@@ -5278,15 +5275,6 @@ class ProductionRepository:
     @staticmethod
     def _validate_assistant_reply_inputs(plan: _CreationPlan, input_references: dict[str, dict[str, object]]):
         return ScriptRecordStore._validate_assistant_reply_inputs(plan, input_references)
-
-    def save_reviewed_script_generation(self, run, script, *, write_guard=None, result_write=None):
-        return self.script_records.save_reviewed_script_generation(run, script, write_guard=write_guard, result_write=result_write)
-
-    def complete_script_generation(self, run_id: str, script: _CreationTaskScript, *, write_guard=None, result_write=None, connection=None) -> tuple[_CreationTask, _ScriptGenerationRun, _CreationTaskScript]:
-        return self.script_records.complete_script_generation(run_id, script, write_guard=write_guard, result_write=result_write, connection=connection)
-
-    def fail_script_generation(self, run_id: str, *, reason: str, impact: str, repair_action: str, retryable: bool, provider_attempted: bool=False, provider_failed: bool=True, connection=None) -> tuple[_CreationTask, _ScriptGenerationRun]:
-        return self.script_records.fail_script_generation(run_id, reason=reason, impact=impact, repair_action=repair_action, retryable=retryable, provider_attempted=provider_attempted, provider_failed=provider_failed, connection=connection)
 
     def record_assistant_script_save(self, script, source, request_digest, *, connection):
         return self.script_records.record_assistant_script_save(script, source, request_digest, connection=connection)

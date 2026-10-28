@@ -750,12 +750,12 @@ def test_provider_use_case_failed_review_preserves_old_draft_and_classifies_conn
     repository = api_state.repository
     old_run = ScriptGenerationRun(id='old-run', workspace_id='local', task_id='task', plan_id='plan', topic_id='topic',
         status='running', route_snapshot={}, prompt_schema_version='old-fixture', input_references=api_state.refs)
-    repository.start_script_generation(old_run)
+    repository.script_records.start_script_generation(old_run)
     old = CreationTaskScript(id='old-script', workspace_id='local', task_id='task', run_id=old_run.id,
         topic_id='topic', title='已有未确认草稿', language='zh-CN', sections=[CreationTaskScriptSection(
             id='old-section', title='用途', content=FACT, visual_prompt='素材界面',
             evidence_reference_ids=[item['reference_id'] for item in api_state.refs])])
-    repository.complete_script_generation(old_run.id, old)
+    repository.script_records.complete_script_generation(old_run.id, old)
     # Recovery fixture: a failed script stage has retained its previous,
     # unconfirmed draft. The application still checks current task and source bindings.
     with repository._connect() as conn:
@@ -811,12 +811,12 @@ def saved_agent_draft(state):
     """Use the real successful lifecycle; the task stays waiting_for_user."""
     run = ScriptGenerationRun(id='retained-run', workspace_id='local', task_id='task', plan_id='plan', topic_id='topic',
         status='running', route_snapshot={}, prompt_schema_version='creation-task-script/v2', input_references=state.refs)
-    state.repository.start_script_generation(run)
+    state.repository.script_records.start_script_generation(run)
     script = CreationTaskScript(id='retained-script', workspace_id='local', task_id='task', run_id=run.id,
         topic_id='topic', title='已有草稿', language='zh-CN', sections=[CreationTaskScriptSection(
             id='retained-section', title='素材用途', content=FACT, visual_prompt='用途设置界面',
             evidence_reference_ids=[item['reference_id'] for item in state.refs])])
-    return state.repository.complete_script_generation(run.id, script)[2]
+    return state.repository.script_records.complete_script_generation(run.id, script)[2]
 
 
 def agent_payload(state, script=None, *, content=FACT, visual='用途设置界面'):
@@ -2237,12 +2237,12 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
 def saved_row_draft(state, count=25):
     run = ScriptGenerationRun(id='row-run', workspace_id='local', task_id='task', plan_id='plan', topic_id='topic',
         status='running', route_snapshot={}, prompt_schema_version='creation-task-script/v2', input_references=state.refs)
-    state.repository.start_script_generation(run)
+    state.repository.script_records.start_script_generation(run)
     script = CreationTaskScript(id='row-script', workspace_id='local', task_id='task', run_id=run.id,
         topic_id='topic', title=f'{count}段完整稿', language='zh-CN', sections=[CreationTaskScriptSection(
             id=f'section-{i}', title=f'段落{i}', content=FACT, visual_prompt=f'计划画面{i}',
             evidence_reference_ids=[state.refs[0]['reference_id']]) for i in range(count)])
-    state.repository.complete_script_generation(run.id, script)
+    state.repository.script_records.complete_script_generation(run.id, script)
     return script
 
 

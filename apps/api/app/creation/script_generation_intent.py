@@ -124,7 +124,7 @@ class ScriptGenerationIntent:
                 topic_id=task.selected_topic_id, status="running", route_snapshot=self.route_snapshot,
                 prompt_schema_version="creation-task-script/v2", input_references=frozen["input_references"],
             )
-            self.repository.start_script_generation(run, connection=conn)
+            self.repository.script_records.start_script_generation(run, connection=conn)
             self.repository.execution_records.append_task_event(TaskEvent(
                 id=event_id, workspace_id=workspace_id, task_id=task_id, job_id=None,
                 event_type="script_generation_requested", payload={
@@ -311,7 +311,7 @@ class ScriptGenerationIntent:
             if record["turn_status"] != "running":
                 return self.public_projection(record)
             if record["run_status"] == "running":
-                self.repository.fail_script_generation(record["run_id"], reason=reason, impact=impact,
+                self.repository.script_records.fail_script_generation(record["run_id"], reason=reason, impact=impact,
                     repair_action=repair_action, retryable=retryable, provider_attempted=provider_attempted,
                     provider_failed=provider_failed, connection=conn)
             self.conversations.finish_turn(record["turn_id"], status, result={
@@ -342,7 +342,7 @@ class ScriptGenerationIntent:
             self._mark_unknown(workspace_id, task_id, request_id, member_id, connection=conn)
             return
         if record["run_status"] == "running":
-            self.repository.fail_script_generation(record["run_id"], reason="api_restarted",
+            self.repository.script_records.fail_script_generation(record["run_id"], reason="api_restarted",
                 impact="生成进程已中断，原请求与已保存草稿保留。",
                 repair_action="查询原请求和草稿后，明确发起新的生成请求。", retryable=True,
                 provider_attempted=False, connection=conn)

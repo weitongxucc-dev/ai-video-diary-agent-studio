@@ -3402,8 +3402,8 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         prompt_schema_version="creation-task-script/v1",
         input_references=[],
     )
-    reloaded.start_script_generation(repair_run)
-    reloaded.fail_script_generation(
+    reloaded.script_records.start_script_generation(repair_run)
+    reloaded.script_records.fail_script_generation(
         repair_run.id,
         reason="文字模型服务拒绝了文案请求。",
         impact="未生成压缩后的文案。",
@@ -3611,7 +3611,7 @@ def test_creation_task_can_regenerate_script_after_duration_preflight_failure(
         input_references=[],
     )
 
-    resumed, _ = production.start_script_generation(run)
+    resumed, _ = production.script_records.start_script_generation(run)
 
     assert resumed.stage == "script"
     assert resumed.stage_status == "running"

@@ -125,7 +125,7 @@ def test_in_flight_old_input_snapshot_cannot_start_after_adoption(state):
     assert adopt(state, command(state, knowledge(state))).status_code == 200
     before = rows(state)
     with pytest.raises(ValueError, match='全部固定引用'):
-        state.repository.start_script_generation(delayed)
+        state.repository.script_records.start_script_generation(delayed)
     assert rows(state) == before
 
 
@@ -199,7 +199,7 @@ def test_unchanged_reference_is_explicit_noop_and_does_not_invalidate_draft(stat
 @pytest.mark.parametrize('busy', ['script_running', 'queued', 'running', 'interrupted', 'confirmed'])
 def test_busy_or_downstream_task_rejects_addition_without_silent_invalidation(state, busy):
     if busy == 'script_running':
-        state.repository.start_script_generation(ScriptGenerationRun(id='busy', workspace_id='local', task_id='task',
+        state.repository.script_records.start_script_generation(ScriptGenerationRun(id='busy', workspace_id='local', task_id='task',
             plan_id='plan', topic_id='topic', status='running', route_snapshot={}, prompt_schema_version='test', input_references=state.refs))
     elif busy == 'confirmed':
         old = saved_agent_draft(state)

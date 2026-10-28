@@ -864,13 +864,13 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
         topic_id="topic-one", status="running", route_snapshot={"source": "pi"},
         prompt_schema_version="assistant-v1", input_references=[{"reference_id": "ref-one"}],
     )
-    repo.start_script_generation(run)
+    repo.script_records.start_script_generation(run)
     initial = CreationTaskScript(
         id="draft-one", workspace_id="one", task_id="task-one", run_id=run.id,
         topic_id="topic-one", title="初稿", language="zh-CN",
         sections=[CreationTaskScriptSection("section-one", "开头", "初稿内容", "真实画面", ["ref-one"])],
     )
-    repo.complete_script_generation(run.id, initial)
+    repo.script_records.complete_script_generation(run.id, initial)
     revised_sections = [CreationTaskScriptSection("section-one", "开头", "用户改过的内容", "产品画面", ["ref-one"])]
     revised = repo.update_assistant_script_draft(
         "one", "task-one", initial.id, title="新版草稿", sections=revised_sections,

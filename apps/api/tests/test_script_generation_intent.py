@@ -136,7 +136,7 @@ def test_ready_result_is_bound_atomically_and_later_edits_do_not_replace_origina
         run_id=accepted["run_id"], topic_id="topic", title="Draft", language="zh-CN",
         sections=[CreationTaskScriptSection(id="section", title="Title", content="本机工作区导览。",
                    visual_prompt="展示入口", evidence_reference_ids=[ref["reference_id"] for ref in state.refs])])
-    state.repository.complete_script_generation(accepted["run_id"], script,
+    state.repository.script_records.complete_script_generation(accepted["run_id"], script,
         write_guard=lambda conn: case.read_generation_request(conn, "local", "task", request_id, actor.member_id),
         result_write=lambda conn, value: case.bind_generation_result(conn, "local", "task", request_id,
             actor.member_id, run_id=value.run_id, script_id=value.id, draft_ready=True))
@@ -231,7 +231,7 @@ def test_restart_reconciles_original_run_and_preserves_saved_or_unknown_writes(g
             run_id=accepted["run_id"], topic_id="topic", title="Saved", language="zh-CN",
             sections=[CreationTaskScriptSection(id="saved", title="用途", content="原已保存文字",
                 visual_prompt="入口", evidence_reference_ids=[])])
-        write = (state.repository.complete_script_generation if checkpoint == "ready"
+        write = (state.repository.script_records.complete_script_generation if checkpoint == "ready"
                  else state.repository.script_records.attach_generation_window)
         write(accepted["run_id"], script,
             write_guard=lambda conn: case.read_generation_request(conn, "local", "task", request_id, actor.member_id),

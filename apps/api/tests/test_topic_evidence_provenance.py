@@ -97,7 +97,7 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
         id="script-run", workspace_id="qa", task_id=task.id, plan_id=plan.id, topic_id=candidate.id,
         status="running", route_snapshot={}, prompt_schema_version="fixture", input_references=inputs,
     )
-    production.start_script_generation(script_run)
+    production.script_records.start_script_generation(script_run)
     script = CreationTaskScript(
         id="script", workspace_id="qa", task_id=task.id, run_id=script_run.id, topic_id=candidate.id,
         title="真实事实", language="zh-CN", sections=[CreationTaskScriptSection(
@@ -106,10 +106,10 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
         )],
     )
     with pytest.raises(ValueError, match="本次模型输入之外"):
-        production.complete_script_generation(script_run.id, replace(script, sections=[
+        production.script_records.complete_script_generation(script_run.id, replace(script, sections=[
             replace(script.sections[0], evidence_reference_ids=["knowledge:knowledge:2"]),
         ]))
-    _, finished, saved = production.complete_script_generation(script_run.id, script)
+    _, finished, saved = production.script_records.complete_script_generation(script_run.id, script)
     assert finished.status == "succeeded" and saved.sections[0].evidence_reference_ids == [
         "knowledge:knowledge:1", "source:manual-source",
     ]
