@@ -53,6 +53,7 @@ from datetime import datetime
 from pathlib import Path
 from app.profiles.preview_records import PreviewRecordStore
 from app.creation.transactions import EditAdoptionTransaction
+from app.creation.timeline_restore_records import TimelineRestoreRecordStore
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
@@ -620,6 +621,10 @@ class ProductionRepository:
         self.execution_records = ExecutionRecordStore(self._connect,
             require_task=self._require_creation_task, job_belongs=self._lineage_job_belongs,
             decode_reference_list=_string_list_from_text, decode_payload_object=_json_object_from_text)
+        self.restore_requests = TimelineRestoreRecordStore(self._connect,
+            append_event=self.execution_records.append_task_event,
+            get_event=self.execution_records.get_task_event,
+            decode_operation=self._edit_operation_from_row, read_readiness=self.edit_execution_readiness)
         self.lineage_records = LineageRecordStore(self._connect,
             require_task=self._require_creation_task,
             job_belongs=self._lineage_job_belongs, output_producers=self.execution_records.output_producers,
@@ -3547,37 +3552,6 @@ class ProductionRepository:
                 "WHERE v.workspace_id=? AND v.task_id=?) SELECT 1 FROM history WHERE id=? LIMIT 1",
                 (workspace_id, task_id, current_id, workspace_id, task_id, ancestor_id)).fetchone() is not None
 
-    def latest_operation_restore(self, workspace_id, task_id, operation_id):
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM edit_operations WHERE workspace_id=? AND task_id=? "
-                "AND operation_type IN ('UndoTimelineVersion','RedoTimelineVersion') "
-                "AND json_extract(payload_json,'$.target_operation_id')=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
-                (workspace_id, task_id, operation_id)).fetchone()
-        return self._edit_operation_from_row(row) if row is not None else None
-
-    @staticmethod
-    def timeline_restore_request_id(workspace_id, member_id, request_id):
-        return 'event_edit_request_' + hashlib.sha256(json.dumps(
-            [workspace_id, member_id, str(request_id), 'restore'], sort_keys=True,
-            ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
-
-    def claim_timeline_restore(self, task, member_id, request_id, inputs, *, write_guard=None):
-        event_id = self.timeline_restore_request_id(task.workspace_id, member_id, request_id)
-        fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
-        with self._connect() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute('SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=?',
-                (task.workspace_id, event_id)).fetchone()
-            if row is not None:
-                if row['task_id'] != task.id or json.loads(row['payload_json'])['input_digest'] != fingerprint:
-                    raise ValueError('原恢复请求已绑定其他操作或输入')
-                return event_id, False
-            if write_guard is not None:
-                write_guard(conn)
-            self.execution_records.append_task_event(_TaskEvent(event_id, task.workspace_id, task.id, None, 'edit_request_claimed',
-                {'member_id': member_id, 'request_id': request_id, 'phase': 'restore',
-                    'input_digest': fingerprint, 'inputs': inputs}), connection=conn)
-        return event_id, True
 
     def edit_execution_readiness(self,workspace_id,task_id,operation_id,*,connection=None):
         with nullcontext(connection) if connection is not None else self._connect() as conn:
@@ -3590,25 +3564,6 @@ class ProductionRepository:
             raise ValueError('编辑执行状态回执不属于原操作')
         return {key:value[key] for key in ('status','reason_code','device_admission')}
 
-    def timeline_restore_receipt(self, workspace_id, task_id, member_id, request_id):
-        event_id = self.timeline_restore_request_id(workspace_id, member_id, request_id)
-        with self._connect() as conn:
-            claim = self.execution_records.get_task_event(workspace_id, event_id, connection=conn)
-            if claim.task_id != task_id or claim.payload['member_id'] != member_id:
-                raise KeyError(request_id)
-            row = conn.execute("SELECT * FROM edit_operations WHERE workspace_id=? AND task_id=? "
-                "AND json_extract(payload_json,'$.restore_request_id')=? "
-                "AND json_extract(payload_json,'$.restore_member_id')=? ORDER BY created_at DESC LIMIT 1",
-                (workspace_id, task_id, request_id, member_id)).fetchone()
-            refusal = conn.execute('SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?',
-                (workspace_id, event_id+'_refusal')).fetchone()
-        operation = self._edit_operation_from_row(row) if row is not None else None
-        return {'request_id': request_id, 'task_id': task_id, 'action': claim.payload['inputs']['action'],
-            'target_operation_id': operation.payload['target_operation_id'] if operation else claim.payload['inputs']['target_operation_id'],
-            'status': 'applied' if operation else 'refused' if refusal else 'result_unknown',
-            'operation_id': operation.id if operation else None, 'result_version_id': operation.result_version_id if operation else None,
-            'execution_readiness': self.edit_execution_readiness(workspace_id,task_id,operation.id) if operation else None,
-            'failure': json.loads(refusal['payload_json']) if refusal is not None and operation is None else None}
 
     def create_creation_execution_job(self, run, *, start_payload, event_type="creation_execution_started",
                                       write_guard=None, execution_source=None, source_preparation=None, budget_scope_actor=None):

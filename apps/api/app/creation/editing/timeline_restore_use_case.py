@@ -13,7 +13,6 @@ from app.creation.contracts import (
     SubtitleCue,
     CoverAsset,
     TimelineVersion,
-    TaskEvent,
 )
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditResult, prepare_changed_montage, logical_montage_output_refs,
@@ -102,7 +101,7 @@ class TimelineRestoreUseCase:
 
     def read_request(self, workspace_id, task_id, request_id, actor):
         self.require_actor(self.repository.get_creation_task(workspace_id, task_id), actor)
-        return self.repository.timeline_restore_receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
+        return self.repository.restore_requests.receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
 
     def replay(self, workspace_id, task_id, receipt):
         operation = self.repository.get_edit_operation(workspace_id, receipt['operation_id'])
@@ -144,7 +143,7 @@ class TimelineRestoreUseCase:
                     raise EditConflict('原恢复指令在提交前已变化')
             if write_guard is not None:
                 write_guard(connection)
-        event_id, fresh = self.repository.claim_timeline_restore(task, member_id, request_id, inputs, write_guard=guarded)
+        event_id, fresh = self.repository.restore_requests.claim(task, member_id, request_id, inputs, write_guard=guarded)
         if not fresh:
             receipt = self.read_request(workspace_id, task_id, request_id, actor)
             if receipt['status'] == 'applied':
@@ -185,9 +184,7 @@ class TimelineRestoreUseCase:
             receipt = self.read_request(workspace_id, task_id, request_id, actor)
             if receipt['status'] == 'applied':
                 return self.replay(workspace_id, task_id, receipt)
-            self.repository.execution_records.append_task_event(TaskEvent(event_id+'_refusal', workspace_id, task_id, None,
-                'timeline_restore_refused', {'code': 'timeline_restore_refused', 'effect': 'refused',
-                    'reason': str(exc)[:512], 'retryable': False}))
+            self.repository.restore_requests.record_refusal(event_id, workspace_id, task_id, str(exc))
             raise
 
     def prepare_restore(self, command: TimelineRestoreCommand) -> PreparedTimelineRestore:
@@ -198,7 +195,7 @@ class TimelineRestoreUseCase:
             if (target.task_id != task_id or target.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}
                     or not self.repository.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, target.result_version_id)):
                 raise EditConflict('指定原修改不属于当前作品的有效历史')
-            last = self.repository.latest_operation_restore(workspace_id, task_id, target.id)
+            last = self.repository.restore_requests.latest_operation_restore(workspace_id, task_id, target.id)
             if command.redo:
                 if last is None or last.operation_type != 'UndoTimelineVersion':
                     raise EditConflict('指定原修改没有对应的可重做撤销记录')

@@ -6899,7 +6899,7 @@ def test_section_change_publish_restore_preserves_later_facts_without_full_input
     task=case.repo.get_creation_task('local',case.task_id)
     inputs={'action':'undo','target_operation_id':None,'expected_timeline_version_id':None,
         'expected_timeline_sequence':None,'source':None,'actor_identity':case.actor.identity_payload()}
-    case.repo.claim_timeline_restore(task,case.actor.member_id,'unknown_narrow',inputs)
+    case.repo.restore_requests.claim(task,case.actor.member_id,'unknown_narrow',inputs)
     jobs_before=len(case.execution.jobs('local',case.task_id))
     with pytest.raises(RecoveryBlocked,match='未知'):
         restore.execute(TimelineRestoreCommand('local',task,False),actor=case.actor,request_id='unknown_narrow')
@@ -6987,3 +6987,136 @@ def test_section_change_restore_rechecks_guard_in_original_owner_transaction(tmp
         assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='UndoTimelineVersion'").fetchone()[0]==0
     assert not case.generated and not case.merged
     case.scheduler.close()
+
+
+def _restore_receipt_metadata(tmp_path, monkeypatch):
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from dataclasses import replace
+    from test_production_foundation import _repository, _save_creation_task, edit_adoption_no_execution
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase, TimelineRestoreCommand
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    repo = _repository(tmp_path)
+    task = _save_creation_task(repo,workspace_id='workspace_a',task_id='restore-task')
+    task = replace(task,owner_user_id='restore-member')
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task),default=str),task.workspace_id,task.id))
+    actor = CreationExecutionActor(task.workspace_id,'restore-member')
+    edits = MetadataEditUseCase(repo,None,output_root=tmp_path,audio_service=None)
+    restore = TimelineRestoreUseCase(repo,edits)
+    monkeypatch.setattr(restore,'prepare_restore',forbidden)
+    monkeypatch.setattr(restore,'apply_restore',forbidden)
+    command = TimelineRestoreCommand(task.workspace_id,task,False)
+    inputs = {'action':'undo','target_operation_id':None,'expected_timeline_version_id':None,
+        'expected_timeline_sequence':None,'source':None,'actor_identity':actor.identity_payload()}
+    return repo,task,actor,restore,command,inputs,forbidden
+
+
+def test_restore_receipt_metadata_unknown_conflict_refusal_and_identity(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from app.device_scheduler import RecoveryBlocked
+    from app.creation.editing.picture import EditConflict
+    from test_production_foundation import _save_creation_task
+    repo,task,actor,restore,command,inputs,forbidden = _restore_receipt_metadata(tmp_path,monkeypatch)
+    records = repo.restore_requests
+    request_id = '原请求-一'
+    guarded, appended = [], []
+    append = records.append_event
+    def guard(connection):
+        assert connection.in_transaction
+        guarded.append(connection)
+    def observe(event, *, connection=None):
+        assert connection is guarded[0] and connection.in_transaction
+        appended.append(event.id)
+        return append(event,connection=connection)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(records,'append_event',observe)
+        event_id,fresh = records.claim(task,actor.member_id,request_id,inputs,write_guard=guard)
+    assert fresh and appended==[event_id]
+    expected_key = 'event_edit_request_'+hashlib.sha256(json.dumps(
+        [task.workspace_id,actor.member_id,request_id,'restore'],sort_keys=True,
+        ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+    assert event_id==expected_key
+    claim = repo.execution_records.get_task_event(task.workspace_id,event_id)
+    assert claim.payload['input_digest']==hashlib.sha256(json.dumps(inputs,sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
+    assert records.claim(task,actor.member_id,request_id,inputs,write_guard=forbidden)==(event_id,False)
+    with pytest.raises(ValueError):
+        records.claim(task,actor.member_id,request_id,{**inputs,'target_operation_id':'changed'})
+    with pytest.raises(RecoveryBlocked):
+        restore.execute(command,actor=actor,request_id=request_id)
+    assert restore.read_request(task.workspace_id,task.id,request_id,actor)['status']=='result_unknown'
+    assert repo.execution_records.get_task_event(task.workspace_id,event_id)==claim
+    other = _save_creation_task(repo,workspace_id=task.workspace_id,task_id='other-restore-task')
+    with pytest.raises(KeyError):
+        records.receipt(task.workspace_id,other.id,actor.member_id,request_id)
+    with pytest.raises(ValueError):
+        records.claim(other,actor.member_id,request_id,inputs)
+    with pytest.raises(KeyError):
+        records.receipt(task.workspace_id,task.id,'other-member',request_id)
+    with pytest.raises(PermissionError):
+        restore.read_request(task.workspace_id,task.id,request_id,replace(actor,member_id='other-member'))
+    with pytest.raises(KeyError):
+        records.receipt('other-workspace',task.id,actor.member_id,request_id)
+    refused_id = '原拒绝请求'
+    for _ in range(2):
+        with pytest.raises(EditConflict):
+            restore.execute(command,actor=actor,request_id=refused_id,expected_timeline_version_id='unpaired-version')
+    receipt = restore.read_request(task.workspace_id,task.id,refused_id,actor)
+    assert receipt['status']=='refused' and receipt['failure']['effect']=='refused' and receipt['failure']['retryable'] is False
+    with repo._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM task_events WHERE id=?",
+            (records.request_id(task.workspace_id,actor.member_id,refused_id)+'_refusal',)).fetchone()[0]==1
+    assert repo.list_edit_operations(task.workspace_id,task.id)==[]
+    assert repo.list_job_runs(task.workspace_id,task.id)==[]
+
+
+def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path, monkeypatch):
+    import sqlite3
+    from datetime import datetime, timezone
+    from app.creation.contracts import EditIntent, EditProposal, EditOperation, TimelineVersion, TaskEvent
+    from app.device_scheduler import RecoveryBlocked
+    repo,task,actor,restore,command,inputs,forbidden = _restore_receipt_metadata(tmp_path,monkeypatch)
+    records = repo.restore_requests
+    request_id = 'original-restore'
+    event_id,fresh = records.claim(task,actor.member_id,request_id,inputs)
+    assert fresh
+    base = repo.create_timeline_version(TimelineVersion('restore-base',task.workspace_id,task.id,None,1,{},None))
+    intent = repo.create_edit_intent(EditIntent('restore-intent',task.workspace_id,task.id,'declared undo','montage',[],None,
+        'undo_timeline',{}, {},1,'interpreted'))
+    payload = {'restore_request_id':request_id,'restore_member_id':actor.member_id,
+        'target_operation_id':'declared-original-operation','changed_version_id':base.id,'restore_version_id':base.id}
+    proposal = repo.create_edit_proposal(EditProposal('restore-proposal',task.workspace_id,task.id,intent.id,
+        'declared restore adoption',['operation:declared-original-operation'],
+        {'operation_type':'UndoTimelineVersion','payload':payload},[],{},[]))
+    now = datetime.now(timezone.utc)
+    operation = EditOperation('restore-operation',task.workspace_id,task.id,proposal.id,'UndoTimelineVersion',payload,
+        base.id,'restore-result','applied',created_at=now,applied_at=now)
+    version = TimelineVersion(operation.result_version_id,task.workspace_id,task.id,base.id,2,{},operation.id)
+    with repo._connect() as conn:
+        conn.execute("CREATE TRIGGER refuse_restore_tail BEFORE UPDATE ON creation_tasks "
+            "WHEN NEW.id='restore-task' BEGIN SELECT RAISE(ABORT,'restore tail refused'); END")
+    with pytest.raises(sqlite3.IntegrityError,match='restore tail refused'):
+        repo.edit_adoption.confirm(task.workspace_id,task.id,proposal.id,operation=operation,result_version=version)
+    assert restore.read_request(task.workspace_id,task.id,request_id,actor)['status']=='result_unknown'
+    assert repo.get_edit_proposal(task.workspace_id,proposal.id).status=='proposed'
+    assert repo.list_edit_operations(task.workspace_id,task.id)==[]
+    with pytest.raises(RecoveryBlocked):
+        restore.execute(command,actor=actor,request_id=request_id)
+    with repo._connect() as conn:
+        conn.execute('DROP TRIGGER refuse_restore_tail')
+    repo.edit_adoption.confirm(task.workspace_id,task.id,proposal.id,operation=operation,result_version=version)
+    readiness = {'status':'valid','reason_code':None,'device_admission':'not_checked'}
+    repo.execution_records.append_task_event(TaskEvent('event_'+operation.id+'_execution_readiness',task.workspace_id,
+        task.id,None,'edit_execution_readiness',{'operation_id':operation.id,**readiness}))
+    # Persisted late refusal must never overwrite the already committed operation proof.
+    records.record_refusal(event_id,task.workspace_id,task.id,'late refusal declaration')
+    receipt = restore.read_request(task.workspace_id,task.id,request_id,actor)
+    assert receipt['status']=='applied' and receipt['failure'] is None
+    assert receipt['operation_id']==operation.id and receipt['result_version_id']==version.id
+    assert receipt['execution_readiness']==readiness
+    assert records.latest_operation_restore(task.workspace_id,task.id,payload['target_operation_id'])==operation
+    before = repo.list_timeline_versions(task.workspace_id,task.id)
+    replay = restore.execute(command,actor=actor,request_id=request_id)
+    assert replay.operation==operation and replay.restore_request==receipt
+    assert repo.list_timeline_versions(task.workspace_id,task.id)==before
+    assert repo.list_job_runs(task.workspace_id,task.id)==[]
