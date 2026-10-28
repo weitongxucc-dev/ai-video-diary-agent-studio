@@ -103,7 +103,7 @@ def queue_crop(state, clip_index=1):
 
 def assert_failed(state, job_id):
     assert state.preview_runtime.run_once()
-    saved = state.production.get_job_run(state.workspace_id, job_id)
+    saved = state.production.job_records.get_job_run(state.workspace_id, job_id)
     assert saved.status == "failed"
     assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
 
@@ -148,7 +148,7 @@ def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_
     monkeypatch.setattr(main_module, "_task_audio", lambda: service)
     _, _, job_id = queue_crop(state)
     assert state.preview_runtime.run_once()
-    assert state.production.get_job_run(state.workspace_id, job_id).status == 'interrupted'
+    assert state.production.job_records.get_job_run(state.workspace_id, job_id).status == 'interrupted'
     receipt = state.client.get(f'/api/creation-tasks/{state.task.id}/media-jobs/{job_id}').json()
     assert receipt['status'] == 'stale' and receipt['result'] is None
     assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)

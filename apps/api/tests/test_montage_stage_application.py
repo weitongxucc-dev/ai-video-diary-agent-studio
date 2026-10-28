@@ -152,7 +152,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert versions[0].snapshot['narration_segments'][0]['id'] == segment.id
         event = repo.execution_records.get_task_event('local', f'event_{job_id}_montage_plan_queued')
         assert event.payload == {'stage': 'montage_plan', 'status': 'completed', 'output': montage['id'], 'reason': 'waiting_for_user'}
-        assert repo.get_job_run('local', job_id).status == 'queued'
+        assert repo.job_records.get_job_run('local', job_id).status == 'queued'
         assert [call['port'] for call in calls] == ['planner', 'save_montage', 'save_montage', 'ensure_base']
         assert calls[0]['configured_global'] is False and calls[1]['connection_supplied'] is False and calls[2]['connection_supplied'] is True
         before_queries = list(calls)
@@ -323,14 +323,14 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
         elif outcome == 'checkpoint_revoked':
             assert current.montage_plan_id
             assert len(case.repo.list_timeline_versions('local', case.task.id)) == 1
-            assert case.repo.get_job_run('local', grant.owner_id).status == 'interrupted'
+            assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'interrupted'
             assert case.scheduler._get(grant.request_id).state != 'done'
         else:
-            assert current.stage_status == 'waiting_for_user', (current.stage_repair_action, case.repo.get_job_run('local', grant.owner_id).failure_reason)
+            assert current.stage_status == 'waiting_for_user', (current.stage_repair_action, case.repo.job_records.get_job_run('local', grant.owner_id).failure_reason)
             versions = case.repo.list_timeline_versions('local', case.task.id)
             assert len(versions) == 1
             assert [row['id'] for row in versions[0].snapshot['narration_segments']] == [row.id for row in reversed(case.rows)]
-            assert case.repo.get_job_run('local', grant.owner_id).status == 'queued'
+            assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'queued'
             same = case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
                 case.runtime, verify_media=False)
             assert len(builds) == 1 and len(case.repo.list_timeline_versions('local', case.task.id)) == 1

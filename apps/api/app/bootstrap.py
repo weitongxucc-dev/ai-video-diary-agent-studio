@@ -150,7 +150,7 @@ def prepare_runtime_dependencies(
     database = DatabaseOwners(
         EpisodeRepository(database_path=settings.database_path), SourceRepository(settings.database_path),
         production, conversations, MontageRepository(settings.database_path), quality,
-        members, platform_auth, scheduled_tasks, VideoJobRunner(production),
+        members, platform_auth, scheduled_tasks, VideoJobRunner(production.job_records),
     )
     inbox = VideoInbox(settings.video_inbox_path)
     processor = FfmpegVideoProcessor(settings)

@@ -51,6 +51,6 @@ def test_pause_and_cross_midnight_gate_only_linked_next_unit_after_canonical_rea
             assert scheduler.owners.check_current(request,conn)=='unauthorized' # original rule precedes window
         scheduler.defer_unit(grant,reason='authorization_lost')
         scheduler.assert_released(grant)
-        assert repo.get_job_run('local',job.id).status=='queued' and service.get(actor,definition['id'])['paused']
+        assert repo.job_records.get_job_run('local',job.id).status=='queued' and service.get(actor,definition['id'])['paused']
     finally:
         scheduler.close()

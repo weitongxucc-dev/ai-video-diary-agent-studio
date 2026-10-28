@@ -36,10 +36,10 @@ def test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes(t
             values.update(clip_id='clip_1', split_time_seconds=3.)
         else:
             values.update(clip_id='clip_1', position=2)
-        before_jobs = len(repo.list_job_runs('local', 'task'))
+        before_jobs = len(repo.job_records.list_job_runs('local', 'task'))
         saved = client.post('/api/creation-tasks/task/edits/exact', json=values)
         assert saved.status_code == 200, saved.text
-        assert len(repo.list_job_runs('local', 'task')) == before_jobs
+        assert len(repo.job_records.list_job_runs('local', 'task')) == before_jobs
         changed = repo.get_creation_task_montage_plan('local', 'task')
         assert changed['audio_timeline'] == original['audio_timeline']
         assert changed['graphic_overlays'] == original['graphic_overlays']

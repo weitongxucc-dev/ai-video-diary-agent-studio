@@ -85,7 +85,7 @@ def test_short_preview_replay_cancel_and_changed_base_do_not_execute(tmp_path, m
         request_id = str(uuid4())
         payload = {'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15},
             'request_id':request_id, 'expected_timeline_version_id':'timeline', 'expected_timeline_sequence':1}
-        count = len(repo.list_job_runs('local', 'task'))
+        count = len(repo.job_records.list_job_runs('local', 'task'))
         queued = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
         assert queued.status_code == 202, queued.text
         receipt = queued.json()
@@ -100,7 +100,7 @@ def test_short_preview_replay_cancel_and_changed_base_do_not_execute(tmp_path, m
         with pytest.raises(PermissionError, match='操作者身份'):
             main._task_media_facts('local', 'task', event['operation'], wrong_actor, actor)
         replay = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
-        assert replay.json()['job_id'] == receipt['job_id'] and len(repo.list_job_runs('local', 'task')) == count + 1
+        assert replay.json()['job_id'] == receipt['job_id'] and len(repo.job_records.list_job_runs('local', 'task')) == count + 1
         cancelled = client.post(receipt['result_url'] + '/cancel')
         assert cancelled.json()['status'] == 'cancelled' and not runtime.run_once()
         payload['request_id'] = str(uuid4())
@@ -121,14 +121,14 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
     from test_task_media_grants import _visual_scope_case
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
     try:
-        count = len(repo.list_job_runs('local', 'task'))
+        count = len(repo.job_records.list_job_runs('local', 'task'))
         selected_budget_for = main._device_operation_budget
         monkeypatch.setattr(main, '_device_operation_budget',
             lambda name: None if name == 'clip_preview' else selected_budget_for(name))
         payload = {'base_version_id':'timeline', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}
         refused = client.post('/api/creation-tasks/task/visual/preview', json=payload)
         assert refused.status_code == 503 and '尚未标定' in refused.text
-        assert len(repo.list_job_runs('local', 'task')) == count
+        assert len(repo.job_records.list_job_runs('local', 'task')) == count
         assert repo.get_creation_task_montage_plan('local', 'task') == original
         task = repo.get_creation_task('local', 'task')
         task.current_timeline_version_id = None
@@ -231,7 +231,7 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
     def commit_other_edit():
         repo.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
     try:
-        job_count = len(repo.list_job_runs('local', 'task'))
+        job_count = len(repo.job_records.list_job_runs('local', 'task'))
         intent_count = len(repo.list_edit_intents('local', 'task'))
         proposal_count = len(repo.list_edit_proposals('local', 'task'))
         if race_at == 'adapter':
@@ -273,7 +273,7 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
         response = client.post(path, json=payload)
         assert response.status_code == 409, response.text
         assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'next'
-        assert len(repo.list_job_runs('local', 'task')) == job_count
+        assert len(repo.job_records.list_job_runs('local', 'task')) == job_count
         assert len(repo.list_edit_intents('local', 'task')) == intent_count
         assert len(repo.list_edit_proposals('local', 'task')) == proposal_count
         assert repo.get_creation_task_montage_plan('local', 'task') == original
@@ -353,14 +353,14 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
         assert [stream['codec_type'] for stream in metadata['streams']]==['video']
     assert client.post('/api/creation-tasks/task/edits/exact/preview',json=payload).json()['job_id']==queued.json()['job_id']
     assert not runtime.run_once()
-    count_before=len(repo.list_job_runs('local','task'))
+    count_before=len(repo.job_records.list_job_runs('local','task'))
     def no_runtime():
         raise AssertionError('metadata proposal must not construct the device runtime')
     monkeypatch.setattr(main,'_creation_runtime',no_runtime)
     metadata=client.post('/api/creation-tasks/task/edits/exact/preview',json={
         'operation_type':'SetClipLock','clip_id':'clip','locked':True})
     assert metadata.status_code==200,metadata.text
-    assert len(repo.list_job_runs('local','task'))==count_before
+    assert len(repo.job_records.list_job_runs('local','task'))==count_before
     # Budget refusal concerns this declared window, independently of the 27s parent.
     host=HostResourceProbe(tmp_path/'budget.sqlite',disk_paths=(tmp_path,),budget=HostBudget(max_cpu_percent=100,
         min_available_memory_bytes=0,max_swap_used_bytes=10**12,min_free_disk_bytes=0,max_disk_io_bytes_per_second=10**12,

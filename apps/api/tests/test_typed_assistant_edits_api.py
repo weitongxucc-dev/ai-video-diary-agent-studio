@@ -156,7 +156,7 @@ def test_task_budget_http_preserves_scope_meaning_and_owner_boundary(metadata_ht
     assert empty.json()['scopes'] == []
     assert empty.json()['authorization_coverage'] == 'scope_unbound'
     assert empty.json()['status'] == 'authorization_scope_unbound'
-    job = state.repo.create_job_run(JobRun(id='job-http-budget-scope', workspace_id='ws',
+    job = state.repo.job_records.create_job_run(JobRun(id='job-http-budget-scope', workspace_id='ws',
         task_id=state.task.id, kind='creation_task_execution', idempotency_key='http-budget-scope',
         input_digest='1' * 64))
     command = dict(scope_id='http-goal', expected_revision=-1, request_id='original-http-test',

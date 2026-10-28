@@ -62,4 +62,4 @@ def test_observation_request_rejects_arbitrary_paths_and_stale_version(system):
     payload["target"] = {"kind": "final"}
     payload["expected_timeline_sequence"] = 0
     assert client.post(route, headers=headers, json=payload).status_code == 409
-    assert repo.list_job_runs("local", "task")[0].kind == "creation_task_montage_render"
+    assert repo.job_records.list_job_runs("local", "task")[0].kind == "creation_task_montage_render"

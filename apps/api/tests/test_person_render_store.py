@@ -64,7 +64,7 @@ def case(tmp_path):
 
 
 def artifact(repo, task_id, identity, kind="person_render"):
-    job = repo.create_job_run(JobRun(
+    job = repo.job_records.create_job_run(JobRun(
         id="job-" + identity, workspace_id="ws", task_id=task_id, kind="person_render",
         idempotency_key="job-" + identity, input_digest="c" * 64,
     ))

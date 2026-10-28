@@ -177,7 +177,7 @@ class QualityInspectionUseCase:
             if artifact is None or tuple(artifact) != (job.task_id, "rendered_video", source["source_ref"],
                     source["render_ref"], source["size_bytes"]):
                 raise ValueError("质检固定产物在接续观察后发生变化")
-            self.production.reopen_failed_job_run(workspace_id, job_id, expected_updated_at=job.updated_at,
+            self.production.job_records.reopen_failed_job_run(workspace_id, job_id, expected_updated_at=job.updated_at,
                 expected_attempt=job.attempt, connection=conn)
             self.checks.reopen_phase(workspace_id, job.task_id, record["check_id"],
                 expected_updated_at=record["updated_at"], attempt=attempt, connection=conn)
@@ -306,7 +306,7 @@ class QualityInspectionUseCase:
         return result
 
     def read(self, workspace_id, job_id, *, connection=None):
-        job = self.production.get_job_run(workspace_id, job_id)
+        job = self.production.job_records.get_job_run(workspace_id, job_id)
         event = self.production.execution_records.get_task_event(workspace_id, f"event_{job_id}_start").payload
         if job.kind != QUALITY_KIND:
             raise ValueError("该作业不属于独立质检")
@@ -327,7 +327,7 @@ class QualityInspectionUseCase:
         try:
             if render_job_id is None:
                 raise ValueError("自动质检缺少原制作作业身份，请使用可信成员重新检查。")
-            job = self.production.get_job_run(workspace_id, render_job_id)
+            job = self.production.job_records.get_job_run(workspace_id, render_job_id)
             if job.task_id != task_id:
                 raise ValueError("自动质检与原制作任务不一致")
             event = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
@@ -455,7 +455,7 @@ class QualityInspectionUseCase:
                 "budget": asdict(self.budget), "resources": self.resources(source, self.budget), "thresholds": {},
                 "protocol": QUALITY_STREAM_PROTOCOL}
             digest = quality_input_digest(request)
-            job = self.production.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
+            job = self.production.job_records.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
                 task_id=task_id, kind=QUALITY_KIND, idempotency_key=f"quality:{check_id}", input_digest=digest), connection=conn)
             self.checks.seal_request(workspace_id, task_id, check_id, request, connection=conn)
             self.production.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id=workspace_id,
@@ -601,7 +601,7 @@ class QualityInspectionUseCase:
         private = {key: value for key, value in record["evidence"].items() if key in {"_request", "_source_input", "_worker_result", "_phases", "_phase_attempt"}}
         evidence = ({**private, **result["evidence"], "_source_receipt": result["receipt"]} if result is not None else private)
         self.checks.finish(job.workspace_id, job.task_id, check_id, evidence=evidence, error=error, connection=connection)
-        self.production.finish_job_run(job.workspace_id, job.id, status=status, output_refs=[],
+        self.production.job_records.finish_job_run(job.workspace_id, job.id, status=status, output_refs=[],
             failure_reason=error, impact="检查未完成，原成片保持不变。" if error is not None else None,
             repair_action="恢复质检执行条件后重新检查当前成片。" if error is not None else None, connection=connection)
         suffix = "_" + private["_phase_attempt"]["digest"] if "_phase_attempt" in private else ""
@@ -628,8 +628,8 @@ class QualityInspectionUseCase:
         if job.status == "interrupted" and job.failure_reason == reason:
             return
         if job.status in {"queued", "interrupted"}:
-            job = self.production.claim_job_run(job.workspace_id, job.id, connection=connection)
-        self.production.finish_job_run(job.workspace_id, job.id, status="interrupted",
+            job = self.production.job_records.claim_job_run(job.workspace_id, job.id, connection=connection)
+        self.production.job_records.finish_job_run(job.workspace_id, job.id, status="interrupted",
             failure_reason=reason, impact="检查暂停，原成片和已有检查回执保留。",
             repair_action="原任务授权及执行条件恢复后继续同一次检查。", connection=connection)
         event = TaskEvent(id=f"event_{job.id}_quality_pause_{uuid4().hex}",
@@ -693,7 +693,7 @@ class QualityInspectionUseCase:
                 else:
                     status = "failed" if error is not None else "succeeded"
                     if job.status in {"queued", "interrupted"}:
-                        job = self.production.claim_job_run(job.workspace_id, job.id, connection=conn)
+                        job = self.production.job_records.claim_job_run(job.workspace_id, job.id, connection=conn)
                     checkpoint = (self.complete_result(conn, job, record["check_id"], result) if status == "succeeded"
                         else self.settle(conn, job, record["check_id"], status=status, error=error))
                     source = request["source"]

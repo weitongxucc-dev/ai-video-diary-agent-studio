@@ -30,7 +30,7 @@ def registered_audio(repository, service, workspace, task_id, logical_ref, input
     tone(source, 440)
     published = service.artifact_store.publish_file(logical_ref, source)
     job_id = "synthetic-lineage:" + logical_ref
-    repository.create_job_run(JobRun(id=job_id, workspace_id=workspace, task_id=task_id, kind="synthetic_lineage",
+    repository.job_records.create_job_run(JobRun(id=job_id, workspace_id=workspace, task_id=task_id, kind="synthetic_lineage",
         idempotency_key=job_id, input_digest=published.sha256))
     record = ArtifactRecord(id=logical_ref, workspace_id=workspace, task_id=task_id,
         kind="audio_source", logical_ref=logical_ref, sha256=published.sha256,

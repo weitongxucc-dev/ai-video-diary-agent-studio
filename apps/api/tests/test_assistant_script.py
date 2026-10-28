@@ -175,7 +175,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
             source, existing = main_module._assistant_execution_source(task.id, bound_request, kwargs["turn_id"],
                 "start", "actual-scope-input")
             assert existing is None
-            job = material_repo.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
+            job = material_repo.job_records.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
                 kind="creation_task_execution", idempotency_key="scope-execution", input_digest="actual-scope-input"))
             actor = CreationExecutionActor("local", member_id)
             material_repo.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",

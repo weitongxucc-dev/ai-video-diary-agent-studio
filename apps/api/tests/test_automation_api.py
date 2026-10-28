@@ -216,7 +216,7 @@ def test_real_topic_script_and_make_routes_block_before_any_generation(automatio
         assert response.status_code==409,response.text
         assert response.json()['detail']['error']==('automation_paused' if restriction=='paused' else 'outside_window')
     external.assert_not_called()
-    assert production.list_job_runs(actor.workspace_id,task_id)==[]
+    assert production.job_records.list_job_runs(actor.workspace_id,task_id)==[]
     assert main._automation_runtime().service.get_run(actor,run['id'])['state']=='blocked'
 
 
@@ -247,7 +247,7 @@ def test_publishing_guard_preserves_read_history_and_checks_original_run_member(
     current_actor[0]=CreationExecutionActor(actor.workspace_id,other.member_id)
     assert publishing.post(f'/api/publishing/tasks/{task_id}/publish',json=body).status_code==403
     external.assert_not_called()
-    assert production.list_job_runs(actor.workspace_id,task_id)==[]
+    assert production.job_records.list_job_runs(actor.workspace_id,task_id)==[]
 
 
 def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automation_state):
@@ -257,7 +257,7 @@ def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automatio
     fp=client.post(f"/api/automations/runs/{run['id']}/preview").json()['preflight_fingerprint']
     result=client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp})
     task_id=result.json()['creation_task']['id']
-    job=production.create_job_run(JobRun(id='queued-publish',workspace_id=actor.workspace_id,task_id=task_id,kind='platform_publish',idempotency_key='explicit-test-publish',input_digest='a'*64))
+    job=production.job_records.create_job_run(JobRun(id='queued-publish',workspace_id=actor.workspace_id,task_id=task_id,kind='platform_publish',idempotency_key='explicit-test-publish',input_digest='a'*64))
     runtime=main._automation_runtime()
     bound=runtime.service.get_run(actor,run['id'])
     queued=runtime.project_state(actor,bound)
@@ -266,7 +266,7 @@ def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automatio
     paused=runtime.project_state(actor,bound)
     assert paused['state']=='blocked' and paused['reason_code']=='automation_paused'
     # Persist a canonical claim fact; this checks projection only, never platform execution.
-    production.claim_job_run(actor.workspace_id,job.id)
+    production.job_records.claim_job_run(actor.workspace_id,job.id)
     running=runtime.project_state(actor,bound)
     assert running['state']=='running' and running['job_id']==job.id
 

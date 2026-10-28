@@ -217,13 +217,13 @@ class DeliveryAdoptionRecovery:
         def write(conn, failed, new_id):
             if write_guard is not None:
                 write_guard(conn)
-            current_job = self.repository.get_job_run(job.workspace_id, job.id, connection=conn)
+            current_job = self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn)
             old = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (original['id'],)).fetchone()
             pred = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (failed.id,)).fetchone()
             current = self._facts(current_job, actor, owner, old, pred, conn, sealed=plan)
             if current != plan or self.resources(current) != resources:
                 raise RecoveryBlocked('原采用接续的来源或有限策略已变化')
-            self.repository.reopen_failed_job_run(job.workspace_id, job.id, expected_updated_at=current_job.updated_at,
+            self.repository.job_records.reopen_failed_job_run(job.workspace_id, job.id, expected_updated_at=current_job.updated_at,
                 expected_attempt=current_job.attempt, connection=conn)
             self.repository.execution_records.append_task_event(TaskEvent(self.plan_event_id(job, plan['unit_id']), job.workspace_id,
                 job.task_id, job.id, 'delivery_adoption_prepared', {**plan, 'new_request_id': new_id, 'resources': resources}), connection=conn)

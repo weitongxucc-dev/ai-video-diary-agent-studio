@@ -416,7 +416,7 @@ def test_recording_rejects_wrong_version_duration_and_container(recording_task):
     bad = client.request("POST", route + "/audio/recordings", files={"audio": ("voice.webm", wav_bytes(), "audio/webm")})
     assert bad.status_code == 202, bad.text
     assert client.media_runtime.run_once()
-    assert repo.get_job_run("local", bad.json()["job_id"]).status == "failed"
+    assert repo.job_records.get_job_run("local", bad.json()["job_id"]).status == "failed"
     uploaded = client.post(route + "/audio/recordings",
                            files={"audio": ("short.wav", wav_bytes(.5), "audio/wav")})
     assert uploaded.status_code == 200, uploaded.text
@@ -426,7 +426,7 @@ def test_recording_rejects_wrong_version_duration_and_container(recording_task):
     invalid = client.request("POST", route + "/audio/preview", json=payload)
     assert invalid.status_code == 202
     assert client.media_runtime.run_once()
-    assert repo.get_job_run("local", invalid.json()["job_id"]).status == "failed"
+    assert repo.job_records.get_job_run("local", invalid.json()["job_id"]).status == "failed"
     assert client.post(route + "/audio/preview", json={**payload, "base_version_id": "old"}).status_code == 409
     assert repo.get_creation_task_montage_plan("local", task_id)["audio_timeline"] is None
 
@@ -443,9 +443,9 @@ def test_recording_stays_blocked_in_scheduled_mode(recording_task, monkeypatch):
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     response = client.request("POST", f"/api/creation-tasks/{task_id}/audio/recordings", files={"audio": ("scheduled.wav", wav_bytes(.8), "audio/wav")})
     assert response.status_code == 202
-    assert repo.get_job_run("local", response.json()["job_id"]).status == "queued"
+    assert repo.job_records.get_job_run("local", response.json()["job_id"]).status == "queued"
     assert client.media_runtime.run_once()
-    assert repo.get_job_run("local", response.json()["job_id"]).status == "succeeded"
+    assert repo.job_records.get_job_run("local", response.json()["job_id"]).status == "succeeded"
     assert client.post(f"/api/creation-tasks/{task_id}/audio/preview", json={
         "base_version_id": version_id, "action": "replace_narration",
         "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}}).status_code == 503
@@ -550,7 +550,7 @@ def test_equal_size_recording_change_rejects_old_proposal(recording_task):
     changed_preview = client.request("POST", route + "/audio/preview", json=edit)
     assert changed_preview.status_code == 202
     assert client.media_runtime.run_once()
-    assert repo.get_job_run("local", changed_preview.json()["job_id"]).status == "failed"
+    assert repo.job_records.get_job_run("local", changed_preview.json()["job_id"]).status == "failed"
     assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
     assert repo.get_creation_task_montage_plan("local", task_id)["output_path"] == "artifacts/task_recording/old.mp4"
 
@@ -686,8 +686,8 @@ def recording_metadata(tmp_path, monkeypatch):
     digest = repo.confirmed_creation_task_script_digest('local',task.id,script['id'])
     store = ArtifactStore(tmp_path/'artifacts')
     blob = store.publish_bytes('artifacts/declared-recording.webm', b'declared saved recording bytes; not media acceptance')
-    job = repo.create_job_run(JobRun('declared-recording-job','local',task.id,TASK_MEDIA_KIND,'declared-recording',hashlib.sha256(b'declared').hexdigest()))
-    running = repo.claim_job_run('local',job.id)
+    job = repo.job_records.create_job_run(JobRun('declared-recording-job','local',task.id,TASK_MEDIA_KIND,'declared-recording',hashlib.sha256(b'declared').hexdigest()))
+    running = repo.job_records.claim_job_run('local',job.id)
     source = repo.execution_records.create_artifact_record(ArtifactRecord('declared-recording-source','local',task.id,'task_recording',
         blob.logical_ref,blob.sha256,blob.size_bytes,job.id,[]))
     repo.lineage_records.create_transform_run(TransformRun('declared-recording-transform','local',task.id,job.id,
@@ -697,7 +697,7 @@ def recording_metadata(tmp_path, monkeypatch):
     stat = store.resolve_file(source.logical_ref).stat()
     repo.execution_records.append_task_event(TaskEvent('event_'+job.id+'_verified','local',task.id,job.id,'task_media_verified',
         {'outputs':[{'reference':source.logical_ref,'size_bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns}]}))
-    repo.finish_job_run('local',job.id,status='succeeded',output_refs=[source.logical_ref])
+    repo.job_records.finish_job_run('local',job.id,status='succeeded',output_refs=[source.logical_ref])
     monkeypatch.setattr(main_module,'production_repo',repo)
     monkeypatch.setattr(main_module,'artifact_store',store)
     monkeypatch.setattr(main_module,'creation_execution',main_module._new_creation_execution(repo))
@@ -716,7 +716,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     from dataclasses import replace
     state = recording_metadata
     repo, task, client = state.repo, state.task, state.client
-    before_jobs = [job.id for job in repo.list_job_runs('local',task.id)]
+    before_jobs = [job.id for job in repo.job_records.list_job_runs('local',task.id)]
     assert client.get(state.route).json()['items'][0]['applied'] is False
     adopted = client.post(state.route+'/adopt',json=state.payload)
     assert adopted.status_code==200,adopted.text
@@ -744,7 +744,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     blocked = client.get(f'/api/creation-tasks/{task.id}/execution/preview')
     assert blocked.status_code==200 and blocked.json()['requirements']['can_continue'] is False
     assert '当前配音是本人录音' in blocked.json()['requirements']['continuation_blocker']
-    assert [job.id for job in repo.list_job_runs('local',task.id)]==before_jobs
+    assert [job.id for job in repo.job_records.list_job_runs('local',task.id)]==before_jobs
     assert current.current_timeline_version_id is None and repo.list_timeline_versions('local',task.id)==[]
     # The other original applied source is the current montage narration graph.
     montage = CreationTaskMontagePlan('declared-montage','local',task.id,task.confirmed_script_id,'metadata','ready',

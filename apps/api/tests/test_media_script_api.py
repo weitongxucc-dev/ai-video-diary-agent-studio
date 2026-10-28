@@ -81,7 +81,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
         return SimpleNamespace(sealed=sealed, directory=job_directory, limits=limits)
     def run(*, prepared, scheduler, grant, cancel_event):
         scheduler.assert_grant(grant)
-        job = state.production.get_job_run(grant.workspace_id, grant.owner_id)
+        job = state.production.job_records.get_job_run(grant.workspace_id, grant.owner_id)
         event = state.production.execution_records.get_task_event(grant.workspace_id, f"event_{job.id}_start").payload
         assert job.status == "running" and job.task_id == state.task.id
         assert CreationExecutionActor.from_event(job.workspace_id, event) == actor
@@ -167,7 +167,7 @@ def test_unavailable_script_configuration_is_explicit_and_never_queues(state, mo
     assert capabilities.status_code == 200 and not capabilities.json()["available"]
     assert capabilities.json()["reason"]
     assert submit(state).status_code == 503
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
     assert state.calls == []
 
 
@@ -178,7 +178,7 @@ def test_unsupported_linux_platform_is_rejected_without_unrestricted_fallback(st
     assert "macOS" in capabilities.json()["reason"]
     assert submit(state).status_code == 503
     assert state.calls == []
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
 
 
 def test_script_current_png_input_is_frozen_and_source_change_refuses_commit(state):
@@ -250,7 +250,7 @@ def test_script_source_is_adopted_through_existing_graphic_edit_and_undo(state):
 
 def test_shared_artifact_transform_connection_is_one_rollback_transaction(state):
     now = utc_now()
-    job = state.production.create_job_run(JobRun(id="job-shared-transaction", workspace_id=state.workspace_id,
+    job = state.production.job_records.create_job_run(JobRun(id="job-shared-transaction", workspace_id=state.workspace_id,
         task_id=state.task.id, kind="fixture_metadata", idempotency_key="metadata-rollback", input_digest="c" * 64))
     artifact = ArtifactRecord(id="artifact-rollback", workspace_id=state.workspace_id, task_id=state.task.id,
         kind="media_script_definition", logical_ref="artifacts/rollback-definition.json", sha256="d" * 64,
@@ -282,7 +282,7 @@ def test_crash_after_graphic_record_recovers_definition_without_rerunning_python
         return original_definition(*args)
     monkeypatch.setattr(scripts, "script_definition", fail_after_graphic_record)
     assert state.runtime.run_once()
-    assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
+    assert state.production.job_records.get_job_run(state.workspace_id, job_id).status == "failed"
     assert any(item.producer_job_id == job_id and item.kind == "graphic_source"
                for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id))
     assert state.client.get(state.base_url + "/graphics/sources").json() == []
@@ -307,7 +307,7 @@ def test_unknown_started_script_without_publication_is_not_rerun(state, monkeypa
     queued = submit(state)
     assert queued.status_code == 202 and state.runtime.run_once()
     job_id = queued.json()["job_id"]
-    assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
+    assert state.production.job_records.get_job_run(state.workspace_id, job_id).status == "failed"
     assert state.client.post(state.base_url + f"/media-jobs/{job_id}/retry").status_code == 202
     assert state.runtime.run_once()
     assert len(state.calls) == 1
@@ -320,8 +320,8 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
     with pytest.raises(RuntimeError, match="rollback"):
         with state.production._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            created = state.production.create_job_run(job, connection=conn)
-            running = state.production.claim_job_run(state.workspace_id, created.id, connection=conn)
+            created = state.production.job_records.create_job_run(job, connection=conn)
+            running = state.production.job_records.claim_job_run(state.workspace_id, created.id, connection=conn)
             assert running.status == "running"
             artifact = state.production.execution_records.create_artifact_record(ArtifactRecord(id="artifact-all-rollback", workspace_id=state.workspace_id,
                 task_id=state.task.id, kind="media_script_definition", logical_ref="artifacts/all-rollback.json", sha256="f" * 64,
@@ -330,12 +330,12 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
                 task_id=state.task.id, job_id=job.id, transform_type="fixture_metadata", input_digest=job.input_digest,
                 input_refs=[], output_refs=[artifact.logical_ref], engine="fixture", parameters={}, status="succeeded",
                 started_at=running.started_at, finished_at=utc_now()), connection=conn)
-            finished = state.production.finish_job_run(state.workspace_id, job.id, status="succeeded",
+            finished = state.production.job_records.finish_job_run(state.workspace_id, job.id, status="succeeded",
                 output_refs=[artifact.logical_ref], connection=conn)
             assert finished.status == "succeeded"
             raise RuntimeError("rollback")
     with pytest.raises(KeyError):
-        state.production.get_job_run(state.workspace_id, job.id)
+        state.production.job_records.get_job_run(state.workspace_id, job.id)
     with pytest.raises(KeyError):
         state.production.execution_records.get_artifact_record(state.workspace_id, "artifact-all-rollback")
     with pytest.raises(KeyError):
@@ -380,7 +380,7 @@ def test_partial_metadata_recovery_reuses_identical_records_without_rerunning(st
     queued = submit(state, input_refs=inputs)
     assert queued.status_code == 202 and state.runtime.run_once()
     job_id = queued.json()["job_id"]
-    assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
+    assert state.production.job_records.get_job_run(state.workspace_id, job_id).status == "failed"
     definition = next(item for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id)
                       if item.producer_job_id == job_id and item.kind == "media_script_definition")
     monkeypatch.setattr(state.production.lineage_records, method, original)

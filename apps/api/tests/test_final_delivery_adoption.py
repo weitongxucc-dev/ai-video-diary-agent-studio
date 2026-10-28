@@ -35,7 +35,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     case.executor.render_is_valid = forbidden
     metadata.picture_renderer = renderer
     render = RenderStageUseCase(case.repo, metadata, None, None, SimpleNamespace())
-    job = case.repo.get_job_run('local', case.job.id)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
     original_audio_calls = list(case.generated)
     parent_head = case.repo.get_creation_task('local', case.task_id).current_timeline_version_id
     baseline = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['generated_bytes']
@@ -63,7 +63,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
             assert case.scheduler._get(grant.request_id).state == 'failed'
             current = case.repo.get_creation_task('local', case.task_id)
             assert current.current_timeline_version_id == parent_head
-            failed = case.repo.get_job_run('local', job.id)
+            failed = case.repo.job_records.get_job_run('local', job.id)
             assert failed.status == 'failed' and not failed.output_refs
             assert 'after transactional subtitle' in failed.failure_reason
             with case.repo._connect() as conn:
@@ -78,11 +78,11 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
             _resume_only_adoption(case, delivery, render, store, monkeypatch, create_track, grant, usage)
             case.scheduler.close()
             return
-        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.get_job_run('local', job.id).failure_reason
+        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', job.id).failure_reason
         if request.resources.get('subtitle_sidecar_bytes', 0):
             measured = case.repo.execution_records.get_task_event('local', leaf.measured_event_id(grant))
             sidecar_measurement = (request.resources, measured.payload)
-    final_job = case.repo.get_job_run('local', job.id)
+    final_job = case.repo.job_records.get_job_run('local', job.id)
     assert final_job.status == 'succeeded', final_job.failure_reason
     assert families == ['picture-fragment', 'picture-fragment', 'packet-copy', 'audio-assembly',
         'audio-assembly', 'audio-encode', 'final-mux']
@@ -139,7 +139,7 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
         with case.repo._connect() as conn:
             assert conn.execute('SELECT count(*) FROM device_work_requests WHERE owner_id=?', (case.job.id,)).fetchone()[0] == request_count
         assert case.scheduler._get(original.id) == original
-        assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     refused(replace(case.actor, member_id='another-member'), 403)
     # Unknown consumption is a durable fault, not permission to create a retry.
     unknown = {**json.loads(receipt['payload_json']), 'output_bytes': None}
@@ -181,7 +181,7 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
     def completed(workspace_id, task_id, job_id):
         with case.repo._connect() as conn:
             assert conn.execute('SELECT state FROM device_permit WHERE id=1').fetchone()[0] == 'free'
-        assert case.repo.get_job_run(workspace_id, job_id).status == 'succeeded'
+        assert case.repo.job_records.get_job_run(workspace_id, job_id).status == 'succeeded'
         assert render.valid(workspace_id, task_id, verify_media=False)
         callbacks.append(job_id)
     case.executor.on_render_completed = completed
@@ -204,7 +204,7 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
         if attempt:
             monkeypatch.setattr(case.repo, 'create_subtitle_track', create_track)
         case.executor.execute(grant, case.scheduler)
-        current = case.repo.get_job_run('local', case.job.id)
+        current = case.repo.job_records.get_job_run('local', case.job.id)
         if not attempt:
             assert current.status == 'failed' and 'after transactional subtitle' in current.failure_reason
             assert callbacks == []

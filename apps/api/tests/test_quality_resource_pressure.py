@@ -61,7 +61,7 @@ def test_quality_pressure_defers_to_future_without_terminal_result(tmp_path):
         assert request["state"] == "blocked" and request["wait_reason"] == "resource_pressure"
         assert before + timedelta(seconds=30) <= retry_at <= after + timedelta(seconds=30)
         assert permit["state"] == "free" and permit["request_id"] is None
-        assert repository.get_job_run("local", job_id).status == "interrupted"
+        assert repository.job_records.get_job_run("local", job_id).status == "interrupted"
         assert checks.get("local", "task")["check_state"] == "checking"
         assert service.projection("local", "task")["result_status"] is None
         with pytest.raises(KeyError):

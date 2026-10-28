@@ -91,7 +91,7 @@ def test_production_snapshot_contends_with_original_quality_recovery(tmp_path, m
                         assert "ROLLBACK" in statements
                         assert _sqlite_table_facts(repository, tables) == before
                         assert checks.get_check("local", "task", check_id)["evidence"]["_worker_result"] == result
-                        assert repository.get_job_run("local", job_id).status == "running"
+                        assert repository.job_records.get_job_run("local", job_id).status == "running"
                 elapsed = monotonic() - started
                 if not hold_until_timeout:
                     assert pending.result(timeout=10) is None
@@ -106,7 +106,7 @@ def test_production_snapshot_contends_with_original_quality_recovery(tmp_path, m
         finished = next(row for row in after["device_work_requests"] if row["id"] == original["id"])
         assert (finished["state"], finished["checkpoint_ref"], finished["attempt_number"], finished["last_grant_generation"]) == (
             "done", event_id, original["attempt_number"], original["last_grant_generation"])
-        assert repository.get_job_run("local", job_id).status == "succeeded"
+        assert repository.job_records.get_job_run("local", job_id).status == "succeeded"
         assert checks.get_check("local", "task", check_id)["result_status"] == "unavailable"
         assert checks.get("local", "task")["check_id"] == check_id
         assert [row["id"] for row in after["task_events"] if row["event_type"] == "quality_check_terminal"] == [event_id]
@@ -168,7 +168,7 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         before = facts()
         generation = runtime.scheduler.reconcile_released()
         source = sealed["source"]
-        expected = VerifiedWork("local", "quality_check", job_id, repository.get_job_run("local", job_id).input_digest,
+        expected = VerifiedWork("local", "quality_check", job_id, repository.job_records.get_job_run("local", job_id).input_digest,
             f"quality:{check_id}:finalize", actor.member_id, "normal_make", sealed["resources"],
             (SourceRef("local", "artifact", source["artifact_id"], source["render_ref"]),))
         for candidate, candidate_generation in [(replace(expected, unit_key=f"quality:{check_id}:missing"), generation),
@@ -216,7 +216,7 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         assert checks.get_check("local", "task", check_id)["evidence"]["_worker_result"] == result
         assert calls == []
         service.recover(runtime.scheduler)
-        assert repository.get_job_run("local", job_id).status == "succeeded"
+        assert repository.job_records.get_job_run("local", job_id).status == "succeeded"
         assert checks.get_check("local", "task", check_id)["result_status"] == "unavailable"
         assert checks.get("local", "task")["check_id"] == check_id
         assert repository.execution_records.get_task_event("local", event_id).payload == {"check_id": check_id, "status": "succeeded"}
@@ -231,7 +231,8 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         completed = facts()
         service.recover(runtime.scheduler)
         assert facts() == completed and calls == []
-        assert runtime.run_once() is False and calls == []
+        # The queue itself is empty; the native driver remains forbidden.
+        assert runtime.scheduler.pick_and_grant() is None and calls == []
         assert service.source_metadata("local", "task")[2] == source_before
         evidence = os.environ.get("QUALITY_RESOURCE_EVIDENCE_DIR")
         if evidence:

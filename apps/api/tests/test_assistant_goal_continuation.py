@@ -41,10 +41,10 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     base = production.create_timeline_version(TimelineVersion(
         "version:one", "workspace", task.id, None, 1, {}, None))
-    job = production.create_job_run(JobRun("execution:one", "workspace", task.id,
+    job = production.job_records.create_job_run(JobRun("execution:one", "workspace", task.id,
         "creation_task_execution", "execution:one", "declared-input"))
-    production.claim_job_run("workspace", job.id)
-    production.finish_job_run("workspace", job.id, status="succeeded")
+    production.job_records.claim_job_run("workspace", job.id)
+    production.job_records.finish_job_run("workspace", job.id, status="succeeded")
     rendered = production.create_timeline_version(TimelineVersion("version:render", "workspace", task.id,
         base.id, 2, {"render_input_timeline_version_id": base.id, "creation_render_request_id": "render:one"}, None))
     production.create_timeline_version(TimelineVersion("version:other", "workspace", task.id, base.id, 3, {}, None))
@@ -71,7 +71,7 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     rows = production.assistant_execution_projection_rows()
     assert len(rows) == 1
     context = owner.execution_candidate(rows[0])
-    actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.get_job_run("workspace", job.id)),
+    actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.job_records.get_job_run("workspace", job.id)),
               "video_ready": production.get_creation_task("workspace", task.id).output_ready})
     event = owner.project_execution(context, actual)
     assert event["status"] == "stale" and event["actionable"] is False and event["result_version_id"] is None
@@ -1045,14 +1045,14 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     case.conversations.settle_goal_round(claim)
     receipt={};code=202;job=None
     if recorded_state in {'queued','running'}:
-        job=case.production.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
+        job=case.production.job_records.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
             'original-request-job','a'*64))
         case.production.execution_records.append_task_event(TaskEvent('event_'+job.id+'_start','workspace',task.id,job.id,
             'task_media_submitted',{**actor.identity_payload(),'arguments':{'_typed_source':{
                 'assistant_turn_id':claim['turn_id'],'request_id':request_id,'conversation_id':case.chat['id']}}}))
         receipt={'job_id':job.id,'status':'queued','input_digest':job.input_digest,'result_kind':'observation'}
         if recorded_state=='running':
-            case.production.claim_job_run('workspace',job.id)
+            case.production.job_records.claim_job_run('workspace',job.id)
     elif recorded_state=='rejected':
         code=409;receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
     case.production.save_edit_request_result(task,event_id,status_code=code,response=receipt)
@@ -1066,7 +1066,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
         return {'status':'recorded','result_status_code':recorded['status_code'],'result':recorded['response']}
     def read_media(task,actor,job_id):
         reads.append(job_id)
-        current=case.production.get_job_run('workspace',job_id)
+        current=case.production.job_records.get_job_run('workspace',job_id)
         source=case.production.execution_records.get_task_event('workspace','event_'+job_id+'_start')
         owner.require_media_task(task.id,current)
         assert CreationExecutionActor.from_event('workspace',source.payload)==actor
@@ -1076,7 +1076,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
         SimpleNamespace(execution_sources=forbidden),owner,read_request=read_request,read_media=read_media)
     if job:
         assert outcome['status']=='waiting_result' and outcome['original_job']['status']==recorded_state
-        assert reads==[job.id] and len(case.production.list_job_runs('workspace',task.id))==1
+        assert reads==[job.id] and len(case.production.job_records.list_job_runs('workspace',task.id))==1
     elif recorded_state=='missing_job':
         assert outcome['status']=='waiting_unknown' and outcome['reason']=='original_request_job_not_located' and reads==[]
     else:

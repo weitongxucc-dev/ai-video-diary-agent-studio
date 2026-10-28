@@ -187,9 +187,9 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
         parameters["portrait_runtime_fingerprint"]=portrait.fingerprint()
     digest=hashlib.sha256(json.dumps(parameters,sort_keys=True).encode()).hexdigest()
     identity=uuid4().hex
-    job=repository.create_job_run(JobRun(id=f"job_{identity}",workspace_id=workspace_id,task_id=task_id,
+    job=repository.job_records.create_job_run(JobRun(id=f"job_{identity}",workspace_id=workspace_id,task_id=task_id,
         kind=kind,idempotency_key=f"{kind}:{identity}",input_digest=digest))
-    running=repository.claim_job_run(workspace_id,job.id)
+    running=repository.job_records.claim_job_run(workspace_id,job.id)
     try:
         temporary_root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(prefix="color-preview-",dir=temporary_root) as directory:
@@ -204,10 +204,10 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
             started_at=running.started_at,finished_at=utc_now()))
         repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
             upstream_ref=clip.source_path,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
-        repository.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
+        repository.job_records.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
         return record
     except Exception as exc:
-        repository.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
+        repository.job_records.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
             impact="没有改变当前镜头或成片。",repair_action="检查源素材、FFmpeg 和外接盘后重试。")
         raise
 

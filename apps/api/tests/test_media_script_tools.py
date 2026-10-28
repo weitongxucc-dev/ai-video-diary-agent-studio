@@ -128,9 +128,9 @@ def case(tmp_path, monkeypatch):
         return MediaScriptTools(repository, store, verify_identity=access.verify_identity, authorize_task_write=write)
 
     def producer(number=1, *, owner=None, status="succeeded", kind=TASK_MEDIA_KIND, task_id="task", include_definition=True):
-        job = repository.create_job_run(JobRun(id=f"script-job-{number}", workspace_id="local", task_id=task_id,
+        job = repository.job_records.create_job_run(JobRun(id=f"script-job-{number}", workspace_id="local", task_id=task_id,
             kind=kind, idempotency_key=f"script-{number}", input_digest="whole-fixture-job"))
-        job = repository.claim_job_run("local", job.id)
+        job = repository.job_records.claim_job_run("local", job.id)
         digest = hashlib.sha256(f"sealed fixture {number}".encode()).hexdigest()
         payload = MediaScriptPreviewRequest(script_source=f"# successful fixture version {number}\nprint(parameters['label'])",
             request_id="12345678-1234-4321-8123-123456789abc",
@@ -161,7 +161,7 @@ def case(tmp_path, monkeypatch):
             parameters={"definition_ref":record.logical_ref,"script_digest":digest,"owner_member_id":owner or actor.member_id},
             status="succeeded", started_at=job.started_at, finished_at=now))
         outputs = ([record.logical_ref] if include_definition else []) + [picture.logical_ref]
-        repository.finish_job_run("local",job.id,status=status,output_refs=outputs if status=="succeeded" else [],
+        repository.job_records.finish_job_run("local",job.id,status=status,output_refs=outputs if status=="succeeded" else [],
             **({} if status=="succeeded" else {"failure_reason":"fixture","impact":"fixture","repair_action":"fixture"}))
         repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_verified",workspace_id="local",task_id=task_id,job_id=job.id,
             event_type="fixture_verified",payload={"outputs":[{"reference":record.logical_ref},{"reference":picture.logical_ref}]}))
@@ -217,7 +217,7 @@ def test_registration_does_not_expand_source_job_artifacts_or_rewrite_verified_e
     after = [item for item in repository.execution_records.list_artifact_records("local","task") if item.producer_job_id==job]
     assert before == after and repository.execution_records.get_task_event("local",event.id) == event
     assert store.describe(definition.logical_ref).sha256 == definition.sha256
-    metadata_jobs = [job for job in repository.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
+    metadata_jobs = [job for job in repository.job_records.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
     assert len(metadata_jobs)==1 and metadata_jobs[0].status=="succeeded"
 
 
@@ -275,7 +275,7 @@ def test_concurrent_version_cas_has_one_winner_and_no_duplicate_version(case):
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert sorted(executor.map(update,["one","two"])) == ["conflict","saved"]
     assert tools().get(actor,recipe["tool_id"])["version"] == 2
-    registrations = [job for job in repository.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
+    registrations = [job for job in repository.job_records.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
     assert len(registrations) == 2
 
 
@@ -309,7 +309,7 @@ def test_reuse_rejects_definition_change_after_registration(case,corruption):
 def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
     repository,store,members,actor,tools,producer = case
     job,_ = producer()
-    before = (repository.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
+    before = (repository.job_records.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
               repository.lineage_records.list_transform_runs("local","task"))
     with repository._connect() as conn:
         conn.execute("""CREATE TRIGGER reject_fixture_recipe BEFORE INSERT ON transform_runs
@@ -317,7 +317,7 @@ def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
             BEGIN SELECT RAISE(ABORT,'synthetic metadata write failure'); END""")
     with pytest.raises(ValueError):
         tools().create_from_job(actor,job,name="fixture",description="fixture",parameter_schema=SCHEMA,request_id="12345678-1234-4321-8123-123456789abc")
-    after = (repository.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
+    after = (repository.job_records.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
              repository.lineage_records.list_transform_runs("local","task"))
     assert after == before
     assert tools().list(actor) == []
@@ -329,10 +329,10 @@ def test_creation_nonce_replay_query_and_payload_conflict_use_existing_job_key(c
     request = "12345678-1234-4321-8123-123456789abc"
     kwargs = dict(request_id=request,name="fixture",description="fixture",parameter_schema=SCHEMA)
     saved = tools().create_from_job(actor,job,**kwargs)
-    before = repository.list_job_runs("local","task")
+    before = repository.job_records.list_job_runs("local","task")
     replay = tools().create_from_job(actor,job,**kwargs)
     assert replay == saved
-    assert repository.list_job_runs("local","task") == before
+    assert repository.job_records.list_job_runs("local","task") == before
     restarted = tools()
     assert restarted.get_created_for_request(actor,request)["tool_id"] == saved["tool_id"]
     with pytest.raises(ScriptToolConflict):
@@ -375,12 +375,12 @@ def test_incomplete_registration_nonce_is_never_recreated(case):
     tools().create_from_job(actor,job,**kwargs)
     with repository._connect() as conn:
         conn.execute("UPDATE job_runs SET status='interrupted' WHERE kind='media_script_tool_registration'")
-    before = repository.list_job_runs("local","task")
+    before = repository.job_records.list_job_runs("local","task")
     with pytest.raises(ScriptToolUnknown):
         tools().create_from_job(actor,job,**kwargs)
     with pytest.raises(ScriptToolUnknown):
         tools().get_created_for_request(actor,request)
-    assert repository.list_job_runs("local","task") == before
+    assert repository.job_records.list_job_runs("local","task") == before
 
 
 @pytest.mark.parametrize("field",["input_digest","output_refs_json"])
@@ -399,7 +399,7 @@ def test_recipe_result_must_close_over_its_actual_registration_digest_and_output
 def test_definition_must_be_an_actual_output_of_the_successful_producer_job(case):
     repository,store,members,actor,tools,producer = case
     job,definition = producer(include_definition=False)
-    source = repository.get_job_run("local",job)
+    source = repository.job_records.get_job_run("local",job)
     assert source.status == "succeeded" and definition.logical_ref not in source.output_refs
     assert definition.logical_ref in repository.lineage_records.get_transform_run("local","script-transform-1").output_refs
     with pytest.raises(ScriptToolError,match="missing or unbound"):

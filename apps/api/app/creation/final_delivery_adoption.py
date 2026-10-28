@@ -168,7 +168,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     from app.creation.render_stage_use_case import render_input_payload, render_input_digest_for
     from app.creation.audio_delivery_assembly import _identity
     saved = version.snapshot['audio_delivery']
-    job = repository.get_job_run(task.workspace_id, saved['job_id'])
+    job = repository.job_records.get_job_run(task.workspace_id, saved['job_id'])
     transform = repository.lineage_records.get_transform_run(task.workspace_id, version.snapshot['transform_run_id'])
     if (job.task_id != task.id or job.kind != 'creation_task_execution' or job.status != 'succeeded'
             or transform.transform_type != 'montage_delivery' or transform.job_id != job.id or transform.status != 'succeeded'

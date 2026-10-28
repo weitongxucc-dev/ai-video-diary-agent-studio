@@ -75,7 +75,7 @@ class PersonStageUseCase:
                 return render
             input_refs = list(dict.fromkeys([f'person-profile://{person.id}/{person.version}', f'voice-profile://{segment.voice_profile_id}/{segment.voice_version}', f'narration-segment://{segment.id}', segment.audio_reference, person.avatar_reference]))
             base_idempotency_key = f'person-render:{task_id}:{cache_key}'
-            matching_jobs = [item for item in self.repository.list_job_runs(workspace_id, task_id) if item.kind == 'person_render' and item.input_digest == cache_key]
+            matching_jobs = [item for item in self.repository.job_records.list_job_runs(workspace_id, task_id) if item.kind == 'person_render' and item.input_digest == cache_key]
             latest_matching_job = matching_jobs[-1] if matching_jobs else None
             idempotency_key = latest_matching_job.idempotency_key if latest_matching_job is not None and latest_matching_job.status in {'interrupted', 'succeeded'} else f'{base_idempotency_key}:retry:{len(matching_jobs)}' if matching_jobs else base_idempotency_key
             job = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, kind='person_render', idempotency_key=idempotency_key, input_digest=cache_key)
@@ -115,7 +115,7 @@ class PersonStageUseCase:
                     try:
                         transform = self.repository.lineage_records.get_transform_run(context.workspace_id, transform_id)
                     except KeyError:
-                        running_job = self.repository.get_job_run(context.workspace_id, context.job_id)
+                        running_job = self.repository.job_records.get_job_run(context.workspace_id, context.job_id)
                         transform = self.repository.lineage_records.create_transform_run(TransformRun(id=transform_id, workspace_id=context.workspace_id, task_id=task_id, job_id=context.job_id, transform_type='person_render', input_digest=cache_key, input_refs=input_refs, output_refs=[logical_ref], engine=provider.model_id, parameters={'motion': payload.motion, 'expression': payload.expression, 'language': segment.language, 'presenter_input_facts': input_facts}, status='succeeded', started_at=running_job.started_at or utc_now(), finished_at=utc_now()))
                     for upstream_ref in input_refs:
                         edge_digest = hashlib.sha256(f'{upstream_ref}\n{logical_ref}'.encode('utf-8')).hexdigest()[:24]

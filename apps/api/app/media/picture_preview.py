@@ -125,7 +125,7 @@ class PicturePreviewRenderer:
         if not isinstance(scope, dict):
             raise ValueError("画面预览音轨与本次封存候选输入不一致")
         task = self.repository.get_creation_task(workspace_id, plan.task_id)
-        job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
+        job = self.repository.job_records.get_job_run(workspace_id, context.grant.owner_id)
         start = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
         arguments = start.payload.get("arguments", {}).get("payload", {})
         if (job.kind != TASK_MEDIA_KIND or job.task_id != plan.task_id
@@ -224,7 +224,7 @@ class PicturePreviewRenderer:
         if not isinstance(declared, dict):
             raise PermissionError("当前成片未封存音轨混音用途")
         if declared.get('prepared_master') is not None:
-            job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
+            job = self.repository.job_records.get_job_run(workspace_id, context.grant.owner_id)
             facts = self.audio.master_mix_facts(job, plan, actor=actor,
                 budget=context.scheduler.resources.budget.cpu_audio)
         else:

@@ -416,10 +416,10 @@ class TimelineRestoreUseCase:
             segment = NarrationSegment(**values)
             desired_version = self.repository.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
             publication = self.repository.execution_records.get_task_event(workspace_id,history[f'{side}_publication'])
-            job = self.repository.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
+            job = self.repository.job_records.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
                 kind='section_timeline_restore',idempotency_key=f'section_restore:{uuid4().hex}',
                 input_digest=hashlib.sha256(json.dumps([history,command.redo,prepared.section_dependencies],sort_keys=True).encode()).hexdigest()))
-            self.repository.claim_job_run(workspace_id,job.id)
+            self.repository.job_records.claim_job_run(workspace_id,job.id)
             change = SectionTimelineChange(self.repository,self.montage_edits.artifact_store)
             try:
                 for attempt in range(2):
@@ -452,8 +452,8 @@ class TimelineRestoreUseCase:
                         if attempt:
                             raise
             except Exception as exc:
-                if self.repository.get_job_run(workspace_id,job.id).status=='running':
-                    self.repository.finish_job_run(workspace_id,job.id,status='failed',failure_reason=str(exc),
+                if self.repository.job_records.get_job_run(workspace_id,job.id).status=='running':
+                    self.repository.job_records.finish_job_run(workspace_id,job.id,status='failed',failure_reason=str(exc),
                         impact='原时间线与已采用成果保留',repair_action='读取当前目标段及原恢复请求后核对冲突')
                 raise
             plan = creation_task_montage_plan_from_payload(payload) if payload is not None else None

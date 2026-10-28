@@ -42,7 +42,7 @@ def _asset(repo, workspace, name):
 
 def test_creation_owner_ignores_unrelated_task_text_but_refuses_changed_source_revision(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, voice=False)
-    job = repo.create_job_run(JobRun(id="job", workspace_id="workspace_a", task_id=task_id,
+    job = repo.job_records.create_job_run(JobRun(id="job", workspace_id="workspace_a", task_id=task_id,
         kind="creation_task_narration", idempotency_key="job", input_digest=digest))
     repo.execution_records.append_task_event(TaskEvent(id="event_job_start", workspace_id=job.workspace_id,
         task_id=task_id, job_id=job.id, event_type="creation_execution_started",
@@ -130,7 +130,7 @@ def test_task_media_retry_reopens_owner_and_device_attempt_in_one_transaction(tm
             scheduler.retry_existing(grant.request_id, actor, reason="failed")
     else:
         scheduler.retry_existing(grant.request_id, actor, reason="failed")
-    assert repo.get_job_run("workspace_a", job.id).status == ("failed" if rollback else "interrupted")
+    assert repo.job_records.get_job_run("workspace_a", job.id).status == ("failed" if rollback else "interrupted")
     request = scheduler._get(grant.request_id)
     assert (request.state, request.attempt_number) == (("failed", 1) if rollback else ("waiting", 2))
     scheduler.close()
@@ -250,7 +250,7 @@ def test_cover_local_check_uses_original_binding_without_reading_source_or_recei
         json.dumps(actor.identity_payload(), ensure_ascii=False, sort_keys=True),
         json.dumps(operation, ensure_ascii=False, sort_keys=True), published.sha256,
         published.size_bytes, file_identity(store.resolve_file(ref)))
-    job = repo.create_job_run(JobRun(id="cover-job", workspace_id=workspace, task_id=task_id,
+    job = repo.job_records.create_job_run(JobRun(id="cover-job", workspace_id=workspace, task_id=task_id,
         kind=COVER_JOB_KIND, idempotency_key=command.idempotency_key, input_digest=command.input_digest))
     repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", workspace, task_id, "rendered_video",
         ref, published.sha256, published.size_bytes, job.id, []))

@@ -76,7 +76,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     from app.quality_inspection import QualityCheckRepository
     monkeypatch.setattr(main, 'quality_check_repo', QualityCheckRepository(repo.database_path))
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
-    monkeypatch.setattr(main, 'video_job_runner', VideoJobRunner(repo))
+    monkeypatch.setattr(main, 'video_job_runner', VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main, 'settings', replace(main.settings, video_output_path=str(tmp_path / 'outputs'),
         video_inbox_path=str(tmp_path / 'library'), temporary_root_path=str(tmp_path / 'temporary'),
         native_portrait_worker_path=None, hermes_radar_path=None, obsidian_vault_path=None))
@@ -174,12 +174,12 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         assert duplicate.status_code==202 and duplicate.json()['job']['id']==queued.json()['job']['id'],duplicate.text
         assert not observations['renders']
         assert runtime.run_once(),runtime.last_error
-        outer=repo.get_job_run('local',queued.json()['job']['id'])
+        outer=repo.job_records.get_job_run('local',queued.json()['job']['id'])
         assert outer.status=='succeeded',asdict(outer)
         task=repo.get_creation_task('local',task_id)
         rendered=repo.get_creation_task_montage_plan('local',task_id)
         version=repo.get_timeline_version('local',task.current_timeline_version_id)
-        child=next(j for j in repo.list_job_runs('local',task_id) if j.kind=='creation_task_montage_render')
+        child=next(j for j in repo.job_records.list_job_runs('local',task_id) if j.kind=='creation_task_montage_render')
         transform=repo.lineage_records.get_transform_run('local','transform_'+child.id)
         assert child.status==transform.status=='succeeded' and version.id=='timeline_'+child.id and version.parent_version_id==base.id
         assert task.output_ready and task.stage=='review' and rendered['status']=='rendered'
@@ -213,13 +213,13 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
             time.sleep(.1)
             quality=client.get(url+'/quality-check')
         assert quality.status_code==200 and quality.json()['check_state'] in {'done','failed'},quality.text
-        counts=(len(repo.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
+        counts=(len(repo.job_records.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
         before=json.dumps(observations,sort_keys=True)
         queries=[client.get(url+'/execution',params={'job_id':outer.id}),client.get(url)]
         assert all(q.status_code==200 for q in queries),[q.text for q in queries]
         assert not runtime.run_once()
         assert json.dumps(observations,sort_keys=True)==before
-        assert counts==(len(repo.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
+        assert counts==(len(repo.job_records.list_job_runs('local',task_id)),len(repo.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
         assert not repo.list_person_renders('local',task_id)
         if destination:
             Path(destination,'NORMAL_SUMMARY.json').write_text(json.dumps({'task':asdict(task),'outer_job':asdict(outer),

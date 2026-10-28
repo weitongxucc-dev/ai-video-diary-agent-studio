@@ -83,15 +83,15 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     with repo._connect() as conn:
         repo._claim_workspace_media_reference(conn, workspace_id='local', reference=source_ref)
     publication = store.publish_file('artifacts/task/owned-final.mp4', original)
-    producer = repo.create_job_run(JobRun('fixture-output-job', 'local', 'task', 'creation_task_montage_render',
+    producer = repo.job_records.create_job_run(JobRun('fixture-output-job', 'local', 'task', 'creation_task_montage_render',
         'owned-output-input', hashlib.sha256(original.read_bytes()).hexdigest()))
-    running = repo.claim_job_run('local', producer.id)
+    running = repo.job_records.claim_job_run('local', producer.id)
     artifact = repo.execution_records.create_artifact_record(ArtifactRecord('fixture-output-artifact', 'local', 'task', 'rendered_video',
         publication.logical_ref, publication.sha256, publication.size_bytes, producer.id, [source_ref]))
     repo.lineage_records.create_transform_run(TransformRun('fixture-output-transform', 'local', 'task', producer.id,
         'rendered_video', producer.input_digest, [source_ref], [publication.logical_ref], 'synthetic-fixture-input/v1',
         {'width':width,'height':height,'duration_ms':2000}, 'succeeded', running.started_at, utc_now()))
-    repo.finish_job_run('local', producer.id, status='succeeded', output_refs=[publication.logical_ref])
+    repo.job_records.finish_job_run('local', producer.id, status='succeeded', output_refs=[publication.logical_ref])
     clip = MontageClip('clip-1', 'fixture-cue', asset.id, 'owned-segment', source_ref, 0, 2, 0, 2, 1, [], False)
     plan = CreationTaskMontagePlan('montage', 'local', 'task', 'fixture-script', 'owned output', 'rendered',
         [], [clip], 2, 0, aspect_ratio='16:9', output_path=publication.logical_ref)
@@ -128,7 +128,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     query=client.get('/api/creation-tasks/task/assistant/edit-requests/'+request['request_id']+'?phase=observation')
     assert query.status_code==200 and query.json()['result']['job_id']==receipt['job_id']
     assert client.get(receipt['result_url']).json()['result']==measured and calls==[receipt['job_id']]
-    assert len(repo.list_job_runs('local','task'))==2 and len(repo.execution_records.list_artifact_records('local','task'))==1
+    assert len(repo.job_records.list_job_runs('local','task'))==2 and len(repo.execution_records.list_artifact_records('local','task'))==1
     assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
     assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
     assert main._creation_task_output_path('local','task',subtitle=False)==store.resolve_file(publication.logical_ref)

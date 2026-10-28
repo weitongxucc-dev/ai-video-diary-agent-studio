@@ -107,7 +107,7 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
             assert quality_registration.owner.check_current(case.scheduler._get(queued['id']), reader) == 'ready'
         callback_receipts.append((job_id, version.id, check_id, queued['id'], sidecar.path))
     case.executor.on_render_completed = on_render_completed
-    job = case.repo.get_job_run('local', case.job.id)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
     original_tts = list(case.generated)
     baseline = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
     first = next_creation_intent(case.repo, case.scheduler, job)
@@ -115,14 +115,14 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
     counts = {}
     for _ in range(55):
         grant = case.scheduler.pick_and_grant()
-        assert grant is not None, case.repo.get_job_run('local', job.id).failure_reason
+        assert grant is not None, case.repo.job_records.get_job_run('local', job.id).failure_reason
         request = case.scheduler._get(grant.request_id)
         assert request.owner_type == 'creation_job'
         family = request.unit_key.split(':')[1]
         counts[family] = counts.get(family, 0)+1
         case.executor.execute(grant, case.scheduler)
-        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.get_job_run('local', job.id).failure_reason
-        if case.repo.get_job_run('local', job.id).status == 'succeeded':
+        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', job.id).failure_reason
+        if case.repo.job_records.get_job_run('local', job.id).status == 'succeeded':
             break
     assert counts == {'picture-fragment': 22, 'packet-copy': 21, 'audio-assembly': 2, 'audio-encode': 1, 'final-mux': 1}
     assert len(callback_receipts) == 1

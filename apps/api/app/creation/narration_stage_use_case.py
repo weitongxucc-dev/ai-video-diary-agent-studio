@@ -75,7 +75,7 @@ class NarrationStageUseCase:
         """Prepare one unadopted rewrite under its own original device grant."""
         grant_context.check()
         grant = grant_context.grant
-        job = self.repository.get_job_run(task.workspace_id, grant.owner_id)
+        job = self.repository.job_records.get_job_run(task.workspace_id, grant.owner_id)
         from app.creation.segment_production_use_case import revision_execution_key
         from app.profile_reference_media import ProfileReferenceInput
         with self.repository._connect() as conn:
@@ -215,7 +215,7 @@ class NarrationStageUseCase:
         grant = context.grant
         if grant.workspace_id != workspace_id:
             raise PermissionError('配音准备工作区与原作业许可不一致')
-        job = self.repository.get_job_run(workspace_id, grant.owner_id)
+        job = self.repository.job_records.get_job_run(workspace_id, grant.owner_id)
         event = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start')
         execution_input = self.repository.creation_execution_input(workspace_id, job.id)
         if (job.kind != 'creation_task_execution' or job.workspace_id != workspace_id or job.task_id != task_id

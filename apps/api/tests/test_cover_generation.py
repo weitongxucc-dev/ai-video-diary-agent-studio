@@ -318,12 +318,12 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     base = repo.create_timeline_version(TimelineVersion("base", "workspace", task.id, None, 1,
         {"montage": creation_task_montage_plan_to_payload(montage), "subtitle_track_ids": []}, None))
     published = store.publish_bytes("artifacts/task/source/current.mp4", b"declared source metadata")
-    source_job = repo.create_job_run(JobRun("source", "workspace", task.id, "declared_render_metadata",
+    source_job = repo.job_records.create_job_run(JobRun("source", "workspace", task.id, "declared_render_metadata",
         "fixture:source", published.sha256))
-    repo.claim_job_run("workspace", source_job.id)
+    repo.job_records.claim_job_run("workspace", source_job.id)
     repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", "workspace", task.id, "rendered_video",
         published.logical_ref, published.sha256, published.size_bytes, source_job.id, []))
-    repo.finish_job_run("workspace", source_job.id, status="succeeded", output_refs=[published.logical_ref])
+    repo.job_records.finish_job_run("workspace", source_job.id, status="succeeded", output_refs=[published.logical_ref])
     intent = repo.create_edit_intent(EditIntent("intent", "workspace", task.id, "选帧封面", "review", [], None,
         "GenerateCoverFromFrame", {}, {}, 1.0, "proposed"))
     operation = {"base_version_id": base.id, "source_video_ref": published.logical_ref,
@@ -336,7 +336,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     unconfigured = CoverUseCase(repo, store, metadata, verify_identity=verify, output_root=root)
     with pytest.raises(CoverUnavailable):
         unconfigured.submit(None, actor, task.id, proposal.id, request_id="original-request")
-    assert len(repo.list_job_runs("workspace", task.id)) == 1
+    assert len(repo.job_records.list_job_runs("workspace", task.id)) == 1
 
     # Explicit declaration for this metadata fixture; these are not host measurements.
     budget = CoverBudget(1024, 4096, 32768, 1024, 1024, 1, 10.0, 1048576, 4, .01, 1048576, 65536)
@@ -388,7 +388,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         processes.active = True
         control = json.loads(Path(argv[-2]).read_bytes())
         command = CoverCommand.from_payload(control["command"])
-        job = repo.get_job_run(command.workspace_id, control["job_id"])
+        job = repo.job_records.get_job_run(command.workspace_id, control["job_id"])
         phase["name"] = "declared_worker"
         assert hashlib.sha256(store.resolve_file(published.logical_ref).read_bytes()).hexdigest() == command.source_sha256
         output = store.publish_bytes(owner.output_ref(job), b"declared image metadata; not a physical PNG")
@@ -413,7 +413,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         assert result.job.status == "succeeded" and len(calls) == 1
         assert result.job.idempotency_key == "cover:proposal"
         assert result.job.input_digest == hashlib.sha256(json.dumps(operation, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        assert len(repo.list_job_runs("workspace", task.id)) == 2
+        assert len(repo.job_records.list_job_runs("workspace", task.id)) == 2
         assert len(repo.list_edit_operations("workspace", task.id)) == 1
         states = repo.list_creation_job_request_states("workspace", result.job.id)
         assert len(states) == 1 and states[0]["id"] == calls[0] and states[0]["state"] == "done"

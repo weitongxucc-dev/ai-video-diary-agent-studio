@@ -34,7 +34,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
         created_by_operation_id=None))
     # A queued metadata producer row supplies the public artifact ownership link.
     # It has never executed and makes no render/worker success claim.
-    producer = repository.create_job_run(JobRun(id="producer-metadata", workspace_id=workspace,
+    producer = repository.job_records.create_job_run(JobRun(id="producer-metadata", workspace_id=workspace,
         task_id=task.id, kind="metadata_fixture", idempotency_key="producer-metadata", input_digest="metadata-fixture"))
     artifact = repository.execution_records.create_artifact_record(ArtifactRecord(id="artifact-metadata", workspace_id=workspace,
         task_id=task.id, kind="rendered_video", logical_ref=logical_ref, sha256=publication.sha256,
@@ -116,7 +116,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
     assert asdict(fresh.get_creation_task(workspace, task.id)) == source_snapshot
     assert fresh.get_timeline_version(workspace, version.id) == version
     assert fresh.execution_records.get_artifact_record(workspace, artifact.id) == artifact
-    fresh_producer = fresh.get_job_run(workspace, producer.id)
+    fresh_producer = fresh.job_records.get_job_run(workspace, producer.id)
     assert (fresh_producer.status, fresh_producer.progress, fresh_producer.attempt) == ("queued", 0, 0)
     assert fresh_producer.started_at is None and fresh_producer.finished_at is None and fresh_producer.output_refs == []
     assert counts() == before == {"creation_plans": 1, "creation_tasks": 1, "timeline_versions": 1,

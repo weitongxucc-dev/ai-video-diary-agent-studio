@@ -172,7 +172,7 @@ def person_application(tmp_path,monkeypatch):
     monkeypatch.setattr(main,'local_members_service',members);monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'avatar_lipsync_provider',provider)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'artifacts'))
-    monkeypatch.setattr(main,'video_job_runner',VideoJobRunner(repo))
+    monkeypatch.setattr(main,'video_job_runner',VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main,'settings',replace(main.settings,video_output_path=str(tmp_path/'outputs'),video_inbox_path=str(tmp_path/'library'),
         temporary_root_path=str(tmp_path/'temporary'),native_portrait_worker_path=None,hermes_radar_path=None,obsidian_vault_path=None))
     monkeypatch.setattr(main,'creation_execution',main._new_creation_execution(repo))
@@ -226,7 +226,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     assert len(renders)==1 and all(r.status=='ready' and r.artifact_ref and r.alignment_evidence for r in renders)
     by_segment={r.narration_segment_id:r for r in renders}
     initial_files={r.id:_file_fact(s.case.metadata.picture_renderer.person_path(r)) for r in renders}
-    initial_child_jobs=[job for job in repo.list_job_runs('local',s.task_id) if job.kind=='person_render']
+    initial_child_jobs=[job for job in repo.job_records.list_job_runs('local',s.task_id) if job.kind=='person_render']
     assert len(initial_child_jobs)==1 and all(job.status=='succeeded' for job in initial_child_jobs)
     event=repo.execution_records.get_task_event('local',f'event_{full_job}_person_render_queued')
     assert set(event.payload['output'].split(','))=={r.id for r in renders}
@@ -244,7 +244,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     render_queued=s.client.post(url+'/execution/resume');assert render_queued.status_code==202,render_queued.text
     assert render_queued.json()['current_stage']=='render',render_queued.text
     assert s.runtime.run_once(),s.runtime.last_error
-    rendered_job=repo.get_job_run('local',render_queued.json()['job']['id'])
+    rendered_job=repo.job_records.get_job_run('local',render_queued.json()['job']['id'])
     assert rendered_job.status=='succeeded',asdict(rendered_job)
     rendered_task=repo.get_creation_task('local',s.task_id)
     payload=repo.get_creation_task_montage_plan('local',s.task_id)
@@ -259,7 +259,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     queued=s.client.post(confirm_url,json={});assert queued.status_code==202,queued.text
     assert s.client.post(confirm_url,json={}).json()==queued.json()
     assert s.runtime.run_once(),s.runtime.last_error
-    job=repo.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
+    job=repo.job_records.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
     current=repo.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
     changed=repo.get_creation_task_montage_plan('local',s.task_id)
     assert changed['clips'][0]['person_render_id']!=clips[0].person_render_id
@@ -270,7 +270,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     final_renders=repo.list_person_renders('local',s.task_id);assert len(final_renders)==2
     replacement=repo.get_person_render('local',s.task_id,changed['clips'][0]['person_render_id'])
     assert replacement.status=='ready' and replacement.cache_key!=by_segment[s.sections[0].id].cache_key
-    child_jobs=[j for j in repo.list_job_runs('local',s.task_id) if j.kind=='person_render']
+    child_jobs=[j for j in repo.job_records.list_job_runs('local',s.task_id) if j.kind=='person_render']
     assert len(child_jobs)==2 and all(j.status=='succeeded' for j in child_jobs)
     replay_started=time.monotonic()
     assert s.client.post(confirm_url,json={}).status_code==409

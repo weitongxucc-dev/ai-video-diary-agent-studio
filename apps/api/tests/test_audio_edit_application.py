@@ -45,10 +45,10 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     repo,actor,media,runtime,client,base,graph,path,calls=edit_state(tmp_path,monkeypatch)
     url='/api/creation-tasks/task/audio/preview'
     edit={'base_version_id':base.id,'action':'update','target_id':graph.tracks[0].clips[0].id,'values':{'gain_db':-3}}
-    before_jobs=repo.list_job_runs('local','task');before_artifacts=repo.execution_records.list_artifact_records('local','task')
+    before_jobs=repo.job_records.list_job_runs('local','task');before_artifacts=repo.execution_records.list_artifact_records('local','task')
     draft=client.post(url+'?draft=true',json=edit)
     assert draft.status_code==200,draft.text
-    assert repo.list_job_runs('local','task')==before_jobs and repo.execution_records.list_artifact_records('local','task')==before_artifacts
+    assert repo.job_records.list_job_runs('local','task')==before_jobs and repo.execution_records.list_artifact_records('local','task')==before_artifacts
     assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
     submitted=client.post(url,json=edit)
     assert submitted.status_code==202,submitted.text

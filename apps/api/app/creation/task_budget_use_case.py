@@ -52,7 +52,7 @@ class TaskBudgetUseCase:
 
     def resume(self, workspace_id, task_id, actor, command, *, execution_control, runtime, write_guard=None):
         self.require_actor(workspace_id, task_id, actor)
-        job = self.repository.get_job_run(workspace_id, command.expected_job_id)
+        job = self.repository.job_records.get_job_run(workspace_id, command.expected_job_id)
         if job.task_id != task_id:
             raise ValueError('恢复请求不属于原任务')
         if job.kind=='creation_task_segment_revision':

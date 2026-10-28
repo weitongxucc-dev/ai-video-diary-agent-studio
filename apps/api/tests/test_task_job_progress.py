@@ -76,12 +76,12 @@ def client(tmp_path, monkeypatch):
 def test_a_running_job_reports_real_progress_elapsed_and_updated_time(client):
     repo = client.repo
     seed_task(repo, WORKSPACE, "task-job-1", owner_user_id=client.member_id)
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-running", workspace_id=WORKSPACE, task_id="task-job-1",
         kind="creation_task_montage_render", idempotency_key="render:1", input_digest="d1",
     ))
-    repo.claim_job_run(WORKSPACE, "job-running")
-    repo.update_job_run_progress(WORKSPACE, "job-running", 40)
+    repo.job_records.claim_job_run(WORKSPACE, "job-running")
+    repo.job_records.update_job_run_progress(WORKSPACE, "job-running", 40)
 
     response = client.get("/api/creation-tasks/task-job-1/job-runs")
 
@@ -104,12 +104,12 @@ def test_a_running_job_reports_real_progress_elapsed_and_updated_time(client):
 def test_a_finished_failed_job_keeps_its_failure_reason_across_reopen(client):
     repo = client.repo
     seed_task(repo, WORKSPACE, "task-job-2", owner_user_id=client.member_id)
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-failed", workspace_id=WORKSPACE, task_id="task-job-2",
         kind="creation_task_montage_render", idempotency_key="render:2", input_digest="d2",
     ))
-    repo.claim_job_run(WORKSPACE, "job-failed")
-    repo.finish_job_run(
+    repo.job_records.claim_job_run(WORKSPACE, "job-failed")
+    repo.job_records.finish_job_run(
         WORKSPACE, "job-failed", status="failed",
         failure_reason="输出磁盘写入失败", impact="本次没有成片", repair_action="检查磁盘空间后重新生成",
     )
@@ -134,13 +134,13 @@ def test_a_finished_failed_job_keeps_its_failure_reason_across_reopen(client):
     assert again["id"] == "job-failed"
     assert again["failure_reason"] == "输出磁盘写入失败"
     assert again["elapsed_seconds"] == first["current"]["elapsed_seconds"]
-    assert reopened.list_job_runs(WORKSPACE, "task-job-2")[0].failure_reason == "输出磁盘写入失败"
+    assert reopened.job_records.list_job_runs(WORKSPACE, "task-job-2")[0].failure_reason == "输出磁盘写入失败"
 
 
 def test_job_progress_does_not_cross_workspaces(client):
     repo = client.repo
     seed_task(repo, WORKSPACE, "task-job-3", owner_user_id=client.member_id)
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-private", workspace_id=WORKSPACE, task_id="task-job-3",
         kind="creation_task_montage_render", idempotency_key="render:3", input_digest="d3",
     ))
@@ -171,19 +171,19 @@ def test_an_old_interrupted_job_does_not_hide_the_later_result(client):
     repo = client.repo
     seed_task(repo, WORKSPACE, "task-job-5", owner_user_id=client.member_id)
     # 一次被中断的旧作业，后面重试成功。
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-old", workspace_id=WORKSPACE, task_id="task-job-5",
         kind="creation_task_montage_render", idempotency_key="render:old", input_digest="d-old",
     ))
-    repo.claim_job_run(WORKSPACE, "job-old")
-    repo.finish_job_run(WORKSPACE, "job-old", status="interrupted",
+    repo.job_records.claim_job_run(WORKSPACE, "job-old")
+    repo.job_records.finish_job_run(WORKSPACE, "job-old", status="interrupted",
                         failure_reason="应用退出时中断", impact="本次没有成片", repair_action="重新生成")
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-new", workspace_id=WORKSPACE, task_id="task-job-5",
         kind="creation_task_montage_render", idempotency_key="render:new", input_digest="d-new",
     ))
-    repo.claim_job_run(WORKSPACE, "job-new")
-    repo.finish_job_run(WORKSPACE, "job-new", status="succeeded")
+    repo.job_records.claim_job_run(WORKSPACE, "job-new")
+    repo.job_records.finish_job_run(WORKSPACE, "job-new", status="succeeded")
 
     body = client.get("/api/creation-tasks/task-job-5/job-runs").json()
 

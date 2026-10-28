@@ -152,13 +152,13 @@ def seed_narration(repo, media, tmp_path):
     data=pcm_bytes();source=tmp_path/'seed.wav';source.write_bytes(data)
     store=media.audio_ingress.task_audio.artifact_store
     ref='artifacts/task/fixture-voice.wav';publication=store.publish_file(ref,source)
-    job=repo.create_job_run(JobRun('fixture-source-job','local','task','fixture_input','fixture-source-input',publication.sha256))
-    running=repo.claim_job_run('local',job.id)
+    job=repo.job_records.create_job_run(JobRun('fixture-source-job','local','task','fixture_input','fixture-source-input',publication.sha256))
+    running=repo.job_records.claim_job_run('local',job.id)
     artifact=repo.execution_records.create_artifact_record(ArtifactRecord('fixture-source-artifact','local','task','task_recording',ref,
         publication.sha256,publication.size_bytes,job.id,[]))
     repo.lineage_records.create_transform_run(TransformRun('fixture-source-transform','local','task',job.id,'task_recording',publication.sha256,
         [],[ref],'synthetic-fixture-input/v1',{'duration_ms':200,'sample_rate':16000,'channels':1,'script_id':script.id,'script_digest':digest},'succeeded',running.started_at,utc_now()))
-    repo.finish_job_run('local',job.id,status='succeeded',output_refs=[ref])
+    repo.job_records.finish_job_run('local',job.id,status='succeeded',output_refs=[ref])
     path=store.resolve_file(ref)
     narration=NarrationArtifactRecord('fixed-recorded','local',script.id,None,'fixed-recorded',str(path),.2,16000,None,
         task_id=task.id,source_kind='recorded',source_artifact_ref=ref,source_sha256=artifact.sha256,source_script_digest=digest)
@@ -213,7 +213,7 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
         assert set(waveform['result'])=={'source_id','duration_seconds','seconds_per_peak','peaks'}
         assert waveform['result']['duration_seconds']==.2 and max(waveform['result']['peaks'])==0
         assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
-        assert repo.get_job_run('local',receipt['job_id']).output_refs==[]
+        assert repo.job_records.get_job_run('local',receipt['job_id']).output_refs==[]
         waveforms.append(waveform['result'])
         fixed=client.get(url).json();assert fixed['job_id']==receipt['job_id'] and fixed['result'] is None
         assert client.get(fixed['result_url']).json()['result']==waveform['result']

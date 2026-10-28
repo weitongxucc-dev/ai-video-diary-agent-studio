@@ -155,7 +155,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
             output_root=tmp_path / 'outputs', portrait_worker_path=None, temporary_root=tmp_path / 'temporary')
         metadata.picture_renderer = renderer
         settings = SimpleNamespace(video_output_path=str(tmp_path / 'outputs'), effective_temporary_root_path=tmp_path / 'temporary')
-        render = RenderStageUseCase(case.repo, metadata, None, VideoJobRunner(case.repo), settings)
+        render = RenderStageUseCase(case.repo, metadata, None, VideoJobRunner(case.repo.job_records), settings)
         case.owner.audio_assembly = case.executor.audio_assembly = audio
         case.owner.cpu_render_limits = CpuRenderLimits(max_output_bytes=32*1024**2, threads=1, timeout_seconds=60)
         render_errors = []
@@ -175,7 +175,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     store, render_errors = configure()
     first_fragment = None
     scope_before_restart = None
-    submit_creation_stage(case.execution, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor)
+    submit_creation_stage(case.execution, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor)
     if preflight_attack is not None:
         from dataclasses import replace
         import time
@@ -240,7 +240,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
                 after = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
                 assert after['generated_bytes'] - before['generated_bytes'] == written[0] > 0
                 assert after['unknown_unit_count'] == after['reserved_bytes'] == 0
-                assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+                assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
             assert len(case.generated) == 2
             assert case.repo.get_creation_task('local', case.task_id).narration_cache_key == before_cache
             assert not [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id)
@@ -275,7 +275,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
         assert not [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id)
             if record.kind == 'audio_assembly_fragment']
         assert len(case.generated) == 2
-        assert case.repo.get_job_run('local', case.job.id).status == 'queued'
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'queued'
         case.scheduler.fail_unit(grant, reason='isolated_preflight_rejection',
             failure_write=lambda conn, current: 'isolated_preflight_rejection')
         case.scheduler.assert_released(grant)
@@ -291,7 +291,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
             assert request.resources['input_count'] <= 5
             admitted.append(request.resources['assembly_unit_id'])
         case.executor.execute(grant, case.scheduler)
-        current = case.repo.get_job_run('local', case.job.id)
+        current = case.repo.job_records.get_job_run('local', case.job.id)
         assert current.status != 'failed', (current.failure_reason, render_errors[-1] if render_errors else None)
         if current.status == 'succeeded':
             break
@@ -350,7 +350,7 @@ def test_same_audio_recipe_has_distinct_persistent_task_and_producer_instances(t
     plans, records = [], []
     store = ArtifactStore(tmp_path / 'artifacts')
     for index, task_id in enumerate((first_task, second_task, first_task)):
-        job = repo.create_job_run(JobRun(id=f'identity-job-{index}', workspace_id='local', task_id=task_id,
+        job = repo.job_records.create_job_run(JobRun(id=f'identity-job-{index}', workspace_id='local', task_id=task_id,
             kind='creation_task_execution', idempotency_key=f'identity-{index}', input_digest='a'*64))
         plan = plan_audio_assembly(graph, 1000, workspace_id='local', task_id=task_id, producer_job_id=job.id,
             source_hashes={'workspace://shared-audio': sha}, max_input_count=5)

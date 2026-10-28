@@ -77,7 +77,7 @@ def _leaf_case(tmp_path, monkeypatch):
 def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tmp_path, monkeypatch):
     case, service, packet, store, metadata, renderer, budget, montage = _leaf_case(tmp_path, monkeypatch)
     source = Path(case.repo.get_asset('local', 'source').path)
-    job = case.repo.get_job_run('local', case.job.id)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
     manifest = service.prepare(job, actor=case.actor, write_guard=lambda conn: None)
     assert len(manifest['units']) == 2
     assert all(unit['layers'] and unit['decode_seconds'] == 1 for unit in manifest['units'])

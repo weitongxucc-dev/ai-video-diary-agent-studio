@@ -226,7 +226,7 @@ class AutomationRuntime:
         publishes = [event for event in events if event.event_type == "platform_publish_prepared" and event.payload.get("confirmed") is True and event.payload.get("identity",{}).get("member_id") == actor.member_id]
         if publishes:
             confirmation["publish"] = {"event_id":publishes[-1].id,"confirmed_at":publishes[-1].created_at.isoformat(),"job_id":publishes[-1].job_id}
-        jobs = self.production.list_job_runs(actor.workspace_id,task.id)
+        jobs = self.production.job_records.list_job_runs(actor.workspace_id,task.id)
         with self.production._connect() as conn:
             requests = [row[0] for row in conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' AND owner_id IN (SELECT id FROM job_runs WHERE workspace_id=? AND task_id=?)",(actor.workspace_id,actor.workspace_id,task.id))]
         projection.update(confirmation=confirmation,execution={"job_ids":[job.id for job in jobs],"device_request_ids":requests,"output_refs":[ref for job in jobs for ref in job.output_refs]})
@@ -238,7 +238,7 @@ class AutomationRuntime:
             raise AutomationBlocked("task_permission_lost","本次任务当前归属无法核验","恢复原成员许可后重试")
         status = self.execution_status(actor.workspace_id,task.id)
         job = status["job"]
-        publish_jobs = [item for item in self.production.list_job_runs(actor.workspace_id,task.id) if item.kind == "platform_publish"]
+        publish_jobs = [item for item in self.production.job_records.list_job_runs(actor.workspace_id,task.id) if item.kind == "platform_publish"]
         if publish_jobs:
             published = publish_jobs[-1]
             if published.status == "succeeded":

@@ -202,7 +202,7 @@ def test_sibling_observation_cannot_advance_goal_past_pending_real_preview_or_ad
     wait_until(lambda: len(calls) == 2)
     wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "no_progress")
     assert main._goal_service().reconcile() == 0 and len(calls) == 2
-    assert not any(job.kind == "creation_task_execution" for job in state.production.list_job_runs(state.workspace_id, state.task.id))
+    assert not any(job.kind == "creation_task_execution" for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id))
 
 
 @pytest.mark.parametrize("damaged", [False, True])
@@ -239,7 +239,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         reused = repeated.json()
         assert reused["job_id"] == receipts[0]["job_id"] and reused["result"]["reused_completed_source"] is True
         assert reused["result"]["applied"] is False
-        assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+        assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
         if len(models) == 2:
             prepared = main._prepare_script_request(state.task.id, state.request, main.MediaScriptPreviewRequest.model_validate({
                 **script_state.payload, "request_id": uuid4(), "assistant_turn_id": kwargs["turn_id"],
@@ -285,7 +285,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         assert final["result"]["response"]["media_job"]["status"] == "succeeded"
         assert final["result"]["response"]["media_job"]["result"]["reused_completed_source"] is True
     assert len(state.calls) == 1 and main._goal_service().reconcile() == 0
-    assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
     if not damaged:
         chat = state.conversations.get(chat["id"], state.workspace_id, state.member.member_id)
         new_instruction = "新的独立指令：重新生成同名图片"
@@ -297,7 +297,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
             "selected_object_refs": [], "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
         assert new.status_code == 200 and new.json()["media_job"]["status"] == "queued", new.text
         assert new.json()["media_job"]["job_id"] != receipts[0]["job_id"]
-        assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 2 and len(state.calls) == 1
+        assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 2 and len(state.calls) == 1
 
 
 @pytest.mark.parametrize("shutdown,operation", [(False, "ChangeCrop"), (True, "ChangeCrop"), (False, "DeleteClip")])
@@ -381,14 +381,14 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
     if operation == "DeleteClip":
         wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "waiting_result")
         assert state.conversations.get_task_goal(root_id)["target_snapshot"]["removed_selected_refs"] == [f"clip:{state.clip.id}"]
-        state.production.claim_job_run(state.workspace_id, jobs[0].id)
+        state.production.job_records.claim_job_run(state.workspace_id, jobs[0].id)
         # A later actual terminal receipt must retain the prior proved deletion.
-        state.production.finish_job_run(state.workspace_id, jobs[0].id, status="succeeded")
+        state.production.job_records.finish_job_run(state.workspace_id, jobs[0].id, status="succeeded")
         main._wake_assistant_continuations()
         wait_until(lambda: len(calls) == 3)
     if shutdown:
         child_id = calls[-1]["turn_id"]
-        wait_until(lambda: len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 2)
+        wait_until(lambda: len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 2)
         main.stop_assistant_continuation_driver()
         child = state.conversations.get_turn(child_id)
         assert child["status"] == "failed" and child["result"]["reason"] == "api_shutdown"
@@ -476,8 +476,8 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
     assert state.conversations.get_turn(root_id)["result"]["goal_business_actions"] == [
         {"kind": "execution_status", "id": jobs[0].id}]
     # Explicit terminal row fixture; real rendering is root's separate QA.
-    state.production.claim_job_run(state.workspace_id, jobs[0].id)
-    state.production.finish_job_run(state.workspace_id, jobs[0].id, status="succeeded")
+    state.production.job_records.claim_job_run(state.workspace_id, jobs[0].id)
+    state.production.job_records.finish_job_run(state.workspace_id, jobs[0].id, status="succeeded")
     if stale:
         state.production.create_timeline_version(replace(state.version, id="unrelated-version", sequence=2,
                                                          parent_version_id=state.version.id, snapshot={}))
@@ -487,7 +487,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
     assert len(calls) == (1 if stale else 2)
     assert main._project_assistant_execution_results() == 0
     assert main._goal_service().reconcile() == 0
-    assert len([job for job in state.production.list_job_runs(state.workspace_id, state.task.id)
+    assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
                 if job.kind == "creation_task_execution"]) == 1
 
 
@@ -552,8 +552,8 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
         historical = next(event['failure'] for event in saved['events'] if event.get('tool_id') == 42)
         assert failure == historical and set(failure) == {'reason','repair_action'}
         assert '/Volumes/' not in failure['reason'] and 'raw_payload' not in response.text
-    state.production.claim_job_run(state.workspace_id, job_ids[0])
-    state.production.finish_job_run(state.workspace_id, job_ids[0], status="succeeded")
+    state.production.job_records.claim_job_run(state.workspace_id, job_ids[0])
+    state.production.job_records.finish_job_run(state.workspace_id, job_ids[0], status="succeeded")
     original = state.client.get(state.base_url + "/execution", params={"job_id":job_ids[0]})
     assert original.status_code == 200 and original.json()["job"]["id"] == job_ids[0]
     main.start_assistant_continuation_driver()
@@ -567,7 +567,7 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
         assert "/Volumes/" not in child["assistant_text"]
         assert child["result"].get("reason") != "goal_runner_interrupted"
     assert len(calls) == 2 and main._project_assistant_execution_results() == 0
-    assert len([job for job in state.production.list_job_runs(state.workspace_id, state.task.id) if job.kind == "creation_task_execution"]) == 1
+    assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id) if job.kind == "creation_task_execution"]) == 1
 
 
 @pytest.mark.parametrize("submitted", [False, True])
@@ -588,8 +588,8 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
         old = state.raw_post(state.base_url+"/execution/start", json=body)
         assert old.status_code == 202, old.text
         job_ids.append(old.json()["job"]["id"])
-        state.production.claim_job_run(state.workspace_id,job_ids[0])
-        state.production.finish_job_run(state.workspace_id,job_ids[0],status="failed",failure_reason="isolated old failed job",
+        state.production.job_records.claim_job_run(state.workspace_id,job_ids[0])
+        state.production.job_records.finish_job_run(state.workspace_id,job_ids[0],status="failed",failure_reason="isolated old failed job",
             impact="No output from this isolated fixture",repair_action="Read the original job")
     def model(_settings, **kwargs):
         calls.append(kwargs)
@@ -632,12 +632,12 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
         assert result["execution_action"] == "start" and "本轮未提交" not in result["reply"]
         assert turn["result"]["goal_business_actions"] == [{"kind":"execution_status", "id":job_ids[0]}]
         assert state.conversations.get_task_goal(turn["id"])["status"] == "waiting_result"
-        state.production.claim_job_run(state.workspace_id,job_ids[0])
-        state.production.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
+        state.production.job_records.claim_job_run(state.workspace_id,job_ids[0])
+        state.production.job_records.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
         assert main._project_assistant_execution_results() == 1
         assert main._goal_service().reconcile() == 1 and len(calls)==2
         assert state.conversations.get_task_goal(turn["id"])["status"] == "no_progress"
-    assert len([job for job in state.production.list_job_runs(state.workspace_id,state.task.id)
+    assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id)
         if job.kind=="creation_task_execution"]) == 1
 
 
@@ -700,12 +700,12 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
     assert goal["source_input_id"] == input_ids[0] and goal["revision"] == 1
     located=state.production.execution_records.get_task_event(state.workspace_id,execution_locator_id(root_id,input_ids[0]))
     assert located.payload["source"]["action"] == "observe" and located.job_id == job_ids[0]
-    state.production.claim_job_run(state.workspace_id,job_ids[0])
-    state.production.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
+    state.production.job_records.claim_job_run(state.workspace_id,job_ids[0])
+    state.production.job_records.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
     assert main._project_assistant_execution_results() == 2
     assert main._goal_service().reconcile() == 1 and len(calls) == 2
     assert main._goal_service().reconcile() == 0
-    assert len([job for job in state.production.list_job_runs(state.workspace_id,state.task.id) if job.kind == "creation_task_execution"]) == 1
+    assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id) if job.kind == "creation_task_execution"]) == 1
 
 
 @pytest.mark.parametrize("mutation", ["none", "watched_input", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
@@ -844,11 +844,11 @@ def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction
     script=state.production.get_creation_task_script(state.workspace_id,current.confirmed_script_id)
     plan=state.production.plan_records.get_creation_plan(state.workspace_id,current.plan_id)
     preview={'script_id':script.id,'input_digest':revision_digest(script,plan)}
-    before=[job.id for job in state.production.list_job_runs(state.workspace_id,state.task.id)]
+    before=[job.id for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id)]
     response=state.raw_post(state.base_url+'/execution/start?assistant_turn_id='+(str(uuid4()) if rejection=='foreign_turn' else turn['id']),
         json={'script_id':preview['script_id'],'input_digest':preview['input_digest'],'requirements_confirmed':True})
     assert response.status_code==409,response.text
-    assert [job.id for job in state.production.list_job_runs(state.workspace_id,state.task.id)]==before
+    assert [job.id for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id)]==before
 
 
 @pytest.mark.parametrize('operation',['ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'])
@@ -910,7 +910,7 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
     try:
         result=case.apply(task,actor,payload,identity={'member_id':actor.member_id,'local_diagnostic':False})
         assert result.status_code==202,result
-        job=repo.get_job_run('local',result.value['job_id'])
+        job=repo.job_records.get_job_run('local',result.value['job_id'])
         event=repo.execution_records.get_task_event('local',f'event_{job.id}_start').payload
         assert event['source']['workspace_id']=='local' and event['source']['task_id']==task.id
         assert event['source']['actor_identity']==actor.identity_payload()
@@ -960,7 +960,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
     if case_kind=='revision':
         for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
         _,revision,_=_submit_section_revision(case)
-        job=case.repo.get_job_run('local',revision['job_id'])
+        job=case.repo.job_records.get_job_run('local',revision['job_id'])
     else: job=case.job
     monkeypatch.setattr(case.segments.renderer,'render',lambda *a,**kw:pytest.fail('visual HTTP must not render'))
     _require_section_visual_decision(case,monkeypatch)
@@ -1016,7 +1016,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
         if case_kind=='stale': payload['decision_digest']='0'*64
         elif case_kind=='revoked': monkeypatch.setattr(case.owner,'verify_identity',lambda actor:'unauthorized')
         elif case_kind=='cancelled':
-            case.repo.finish_job_run('local',job.id,status='cancelled',failure_reason='user_cancelled',impact='保留音频',repair_action='核对原任务')
+            case.repo.job_records.finish_job_run('local',job.id,status='cancelled',failure_reason='user_cancelled',impact='保留音频',repair_action='核对原任务')
         elif case_kind=='queue_gap':
             original_submit=case.scheduler.submit
             monkeypatch.setattr(case.scheduler,'submit',lambda *a,**kw:(_ for _ in ()).throw(RuntimeError('after adoption before queue')))
@@ -1065,7 +1065,7 @@ def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_b
     with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
     source={'assistant_turn_id':turn['id'],'input_id':turn['id'],'conversation_id':chat['id']}
     case.repo.execution_records.append_task_event(TaskEvent('visual-review','local',case.task_id,None,'narration_semantic_review',{'source':source}))
-    job=case.repo.create_job_run(JobRun('visual-revision','local',case.task_id,'creation_task_segment_revision','visual-revision','original-digest'))
+    job=case.repo.job_records.create_job_run(JobRun('visual-revision','local',case.task_id,'creation_task_segment_revision','visual-revision','original-digest'))
     task=case.repo.get_creation_task('local',case.task_id)
     case.repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start','local',case.task_id,job.id,'segment_revision_requested',
         {**case.actor.identity_payload(),'input_digest':job.input_digest,'script_id':case.script_id,'plan_id':task.plan_id,
@@ -1200,7 +1200,7 @@ def test_execution_binding_repairs_conversation_after_original_locator_commit(ex
         {'kind':'execution_status', 'id':state.job.id}]
     assert main._assistant_execution_source(state.task.id, state.request, state.turn_id,
         'start', state.job.input_digest)[1]['job']['id'] == state.job.id
-    assert [job.id for job in state.production.list_job_runs(state.workspace_id, state.task.id)] == [state.job.id]
+    assert [job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)] == [state.job.id]
 
 
 def test_execution_binding_late_input_and_version_gate_precede_actor_and_write(execution_binding_state, monkeypatch):
@@ -1463,7 +1463,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
     contract = {'name':'card.png', 'width':64, 'height':64, 'max_bytes':4096}
     job = media.submit(runtime, actor, state.task.id, 'media_script_preview',
         {'_typed_source':source, 'payload':{'requested_outputs':[contract], 'input_refs':[]}}, 'graphic_source')
-    running = repo.claim_job_run('local', job.id)
+    running = repo.job_records.claim_job_run('local', job.id)
     # Opaque fixture bytes stand for an already verified publication. No PNG is generated/decoded.
     blob = state.store.publish_bytes('artifacts/declared-result.png', b'declared existing PNG publication')
     stat = state.store.resolve_file(blob.logical_ref).stat()
@@ -1479,7 +1479,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
     repo.execution_records.append_task_event(TaskEvent('event_'+job.id+'_result','local',state.task.id,job.id,'task_media_result',{'result':result}))
     repo.execution_records.append_task_event(TaskEvent('event_'+job.id+'_verified','local',state.task.id,job.id,'task_media_verified',
         {'outputs':[{'reference':record.logical_ref, **revision}]}))
-    repo.finish_job_run('local',job.id,status='succeeded',output_refs=[record.logical_ref])
+    repo.job_records.finish_job_run('local',job.id,status='succeeded',output_refs=[record.logical_ref])
     receipt = main._media_result_receipt(media,job,actor,runtime)
     conversations.finish_turn(state.turn_id,'completed','declared completed publication',result={
         'kind':'task_turn','response':{'media_job':receipt}})
@@ -1506,7 +1506,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
 @pytest.mark.parametrize('damaged',[False,True])
 def test_media_result_completed_slot_keeps_adopted_chain_and_rechecks_file(media_result_state, damaged):
     state = media_result_state
-    before = [job.id for job in state.production.list_job_runs('local',state.task.id)]
+    before = [job.id for job in state.production.job_records.list_job_runs('local',state.task.id)]
     ordinary = state.client.get(f'/api/creation-tasks/{state.task.id}/media-jobs/{state.original_job.id}')
     assert ordinary.status_code==200 and ordinary.json()['status']=='stale'
     assert 'script_source' not in state.slot
@@ -1532,5 +1532,5 @@ def test_media_result_completed_slot_keeps_adopted_chain_and_rechecks_file(media
         with pytest.raises(main.HTTPException) as stale:
             main._completed_media_result(task,state.request,state.child_id,state.slot,contract=state.contract,input_refs=[])
         assert stale.value.status_code==409
-    assert [job.id for job in state.production.list_job_runs('local',state.task.id)]==before
+    assert [job.id for job in state.production.job_records.list_job_runs('local',state.task.id)]==before
     assert state.conversations.get_turn(state.child_id)['status']=='running'

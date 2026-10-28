@@ -356,12 +356,12 @@ def test_unknown_tool_save_reopens_and_gets_only_original_receipt(assistant_stat
     monkeypatch.setattr(main, "run_task_turn", lambda *_args, **_kwargs: pytest.fail("receipt recovery must never call a model"))
     monkeypatch.setattr(main, "save_media_script_tool", lambda *_args, **_kwargs: pytest.fail("receipt recovery must never POST save"))
     before = reopened.get_turn(turn_id)
-    job_count = len(state.production.list_job_runs(state.workspace_id, state.task.id))
+    job_count = len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id))
     main.start_assistant_continuation_driver()
     main.stop_assistant_continuation_driver()
     after = reopened.get_turn(turn_id)
     assert after["status"] == before["status"] and len(state.calls) == 1
-    assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == job_count
+    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == job_count
     assert after["result"]["response"]["edit_preview"] is None
     if change in {"revoked", "other_member"}:
         assert after == before
@@ -384,13 +384,13 @@ def test_unknown_tool_save_reopens_and_gets_only_original_receipt(assistant_stat
 @pytest.mark.parametrize("status", ["rejected", "not_submitted"])
 def test_terminal_tool_save_failure_keeps_original_locator_without_registering(assistant_state, status):
     state = assistant_state
-    count = len(state.production.list_job_runs(state.workspace_id, state.task.id))
+    count = len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id))
     response = state.send(lambda kwargs: unknown_tool_save(state, kwargs, status=status))
     assert response.status_code == 200, response.text
     receipt = response.json()["script_tool"]
     assert receipt["status"] == status and receipt["submitted_input"] == original_tool_input(state)
     assert main._reconcile_assistant_business_results() == 0
-    assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == count
+    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == count
 
 
 @pytest.mark.parametrize("invalid", ["uuid", "turn", "locator"])
@@ -475,8 +475,8 @@ def receipt_state(tmp_path, monkeypatch):
     store = ArtifactStore(tmp_path/'blobs')
     # Succeeded is a seed fact, not a claim that a script/model was executed.
     digest = hashlib.sha256(b'declared receipt producer').hexdigest()
-    producer = repo.create_job_run(JobRun('declared-producer','local',task.id,TASK_MEDIA_KIND,'declared-producer',digest))
-    producer = repo.claim_job_run('local', producer.id)
+    producer = repo.job_records.create_job_run(JobRun('declared-producer','local',task.id,TASK_MEDIA_KIND,'declared-producer',digest))
+    producer = repo.job_records.claim_job_run('local', producer.id)
     definition = {'script_source':"# declared source; never executed\nprint(parameters['color'])",
         'language':'python', 'parameters':{'color':'red'}, 'input_slots':[],
         'requested_outputs':[{'name':'card.png','max_bytes':4096,'width':16,'height':16}],
@@ -489,7 +489,7 @@ def receipt_state(tmp_path, monkeypatch):
         'media_script',digest,[],[record.logical_ref],'declared-metadata',
         {'definition_ref':record.logical_ref,'script_digest':digest,'owner_member_id':member.member_id},
         'succeeded',producer.started_at,now))
-    repo.finish_job_run('local',producer.id,status='succeeded',output_refs=[record.logical_ref])
+    repo.job_records.finish_job_run('local',producer.id,status='succeeded',output_refs=[record.logical_ref])
     monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'artifact_store',store)
     monkeypatch.setattr(main,'local_members_service',members)
@@ -539,7 +539,7 @@ def test_recipe_receipt_unknown_reentry_preserves_identity_and_never_registers(r
     from app.media_script_tools import MediaScriptTools
     state = receipt_state
     details = unknown_receipt(state)
-    before = [j.id for j in state.production.list_job_runs('local',state.task.id)]
+    before = [j.id for j in state.production.job_records.list_job_runs('local',state.task.id)]
     order = []
     original_origin = state.conversations.task_result_source
     original_identity = MediaScriptTools.registration_identity
@@ -570,7 +570,7 @@ def test_recipe_receipt_unknown_reentry_preserves_identity_and_never_registers(r
         with pytest.raises(ValueError):
             main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
     assert state.production.execution_records.get_task_event('local',event_id)==original_event
-    assert [j.id for j in state.production.list_job_runs('local',state.task.id)]==before
+    assert [j.id for j in state.production.job_records.list_job_runs('local',state.task.id)]==before
     assert not hasattr(MediaScriptTools,'_creation_identity')
 
 
@@ -581,7 +581,7 @@ def test_recipe_receipt_v1_and_unknown_head_are_distinct(receipt_state):
     updated=state.client.patch('/api/media-script-tools/'+state.tool['tool_id'],
         json={**original,'expected_version':1,'name':'actual version two'})
     assert updated.status_code==200,updated.text
-    before=[j.id for j in state.production.list_job_runs('local',state.task.id)]
+    before=[j.id for j in state.production.job_records.list_job_runs('local',state.task.id)]
     receipt,_=main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,
         {'kind':'media_script_tool_result','action':'save','request_id':state.save_payload['request_id'],
          'query_url':'/api/media-script-tools/requests/'+state.save_payload['request_id'],
@@ -597,7 +597,7 @@ def test_recipe_receipt_v1_and_unknown_head_are_distinct(receipt_state):
             {'kind':'media_script_tool_result','action':'update','tool':{**updated.json(),'version':1},
              'expected_version':1,'submitted_input':submitted})
     assert forged.value.status_code==502
-    assert [j.id for j in state.production.list_job_runs('local',state.task.id)]==before
+    assert [j.id for j in state.production.job_records.list_job_runs('local',state.task.id)]==before
 
 
 def test_recipe_receipt_keeps_actor_and_registry_error_gates(receipt_state, monkeypatch):
@@ -644,7 +644,7 @@ def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, m
     monkeypatch.setattr(main, 'conversation_repo', reopened)
     monkeypatch.setattr(main, 'save_media_script_tool', lambda *a, **k: pytest.fail('recovery must never POST save'))
     before = reopened.get_turn(state.turn_id)
-    jobs = [job.id for job in state.production.list_job_runs(state.workspace_id, state.task.id)]
+    jobs = [job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)]
     assert main._reconcile_assistant_business_results() == 1
     after = reopened.get_turn(state.turn_id)
     assert after['status'] == before['status'] == 'completed'
@@ -656,7 +656,7 @@ def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, m
     assert receipt['submitted_input'] == details['submitted_input'] and 'definition' not in receipt['tool']
     assert after['result']['response']['script_tool'] == receipt
     assert after['result']['response']['edit_preview'] is None
-    assert [job.id for job in state.production.list_job_runs(state.workspace_id, state.task.id)] == jobs
+    assert [job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)] == jobs
     assert main._reconcile_assistant_business_results() == 0
     assert reopened.get_turn(state.turn_id) == after
     assert len(reopened.list_turns(after['conversation_id'])) == 1
@@ -698,6 +698,6 @@ def test_related_media_receipt_uses_original_turn_job_and_rejects_foreign_source
             with pytest.raises(main.HTTPException) as foreign_actor:
                 main._related_media_result(state.task.id,state.request,state.turn_id,origin['conversation_id'],reported)
             assert foreign_actor.value.status_code==404
-        assert [item.id for item in state.production.list_job_runs('local',state.task.id)].count(job.id)==1
+        assert [item.id for item in state.production.job_records.list_job_runs('local',state.task.id)].count(job.id)==1
     finally:
         runtime.scheduler.close()

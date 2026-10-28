@@ -285,8 +285,8 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
     try:
         job = execution.start("local", task_id, script_id, digest, actor=actor)
         # Persisted completed-job fixture; no fabricated render/audio acceptance.
-        repo.claim_job_run("local", job.id)
-        repo.finish_job_run("local", job.id, status="succeeded")
+        repo.job_records.claim_job_run("local", job.id)
+        repo.job_records.finish_job_run("local", job.id, status="succeeded")
         original = repo.get_creation_task_montage_plan("local", task_id)
         original.update(status="rendered", output_path="artifacts/fixture-old.mp4")
         repo.save_creation_task_montage_plan("local", task_id, "montage_1", original)
@@ -388,14 +388,14 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
         scheduler.assert_grant(grant)
         # Actual persistent producer/transform lineage with explicitly synthetic
         # artifact records. This tests input fencing, not playable-media validity.
-        inner = repo.create_job_run(JobRun("job_fixture_render", "local", task_id,
+        inner = repo.job_records.create_job_run(JobRun("job_fixture_render", "local", task_id,
             "creation_task_montage_render", "fixture-inner", "fixture-inner-digest"))
-        repo.claim_job_run("local", inner.id)
+        repo.job_records.claim_job_run("local", inner.id)
         refs = ["artifacts/fixture/video.mp4", "artifacts/fixture/subtitles.srt"]
         for index, ref in enumerate(refs):
             repo.execution_records.create_artifact_record(ArtifactRecord(f"fixture_artifact_{index}", "local", task_id,
                 "rendered_video" if index == 0 else "subtitle_track", ref, "0" * 64, 1, inner.id, []))
-        repo.finish_job_run("local", inner.id, status="succeeded", output_refs=refs)
+        repo.job_records.finish_job_run("local", inner.id, status="succeeded", output_refs=refs)
         transform = repo.lineage_records.create_transform_run(TransformRun(f"transform_{inner.id}", "local", task_id,
             inner.id, "montage_render", inner.input_digest, [], refs, "fixture", {}, "succeeded",
             datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
@@ -460,14 +460,14 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
                           sequence=2, snapshot={"montage": cropped}, created_by_operation_id="concurrent_operation")
 
         def fail_after_crop(inner, _render):
-            repo.create_job_run(inner)
-            repo.claim_job_run("local", inner.id)
+            repo.job_records.create_job_run(inner)
+            repo.job_records.claim_job_run("local", inner.id)
             now = datetime.now(timezone.utc)
             repo.edit_adoption.confirm("local", task_id, proposal.id,
                 operation=EditOperation("concurrent_operation", "local", task_id, proposal.id, "ChangeCrop",
                     {"clip_id": "clip_1", "crop_x": 0}, base.id, version.id, "applied", created_at=now, applied_at=now),
                 result_version=version, montage_plan_id="montage_1", montage_payload=cropped)
-            return repo.finish_job_run("local", inner.id, status="failed",
+            return repo.job_records.finish_job_run("local", inner.id, status="failed",
                 failure_reason="synthetic executor failed after concurrent crop", impact="no video", repair_action="fixture")
 
         monkeypatch.setattr(main_module, "production_repo", repo)
@@ -514,7 +514,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
             cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=0.5))
         monkeypatch.setattr(main_module, "production_repo", repo)
         monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
-        monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
+        monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo.job_records))
         monkeypatch.setattr(main_module, "settings", SimpleNamespace(
             video_output_path=str(tmp_path / "output"), video_inbox_path=str(tmp_path / "library"),
             effective_temporary_root_path=tmp_path / "temp", native_portrait_worker_path=None))
@@ -561,12 +561,12 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
             executor._checkpoint = crash
             with pytest.raises(RuntimeError, match="crash after inner publication"):
                 executor.execute(grant, scheduler)
-            assert repo.get_job_run("local", job.id).status == "running"
+            assert repo.job_records.get_job_run("local", job.id).status == "running"
             scheduler.assert_grant(grant)
             executor._checkpoint = checkpoint
         executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
-        finished = repo.get_job_run("local", job.id)
+        finished = repo.job_records.get_job_run("local", job.id)
         if publication_state == "missing_input_version":
             assert finished.status == "failed"
             assert "完整性与媒体校验" in finished.failure_reason
@@ -580,7 +580,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert version.snapshot["creation_render_request_id"] == request_id
         tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=version.id)
         assert len(tracks) == 1 and tracks[0].status == "valid"
-        inner = [j for j in repo.list_job_runs("local", task_id) if j.kind == "creation_task_montage_render"]
+        inner = [j for j in repo.job_records.list_job_runs("local", task_id) if j.kind == "creation_task_montage_render"]
         assert len(inner) == 1 and inner[0].status == "succeeded"
         assert renders == [request_id]
         validations = 2 if publication_state == "crash" else 1
@@ -588,7 +588,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert quality_requests == [("local", task_id)]  # reuse the persisted quality request on replay
         execution.render_is_valid = lambda w, t: main_module._creation_render_is_valid(w, t, verify_media=False)
         assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
-        assert submit_creation_stage(execution, scheduler, repo.get_job_run("local", job.id), actor) is None
+        assert submit_creation_stage(execution, scheduler, repo.job_records.get_job_run("local", job.id), actor) is None
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "done"
             assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
@@ -625,7 +625,7 @@ def test_granted_render_failure_reads_actual_reason_and_preserves_upstream(tmp_p
             render_is_valid=lambda _w, _t, _context: False)
         executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
-        persisted = repo.get_job_run("local", job.id)
+        persisted = repo.job_records.get_job_run("local", job.id)
         assert persisted.status == "failed" and persisted.failure_reason == reason
         assert persisted.progress != 100 and persisted.output_refs == []
         status = main_module._creation_execution_status("local", task_id)
@@ -770,7 +770,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     monkeypatch.setattr(main_module, "creation_execution", execution)
     monkeypatch.setattr(main_module, "narration_generator", generator)
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "artifacts"))
-    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "outputs"),
         video_inbox_path=str(tmp_path / "library"), effective_temporary_root_path=tmp_path / "temp",
         native_portrait_worker_path=None))
@@ -833,7 +833,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         assert not repo.get_creation_task(workspace, task_id).narration_cache_key
         state["identity"] = "unknown"
         assert client.post(base + "/start", json=payload).status_code == 503
-        assert not repo.list_job_runs(workspace, task_id)
+        assert not repo.job_records.list_job_runs(workspace, task_id)
         state["identity"] = "ready"
         first = client.post(base + "/start", json=payload)
         second = client.post(base + "/start", json=payload)
@@ -860,14 +860,14 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 waiting = conn.execute("SELECT state,wait_reason FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             assert tuple(waiting) == ("blocked", "resource_unknown")
             assert state["identity"] == "ready"
-            assert repo.get_job_run(workspace, job_id).status == "queued"
+            assert repo.job_records.get_job_run(workspace, job_id).status == "queued"
             assert calls == []
             time.sleep(0.1)
             grant = scheduler.pick_and_grant()
         if stop == "input":
             assert grant is None
             assert calls == []
-            assert repo.get_job_run(workspace, job_id).status == "queued"
+            assert repo.job_records.get_job_run(workspace, job_id).status == "queued"
             with repo._connect() as conn:
                 assert conn.execute("SELECT wait_reason FROM device_work_requests WHERE owner_id=?", (job_id,)).fetchone()[0] == "resource_busy"
             assert main_module._creation_execution_status(workspace, task_id)["waiting_reason"] == "本机资源检查尚未通过，正在等待满足制作条件。"
@@ -902,7 +902,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         scheduler.assert_released(grant)
         assert scheduler.processes.children_released(tuple(children)) is True
         if stop in {"revoked", "cancelled", "output", "rss", "timeout", "commit_unknown"}:
-            assert repo.get_job_run(workspace, job_id).status == (
+            assert repo.job_records.get_job_run(workspace, job_id).status == (
                 "cancelled" if stop == "cancelled" else "interrupted" if stop in {"revoked", "commit_unknown"} else "failed")
             assert calls == ["narration"]
             assert not any(event.payload.get("status") == "completed" for event in repo.execution_records.list_task_events(workspace, task_id))
@@ -912,7 +912,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         assert grant.unit_key.startswith("montage_plan:")
         executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
-        assert repo.get_job_run(workspace, job_id).status == "failed"
+        assert repo.job_records.get_job_run(workspace, job_id).status == "failed"
         assert repo.get_creation_task(workspace, task_id).narration_cache_key
         retry = execution.retry(workspace, task_id, member_id=actor.member_id)
         submit_creation_stage(execution, scheduler, retry, actor)
@@ -923,7 +923,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 queued = [dict(row) for row in conn.execute(
                     "SELECT id,unit_key,state,wait_reason FROM device_work_requests WHERE owner_id=?", (retry.id,))]
             assert grant is not None and grant.unit_key.startswith(stage + ":"), (
-                queued, repo.get_job_run(workspace, retry.id).failure_reason,
+                queued, repo.job_records.get_job_run(workspace, retry.id).failure_reason,
                 repo.get_creation_task_montage_plan(workspace, task_id).get("status"),
                 repo.get_creation_task_montage_plan(workspace, task_id).get("low_confidence_clip_count"))
             if stage == "render" and stop == "render_revoked":
@@ -931,7 +931,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             executor.execute(grant, scheduler)
             scheduler.assert_released(grant)
             if stage == "render" and stop in {"render_revoked", "render_commit_unknown"}:
-                assert repo.get_job_run(workspace, retry.id).status != "succeeded"
+                assert repo.job_records.get_job_run(workspace, retry.id).status != "succeeded"
                 assert not any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed"
                                for event in repo.execution_records.list_task_events(workspace, task_id))
                 assert scheduler.processes.children_released(tuple(children)) is True
@@ -941,15 +941,15 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 try:
                     montage = repo.get_creation_task_montage_plan(workspace, task_id)
                 except KeyError:
-                    pytest.fail(repo.get_job_run(workspace, retry.id).failure_reason)
+                    pytest.fail(repo.job_records.get_job_run(workspace, retry.id).failure_reason)
                 assert "未运行视觉语义模型" in montage["message"]
                 assert montage["status"] == "waiting_for_user"
                 pending = [clip["id"] for clip in montage["clips"] if clip["needs_confirmation"]]
                 assert len(pending) == montage["low_confidence_clip_count"] > 0
                 assert repo.get_creation_task(workspace, task_id).stage_status == "waiting_for_user"
-                assert repo.get_job_run(workspace, retry.id).status == "queued"
-                assert repo.get_job_run(workspace, retry.id).failure_reason == "waiting_for_user"
-                assert repo.get_job_run(workspace, retry.id).finished_at is None
+                assert repo.job_records.get_job_run(workspace, retry.id).status == "queued"
+                assert repo.job_records.get_job_run(workspace, retry.id).failure_reason == "waiting_for_user"
+                assert repo.job_records.get_job_run(workspace, retry.id).finished_at is None
                 assert render_calls == []
                 assert scheduler.pick_and_grant() is None
                 with repo._connect() as conn:
@@ -990,7 +990,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 assert resumed.json()["job"]["id"] == retry.id
                 assert resumed.json()["job"]["status"] == "queued"
                 assert calls == ["narration", "montage_plan", "montage_plan"]
-        finished = repo.get_job_run(workspace, retry.id)
+        finished = repo.job_records.get_job_run(workspace, retry.id)
         assert finished.status == "succeeded", finished.failure_reason
         assert calls == ["narration", "montage_plan", "montage_plan"]
         events = repo.execution_records.list_task_events(workspace, task_id)
@@ -1114,7 +1114,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 0
             conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE workspace_id=? AND task_id=?",
                          (json.dumps(creation_task_montage_plan_to_payload(montage)), task.workspace_id, task_id))
-        assert repo.get_job_run(task.workspace_id, job.id).status == "failed"
+        assert repo.job_records.get_job_run(task.workspace_id, job.id).status == "failed"
         job = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
         request_id = submit_creation_stage(execution, scheduler, job, actor)
         with repo._connect() as conn:
@@ -1134,20 +1134,20 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         assert submit_creation_stage(execution, scheduler, job, actor) == request_id
         grant = scheduler.pick_and_grant()
         assert grant is not None
-        original_claim = repo.claim_job_run
+        original_claim = repo.job_records.claim_job_run
 
         def cancel_before_claim(workspace_id, job_id):
             execution.cancel(workspace_id, task_id, member_id=actor.member_id)
             return original_claim(workspace_id, job_id)
 
-        monkeypatch.setattr(repo, "claim_job_run", cancel_before_claim)
+        monkeypatch.setattr(repo.job_records, "claim_job_run", cancel_before_claim)
         CreationJobUnitExecutor(
             repo, render_action=lambda *_args: pytest.fail("cancelled job must not render"),
             render_is_valid=lambda *_args: pytest.fail("cancelled job must not validate output"),
         ).execute(grant, scheduler)
-        monkeypatch.setattr(repo, "claim_job_run", original_claim)
+        monkeypatch.setattr(repo.job_records, "claim_job_run", original_claim)
         scheduler.assert_released(grant)
-        assert repo.get_job_run(task.workspace_id, job.id).status == "cancelled"
+        assert repo.job_records.get_job_run(task.workspace_id, job.id).status == "cancelled"
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "cancelled"
 
@@ -1160,7 +1160,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             render_is_valid=lambda *_args: pytest.fail("failed render cannot validate output"),
         ).execute(failure_grant, scheduler)
         scheduler.assert_released(failure_grant)
-        assert repo.get_job_run(task.workspace_id, failed_attempt.id).status == "failed"
+        assert repo.job_records.get_job_run(task.workspace_id, failed_attempt.id).status == "failed"
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (failure_request_id,)).fetchone()[0] == "failed"
         resumed = execution.retry(task.workspace_id, task_id, member_id=actor.member_id)
@@ -1171,7 +1171,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         output_store = ArtifactStore(tmp_path / "artifacts")
         monkeypatch.setattr(main_module, "production_repo", repo)
         monkeypatch.setattr(main_module, "artifact_store", output_store)
-        monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
+        monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo.job_records))
         monkeypatch.setattr(main_module, "settings", SimpleNamespace(
             video_output_path=str(tmp_path / "outputs"), video_inbox_path=str(tmp_path / "library"),
             effective_temporary_root_path=tmp_path / "temp", native_portrait_worker_path=None))
@@ -1207,7 +1207,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         assert render_calls == [1]
         published_task = repo.get_creation_task(task.workspace_id, task_id)
         published_version = repo.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
-        inner_jobs = [item for item in repo.list_job_runs(task.workspace_id, task_id)
+        inner_jobs = [item for item in repo.job_records.list_job_runs(task.workspace_id, task_id)
                       if item.kind == "creation_task_montage_render"]
         assert len(inner_jobs) == 1 and inner_jobs[0].status == "succeeded"
 
@@ -1252,9 +1252,9 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         retry_executor.execute(retry_grant, scheduler)
         assert render_calls == [1], "outer recovery must reuse its published inner render"
         scheduler.assert_released(retry_grant)
-        finished = repo.get_job_run(task.workspace_id, resumed.id)
+        finished = repo.job_records.get_job_run(task.workspace_id, resumed.id)
         assert finished.status == "succeeded", finished.failure_reason
-        assert submit_creation_stage(execution, scheduler, repo.get_job_run(task.workspace_id, resumed.id), actor) is None
+        assert submit_creation_stage(execution, scheduler, repo.job_records.get_job_run(task.workspace_id, resumed.id), actor) is None
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (retry_request_id,)).fetchone()[0] == "done"
             event = conn.execute("SELECT payload_json FROM task_events WHERE id=?",
@@ -1273,7 +1273,7 @@ def test_draft_and_wrong_workspace_cannot_start(tmp_path, monkeypatch):
     execution = _execution(repo)
     with pytest.raises(ValueError, match="确认当前文案"):
         execution.start("workspace_a", task_id, script_id, digest)
-    assert not repo.list_job_runs("workspace_a", task_id)
+    assert not repo.job_records.list_job_runs("workspace_a", task_id)
     with pytest.raises(KeyError):
         execution.start("workspace_b", task_id, script_id, digest)
 
@@ -1282,7 +1282,7 @@ def test_missing_authorized_voice_blocks_start_before_job_creation(tmp_path):
     repo, task_id, script_id, digest = _seed(tmp_path, voice=False)
     with pytest.raises(ValueError, match="选择已授权声音"):
         _execution(repo).start("workspace_a", task_id, script_id, digest)
-    assert repo.list_job_runs("workspace_a", task_id) == []
+    assert repo.job_records.list_job_runs("workspace_a", task_id) == []
 
 
 def test_duplicate_start_and_restart_execute_one_persisted_job(tmp_path, monkeypatch):
@@ -1393,7 +1393,7 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
         "script_id": script_id, "input_digest": digest, "requirements_confirmed": False,
     })
     assert rejected.status_code == 409
-    assert not repo.list_job_runs("local", task_id)
+    assert not repo.job_records.list_job_runs("local", task_id)
     payload = {"script_id": script_id, "input_digest": digest,
                "requirements_confirmed": True}
     first = client.post(base + "/start", json=payload)
@@ -1401,7 +1401,7 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     assert first.status_code == second.status_code == 202
     assert first.json()["job"]["id"] == second.json()["job"]["id"]
     assert first.json()["status_updated_at"] is not None
-    assert len(repo.list_job_runs("local", task_id)) == 1
+    assert len(repo.job_records.list_job_runs("local", task_id)) == 1
     # 两次点击只产生一条持久许可请求，身份是名册里的真实成员行。
     with repo._connect() as conn:
         requests = conn.execute(
@@ -1428,7 +1428,7 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
     payload = {"script_id": script_id, "input_digest": digest, "requirements_confirmed": True}
     forged = TestClient(main_module.app, headers={"X-Local-Member-Token": "not-a-real-token"})
     assert forged.post(base + "/start", json=payload).status_code == 401
-    assert not repo.list_job_runs("local", task_id)
+    assert not repo.job_records.list_job_runs("local", task_id)
     # 另一位真实成员发起时，许可挂的是他自己的成员行，不是 owner 的，也不是一个字符串。
     second, second_token = members.join(members.create_invite_code(), "第二位")
     client = TestClient(main_module.app, headers={"X-Local-Member-Token": second_token})
@@ -1553,8 +1553,8 @@ def _render_validity_fixture(tmp_path, monkeypatch):
         get_creation_task_montage_plan=lambda *_: plan,
         get_timeline_version=lambda *_: current_version,
         execution_records=SimpleNamespace(list_artifact_records=lambda *_: [record]),
-        get_job_run=lambda *_: SimpleNamespace(status="succeeded", task_id="task_1",
-            output_refs=[published.logical_ref], input_digest="render-input"),
+        job_records=SimpleNamespace(get_job_run=lambda *_: SimpleNamespace(status="succeeded", task_id="task_1",
+            output_refs=[published.logical_ref], input_digest="render-input")),
         lineage_records=SimpleNamespace(get_transform_run=lambda *_: transform),
     )
     monkeypatch.setattr(main_module, "production_repo", repository)
@@ -1622,10 +1622,10 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     actor = CreationExecutionActor("local", member.member_id)
     job = execution.start("local", task_id, script_id, digest, actor=actor)
     request_id = submit_creation_stage(execution, scheduler, job, actor)
-    repo.claim_job_run("local", job.id)
+    repo.job_records.claim_job_run("local", job.id)
     repo.start_creation_task_narration("local", task_id)
     # The old startup recovery only changed JobRun, leaving this stage running.
-    repo.interrupt_running_job_runs()
+    repo.job_records.interrupt_running_job_runs()
     assert repo.get_creation_task("local", task_id).stage_status == "running"
     if scenario in {"changed_input", "newer_input_and_execution"}:
         script = repo.get_creation_task_script("local", script_id)
@@ -1636,13 +1636,13 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     if scenario in {"newer_execution", "newer_input_and_execution"}:
         newer_digest = revision_digest(repo.get_creation_task_script("local", script_id),
             repo.plan_records.get_creation_plan("local", repo.get_creation_task("local", task_id).plan_id))
-        newer = repo.create_job_run(JobRun("newer-execution", "local", task_id,
+        newer = repo.job_records.create_job_run(JobRun("newer-execution", "local", task_id,
             "creation_task_execution", "newer-execution-input", newer_digest))
         repo.execution_records.append_task_event(TaskEvent(f"event_{newer.id}_start", "local", task_id, newer.id,
             "creation_execution_started", {"script_id":script_id,
                 "plan_id":repo.get_creation_task("local", task_id).plan_id,
                 "input_digest":newer_digest, "member_id":member.member_id}))
-        repo.claim_job_run("local", newer.id)
+        repo.job_records.claim_job_run("local", newer.id)
         if repo.get_creation_task("local", task_id).stage_status != "running":
             repo.start_creation_task_narration("local", task_id)
     current_task = asdict(repo.get_creation_task("local", task_id))
@@ -1655,7 +1655,7 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
         assert recovered.stage_status == "not_started" and recovered.stage_reason == "process_interrupted"
     else:
         assert asdict(recovered) == current_task
-    assert repo.get_job_run("local", job.id).status == "interrupted"
+    assert repo.job_records.get_job_run("local", job.id).status == "interrupted"
     with repo._connect() as conn:
         assert conn.execute("SELECT id FROM device_work_requests WHERE owner_id=?", (job.id,)).fetchall()[0][0] == request_id
         assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_id=?", (job.id,)).fetchone()[0] == 1
@@ -1682,7 +1682,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     runtime_starts = []
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "quality_check_repo", main_module.QualityCheckRepository(repo.database_path))
-    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo))
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main_module, "creation_execution", execution)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "execution_worker", worker)
@@ -2086,7 +2086,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             with pytest.raises(OSError if after_wait == "write_failure" else RecoveryBlocked):
                 runtime.run_once()
             assert runtime.last_error is not None
-            assert repo.get_job_run("local", job.id).status == "interrupted"
+            assert repo.job_records.get_job_run("local", job.id).status == "interrupted"
             assert repo.get_creation_task("local", task_id).stage_status == "not_started"
             stopped = repo.execution_records.get_task_event("local", f"event_{job.id}_stopped_{grants[-1].generation}")
             assert stopped.payload["permit_retained"] is True
@@ -2104,7 +2104,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             return
         assert runtime.run_once() is True and runtime.last_error is None
         if after_wait == "application_quit":
-            interrupted = repo.get_job_run("local", job.id)
+            interrupted = repo.job_records.get_job_run("local", job.id)
             assert interrupted.status == "interrupted" and interrupted.failure_reason == "application_quit"
             assert repo.get_creation_task("local", task_id).stage_status == "not_started"
             with repo._connect() as conn:
@@ -2126,20 +2126,20 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             assert resumed.id != job.id and resumed.input_digest == job.input_digest
             submit_creation_stage(execution, runtime.scheduler, resumed, actor)
             assert runtime.run_once() is True
-            assert repo.get_job_run("local", resumed.id).status == "queued"
+            assert repo.job_records.get_job_run("local", resumed.id).status == "queued"
             recovered = repo.get_creation_task("local", task_id)
             assert recovered.narration_cache_key == "pressure_cache" and recovered.stage == "montage"
             assert attempts == [1, 2]
             runtime.scheduler.assert_released(grants[-1])
             return
         if after_wait == "model_error":
-            assert repo.get_job_run("local", job.id).status == "failed"
-            assert repo.get_job_run("local", job.id).failure_reason == "synthetic model abort"
+            assert repo.job_records.get_job_run("local", job.id).status == "failed"
+            assert repo.job_records.get_job_run("local", job.id).failure_reason == "synthetic model abort"
             assert repo.get_creation_task("local", task_id).stage_status == "failed"
             assert repo.get_creation_task("local", task_id).stage_reason == "synthetic model abort"
             assert runtime.run_once() is False
             return
-        assert attempts == [1] and repo.get_job_run("local", job.id).status == "interrupted"
+        assert attempts == [1] and repo.job_records.get_job_run("local", job.id).status == "interrupted"
         assert repo.get_creation_task("local", task_id).stage_status == "not_started"
         if after_wait == "checkpoint_pressure":
             assert repo.get_creation_task("local", task_id).stage == "montage"
@@ -2163,7 +2163,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         assert runtime.run_once() is (after_wait in {"recover", "io_gap", "checkpoint_pressure"})
         assert attempts == ([1, 2] if after_wait in {"recover", "io_gap"} else [1])
         if after_wait in {"recover", "io_gap", "checkpoint_pressure"}:
-            assert repo.get_job_run("local", job.id).status == "queued"
+            assert repo.job_records.get_job_run("local", job.id).status == "queued"
             assert repo.get_creation_task("local", task_id).narration_cache_key == "pressure_cache"
             assert all(event.payload.get("stage") != "render" for event in repo.execution_records.list_task_events("local", task_id))
         with repo._connect() as conn:
@@ -2234,7 +2234,7 @@ def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_o
     authorization = service.ensure(task, actor)
     assert authorization.resource_scope["assets"] == ["selected"]
     source = repo.workspace_media_reference_for_asset("local", "selected")
-    job = repo.create_job_run(JobRun("derived-job", "local", task_id, "creation_task_execution", "derived", "a"*64))
+    job = repo.job_records.create_job_run(JobRun("derived-job", "local", task_id, "creation_task_execution", "derived", "a"*64))
     repo.execution_records.create_artifact_record(ArtifactRecord("derived-artifact", "local", task_id, "rendered_video",
         "artifacts/own-output.mp4", "a"*64, 1, job.id, [source]))
     assert service.verdict(actor, task_id, "task_media", references=["artifacts/own-output.mp4"]) == "ready"
@@ -2274,7 +2274,7 @@ def test_restart_keeps_revoked_task_paused_and_recovers_other_valid_task(tmp_pat
         with repo._connect() as conn:
             queued = [row[0] for row in conn.execute("SELECT owner_id FROM device_work_requests")]
         assert queued == [valid_job.id]
-        assert repo.get_job_run("local",revoked_job.id).status == "queued"
+        assert repo.job_records.get_job_run("local",revoked_job.id).status == "queued"
         assert service.status("local",revoked_task) == "revoked"
         assert service.status("local",valid_task) == "valid"
     finally:
@@ -2295,7 +2295,7 @@ def test_scope_refusal_does_not_stop_other_task_authorization_observation(tmp_pa
     now[0] += timedelta(seconds=1)
     service.ensure(repo.get_creation_task("local",valid_task),actor)
     for task_id in (denied_task,valid_task):
-        repo.create_job_run(JobRun("job_"+task_id,"local",task_id,"creation_task_execution","observe_"+task_id,"a"*64))
+        repo.job_records.create_job_run(JobRun("job_"+task_id,"local",task_id,"creation_task_execution","observe_"+task_id,"a"*64))
     now[0] += timedelta(minutes=1,seconds=1)
     verdict[0] = "ready"
     service.start()
@@ -2345,7 +2345,7 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     claim=conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
     goal=claim['goal']
     control=CreationExecutionControl(repo,_execution(repo),None,lambda _: 'ready')
-    job=repo.create_job_run(JobRun('original-job','local',task_id,'creation_task_execution','original-job','a'*64))
+    job=repo.job_records.create_job_run(JobRun('original-job','local',task_id,'creation_task_execution','original-job','a'*64))
     repo.execution_records.append_task_event(TaskEvent('event_original-job_start','local',task_id,job.id,'creation_execution_started',
         {'member_id':member,'script_id':'script_local','plan_id':'plan_local','input_digest':'a'*64}))
     repo.bind_creation_execution_source(job,{'assistant_turn_id':claim['turn_id'],'conversation_id':chat['id'],
@@ -2371,7 +2371,7 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     assert wrong['ok'] is False and wrong['failure']['status_code']==403
     late=call('cancel_creation_execution',{'task_id':task_id,'payload':{}})
     assert late['ok'] is False and late['failure']['status_code']==403
-    assert repo.get_job_run('local',job.id).status=='queued'
+    assert repo.job_records.get_job_run('local',job.id).status=='queued'
     with repo._connect() as conn:
         assert conn.execute("SELECT count(*) FROM task_events WHERE event_type LIKE 'task_business_invok%'").fetchone()[0]==0
 
@@ -2388,7 +2388,7 @@ def test_creation_job_and_original_goal_source_share_the_guarded_owner_transacti
         raise TaskBusinessRejected('任务授权已到期')
     with pytest.raises(TaskBusinessRejected):
         execution.start('local',task_id,script_id,digest,actor=actor,write_guard=refused,execution_source=source)
-    assert repo.list_job_runs('local',task_id)==[]
+    assert repo.job_records.list_job_runs('local',task_id)==[]
     with repo._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0]==0
     calls=[]
@@ -2399,7 +2399,7 @@ def test_creation_job_and_original_goal_source_share_the_guarded_owner_transacti
     assert execution.start('local',task_id,script_id,digest,actor=actor,write_guard=allowed,execution_source=source).id==job.id
     located=repo.execution_records.get_task_event('local','event_assistant_execution_locator_trusted-turn')
     assert located.job_id==job.id and located.payload['source']==source
-    assert calls==[True,True] and len(repo.list_job_runs('local',task_id))==1
+    assert calls==[True,True] and len(repo.job_records.list_job_runs('local',task_id))==1
     binding=repo.creation_narration_source_binding('local',job.id)
     assert binding.payload['basis']=='current_bytes_at_adoption'
     assert binding.payload['business_input_digest']==digest
@@ -2593,7 +2593,7 @@ def test_execution_projection_failure_reports_original_committed_job(tmp_path,mo
     result=host('start_creation_execution',{'payload':{'script_id':script_id,'input_digest':digest,'requirements_confirmed':True}},
         call_id='start',tool_call_id='tool',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
     assert result['ok'] is False and result['failure'].get('submission_effect')=='unknown',result
-    jobs=business.production.list_job_runs('local',binding['task_id'])
+    jobs=business.production.job_records.list_job_runs('local',binding['task_id'])
     assert len(jobs)==1 and result['failure']['job_id']==jobs[0].id
     assert result['failure']['query_tool']=='read_creation_execution'
 
@@ -2780,7 +2780,7 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
     repo,task_id,execution,owner,scheduler,request,actor,calls=_queued_creation_admission_case(tmp_path,static=static)
     task=asdict(repo.get_creation_task('local',task_id))
     assert scheduler.pick_and_grant() is None
-    first=repo.get_job_run('local',request.owner_id)
+    first=repo.job_records.get_job_run('local',request.owner_id)
     assert scheduler.pick_and_grant() is None
     current=scheduler._get(request.id)
     assert first.attempt==0 and first.started_at is None and current.last_grant_generation is None
@@ -2808,7 +2808,7 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         with pytest.raises(ExecutionControlRejected) as same_input:
             control.resume('local',task_id,actor,runtime,verify_media=False)
         assert same_input.value.detail['job_id']==request.owner_id
-        assert len(repo.list_job_runs('local',task_id))==1
+        assert len(repo.job_records.list_job_runs('local',task_id))==1
         from fastapi.encoders import jsonable_encoder
         assert jsonable_encoder(status)['input_rejection']['failed_limits']==receipt['failed_limits']
         # An explicitly changed unit declaration may use the formal continue
@@ -2817,7 +2817,7 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         owner.stage_facts=lambda *_:('narration:'+'c'*64,changed)
         resumed=control.resume('local',task_id,actor,runtime,verify_media=False)
         assert resumed['job']['status']=='queued' and resumed['job']['id']!=request.owner_id
-        assert repo.get_job_run('local',request.owner_id).status=='failed'
+        assert repo.job_records.get_job_run('local',request.owner_id).status=='failed'
         assert repo.execution_records.get_task_event('local',stored.id)==stored and calls==[request.id]
     else:
         assert current.state=='blocked' and current.wait_reason=='resource_busy'
@@ -2831,7 +2831,7 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
     monkeypatch.setattr(scheduler,'_record_event',failed_request_write)
     with pytest.raises(RuntimeError,match='request write failed'):
         scheduler.pick_and_grant()
-    assert repo.get_job_run('local',request.owner_id).status=='queued'
+    assert repo.job_records.get_job_run('local',request.owner_id).status=='queued'
     assert scheduler._get(request.id).state=='waiting'
     assert not [event for event in repo.execution_records.list_task_events('local',task_id)
         if event.payload.get('failure_kind')=='input_budget_exceeded']
@@ -2991,15 +2991,15 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     for _ in range(3):
         grant=case.scheduler.pick_and_grant()
-        assert grant is not None,case.repo.get_job_run('local',case.job.id).failure_reason
+        assert grant is not None,case.repo.job_records.get_job_run('local',case.job.id).failure_reason
         case.executor.execute(grant,case.scheduler)
     original_usage=case.repo.creation_narration_usage('local',case.job.id)
     first=case.scheduler.pick_and_grant()
-    assert first is not None, (case.repo.get_job_run('local',case.job.id).failure_reason,
+    assert first is not None, (case.repo.job_records.get_job_run('local',case.job.id).failure_reason,
         [dict(row) for row in case.repo.list_creation_job_request_states('local',case.job.id)])
     case.executor.execute(first,case.scheduler)
     partial=case.repo.creation_narration_merge_checkpoint('local',case.job.id)
-    assert partial is not None,case.repo.get_job_run('local',case.job.id).failure_reason
+    assert partial is not None,case.repo.job_records.get_job_run('local',case.job.id).failure_reason
     assert partial['section_ids']==['section_1','section_2'] and 'output' not in partial
     assert partial['pcm']['generated_bytes']==960044
     assert case.repo.get_creation_task('local',case.task_id).narration_cache_key is None
@@ -3158,7 +3158,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
             assert case.executor.recover_pcm_unit(job, case.actor, case.scheduler)
             current = case.repo.get_creation_task('local', task.id)
             assert current.current_timeline_version_id == base.id
-            assert case.repo.get_job_run('local', job.id).status == 'interrupted'
+            assert case.repo.job_records.get_job_run('local', job.id).status == 'interrupted'
             assert case.repo.list_edit_operations('local', task.id) == []
             usage = case.repo.creation_narration_usage('local', job.id)
             assert not usage['unsettled'] and usage['used_output_bytes'] == 192096
@@ -3174,7 +3174,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
         case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     current=case.repo.get_creation_task('local',task.id)
     assert current.current_timeline_version_id!=base.id
-    assert case.repo.get_job_run('local',job.id).status=='succeeded'
+    assert case.repo.job_records.get_job_run('local',job.id).status=='succeeded'
     assert case.repo.get_narration_segment('local',task.id,segments[0].id).audio_reference!=segments[0].audio_reference
     assert case.repo.get_narration_segment('local',task.id,segments[1].id)==segments[1]
     usage=case.repo.creation_narration_usage('local',job.id)
@@ -3293,7 +3293,7 @@ def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     before,request,runtime = _submit_section_revision(case)
-    revision_job=case.repo.get_job_run('local',request['job_id'])
+    revision_job=case.repo.job_records.get_job_run('local',request['job_id'])
     binding=case.repo.creation_narration_source_binding('local',revision_job.id)
     assert binding.payload['business_input_digest']==revision_job.input_digest
     assert binding.id!=case.repo.creation_narration_source_binding('local',case.job.id).id
@@ -3306,11 +3306,11 @@ def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_
     assert audio.unit_key.startswith('segment_revision:')
     case.executor.execute(audio,case.scheduler)
     video = case.scheduler.pick_and_grant()
-    assert video is not None, (case.repo.get_job_run('local', request['job_id']).failure_reason, case.repo.list_creation_job_request_states('local',request['job_id']))
+    assert video is not None, (case.repo.job_records.get_job_run('local', request['job_id']).failure_reason, case.repo.list_creation_job_request_states('local',request['job_id']))
     assert video.unit_key.startswith('segment_video:section_1:')
     case.executor.execute(video,case.scheduler)
     receipt = case.segments.read_request('local',case.task_id,'revision_1',case.actor)
-    assert receipt['job_id']==request['job_id'] and receipt['status']=='succeeded', case.repo.get_job_run('local',request['job_id']).failure_reason
+    assert receipt['job_id']==request['job_id'] and receipt['status']=='succeeded', case.repo.job_records.get_job_run('local',request['job_id']).failure_reason
     current = case.segments.context('local',case.task_id,'section_1',case.actor)
     assert current['text']=='原文更紧凑' and current['segment_version']!=before['segment_version']
     assert case.repo.get_creation_task_script('local',case.script_id).sections[0].content=='原文'*130
@@ -3536,7 +3536,7 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     case.repo.create_subtitle_track(replace(translation,artifact_ref=translated_ref,transform_id=translated_transform,status='valid'))
     before,request,_runtime=_submit_section_revision(case)
     for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
-    assert case.repo.get_job_run('local',request['job_id']).status=='succeeded'
+    assert case.repo.job_records.get_job_run('local',request['job_id']).status=='succeeded'
     current=case.repo.get_creation_task('local',case.task_id)
     revised=case.repo.get_timeline_version('local',current.current_timeline_version_id)
     assert next(item for item in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
@@ -3765,7 +3765,7 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     assert replace(authorization, resource_scope=case.original_authorization.resource_scope,
         revision=case.original_authorization.revision, last_checked_at=case.original_authorization.last_checked_at,
         last_verdict=case.original_authorization.last_verdict) == case.original_authorization
-    job = case.repo.get_job_run('local', case.job.id)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
     assert job.input_digest != case.job.input_digest and job.status == 'queued' and job.attempt == 0
     assert job.idempotency_key == case.job.idempotency_key and job.created_at == case.job.created_at
     assert case.repo.execution_records.get_task_event('local', start.id) == start
@@ -3845,7 +3845,7 @@ def test_queued_voice_selection_refuses_races_or_unknown_and_rolls_back_all_writ
     with pytest.raises((ValueError, RecoveryBlocked, sqlite3.IntegrityError)):
         case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
     assert snapshot() == before
-    assert case.repo.get_job_run('local', case.job.id).input_digest == case.job.input_digest
+    assert case.repo.job_records.get_job_run('local', case.job.id).input_digest == case.job.input_digest
     assert len(case.execution.jobs('local', case.task_id)) == 1
 
 
@@ -3883,7 +3883,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
         raise RuntimeError('injected final merge failure before output')
     monkeypatch.setattr(case.stage,'prepare_merge',fail_final)
     case.executor.execute(final, case.scheduler)
-    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     assert case.repo.creation_narration_merge_checkpoint('local', case.job.id) == checkpoint
     failed_usage = case.repo.creation_narration_usage('local', case.job.id)
     assert failed_usage['used_output_bytes'] == consumed['used_output_bytes'] and not failed_usage['unsettled']
@@ -3917,7 +3917,7 @@ def test_narration_partial_merge_exhausts_parent_without_refund_or_reset(tmp_pat
     assert checkpoint['section_ids'] == ['section_1', 'section_2']
     partial_path=Path(checkpoint['pcm']['work_path'])
     assert partial_path.is_file()
-    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     task = case.repo.get_creation_task('local', case.task_id)
     assert task.stage == 'narration' and task.narration_cache_key is None and not task.stage_retryable
     assert all(s.status == 'ready' for s in case.repo.list_narration_segments('local', case.task_id, case.script_id))
@@ -4002,11 +4002,11 @@ def test_narration_legacy_static_refusal_migrates_idempotently_without_new_job(t
         conn.execute('BEGIN IMMEDIATE')
         assert case.owner.record_admission(conn, request, decision, datetime.now(timezone.utc)) == 'input_rejected'
         conn.execute("UPDATE device_work_requests SET state='failed',last_failure_reason='declared_resources_exceed_budget' WHERE id=?", (request.id,))
-    replacement = migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor)
-    repeated = migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor)
+    replacement = migrate_creation_narration_request(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor)
+    repeated = migrate_creation_narration_request(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor)
     assert replacement.id == repeated.id and replacement.first_ready_at_utc == request.first_ready_at_utc
     assert case.scheduler._get(request.id).wait_reason == f'replaced_by:{replacement.id}'
-    assert case.repo.get_job_run('local', case.job.id).status == 'queued'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'queued'
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert any(e.payload.get('failure_kind') == 'input_budget_exceeded' for e in case.repo.execution_records.list_task_events('local', case.task_id))
 
@@ -4026,7 +4026,7 @@ def test_narration_quit_settles_then_cached_resume_does_not_charge_output_twice(
     usage = case.repo.creation_narration_usage('local', case.job.id)
     assert usage['consumption_known'] and usage['used_output_bytes'] > 0 and usage['used_seconds'] > 0
     assert case.scheduler._get(grant.request_id).state == 'blocked'
-    assert case.repo.get_job_run('local', case.job.id).status == 'interrupted'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'interrupted'
     monkeypatch.setattr(case.stage, 'prepare_segment', original)
     case.scheduler = DeviceScheduler(case.repo.database_path, tmp_path/'units.lock', owners=case.owner,
         resources=case.resources, processes=HostProcessProbe(), clock=lambda: datetime.now(timezone.utc)+timedelta(seconds=2))
@@ -4061,7 +4061,7 @@ def test_narration_unknown_usage_blocks_redispatch_without_reset(tmp_path, monke
     usage = case.repo.creation_narration_usage('local', case.job.id)
     assert not usage['consumption_known'] and len(usage['unsettled']) == 1
     with pytest.raises(RecoveryBlocked, match='消耗未知'):
-        next_creation_intent(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id))
+        next_creation_intent(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id))
     case.scheduler.clock = lambda: datetime.now(timezone.utc)+timedelta(seconds=2)
     assert case.scheduler.pick_and_grant() is None
     assert len(case.execution.jobs('local', case.task_id)) == 1
@@ -4092,7 +4092,7 @@ def test_narration_exhausted_parent_keeps_ready_segment_and_cannot_reset(tmp_pat
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     grant = case.scheduler.pick_and_grant()
     case.executor.execute(grant, case.scheduler)
-    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     assert [s.status for s in case.repo.list_narration_segments('local', case.task_id, case.script_id)] == ['ready', 'pending']
     assert case.repo.get_creation_task('local', case.task_id).narration_cache_key is None
     assert case.repo.creation_narration_usage('local', case.job.id)['used_output_bytes'] == one_output
@@ -4136,7 +4136,7 @@ def test_narration_real_memory_pressure_settles_known_usage_and_retains_unknown(
         usage = case.repo.creation_narration_usage('local', case.job.id)
         assert usage['consumption_known'] and not usage['unsettled']
         assert usage['used_output_bytes'] == partial.stat().st_size and usage['used_seconds'] > 0
-        assert case.repo.get_job_run('local', case.job.id).status == 'interrupted'
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'interrupted'
         assert case.scheduler._get(request_id).state == 'blocked'
         assert case.scheduler._get(request_id).wait_reason == 'resource_pressure'
         monkeypatch.setattr(case.stage, 'prepare_segment', original_prepare)
@@ -4175,7 +4175,7 @@ def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
     assert case.call('native_task_file',args)==first
     with pytest.raises(ValueError,match='变化'):
         case.call('native_task_file',{**args,'expected_sha256':'0'*64},'bad_cas')
-    bad = case.repo.get_job_run_by_idempotency_key('local',f'native:{case.task_id}:{case.actor.member_id}:bad_cas')
+    bad = case.repo.job_records.get_job_run_by_idempotency_key('local',f'native:{case.task_id}:{case.actor.member_id}:bad_cas')
     assert bad.status=='failed' and case.repo.native_operation_result('local',bad.id)['submission_effect']=='not_submitted'
     root = case.native.task_root(case.actor,case.task_id)
     (root/'work'/'image.txt').write_bytes(b'\x89PNG\r\n\x1a\n'+b'\x00'*30)
@@ -4186,7 +4186,7 @@ def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
     stale = case.call('register_task_artifacts',{'request_id':'register_stale','execution_job_id':first['job_id'],
         'files':[{'path':path,'role':'notes','expected_sha256':changed['sha256']}]})
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
-    assert case.repo.get_job_run('local',stale['job_id']).status=='failed'
+    assert case.repo.job_records.get_job_run('local',stale['job_id']).status=='failed'
     registered = case.call('register_task_artifacts',{'request_id':'register_current','execution_job_id':changed['job_id'],
         'files':[{'path':path,'role':'notes','expected_sha256':changed['sha256']}]})
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
@@ -4198,7 +4198,7 @@ def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
     # A started operation with no result cannot mutate again on a repeated request.
     pending,_ = case.repo.create_native_operation(case.actor,case.origin,'unknown_write','native_task_file',
         {**args,'path':'/task/work/unknown'}, {},write_guard=lambda conn:None)
-    case.repo.claim_job_run('local',pending.id)
+    case.repo.job_records.claim_job_run('local',pending.id)
     with pytest.raises(RecoveryBlocked):
         case.call('native_task_file',{**args,'path':'/task/work/unknown'},'unknown_write')
     assert not (root/'work'/'unknown').exists()
@@ -4281,14 +4281,14 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
     assert (new.eligible_since_utc, new.eligible_wait_seconds) == (old.eligible_since_utc, old.eligible_wait_seconds)
     assert new.resources['parent_max_output_bytes'] == old.resources.get('parent_max_output_bytes', old.resources['max_output_bytes'])
     assert new.resources['parent_timeout_seconds'] == old.resources.get('parent_timeout_seconds', old.resources['timeout_seconds'])
-    assert case.repo.get_job_run('local', case.job.id).idempotency_key == case.job.idempotency_key
+    assert case.repo.job_records.get_job_run('local', case.job.id).idempotency_key == case.job.idempotency_key
     assert case.repo.execution_records.get_task_event('local', start.id) == start
     assert case.repo.creation_narration_source_binding('local', case.job.id) == source
     assert case.repo.creation_narration_usage('local', case.job.id) == usage
     assert source.payload['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert case.repo.execution_records.get_task_event('local', f'event_{new.id}_source_revalidated').payload['source_binding_event_id'] == source.id
-    assert migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor).id == new.id
-    assert submit_creation_stage(case.execution, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor) == new.id
+    assert migrate_creation_narration_request(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor).id == new.id
+    assert submit_creation_stage(case.execution, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor) == new.id
     with case.repo._connect() as conn:
         assert case.owner.check_current(new, conn) == 'ready'
     grant = case.scheduler.pick_and_grant()
@@ -4326,7 +4326,7 @@ def test_unstarted_narration_revalidation_refuses_without_new_baseline(tmp_path,
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_revalidated'").fetchone()[0] == 0
     assert case.repo.execution_records.get_task_event('local', source.id) == source
-    assert case.repo.get_job_run('local', case.job.id) == case.job
+    assert case.repo.job_records.get_job_run('local', case.job.id) == case.job
 
 
 def test_unstarted_source_revalidation_revocation_during_prepare_keeps_original_request(tmp_path, monkeypatch):
@@ -4347,7 +4347,7 @@ def test_unstarted_source_revalidation_revocation_during_prepare_keeps_original_
     with pytest.raises(PermissionError, match='授权不可核实'):
         migrate_creation_narration_request(case.repo, case.scheduler, case.job, case.actor)
     assert case.scheduler._get(case.request_id).state == 'waiting'
-    assert case.repo.get_job_run('local', case.job.id) == case.job
+    assert case.repo.job_records.get_job_run('local', case.job.id) == case.job
     assert case.repo.creation_narration_source_binding('local', case.job.id) == source
     with case.repo._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 1
@@ -4495,7 +4495,7 @@ def test_account_voice_http_uses_content_owner_and_full_current_actor_then_repla
     assert receipt['member_id'] == case.actor.user_id != case.actor.member_id
     assert receipt['selected_voice']['profile_id'] == 'voice_2'
     assert case.repo.execution_records.get_task_event(case.actor.workspace_id,start.id) == start
-    updated = case.repo.get_job_run(case.actor.workspace_id,case.job.id)
+    updated = case.repo.job_records.get_job_run(case.actor.workspace_id,case.job.id)
     assert updated.id == case.job.id and updated.idempotency_key == case.job.idempotency_key and updated.attempt == 0
     source = case.repo.creation_narration_source_binding(case.actor.workspace_id,case.job.id)
     assert source.payload['actor'] == case.actor.identity_payload()
@@ -4587,14 +4587,14 @@ def test_segment_visual_decision_keeps_audio_usage_and_resumes_original_job(tmp_
         for _ in range(2):
             case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
         before, result, runtime = _submit_section_revision(case)
-        job = case.repo.get_job_run('local', result['job_id'])
+        job = case.repo.job_records.get_job_run('local', result['job_id'])
     else:
         job = case.job
     _require_section_visual_decision(case, monkeypatch)
     grant = case.scheduler.pick_and_grant()
     assert grant.owner_id == job.id, (grant.unit_key,case.repo.list_creation_job_request_states('local',job.id))
     case.executor.execute(grant, case.scheduler)
-    updated = case.repo.get_job_run('local', job.id)
+    updated = case.repo.job_records.get_job_run('local', job.id)
     assert updated.status == 'queued', updated.failure_reason
     assert case.scheduler._get(grant.request_id).state == 'done'
     view = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
@@ -4638,7 +4638,7 @@ def test_segment_visual_decision_submit_gap_and_cancel_preserve_checkpoint(tmp_p
     submit = case.scheduler.submit
     def interrupted(*args, **kwargs):
         if cancel:
-            case.repo.finish_job_run('local',case.job.id,status='cancelled',failure_reason='user_cancelled',
+            case.repo.job_records.finish_job_run('local',case.job.id,status='cancelled',failure_reason='user_cancelled',
                 impact='保留段落音频检查点。',repair_action='需要时从原任务继续。')
             return submit(*args,**kwargs)
         raise RuntimeError('after durable adoption, before queue')
@@ -4794,7 +4794,7 @@ def test_edit_source_unverifiable_jobs_cannot_be_submitted(tmp_path, monkeypatch
         with pytest.raises(PermissionError):
             case.owner.verify_submission(case.submission, case.actor, connection=conn)
         assert case.owner.check_current(case.request, conn) == 'stale'
-    assert case.repo.get_job_run('local', case.job.id).status == 'running'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'running'
 
 
 def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=False):
@@ -4833,7 +4833,7 @@ def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=Fal
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     grant = case.scheduler.pick_and_grant()
     case.executor.execute(grant, case.scheduler)
-    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     assert case.scheduler._get(grant.request_id).state == 'failed'
     settled = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
     assert settled.payload['output_file'] is None and settled.payload['output_bytes'] > 0
@@ -4881,9 +4881,9 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         assert case.repo.get_creation_task('local', case.task_id).stage_status == 'waiting_for_user'
         record = case.repo.get_narration_artifact('local', case.output['cache_key'])
         assert record.sample_rate == 24000 and record.duration_seconds == 1.0
-        decision = case.segments.visual_decision(case.repo.get_job_run('local', case.job.id), 'section_1')
+        decision = case.segments.visual_decision(case.repo.job_records.get_job_run('local', case.job.id), 'section_1')
         case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
-        assert case.segments.visual_decision(case.repo.get_job_run('local', case.job.id), 'section_1') == decision
+        assert case.segments.visual_decision(case.repo.job_records.get_job_run('local', case.job.id), 'section_1') == decision
         assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.repo.creation_narration_usage('local', case.job.id) == before
     assert case.repo.execution_records.get_task_event('local', case.settled.id) == case.settled
@@ -4930,12 +4930,12 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
         with pytest.raises(ExecutionControlRejected):
             control.resume('local', case.task_id, case.actor, runtime, verify_media=False, write_guard=guard)
         assert case.scheduler._get(montage['id']).state == 'failed'
-        assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     else:
         control.resume('local', case.task_id, case.actor, runtime, verify_media=False, write_guard=guard)
         current = case.scheduler._get(montage['id'])
         assert current.state == 'waiting' and current.attempt_number == 2
-        assert case.repo.get_job_run('local', case.job.id).status == 'interrupted'
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'interrupted'
         assert observed and len(case.execution.jobs('local', case.task_id)) == 1
     assert case.scheduler._get(first.request_id).state == 'failed'
     assert case.repo.creation_narration_usage('local', case.job.id) == before
@@ -4988,7 +4988,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
         with pytest.raises(ExecutionControlRejected) as rejected:
             control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
         assert rejected.value.status_code == 403
-        assert repo.get_job_run('local', job.id).status == 'succeeded'
+        assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
         assert len(repo.list_creation_job_request_states('local', job.id)) == 1
         assert not any(event.payload.get('input_timeline_version_id') == edited.id
             for event in repo.execution_records.list_task_events('local', task_id))
@@ -4998,7 +4998,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
         fresh = next(row for row in requests if row['id'] != original_request)
         assert fresh['unit_key'].startswith('render:') and fresh['state'] == 'waiting'
         assert scheduler._get(fresh['id']).resources['overlay_count'] == 2
-        assert repo.get_job_run('local', job.id).status == 'queued'
+        assert repo.job_records.get_job_run('local', job.id).status == 'queued'
         control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
         assert repo.list_creation_job_request_states('local', job.id) == requests
         grant = scheduler.pick_and_grant()
@@ -5040,7 +5040,7 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
             if row['state'] in {'waiting', 'blocked'}:
                 case.scheduler.cancel(row['id'], case.actor)
         before, receipt, runtime = _submit_section_revision(case)
-        job = case.repo.get_job_run('local', receipt['job_id'])
+        job = case.repo.job_records.get_job_run('local', receipt['job_id'])
     else:
         job = case.job
     original = case.segments.prepare_video
@@ -5049,7 +5049,7 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
     monkeypatch.setattr(case.segments, 'prepare_video', conflict)
     grant = case.scheduler.pick_and_grant()
     case.executor.execute(grant, case.scheduler)
-    updated = case.repo.get_job_run('local', job.id)
+    updated = case.repo.job_records.get_job_run('local', job.id)
     assert updated.status == 'queued' and updated.failure_reason == 'waiting_for_user', updated.failure_reason
     assert case.scheduler._get(grant.request_id).state == 'done'
     view = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
@@ -5101,7 +5101,7 @@ def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_
         if row['state'] in {'waiting', 'blocked'}:
             case.scheduler.cancel(row['id'], case.actor)
     _, receipt, runtime = _submit_section_revision(case)
-    job = case.repo.get_job_run('local', receipt['job_id'])
+    job = case.repo.job_records.get_job_run('local', receipt['job_id'])
     prepare = case.segments.prepare_video
     def conflict(*args, **kwargs):
         raise DurationConflict('合法画面待补充，原配音保留')
@@ -5110,13 +5110,13 @@ def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_
     usage = case.segments.visual_usage(job)
     def cancel_after_preparation(*args, **kwargs):
         prepared = prepare(*args, **kwargs)
-        case.repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
+        case.repo.job_records.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
             impact='用户暂停原请求', repair_action='保持取消，不自动恢复')
         return prepared
     monkeypatch.setattr(case.segments, 'prepare_video', cancel_after_preparation)
     with pytest.raises(ValueError, match='原段落作业已停止'):
         case.segments.resume_request('local', case.task_id, 'revision_1', case.actor, runtime=runtime)
-    current = case.repo.get_job_run('local', job.id)
+    current = case.repo.job_records.get_job_run('local', job.id)
     assert current.status == 'cancelled' and current.failure_reason == 'user_cancelled'
     assert case.segments.visual_usage(current) == usage
     with pytest.raises(KeyError):
@@ -5162,7 +5162,7 @@ def test_pcm_sealed_two_input_unit_survives_larger_cap_and_prefix_uses_one_slot(
         raise RuntimeError('known pre-output failure')
     monkeypatch.setattr(case.stage, 'prepare_merge', fail_before_output)
     case.executor.execute(first, case.scheduler)
-    assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     monkeypatch.setattr(case.stage, 'prepare_merge', prepare)
     case.scheduler.resume_creation_narration(first.request_id, resume_write=lambda conn, current:
         case.owner.resume_narration_request(conn, current, case.actor))
@@ -5238,7 +5238,7 @@ def test_scope_shrink_before_real_grant_start_rolls_back_started_and_pending_seg
         policy_kind='explicit_total', authorization_guard=lambda conn: None)
     with pytest.raises(BudgetScopeExhausted):
         case.executor.execute(grant, case.scheduler)
-    assert case.repo.get_job_run('local', case.job.id).status == 'queued'
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'queued'
     assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
     assert case.repo.creation_narration_usage('local', case.job.id)['budget'] is None
     assert case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['unit_count'] == 0
@@ -5578,7 +5578,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
         assert artifact.cache_key == 'declared-unit-key' and segment.audio_reference == 'narration://artifact/declared-unit-key'
         assert segment.created_at == pending.created_at and segment.id == pending.id and segment.status == 'ready'
         assert repo.get_narration_segment('local', case.task_id, pending.id) == pending
-        assert repo.get_job_run('local', case.job.id).status == 'queued'
+        assert repo.job_records.get_job_run('local', case.job.id).status == 'queued'
         assert repo.get_narration_artifact('local', artifact.cache_key) is None
     finally:
         case.scheduler.close()
@@ -5628,7 +5628,7 @@ def test_single_segment_preparation_refuses_changed_tail_or_current_voice_before
                 section_id='section_1', grant_context=context)
         assert calls == []
         assert repo.get_narration_segment('local', case.task_id, pending.id) == pending
-        assert repo.get_job_run('local', case.job.id).status == 'queued'
+        assert repo.job_records.get_job_run('local', case.job.id).status == 'queued'
     finally:
         case.scheduler.close()
 
@@ -5646,7 +5646,7 @@ def test_bounded_narration_start_reenters_original_unit_and_checks_current(tmp_p
         return case.control.start('local', case.task_id, case.script_id, case.digest,
             case.actor, case.runtime, verify_media=False)
     first = start()
-    job = case.repo.get_job_run('local', first['job']['id'])
+    job = case.repo.job_records.get_job_run('local', first['job']['id'])
     states = case.repo.list_creation_job_request_states('local', job.id)
     request = case.scheduler._get(states[0]['id'])
     assert request.unit_key.startswith('narration:segment:v1:section_1:')
@@ -5689,7 +5689,7 @@ def test_bounded_narration_start_unknown_and_other_member_keep_original(tmp_path
     case = _bounded_narration_start_case(tmp_path, monkeypatch)
     result = case.control.start('local', case.task_id, case.script_id, case.digest,
         case.actor, case.runtime, verify_media=False)
-    job = case.repo.get_job_run('local', result['job']['id'])
+    job = case.repo.job_records.get_job_run('local', result['job']['id'])
     original_requests = case.repo.list_creation_job_request_states('local', job.id)
     with pytest.raises(ExecutionControlRejected) as refused:
         case.control.start('local', case.task_id, case.script_id, case.digest,
@@ -5736,7 +5736,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
     assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
     result = case.control.start('local', case.task_id, case.script_id, case.digest,
         case.actor, case.runtime, verify_media=False)
-    job = repo.get_job_run('local', result['job']['id'])
+    job = repo.job_records.get_job_run('local', result['job']['id'])
     request = case.scheduler._get(repo.list_creation_job_request_states('local', job.id)[0]['id'])
     inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id,
         voice_profile_id=request.resources['voice_profile_id'], voice_version=request.resources['voice_version'])
@@ -5821,7 +5821,7 @@ def test_owner_idle_observation_survives_reader_close_and_borrows_writer(tmp_pat
         writer.rollback()
         assert observed(writer) == 'ready'
     assert case.generated == [] and case.merged == []
-    assert case.repo.get_job_run('local', case.job.id) == case.job
+    assert case.repo.job_records.get_job_run('local', case.job.id) == case.job
     case.scheduler.close()
 
 
@@ -5882,7 +5882,7 @@ def test_owner_submission_rechecks_after_authorization_and_borrows_transaction(t
                 case.owner.verify_submission(intent, case.actor, connection=writer)
             assert writer.in_transaction
             writer.rollback()
-        assert case.repo.get_job_run('local', case.job.id) == case.job
+        assert case.repo.job_records.get_job_run('local', case.job.id) == case.job
     assert case.repo.list_creation_job_request_states('local', case.job.id) == []
     assert case.generated == [] and case.merged == []
     case.scheduler.close()
@@ -6137,12 +6137,12 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
             assert [row['source_section_id'] for row in snapshot['narration_segments']] == ['section_1', 'section_2', 'section_3']
             assert snapshot['narration_segments'][0]['audio_reference'].endswith('paid-replacement')
             assert repo.get_narration_segment('local', case.task.id, case.rows[-1].id) == case.rows[-1]
-            assert repo.get_job_run('local', job.id).status == 'succeeded'
+            assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
             assert case.scheduler._get(final.request_id).state == 'done'
             assert len(repo.list_edit_operations('local', case.task.id)) == 1
         elif outcome == 'source_blocked':
             assert repo.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
-            assert repo.get_job_run('local', job.id).status == 'interrupted'
+            assert repo.job_records.get_job_run('local', job.id).status == 'interrupted'
             events = [e for e in repo.execution_records.list_task_events('local', case.task.id)
                 if e.job_id == job.id and e.event_type == 'narration_edit_result_reconciled']
             assert len(events) == 1 and events[0].payload['publication_blocked']
@@ -6328,7 +6328,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
         assert usage['unsettled'] and usage['used_output_bytes'] == checkpoint['pcm']['generated_bytes']
         if outcome == 'unknown':
             monkeypatch.setattr(case.repo, 'complete_creation_task_narration', original_complete)
-            assert case.executor.recover_pcm_unit(case.repo.get_job_run('local', case.job.id), case.actor, case.scheduler)
+            assert case.executor.recover_pcm_unit(case.repo.job_records.get_job_run('local', case.job.id), case.actor, case.scheduler)
     if outcome in {'normal', 'unknown'}:
         task = case.repo.get_creation_task('local', case.task_id)
         assert task.stage == 'montage' and task.narration_cache_key
@@ -7062,7 +7062,7 @@ def test_restore_receipt_metadata_unknown_conflict_refusal_and_identity(tmp_path
         assert conn.execute("SELECT count(*) FROM task_events WHERE id=?",
             (records.request_id(task.workspace_id,actor.member_id,refused_id)+'_refusal',)).fetchone()[0]==1
     assert repo.list_edit_operations(task.workspace_id,task.id)==[]
-    assert repo.list_job_runs(task.workspace_id,task.id)==[]
+    assert repo.job_records.list_job_runs(task.workspace_id,task.id)==[]
 
 
 def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path, monkeypatch):
@@ -7114,4 +7114,4 @@ def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path
     replay = restore.execute(command,actor=actor,request_id=request_id)
     assert replay.operation==operation and replay.restore_request==receipt
     assert repo.list_timeline_versions(task.workspace_id,task.id)==before
-    assert repo.list_job_runs(task.workspace_id,task.id)==[]
+    assert repo.job_records.list_job_runs(task.workspace_id,task.id)==[]

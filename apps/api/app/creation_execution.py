@@ -133,7 +133,7 @@ class CreationStageGrantContext:
         authorizations = owner.task_authorizations
         if authorizations is None:
             return None  # An explicitly configured diagnostic owner keeps its live verifier.
-        job = owner.repository.get_job_run(self.grant.workspace_id,self.grant.owner_id)
+        job = owner.repository.job_records.get_job_run(self.grant.workspace_id,self.grant.owner_id)
         if job.task_id != task_id or actor.workspace_id != self.grant.workspace_id:
             return "unauthorized"
         operation = ("render" if self.grant.unit_key.startswith("render:") else
@@ -635,7 +635,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                     or "render_input_timeline_version_id" not in version.snapshot
                     or version.parent_version_id != version.snapshot["render_input_timeline_version_id"]):
                 raise ValueError("当前成片版本缺少本次许可的原始输入")
-            inner = repository.get_job_run(task.workspace_id, transform_id.removeprefix("transform_"))
+            inner = repository.job_records.get_job_run(task.workspace_id, transform_id.removeprefix("transform_"))
             transform = repository.lineage_records.get_transform_run(task.workspace_id, transform_id)
             if (inner.task_id != task.id or inner.kind != "creation_task_montage_render"
                     or inner.status != "succeeded" or transform.status != "succeeded"
@@ -943,7 +943,7 @@ class CreationJobOwnerVerifier:
 
     def render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
         if self.packet_copy_assembly is not None and job is None and request is not None:
-            job = self.repository.get_job_run(task.workspace_id, request.owner_id, connection=conn)
+            job = self.repository.job_records.get_job_run(task.workspace_id, request.owner_id, connection=conn)
         if self.audio_delivery is not None and job is not None:
             adoption = self.audio_delivery.adoption_recovery.unit_facts(job, actor, self, request=request, connection=conn)
             if adoption is not None:
@@ -972,7 +972,7 @@ class CreationJobOwnerVerifier:
             raise ValueError("人物组合 CPU 成片专属预算尚未标定" if plan.presenter_share_target else "CPU 成片资源预算尚未配置")
         mix_facts = self.audio_mix_facts
         if self.audio_assembly is not None and not plan.presenter_share_target:
-            job = job or (self.repository.get_job_run(task.workspace_id, request.owner_id, connection=conn) if request is not None else None)
+            job = job or (self.repository.job_records.get_job_run(task.workspace_id, request.owner_id, connection=conn) if request is not None else None)
             if job is not None:
                 row = conn.execute('SELECT payload FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=? AND id=?',
                     (task.workspace_id, task.id, task.montage_plan_id)).fetchone()
@@ -1247,7 +1247,7 @@ class CreationJobOwnerVerifier:
                 return self.pcm_assembly_baseline(request, reader, original_recovery=original_recovery)
         if request.resources.get('execution_mode') != 'cpu_pcm_wav_assembly':
             raise RecoveryBlocked('原请求不是PCM组装许可')
-        job = self.repository.get_job_run(request.workspace_id, request.owner_id, connection=conn)
+        job = self.repository.job_records.get_job_run(request.workspace_id, request.owner_id, connection=conn)
         if job.kind == KIND:
             job, snapshot, event = self._snapshot_facts(conn, request.workspace_id, request.owner_id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
@@ -1265,7 +1265,7 @@ class CreationJobOwnerVerifier:
 
     def migrate_narration_request(self, conn, old, actor, *, source_preparation, write_guard=None):
         from app.creation.narration_pcm import verify_narration_source
-        current = self.repository.get_job_run(old.workspace_id, old.owner_id, connection=conn)
+        current = self.repository.job_records.get_job_run(old.workspace_id, old.owner_id, connection=conn)
         revision = None
         if current.kind == NARRATION_EDIT_KIND:
             job, snapshot, event = self._snapshot_facts(conn, old.workspace_id, old.owner_id)
@@ -1422,7 +1422,7 @@ class CreationJobOwnerVerifier:
             return valid
 
     def _snapshot_facts(self, conn, workspace_id, job_id):
-        job = self.repository.get_job_run(workspace_id, job_id, connection=conn)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=conn)
         event = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start', connection=conn)
         if event.task_id != job.task_id or event.job_id != job.id:
             raise KeyError('创作任务或开始记录不存在')
@@ -1435,7 +1435,7 @@ class CreationJobOwnerVerifier:
         ).fetchone()
         if row is None:
             raise KeyError(job_id)
-        job = self.repository._job_run_from_row(row)
+        job = self.repository.job_records.job_run_from_row(row)
         task_row = conn.execute(
             "SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
             (workspace_id, job.task_id),
@@ -2190,7 +2190,7 @@ class CreationJobUnitExecutor:
     def _pause_for_quit(self, grant, scheduler):
         if not self._application_quit.is_set():
             return False
-        if self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == "cancelled":
+        if self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id).status == "cancelled":
             return False  # A prior explicit user cancellation keeps its terminal meaning.
         scheduler.defer_unit(grant, reason="worker_interrupted",
             retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=1),
@@ -2200,7 +2200,7 @@ class CreationJobUnitExecutor:
         return True
 
     def _write_interrupted(self, conn, grant, *, scheduler, stage, reason, decision=None, permit_retained=False):
-        job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+        job = self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id)
         owner = scheduler.owners
         if hasattr(owner, "registrations"):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
@@ -2301,7 +2301,7 @@ class CreationJobUnitExecutor:
                                   grant.workspace_id, row["task_id"]))
         if row["status"] == "running":
             if status == 'succeeded' and final_output_refs is not None:
-                self.repository.finish_job_run(grant.workspace_id, grant.owner_id, status='succeeded',
+                self.repository.job_records.finish_job_run(grant.workspace_id, grant.owner_id, status='succeeded',
                     output_refs=final_output_refs, connection=conn)
             else:
                 changed = conn.execute(
@@ -2484,7 +2484,7 @@ class CreationJobUnitExecutor:
                     current_task.updated_at = datetime.now(timezone.utc)
                     conn.execute('UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?',
                         (json.dumps(asdict(current_task), default=str), current_task.updated_at.isoformat(), job.workspace_id, job.task_id))
-                    self.segments._validate_visual_decision(self.repository.get_job_run(job.workspace_id, job.id, connection=conn),
+                    self.segments._validate_visual_decision(self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn),
                         current_task, actor, owner, prepared.payload, connection=conn)
                     self.segments.persist_video_preparation_for_request(prepared, request_id, connection=conn)
                     self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_narration_recovered_{generation}',
@@ -2740,7 +2740,7 @@ class CreationJobUnitExecutor:
                     context.narration_output_usage[0] is None or context.narration_output_usage[0]>0
                     or Path(resources['pcm_assembly']['receipt_path']+'.manifest.json').exists()):
                 context.narration_output_usage[0]=None
-                if self.repository.get_job_run(job.workspace_id,job.id).status=='cancelled':
+                if self.repository.job_records.get_job_run(job.workspace_id,job.id).status=='cancelled':
                     scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,
                         checkpoint_write=lambda conn,current:self._checkpoint(conn,current,status='cancelled',
                             reason='user_cancelled_result_unknown',stage='narration'),cancelled=True)
@@ -2750,7 +2750,7 @@ class CreationJobUnitExecutor:
             if isinstance(exc, RecoveryBlocked) and not (
                     isinstance(exc, HostResourceRefusal) and exc.recoverable_pressure):
                 raise
-            cancelled = self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled'
+            cancelled = self.repository.job_records.get_job_run(job.workspace_id, job.id).status == 'cancelled'
             quitting = self._application_quit.is_set() and not cancelled
             pressure = isinstance(exc, HostResourceRefusal) and exc.recoverable_pressure
             diagnostic = getattr(exc, 'command_diagnostics', None)
@@ -2796,13 +2796,13 @@ class CreationJobUnitExecutor:
         cancellation = threading.Event()
         context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources['timeout_seconds'] - elapsed, resources['max_output_bytes'], resources.get('threads', 1), cancellation)
         self.register_cancellation(grant.request_id, cancellation)
-        job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+        job = self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id)
         try:
             context.check()
             if job.status == 'running':
                 with self.repository._connect() as conn:
                     conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
-            job = self.repository.claim_job_run(job.workspace_id, job.id)
+            job = self.repository.job_records.claim_job_run(job.workspace_id, job.id)
             if stage == 'person_render':
                 self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_person_render_running_{grant.request_id}_{grant.generation}', workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage', payload={'stage': stage, 'status': 'running'}, created_at=datetime.now(timezone.utc)))
             current_task = self.repository.get_creation_task(job.workspace_id, job.task_id)
@@ -2882,7 +2882,7 @@ class CreationJobUnitExecutor:
             if natural_exit is not None and natural_exit != 0:
                 reason = diagnostics['stderr'].decode('utf-8', errors='replace')[-4000:]
                 scheduler.fail_unit(grant, reason=f'creation_{stage}_failed', failure_write=lambda conn, current: self._checkpoint(conn, current, status='failed', reason=reason or f'worker exit {natural_exit}', stage=stage))
-            elif self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled' or cancellation.is_set():
+            elif self.repository.job_records.get_job_run(job.workspace_id, job.id).status == 'cancelled' or cancellation.is_set():
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='cancelled', stage=stage), cancelled=True)
             else:
                 scheduler.defer_unit(grant, reason='resource_pressure',
@@ -2899,7 +2899,7 @@ class CreationJobUnitExecutor:
         except Exception as exc:
             if self._pause_for_quit(grant, scheduler):
                 return
-            if self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled':
+            if self.repository.job_records.get_job_run(job.workspace_id, job.id).status == 'cancelled':
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._checkpoint(conn, current, status='cancelled', stage=stage), cancelled=True)
             elif isinstance(exc, PermissionError):
                 if not self._defer_permission_loss(grant, scheduler):
@@ -2922,7 +2922,7 @@ class CreationJobUnitExecutor:
         if row["status"] == "cancelled" and status != "cancelled":
             raise ValueError("已取消的人物编辑不能提交版本")
         if status == "succeeded":
-            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
+            job = self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
             task = self.repository.get_creation_task(grant.workspace_id, job.task_id, connection=conn)
             event = self.repository.execution_records.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
             if event.task_id != task.id or event.job_id != job.id:
@@ -2955,7 +2955,7 @@ class CreationJobUnitExecutor:
         cancellation = threading.Event()
         self.register_cancellation(grant.request_id, cancellation)
         try:
-            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+            job = self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id)
             with self.repository._connect() as conn:
                 row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()
                 permit = conn.execute('SELECT granted_at_utc FROM device_permit WHERE id=1').fetchone()
@@ -2968,7 +2968,7 @@ class CreationJobUnitExecutor:
                 with self.repository._connect() as conn:
                     conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
             if job.status != 'cancelled':
-                job = self.repository.claim_job_run(job.workspace_id, job.id)
+                job = self.repository.job_records.claim_job_run(job.workspace_id, job.id)
             context.check()
             event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start')
             commit = self.person_stage.prepare_edit(job.workspace_id, job.task_id, context, event.payload['edit_proposal_id'])
@@ -2981,7 +2981,7 @@ class CreationJobUnitExecutor:
                 return
             if isinstance(exc, PermissionError) and self._defer_permission_loss(grant, scheduler):
                 return
-            cancelled = isinstance(exc, GrantedCommandCancelled) or cancellation.is_set() or self.repository.get_job_run(grant.workspace_id, grant.owner_id).status == 'cancelled'
+            cancelled = isinstance(exc, GrantedCommandCancelled) or cancellation.is_set() or self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id).status == 'cancelled'
             if cancelled:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, 'cancelled', reason='user_cancelled'), cancelled=True)
             else:
@@ -3003,7 +3003,7 @@ class CreationJobUnitExecutor:
         if row["status"] == "cancelled" and status != "cancelled":
             raise ValueError("已取消的配音编辑不能提交版本")
         if status == "succeeded":
-            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
+            job = self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
             task = self.repository.get_creation_task(grant.workspace_id, job.task_id, connection=conn)
             event = self.repository.execution_records.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
             if event.task_id != task.id or event.job_id != job.id:
@@ -3081,7 +3081,7 @@ class CreationJobUnitExecutor:
                 elapsed_seconds=max(0,time.monotonic()-started),output_bytes=measured,connection=conn)
         pcm_preparation=None
         def next_unit(conn,current):
-            current_job=self.repository.get_job_run(job.workspace_id,job.id,connection=conn)
+            current_job=self.repository.job_records.get_job_run(job.workspace_id,job.id,connection=conn)
             current_task=self.repository.get_creation_task(job.workspace_id,job.task_id,connection=conn)
             key,_=owner.narration_edit_facts(current_job,current_task,event,plan,connection=conn,pcm_preparation=pcm_preparation)
             intent=SubmissionIntent(job.workspace_id,DEVICE_OWNER_TYPE,job.id,job.input_digest,key,SchedulePolicy())
@@ -3118,7 +3118,7 @@ class CreationJobUnitExecutor:
             pcm_started=resources.get('execution_mode')=='cpu_pcm_wav_assembly' and (
                 context.narration_output_usage[0] is None or context.narration_output_usage[0]>0
                 or Path(resources['pcm_assembly']['receipt_path']+'.manifest.json').exists())
-            cancelled=self.repository.get_job_run(job.workspace_id,job.id).status=='cancelled'
+            cancelled=self.repository.job_records.get_job_run(job.workspace_id,job.id).status=='cancelled'
             if context.narration_output_usage[0] is None or pcm_started:
                 context.narration_output_usage[0]=None
                 if cancelled:
@@ -3208,7 +3208,7 @@ class CreationJobUnitExecutor:
                 raise RecoveryBlocked('原组装单元消耗未知，须先核对原回执，不能新许可清账')
             if (packet_copy or delivery or picture_leaf or adoption) and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
                 raise PermissionError('画面归约在启动前已撤权或父事实变化')
-            job = self.repository.claim_job_run(job.workspace_id, job.id, connection=conn)
+            job = self.repository.job_records.claim_job_run(job.workspace_id, job.id, connection=conn)
             family = 'delivery_adoption' if adoption else 'picture_fragment' if picture_leaf else 'audio_delivery' if delivery else 'picture_packet' if packet_copy else 'audio_assembly'
             started_id = f'event_{job.id}_{family}_started_{grant.generation}'
             receipt_id = (f'event_{job.id}_{family}_usage_{grant.generation}' if packet_copy or delivery or picture_leaf or adoption else
@@ -3268,7 +3268,7 @@ class CreationJobUnitExecutor:
                 scopes.settle(conn, job.workspace_id, job.id, request_id=current.request_id,
                     permit_generation=current.generation, receipt_id=receipt_id)
         def next_unit(conn, current):
-            latest = self.repository.get_job_run(job.workspace_id, job.id, connection=conn)
+            latest = self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn)
             if latest.status == 'succeeded':
                 return None
             if picture_leaf:
@@ -3325,7 +3325,7 @@ class CreationJobUnitExecutor:
             if (adoption or delivery and resources['kind'] == 'creation_final_mux') and self.picture_fragments is not None:
                 self._notify_render_completed(job)
         except Exception as exc:
-            cancelled = isinstance(exc, GrantedCommandCancelled) or self.repository.get_job_run(job.workspace_id, job.id).status == 'cancelled'
+            cancelled = isinstance(exc, GrantedCommandCancelled) or self.repository.job_records.get_job_run(job.workspace_id, job.id).status == 'cancelled'
             if self._application_quit.is_set() and not cancelled or isinstance(exc, HostResourceRefusal) and exc.recoverable_pressure:
                 def pause(conn, current):
                     settle(conn, current)
@@ -3372,7 +3372,7 @@ class CreationJobUnitExecutor:
         try:
             scheduler.assert_grant(grant)
         except PermissionError:
-            if self.repository.get_job_run(grant.workspace_id, grant.owner_id).status != "cancelled":
+            if self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id).status != "cancelled":
                 if self._defer_permission_loss(grant, scheduler):
                     return
                 raise
@@ -3398,7 +3398,7 @@ class CreationJobUnitExecutor:
         cancellation = threading.Event()
         self.register_cancellation(grant.request_id, cancellation)
         try:
-            job = self.repository.get_job_run(grant.workspace_id, grant.owner_id)
+            job = self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id)
             if job.status == "running":
                 # Host recovery has already proved the prior child tree released.
                 with self.repository._connect() as conn:
@@ -3406,9 +3406,9 @@ class CreationJobUnitExecutor:
                                  "AND kind=? AND status='running'",
                                  (grant.workspace_id, grant.owner_id, KIND))
             try:
-                job = self.repository.claim_job_run(grant.workspace_id, grant.owner_id)
+                job = self.repository.job_records.claim_job_run(grant.workspace_id, grant.owner_id)
             except ValueError:
-                if self.repository.get_job_run(grant.workspace_id, grant.owner_id).status != "cancelled":
+                if self.repository.job_records.get_job_run(grant.workspace_id, grant.owner_id).status != "cancelled":
                     raise
                 # No child has been launched by this executor yet. The scheduler
                 # still verifies that every previously registered child exited.
@@ -3443,7 +3443,7 @@ class CreationJobUnitExecutor:
                         raise ValueError("本次已提交成片未通过当前许可内校验，未重复渲染")
                 else:
                     self.render_action(job.workspace_id, job.task_id, context)
-                    if not cancellation.is_set() and self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
+                    if not cancellation.is_set() and self.repository.job_records.get_job_run(job.workspace_id, job.id).status != "cancelled":
                         if not self.render_is_valid(job.workspace_id, job.task_id, context):
                             raise ValueError("成片产物未通过当前许可内的完整性与媒体校验")
             except GrantedCommandCancelled:
@@ -3460,7 +3460,7 @@ class CreationJobUnitExecutor:
                 natural_exit = diagnostics.get("before_termination_returncode") if diagnostics else None
                 if natural_exit is not None and natural_exit != 0:
                     raise  # A worker error is not a recoverable-pressure retry.
-                if cancellation.is_set() or self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+                if cancellation.is_set() or self.repository.job_records.get_job_run(job.workspace_id, job.id).status == "cancelled":
                     cancellation.set()
                 else:
                     # This existing gate proves process/resource release before
@@ -3476,7 +3476,7 @@ class CreationJobUnitExecutor:
             except Exception as exc:
                 if self._pause_for_quit(grant, scheduler):
                     return
-                if cancellation.is_set() or self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+                if cancellation.is_set() or self.repository.job_records.get_job_run(job.workspace_id, job.id).status == "cancelled":
                     cancellation.set()
                 else:
                     if isinstance(exc, PermissionError) and self._defer_permission_loss(grant, scheduler):
@@ -3490,14 +3490,14 @@ class CreationJobUnitExecutor:
                                             failure_write=lambda conn, current: self._checkpoint(
                                                 conn, current, status="failed", reason=reason))
                     except ValueError:
-                        if self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
+                        if self.repository.job_records.get_job_run(job.workspace_id, job.id).status != "cancelled":
                             raise
                         scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                                                 checkpoint_write=lambda conn, current: self._checkpoint(
                                                     conn, current, status="cancelled", reason="user_cancelled"),
                                                 cancelled=True)
                     return
-            if cancellation.is_set() or self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+            if cancellation.is_set() or self.repository.job_records.get_job_run(job.workspace_id, job.id).status == "cancelled":
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                                         checkpoint_write=lambda conn, current: self._checkpoint(
                                             conn, current, status="cancelled", reason="user_cancelled"),
@@ -3513,7 +3513,7 @@ class CreationJobUnitExecutor:
                                         checkpoint_write=lambda conn, current: self._checkpoint(
                                             conn, current, status="succeeded", output=output))
             except PermissionError:
-                if self.repository.get_job_run(job.workspace_id, job.id).status != "cancelled":
+                if self.repository.job_records.get_job_run(job.workspace_id, job.id).status != "cancelled":
                     if self._defer_permission_loss(grant, scheduler):
                         return
                     raise
@@ -3559,7 +3559,7 @@ class CreationExecution:
     ) -> None:
         self.repository = repository
         self.budget_policy_for = budget_policy_for
-        self.runtime = TaskRuntime(repository)
+        self.runtime = TaskRuntime(repository.job_records)
         self.actions = {
             "montage_plan": run_montage_plan,
             "render": run_render,
@@ -3745,14 +3745,14 @@ class CreationExecution:
         return run
 
     def jobs(self, workspace_id: str, task_id: str) -> list[JobRun]:
-        return [job for job in self.repository.list_job_runs(workspace_id, task_id) if job.kind == KIND]
+        return [job for job in self.repository.job_records.list_job_runs(workspace_id, task_id) if job.kind == KIND]
 
     def latest(self, workspace_id: str, task_id: str) -> JobRun | None:
         jobs = self.jobs(workspace_id, task_id)
         return jobs[-1] if jobs else None
 
     def execute(self, workspace_id: str, job_id: str) -> JobRun:
-        job = self.repository.get_job_run(workspace_id, job_id)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id)
         if job.kind != KIND:
             raise ValueError("不是连续制作作业")
         event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
@@ -3775,7 +3775,7 @@ class CreationExecution:
         if write_guard is not None:
             if job.status in {"succeeded","failed","cancelled"}:
                 return job
-            return self.repository.finish_job_run(workspace_id,job.id,status="cancelled",failure_reason="user_cancelled",
+            return self.repository.job_records.finish_job_run(workspace_id,job.id,status="cancelled",failure_reason="user_cancelled",
                 impact="当前阶段在下一个安全边界停止；此前有效产物保留。",repair_action="需要时点击继续制作。",write_guard=write_guard)
         return self.runtime.cancel(
             workspace_id, job.id,
@@ -3784,7 +3784,7 @@ class CreationExecution:
         )
 
     def _work(self, context: JobContext) -> JobResult:
-        job = self.repository.get_job_run(context.workspace_id, context.job_id)
+        job = self.repository.job_records.get_job_run(context.workspace_id, context.job_id)
         event = self.repository.execution_records.get_task_event(context.workspace_id, f"event_{job.id}_start")
         script_id = str(event.payload["script_id"])
         workspace_id, task_id = context.workspace_id, job.task_id
@@ -3887,7 +3887,7 @@ class CreationExecution:
         self.repository.execution_records.append_task_event(
             TaskEvent(
                 id=f"event_{uuid4().hex}", workspace_id=context.workspace_id,
-                task_id=self.repository.get_job_run(context.workspace_id, context.job_id).task_id,
+                task_id=self.repository.job_records.get_job_run(context.workspace_id, context.job_id).task_id,
                 job_id=context.job_id, event_type="creation_execution_stage",
                 payload={"stage": stage, "status": status,
                          **({"reason": reason} if reason else {}),

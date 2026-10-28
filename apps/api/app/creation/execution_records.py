@@ -258,6 +258,19 @@ class ExecutionRecordStore:
         )
 
     @staticmethod
+    def registered_job_output_refs(connection, workspace_id, task_id, job_id):
+        return {
+            str(artifact_row["logical_ref"])
+            for artifact_row in connection.execute(
+                """
+                SELECT logical_ref FROM artifact_records
+                WHERE workspace_id = ? AND task_id = ? AND producer_job_id = ?
+                """,
+                (workspace_id, task_id, job_id),
+            ).fetchall()
+        }
+
+    @staticmethod
     def output_producers(connection, workspace_id, task_id, references):
         placeholders = ", ".join("?" for _ in references)
         rows = connection.execute(

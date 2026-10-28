@@ -177,7 +177,7 @@ class RenderStageUseCase:
             if not isinstance(transform_id, str) or not transform_id.startswith("transform_job_"):
                 raise ValueError("成片恢复缺少内层渲染记录")
             inner_id = transform_id.removeprefix("transform_")
-            inner_job = self.repository.get_job_run(workspace_id, inner_id)
+            inner_job = self.repository.job_records.get_job_run(workspace_id, inner_id)
             transform = self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             output_refs = [plan.output_path, plan.subtitle_path]
             if (input_digest != original_digest or inner_job.task_id != task.id
@@ -201,7 +201,7 @@ class RenderStageUseCase:
         base_idempotency_key = f"montage-render:{task.id}:{input_digest}"
         matching_jobs = [
             existing
-            for existing in self.repository.list_job_runs(workspace_id, task.id)
+            for existing in self.repository.job_records.list_job_runs(workspace_id, task.id)
             if existing.kind == "creation_task_montage_render"
             and existing.input_digest == input_digest
         ]
@@ -334,7 +334,7 @@ class RenderStageUseCase:
         )
 
         def render_job(context) -> JobResult:
-            running_job = self.repository.get_job_run(
+            running_job = self.repository.job_records.get_job_run(
                 context.workspace_id, context.job_id
             )
             try:
@@ -732,7 +732,7 @@ class RenderStageUseCase:
             )
             if registered is None or registered.producer_job_id != transform.job_id:
                 return False
-            job = self.repository.get_job_run(workspace_id, registered.producer_job_id)
+            job = self.repository.job_records.get_job_run(workspace_id, registered.producer_job_id)
             if (job.status != "succeeded" or job.task_id != task_id
                     or (render_input_digest is not None and job.kind != "creation_task_montage_render")
                     or job.output_refs != transform.output_refs

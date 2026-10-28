@@ -50,14 +50,14 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     assert changed.status_code == 200, changed.text
     operation = changed.json()["operation"]
     edit_version = state.repo.get_timeline_version("ws", operation["result_version_id"])
-    job = state.repo.create_job_run(JobRun("render", "ws", state.task.id, "creation_task_execution", "render", "declared-input"))
-    state.repo.claim_job_run("ws", job.id)
+    job = state.repo.job_records.create_job_run(JobRun("render", "ws", state.task.id, "creation_task_execution", "render", "declared-input"))
+    state.repo.job_records.claim_job_run("ws", job.id)
     source = {"workspace_id": "ws", "task_id": state.task.id, "member_id": state.member.member_id,
         "conversation_id": chat["id"], "assistant_turn_id": turn["id"], "expected_timeline_version_id": edit_version.id,
         "expected_timeline_sequence": edit_version.sequence}
     state.repo.execution_records.append_task_event(TaskEvent("located-render", "ws", state.task.id, job.id, "assistant_execution_located", {"source": source, "job_id": job.id}))
     def actual(*_):
-        return jsonable_encoder({"task_id": state.task.id, "job": asdict(state.repo.get_job_run("ws", job.id)), "video_ready": state.repo.get_job_run("ws", job.id).status == "succeeded"})
+        return jsonable_encoder({"task_id": state.task.id, "job": asdict(state.repo.job_records.get_job_run("ws", job.id)), "video_ready": state.repo.job_records.get_job_run("ws", job.id).status == "succeeded"})
     monkeypatch.setattr(main, "_read_bound_execution_result", actual)
     # The render-publication fact is isolated; no worker, model or decoding runs.
     monkeypatch.setattr(state.repo, "goal_render_request_row", lambda *_: {"owner_id": job.id, "state": "done"})
@@ -68,7 +68,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         snapshot = {key: value for key, value in edit_version.snapshot.items() if key != "subtitle_track_ids"}
         state.repo.create_timeline_version(replace(edit_version, id="render-version", parent_version_id=edit_version.id, sequence=edit_version.sequence+1,
             snapshot={**snapshot, "montage": rendered_montage, "transform_run_id": "declared-render", "creation_render_request_id": "published-render", "render_input_timeline_version_id": edit_version.id}))
-        state.repo.finish_job_run("ws", job.id, status="succeeded")
+        state.repo.job_records.finish_job_run("ws", job.id, status="succeeded")
     repo.finish_turn(turn["id"], "completed", "修改已保存；尚未重新生成视频。", {"kind": "task_turn", "response": {
         "reply": "修改已保存；尚未重新生成视频。", "execution_status": actual(), "edit_request": {"request_id": request_id, "status": "recorded"}},
         "goal_business_actions": [{"kind": "execution_status", "id": job.id}]})

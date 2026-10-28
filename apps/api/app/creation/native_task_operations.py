@@ -280,7 +280,7 @@ class NativeTaskOperations:
         try:
             with self.lock(root):
                 self.require_files_released(actor,origin['task_id'])
-                self.repository.claim_job_run(actor.workspace_id,job.id)
+                self.repository.job_records.claim_job_run(actor.workspace_id,job.id)
                 if action=='mkdir':
                     was_present = path.exists()
                     path.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -361,7 +361,7 @@ class NativeTaskOperations:
                     raise ValueError('声明输出需要明确的任务路径和用途')
                 self.path(root,output['path'],write=True)
         else:
-            source = self.repository.get_job_run(actor.workspace_id,arguments['execution_job_id'])
+            source = self.repository.job_records.get_job_run(actor.workspace_id,arguments['execution_job_id'])
             if source.kind not in {KIND,'native_task_file'} or source.task_id!=origin['task_id'] or source.status!='succeeded':
                 raise ValueError('仅能登记本任务已完成执行的真实文件')
         with self.lock(root):
@@ -377,7 +377,7 @@ class NativeTaskOperations:
         return self.read_job(job,actor)
 
     def find_original(self,actor,origin,request_id,operation,arguments):
-        job = self.repository.get_job_run_by_idempotency_key(actor.workspace_id,
+        job = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id,
             f'native:{origin["task_id"]}:{actor.member_id}:{request_id}')
         if job is None:
             return None
@@ -389,8 +389,8 @@ class NativeTaskOperations:
         return job
 
     def original_job(self,actor,origin,arguments):
-        job = (self.repository.get_job_run(actor.workspace_id,arguments['job_id']) if arguments.get('job_id') else
-            self.repository.get_job_run_by_idempotency_key(actor.workspace_id,
+        job = (self.repository.job_records.get_job_run(actor.workspace_id,arguments['job_id']) if arguments.get('job_id') else
+            self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id,
                 f'native:{origin["task_id"]}:{actor.member_id}:{arguments["request_id"]}'))
         if job is None or job.task_id!=origin['task_id'] or job.kind not in {KIND,'native_task_file'}:
             raise PermissionError('原执行不属于当前任务')
@@ -414,7 +414,7 @@ class NativeTaskOperations:
                     if source.tell()-offset>limit:
                         break
                     messages.append(json.loads(line));next_offset=source.tell()
-        job = self.repository.get_job_run(job.workspace_id,job.id)
+        job = self.repository.job_records.get_job_run(job.workspace_id,job.id)
         result = self.repository.native_operation_result(job.workspace_id,job.id) or {}
         requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
         return {'job_id':job.id,'request_id':self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload['request_id'],
@@ -430,7 +430,7 @@ class NativeTaskOperations:
             'waiting_reason':(requests[-1]['wait_reason'] or requests[-1]['last_failure_reason']) if requests else None}
 
     def verify_submission(self,intent,actor,owner,*,connection=None):
-        job = self.repository.get_job_run(intent.workspace_id,intent.owner_id,connection=connection)
+        job = self.repository.job_records.get_job_run(intent.workspace_id,intent.owner_id,connection=connection)
         event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start',connection=connection).payload
         from app.creation_execution import CreationExecutionActor
         task = self.require_actor(actor,job.task_id)
@@ -446,7 +446,7 @@ class NativeTaskOperations:
             'normal_make',event['resources'])
 
     def capture_local(self,request,conn,owner):
-        job = self.repository.get_job_run(request.workspace_id,request.owner_id,connection=conn)
+        job = self.repository.job_records.get_job_run(request.workspace_id,request.owner_id,connection=conn)
         event = self.repository.execution_records.get_task_event(request.workspace_id,f'event_{job.id}_start',connection=conn).payload
         from app.creation_execution import CreationExecutionActor
         actor = CreationExecutionActor.from_event(request.workspace_id,event)
@@ -556,14 +556,14 @@ class NativeTaskOperations:
     def execute(self,grant,scheduler,executor):
         from app.granted_subprocess import run_granted_command,GrantedCommandCancelled,GrantedCommandTimeout
         from app.creation_execution import CreationExecutionActor
-        job = self.repository.get_job_run(grant.workspace_id,grant.owner_id)
+        job = self.repository.job_records.get_job_run(grant.workspace_id,grant.owner_id)
         event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
         actor = CreationExecutionActor.from_event(job.workspace_id,event)
         root = self.task_root(actor,job.task_id)
         if job.attempt:
             raise RecoveryBlocked('已开始的通用执行须先对账，不自动重复')
         scheduler.assert_grant(grant)
-        job = self.repository.claim_job_run(job.workspace_id,job.id)
+        job = self.repository.job_records.claim_job_run(job.workspace_id,job.id)
         cancellation = threading.Event()
         executor.register_cancellation(grant.request_id,cancellation)
         resources = event['resources']; started=time.monotonic()
@@ -735,7 +735,7 @@ class NativeTaskOperations:
         artifact = self.repository.execution_records.get_artifact_record(actor.workspace_id,artifact_id)
         if artifact.task_id!=task_id:
             raise PermissionError('产物不属于原任务')
-        job = self.repository.get_job_run(actor.workspace_id,artifact.producer_job_id)
+        job = self.repository.job_records.get_job_run(actor.workspace_id,artifact.producer_job_id)
         if job.kind!=KIND or job.status!='succeeded' or artifact.logical_ref not in job.output_refs:
             raise ValueError('原产物尚未完成登记')
         actual = self.store.describe(artifact.logical_ref)
@@ -745,9 +745,9 @@ class NativeTaskOperations:
 
     def record_stopped(self,grant,scheduler,exc):
         def stopped(conn,current):
-            job = self.repository.get_job_run(current.workspace_id,current.owner_id,connection=conn)
+            job = self.repository.job_records.get_job_run(current.workspace_id,current.owner_id,connection=conn)
             if job.status=='running':
-                self.repository.finish_job_run(job.workspace_id,job.id,status='interrupted',failure_reason=str(exc),
+                self.repository.job_records.finish_job_run(job.workspace_id,job.id,status='interrupted',failure_reason=str(exc),
                     impact='通用执行停止与消耗尚待对账，原采用成果保留',repair_action='核对原进程、文件和许可后恢复',connection=conn)
         scheduler.record_owner_stop(grant,owner_database_path=self.repository.database_path,owner_write=stopped)
 
@@ -798,7 +798,7 @@ class NativeTaskOperations:
             process_result['published_output_bytes']+=published.size_bytes
             if published.sha256!=sha or published.size_bytes!=source_output['size_bytes']:
                 raise ValueError('登记期间工作文件已变化，未采用新内容')
-            source_job = self.repository.get_job_run(job.workspace_id,arguments['execution_job_id'])
+            source_job = self.repository.job_records.get_job_run(job.workspace_id,arguments['execution_job_id'])
             source_event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{source_job.id}_start').payload
             input_refs = [*source_job.output_refs,*source_event['arguments'].get('_input_refs',[])]
             artifact = ArtifactRecord(id=f'artifact_{job.id}_{index}',workspace_id=job.workspace_id,task_id=job.task_id,

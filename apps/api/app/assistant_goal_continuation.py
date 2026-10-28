@@ -495,7 +495,7 @@ class GoalResultProjection:
                     != (goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
                     or source.get("expected_timeline_version_id") != base_version or not self.source_belongs_to_goal(goal, source)):
                 continue
-            job = self.production.get_job_run(goal["workspace_id"], event.payload["job_id"])
+            job = self.production.job_records.get_job_run(goal["workspace_id"], event.payload["job_id"])
             if job.task_id == goal["task_id"] and job.kind == "creation_task_execution":
                 matches.append((source, job))
         return matches[0] if len(matches) == 1 else None
@@ -669,7 +669,7 @@ class GoalResultProjection:
         from app.graphic_sources import graphic_source_facts
         from app.task_audio import TASK_MEDIA_KIND, media_digest
 
-        job = self.production.get_job_run(goal["workspace_id"], job_id)
+        job = self.production.job_records.get_job_run(goal["workspace_id"], job_id)
         start = self.production.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
         source = start["arguments"]["_typed_source"]
         if (job.task_id != goal["task_id"] or job.kind != TASK_MEDIA_KIND or job.status != "succeeded"
@@ -938,7 +938,7 @@ class GoalResultProjection:
         if candidate["kind"] == "job":
             if not media_available:
                 return False
-            job = self.production.get_job_run(workspace_id, candidate["id"])
+            job = self.production.job_records.get_job_run(workspace_id, candidate["id"])
             start = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_start").payload
             if media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest:
                 self.mark(candidate)
@@ -1103,7 +1103,7 @@ class GoalResultProjection:
             elif actual.get("job_id"):
                 if not runtime_available:
                     return False
-                job = self.production.get_job_run(workspace_id, actual["job_id"])
+                job = self.production.job_records.get_job_run(workspace_id, actual["job_id"])
                 if job.task_id != task_id:
                     self.mark(candidate)
                     return True

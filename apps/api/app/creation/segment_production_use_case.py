@@ -242,7 +242,7 @@ class SegmentProductionUseCase:
         event = self.repository.find_segment_revision_request(workspace_id, task_id, actor.member_id, request_id)
         if event is None:
             raise KeyError(request_id)
-        job = self.repository.get_job_run(workspace_id, event.job_id)
+        job = self.repository.job_records.get_job_run(workspace_id, event.job_id)
         requests = self.repository.list_creation_job_request_states(workspace_id, job.id)
         result = self.repository.segment_revision_result(workspace_id, job.id)
         task = self.repository.get_creation_task(workspace_id, task_id)
@@ -556,7 +556,7 @@ class SegmentProductionUseCase:
         if offset<0 or not 1<=limit<=8:
             raise ValueError('画面候选分页范围无效')
         task = self.require_actor(workspace_id,task_id,actor)
-        job = self.repository.get_job_run(workspace_id,job_id)
+        job = self.repository.job_records.get_job_run(workspace_id,job_id)
         if job.task_id != task_id:
             raise PermissionError('画面决定不属于当前任务')
         start = self.repository.execution_records.get_task_event(workspace_id,f'event_{job_id}_start').payload
@@ -631,7 +631,7 @@ class SegmentProductionUseCase:
             if write_guard is not None:
                 write_guard(conn)
             task = self.require_actor(workspace_id,task_id,actor,connection=conn)
-            job = self.repository.get_job_run(workspace_id,job_id,connection=conn)
+            job = self.repository.job_records.get_job_run(workspace_id,job_id,connection=conn)
             waiting = self.visual_decision(job,section_id,connection=conn)
             if waiting is None or job.task_id != task_id:
                 raise ValueError('原段落画面决定不存在')
@@ -672,7 +672,7 @@ class SegmentProductionUseCase:
             'device_request_id':request.id,'replayed':replayed}
 
     def capture_local(self, request, conn, owner):
-        job = self.repository.get_job_run(request.workspace_id,request.owner_id,connection=conn)
+        job = self.repository.job_records.get_job_run(request.workspace_id,request.owner_id,connection=conn)
         task = self.repository.get_creation_task(request.workspace_id,job.task_id,connection=conn)
         event = self.repository.execution_records.get_task_event(request.workspace_id,f'event_{job.id}_start',connection=conn).payload
         actor = self.actor_from_event(request.workspace_id,event)
@@ -701,7 +701,7 @@ class SegmentProductionUseCase:
         def check(current):
             if read(current) != before:
                 return 'stale'
-            current_job = self.repository.get_job_run(request.workspace_id,request.owner_id,connection=current)
+            current_job = self.repository.job_records.get_job_run(request.workspace_id,request.owner_id,connection=current)
             if current_job.status not in {'queued','interrupted','running'}:
                 return 'stale'
             verdict = owner.authorization_verdict(task,actor,'narration_edit' if event.get('command') else 'render',
@@ -726,7 +726,7 @@ class SegmentProductionUseCase:
         return revision_execution_key(job.input_digest, reference)
 
     def verify_submission(self, intent, actor, owner, *, connection=None, reference_preparation=None):
-        job = self.repository.get_job_run(intent.workspace_id, intent.owner_id, connection=connection)
+        job = self.repository.job_records.get_job_run(intent.workspace_id, intent.owner_id, connection=connection)
         event = self.repository.execution_records.get_task_event(intent.workspace_id, f'event_{job.id}_start', connection=connection).payload
         task = self.require_actor(intent.workspace_id, job.task_id, actor, connection=connection)
         if actor != self.actor_from_event(intent.workspace_id, event) or job.status not in {'queued','interrupted','running'}:
@@ -785,7 +785,7 @@ class SegmentProductionUseCase:
             if request.unit_key.startswith('segment_video:'):
                 section_id = request.unit_key.removeprefix('segment_video:').rpartition(':')[0]
                 prepared = self.repository.execution_records.get_task_event(request.workspace_id,self.video_preparation_id(
-                    self.repository.get_job_run(request.workspace_id,request.owner_id,connection=connection),section_id),connection=connection)
+                    self.repository.job_records.get_job_run(request.workspace_id,request.owner_id,connection=connection),section_id),connection=connection)
                 for source in prepared.payload['sources']:
                     stat = Path(source['path']).stat()
                     if (stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns) != (source['size'],source['mtime_ns'],source['ctime_ns']):
@@ -839,7 +839,7 @@ class SegmentProductionUseCase:
             if conflict is not None:
                 prepared = replace(prepared, payload={**prepared.payload, 'request_id': conflict.payload['request_id']})
             def verify_preparation(conn):
-                current_job = self.repository.get_job_run(job.workspace_id, job.id, connection=conn)
+                current_job = self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn)
                 current_task = self.repository.get_creation_task(job.workspace_id, task.id, connection=conn)
                 self._validate_visual_decision(current_job, current_task,
                     self.actor_from_event(job.workspace_id, event), owner, prepared.payload, connection=conn)
@@ -853,7 +853,7 @@ class SegmentProductionUseCase:
         from app.device_scheduler import RecoveryBlocked
         reason = str(exc) if isinstance(exc, RecoveryBlocked) else f'段落执行停止：{type(exc).__name__}'
         def stopped(conn, current):
-            job = self.repository.get_job_run(current.workspace_id,current.owner_id,connection=conn)
+            job = self.repository.job_records.get_job_run(current.workspace_id,current.owner_id,connection=conn)
             if job.status == 'running':
                 return self.repository.checkpoint_segment_unit(current,status='interrupted',reason=reason,connection=conn)
         scheduler.record_owner_stop(grant,owner_database_path=self.repository.database_path,owner_write=stopped)
@@ -870,7 +870,7 @@ class SegmentProductionUseCase:
 
     def resume_request(self,workspace_id,task_id,request_id,actor,*,runtime,write_guard=None):
         result = self.read_request(workspace_id,task_id,request_id,actor)
-        job = self.repository.get_job_run(workspace_id,result['job_id'])
+        job = self.repository.job_records.get_job_run(workspace_id,result['job_id'])
         start = self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start').payload
         section_id = start['command']['section_id']
         decision = self.visual_decision(job,section_id)
@@ -889,7 +889,7 @@ class SegmentProductionUseCase:
                 with self.repository._connect() as conn:
                     conn.execute('BEGIN IMMEDIATE')
                     if write_guard is not None: write_guard(conn)
-                    current = self.repository.get_job_run(workspace_id, job.id, connection=conn)
+                    current = self.repository.job_records.get_job_run(workspace_id, job.id, connection=conn)
                     if current.status != 'queued':
                         raise ValueError('原段落作业已停止，不能保存恢复画面；原音频与取消事实保留')
                     self.verify_revision(workspace_id, task_id, actor, command, connection=conn)
@@ -909,14 +909,14 @@ class SegmentProductionUseCase:
                 raise ValueError('原画面决定输入已变化，不能恢复')
             return self.read_request(workspace_id,task_id,request_id,actor)
         if not result['device_requests'] and result['status']=='queued':
-            job = self.repository.get_job_run(workspace_id,result['job_id'])
+            job = self.repository.job_records.get_job_run(workspace_id,result['job_id'])
             runtime.scheduler.submit(SubmissionIntent(workspace_id,'creation_job',job.id,job.input_digest,
                 self.revision_key(job),SchedulePolicy()),actor)
             runtime.wake()
             return self.read_request(workspace_id,task_id,request_id,actor)
         if result['status'] == 'queued':
             from app.creation_execution import migrate_creation_narration_request
-            job = self.repository.get_job_run(workspace_id, result['job_id'])
+            job = self.repository.job_records.get_job_run(workspace_id, result['job_id'])
             migrate_creation_narration_request(self.repository, runtime.scheduler, job, actor, write_guard=write_guard)
             runtime.wake()
             return self.read_request(workspace_id, task_id, request_id, actor)
@@ -933,7 +933,7 @@ class SegmentProductionUseCase:
         return self.read_request(workspace_id,task_id,request_id,actor)
 
     def recover(self,runtime):
-        for job in self.repository.list_pending_task_media_jobs(SEGMENT_REVISION_KIND):
+        for job in self.repository.job_records.list_pending_task_media_jobs(SEGMENT_REVISION_KIND):
             event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start')
             actor = self.actor_from_event(job.workspace_id,event.payload)
             owner = runtime.registrations['creation_job'].owner
@@ -956,7 +956,7 @@ class SegmentProductionUseCase:
         owner = scheduler.owners
         if hasattr(owner,'registrations'):
             owner = owner.registrations['creation_job'].owner
-        if self.repository.get_job_run(grant.workspace_id,grant.owner_id).status=='cancelled':
+        if self.repository.job_records.get_job_run(grant.workspace_id,grant.owner_id).status=='cancelled':
             scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,cancelled=True,
                 checkpoint_write=lambda conn,current:self.repository.checkpoint_segment_unit(current,
                     status='cancelled',reason='user_cancelled',connection=conn))
@@ -998,7 +998,7 @@ class SegmentProductionUseCase:
                 output_bytes=max(measured_bytes,retained_bytes,context.narration_output_usage[0]),connection=conn)
 
         def next_unit(conn,current):
-            updated = self.repository.get_job_run(job.workspace_id,job.id,connection=conn)
+            updated = self.repository.job_records.get_job_run(job.workspace_id,job.id,connection=conn)
             if command is not None:
                 if self.waiting_for_visual_decision(updated,connection=conn):
                     return None
@@ -1151,7 +1151,7 @@ class SegmentProductionUseCase:
                 settle(conn,current)
                 return self.repository.checkpoint_segment_unit(current,status='interrupted' if quitting or pressure else 'failed',
                     reason=reason or type(exc).__name__,connection=conn)
-            cancelled = self.repository.get_job_run(job.workspace_id,job.id).status=='cancelled'
+            cancelled = self.repository.job_records.get_job_run(job.workspace_id,job.id).status=='cancelled'
             measure_retained()
             if cancelled:
                 def cancel_write(conn,current):

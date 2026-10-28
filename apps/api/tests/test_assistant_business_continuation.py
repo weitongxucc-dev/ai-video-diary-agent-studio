@@ -102,7 +102,7 @@ def test_lifecycle_driver_completes_preview_and_projects_user_decision_once(stat
     events = outcome["events"]
     assert main._reconcile_assistant_business_results() == 0
     assert current(state)["events"] == events
-    assert not any(job.kind == "creation_task_execution" for job in state.production.list_job_runs(state.workspace_id, state.task.id))
+    assert not any(job.kind == "creation_task_execution" for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id))
 
 
 def test_startup_recovers_completed_job_without_replaying_it(state):
@@ -144,7 +144,7 @@ def test_stopped_old_or_foreign_target_does_not_resume_an_actionable_turn(state,
         assert after["assistant_text"] == before["assistant_text"]
     if change in {"stopped", "stale"}:
         assert after["result"]["continuation"]["status"] == change
-    assert state.production.get_job_run(state.workspace_id, queued.json()["job_id"]).status == "succeeded"
+    assert state.production.job_records.get_job_run(state.workspace_id, queued.json()["job_id"]).status == "succeeded"
 
 
 def test_failure_is_projected_without_retry_or_fabricated_proposal(state, monkeypatch):
@@ -159,7 +159,7 @@ def test_failure_is_projected_without_retry_or_fabricated_proposal(state, monkey
     assert after["result"]["continuation"]["status"] == "failed"
     assert not after["result"]["edit_preview"]
     assert after["result"]["response"]["media_job"]["status"] == "failed"
-    assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
 
 
 def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state):
@@ -179,7 +179,7 @@ def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state
     main._save_edit_request_result(task, event_id, main.JSONResponse(status_code=409, content={"detail": "original turn ended"}))
     after = await_projection(state, lambda item: item["result"]["response"]["edit_request"]["status"] == "rejected")
     assert not after["result"]["edit_preview"]
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
     assert len(state.conversations.list_turns(state.conversation["id"])) == 1
 
 
@@ -215,7 +215,7 @@ def test_assistant_dispatch_persists_unknown_request_location_without_502(state,
     assert response.json()["edit_preview"] is None and response.json()["media_job"] is None
     saved = state.conversations.get_turn(response.json()["turn_id"])
     assert saved["result"]["response"]["edit_request"] == response.json()["edit_request"]
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
 
 
 def test_script_view_dispatches_real_typed_proposal_by_receipt_shape(state, monkeypatch):

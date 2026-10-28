@@ -141,7 +141,7 @@ def seed_source(repository, store, version="v1"):
     ref = f"artifacts/{version}.mp4"
     publication = store.publish_bytes(ref, f"non-media metadata fixture {version}".encode())
     producer = f"fixture-producer-{version}"
-    repository.create_job_run(JobRun(id=producer, workspace_id="local", task_id="task", kind="creation_task_montage_render",
+    repository.job_records.create_job_run(JobRun(id=producer, workspace_id="local", task_id="task", kind="creation_task_montage_render",
         idempotency_key=producer, input_digest=version))
     repository.execution_records.create_artifact_record(ArtifactRecord(f"artifact-{version}", "local", "task", "rendered_video", ref,
         publication.sha256, publication.size_bytes, producer, []))
@@ -178,7 +178,7 @@ def stage_metadata_prefix(runtime, service, actor, check_id):
         assert grant is not None and grant.unit_key == f"quality:{check_id}:{phase}"
         job, _, record, sealed = service.read(actor.workspace_id, grant.owner_id)
         if job.status in {"queued", "interrupted"}:
-            job = service.production.claim_job_run(actor.workspace_id, job.id)
+            job = service.production.job_records.claim_job_run(actor.workspace_id, job.id)
         request = quality_phase_request(sealed, record["evidence"])
         result = metadata_result(request)
         service.validate_result(request, result)
@@ -211,7 +211,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
     def worker(context, request, temporary_root):
         context.check()
         assert context.grant.owner_type == QUALITY_KIND
-        assert repository.get_job_run("local", context.grant.owner_id).status == "running"
+        assert repository.job_records.get_job_run("local", context.grant.owner_id).status == "running"
         calls.append(request["check_id"])
         if len(calls) == 1:
             seed_source(repository, store, "v2")
@@ -250,7 +250,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         assert not any(key.startswith("_") for key in current)
         reopened = QualityCheckRepository(repository.database_path)
         for check_id in (old_id, newer[0]):
-            job = repository.get_job_run("local", f"job_quality_{check_id}")
+            job = repository.job_records.get_job_run("local", f"job_quality_{check_id}")
             assert job.status == "succeeded"
             terminal = repository.execution_records.get_task_event("local", f"event_{job.id}_quality_terminal")
             assert terminal.payload == {"check_id": check_id, "status": "succeeded"}
@@ -262,7 +262,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         request = stage_metadata_prefix(runtime, service, actor, released_result)
         grant = runtime.scheduler.pick_and_grant()
         assert grant is not None and grant.owner_id == f"job_quality_{released_result}"
-        job = repository.get_job_run("local", grant.owner_id)
+        job = repository.job_records.get_job_run("local", grant.owner_id)
         _, _, record, _ = service.read("local", job.id)
         # A declared already-returned worker receipt, not the separate late-SQL gate.
         checks.store_worker_result("local", "task", record["check_id"], metadata_result(request))
@@ -290,14 +290,14 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         service.budget = None
         processes.recovery = "released"
         service.recover(runtime.scheduler)
-        assert repository.get_job_run("local", f"job_quality_{released_result}").status == "succeeded"
+        assert repository.job_records.get_job_run("local", f"job_quality_{released_result}").status == "succeeded"
         assert reopened.get_check("local", "task", released_result)["result_status"] == "unavailable"
         assert repository.execution_records.get_task_event("local", f"event_job_quality_{released_result}_quality_terminal").payload == {
             "check_id": released_result, "status": "succeeded"}
         assert reopened.get("local", "task")["check_id"] == interrupted
         assert reopened.get("local", "task")["check_state"] == "checking"
         assert service.projection("local", "task")["result_status"] is None
-        assert repository.get_job_run("local", f"job_quality_{interrupted}").status == "interrupted"
+        assert repository.job_records.get_job_run("local", f"job_quality_{interrupted}").status == "interrupted"
         assert len(calls) == 2 * len(QUALITY_PHASES)
         evidence_root = os.environ.get("QUALITY_RESOURCE_EVIDENCE_DIR")
         if evidence_root:
@@ -601,7 +601,7 @@ def test_quality_phase_cancellation_preserves_prefix_without_completing_current_
         assert list(record["evidence"]["_phases"]) == ["metadata"]
         assert record["evidence"]["_worker_result"]["phase"] == "black_frames"
         assert record["check_state"] == "failed" and record["result_status"] is None
-        assert repository.get_job_run("local", f"job_quality_{check_id}").status == "cancelled"
+        assert repository.job_records.get_job_run("local", f"job_quality_{check_id}").status == "cancelled"
         with repository._connect() as conn:
             units = [tuple(row) for row in conn.execute("SELECT unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY unit_key", (f"job_quality_{check_id}",))]
             assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
@@ -813,14 +813,14 @@ def test_quality_measurement_requires_commit_and_keeps_successful_prefix_on_fail
         measured, = service.read_measurements('local', job_id, actor)
         assert measured == observations[0]
         execution = measured['execution']
-        assert execution['input_digest'] == repository.get_job_run('local', job_id).input_digest
+        assert execution['input_digest'] == repository.job_records.get_job_run('local', job_id).input_digest
         assert execution['process_released'] is True
         assert execution['elapsed_seconds'] >= measured['worker_elapsed_seconds']
         with pytest.raises(PermissionError):
             service.read_measurements('local', job_id, CreationExecutionActor('local', 'other'))
         for _ in range(1 if fail_next else len(QUALITY_PHASES) - 1):
             assert runtime.run_once() is True
-        assert repository.get_job_run('local', job_id).status == ('failed' if fail_next else 'succeeded')
+        assert repository.job_records.get_job_run('local', job_id).status == ('failed' if fail_next else 'succeeded')
         assert service.read_measurements('local', job_id, actor) == observations
         assert list(checks.get_check('local', 'task', check_id)['evidence']['_phases']) == (
             ['metadata'] if fail_next else list(QUALITY_PHASES[:-1]))
@@ -890,13 +890,13 @@ def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_pref
         runtime = build_metadata_runtime(tmp_path, service, worker)
         first_successor = service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor)
         assert service.continue_failed_phase(runtime.scheduler, 'local', job_id, failed['id'], actor) == first_successor
-        resumed = repository.get_job_run('local', job_id)
+        resumed = repository.job_records.get_job_run('local', job_id)
         assert (resumed.status, resumed.input_digest, resumed.attempt) == ('queued', job.input_digest, job.attempt)
         current = checks.get_check('local', 'task', check_id)
         assert current['evidence']['_request'] == sealed
         assert current['evidence']['_phases'] == original_prefix
         assert runtime.run_once() is True  # This explicitly continued attempt also fails.
-        assert repository.get_job_run('local', job_id).status == 'failed'
+        assert repository.job_records.get_job_run('local', job_id).status == 'failed'
         assert runtime.stop(1)
         profile.update(revision=3, digest='b'*64)
         service.budget = replace(service.budget, max_timeout_seconds=14.)

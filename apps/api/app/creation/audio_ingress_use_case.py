@@ -64,7 +64,7 @@ class AudioIngressUseCase:
                 _, duration_ms = service.recording(
                     workspace_id, task_id, record.logical_ref,
                 )
-                if not outputs.published_outputs_current(self.repository.get_job_run(workspace_id, record.producer_job_id)):
+                if not outputs.published_outputs_current(self.repository.job_records.get_job_run(workspace_id, record.producer_job_id)):
                     continue
             except (KeyError, ValueError, FileNotFoundError):
                 continue  # Failed or obsolete uploads are never offered as current narration.
@@ -99,7 +99,7 @@ class AudioIngressUseCase:
             source, duration_ms = self.task_audio.recording(
                 workspace_id, task.id, source_ref,
             )
-            if not outputs.published_outputs_current(self.repository.get_job_run(workspace_id, source.producer_job_id)):
+            if not outputs.published_outputs_current(self.repository.job_records.get_job_run(workspace_id, source.producer_job_id)):
                 raise ValueError("电脑录音已变化或缺少受许可核验回执，请重新录制")
             audio_path = self.task_audio.source(workspace_id, task.id, source.logical_ref)
             cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"

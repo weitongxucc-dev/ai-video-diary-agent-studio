@@ -577,8 +577,8 @@ class MetadataEditUseCase:
 
     def publish_subtitle_text(self, *, workspace_id: str, task_id: str, proposal_id: str, kind: str, input_refs: list[str], content: str, engine: str, parameters: dict[str, object]):
         input_digest = hashlib.sha256(json.dumps({'inputs': input_refs, 'content': content, 'parameters': parameters}, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
-        job = self.repository.create_job_run(JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, kind=kind, idempotency_key=f'{kind}:{proposal_id}:{input_digest}', input_digest=input_digest))
-        running = self.repository.claim_job_run(workspace_id, job.id)
+        job = self.repository.job_records.create_job_run(JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, kind=kind, idempotency_key=f'{kind}:{proposal_id}:{input_digest}', input_digest=input_digest))
+        running = self.repository.job_records.claim_job_run(workspace_id, job.id)
         logical_ref = f'artifacts/{task_id}/{job.id}/subtitles.srt'
         staging_root = Path(self.output_root).expanduser() / '.job-staging'
         staging_root.mkdir(parents=True, exist_ok=True)
@@ -591,11 +591,11 @@ class MetadataEditUseCase:
             transform = self.repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{job.id}', workspace_id=workspace_id, task_id=task_id, job_id=job.id, transform_type=kind, input_digest=input_digest, input_refs=input_refs, output_refs=[artifact.logical_ref], engine=engine, parameters=parameters, status='succeeded', started_at=running.started_at or utc_now(), finished_at=utc_now()))
             for upstream in input_refs:
                 self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f'edge_{job.id}_{hashlib.sha256(upstream.encode()).hexdigest()[:20]}', workspace_id=workspace_id, task_id=task_id, upstream_ref=upstream, downstream_ref=artifact.logical_ref, created_by_transform_id=transform.id))
-            self.repository.finish_job_run(workspace_id, job.id, status='succeeded', output_refs=[artifact.logical_ref])
+            self.repository.job_records.finish_job_run(workspace_id, job.id, status='succeeded', output_refs=[artifact.logical_ref])
             return (artifact.logical_ref, transform.id)
         except Exception as exc:
             try:
-                self.repository.finish_job_run(workspace_id, job.id, status='failed', failure_reason=str(exc) or type(exc).__name__, impact='没有保存新的字幕轨，当前版本保持不变。', repair_action='检查字幕内容与本机产物目录后重试。')
+                self.repository.job_records.finish_job_run(workspace_id, job.id, status='failed', failure_reason=str(exc) or type(exc).__name__, impact='没有保存新的字幕轨，当前版本保持不变。', repair_action='检查字幕内容与本机产物目录后重试。')
             except (KeyError, ValueError):
                 pass
             raise

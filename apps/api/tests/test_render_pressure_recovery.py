@@ -99,7 +99,7 @@ def render_case(tmp_path, monkeypatch):
         with repo._connect() as conn:
             queued = dict(conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request.id,)).fetchone())
             permit = dict(conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone())
-        return queued, permit, repo.get_job_run("local", job.id)
+        return queued, permit, repo.job_records.get_job_run("local", job.id)
 
     yield SimpleNamespace(repo=repo, task_id=task_id, runtime=runtime, state=state, receipt=receipt,
                           request=request, job=job, snapshot=snapshot, executor=executor, members=members, member=member,

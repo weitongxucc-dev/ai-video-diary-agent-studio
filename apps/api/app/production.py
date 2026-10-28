@@ -17,6 +17,7 @@ from app.creation.script_contracts import (
 )
 from app.creation.request_records import CreationRequestRecordStore
 from app.creation.request_adoption_use_case import CreationRequestAdoptionUseCase
+from app.creation.job_records import JobRunRecordStore
 from app.creation.execution_records import ExecutionRecordStore
 from app.creation.script_records import ScriptRecordStore
 from app.creation.topic_records import TopicRecordStore
@@ -560,8 +561,11 @@ class ProductionRepository:
             read_asset_payload=self._material_assets._asset_payload_row_by_id,
             assemble_scene_segments=self._material_assets.assemble_scene_segments,
             mark_scene_failed=self._material_assets.mark_scene_failed)
+        self.job_records = JobRunRecordStore(self._connect,
+            require_task=self._require_creation_task, decode_reference_list=_string_list_from_text,
+            revision_token=_revision_value, registered_job_output_refs=ExecutionRecordStore.registered_job_output_refs)
         self.execution_records = ExecutionRecordStore(self._connect,
-            require_task=self._require_creation_task, job_belongs=self._lineage_job_belongs,
+            require_task=self._require_creation_task, job_belongs=self.job_records.job_belongs,
             decode_reference_list=_string_list_from_text, decode_payload_object=_json_object_from_text)
         self.restore_requests = TimelineRestoreRecordStore(self._connect,
             append_event=self.execution_records.append_task_event,
@@ -569,7 +573,7 @@ class ProductionRepository:
             decode_operation=self._edit_operation_from_row, read_readiness=self.edit_execution_readiness)
         self.lineage_records = LineageRecordStore(self._connect,
             require_task=self._require_creation_task,
-            job_belongs=self._lineage_job_belongs, output_producers=self.execution_records.output_producers,
+            job_belongs=self.job_records.job_belongs, output_producers=self.execution_records.output_producers,
             decode_reference_list=_string_list_from_text, decode_parameter_object=_json_object_from_text)
         self.topic_records = TopicRecordStore(self._connect,
             read_task=self.get_creation_task, require_task=self._require_creation_task,
@@ -1706,7 +1710,7 @@ class ProductionRepository:
             if source.kind != "task_recording" or source.sha256 != artifact.source_sha256:
                 return False
             try:
-                job = self.get_job_run(artifact.workspace_id, source.producer_job_id)
+                job = self.job_records.get_job_run(artifact.workspace_id, source.producer_job_id)
                 transform = next((item for item in self.lineage_records.list_transform_runs(artifact.workspace_id, artifact.task_id)
                     if item.job_id == source.producer_job_id and item.output_refs == [source.logical_ref]), None)
             except KeyError:
@@ -3343,7 +3347,7 @@ class ProductionRepository:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
-            current=self.create_job_run(run,connection=conn)
+            current=self.job_records.create_job_run(run,connection=conn)
             event_id=f"event_{current.id}_start"
             try:
                 event=self.execution_records.get_task_event(run.workspace_id,event_id,connection=conn)
@@ -3384,94 +3388,10 @@ class ProductionRepository:
             raise ValueError("原助手输入已绑定不同制作作业")
         return event
 
-    def create_job_run(self, run: _JobRun, *, connection: sqlite3.Connection | None = None) -> _JobRun:
-        _validate_new_job_run(run)
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, run.workspace_id, run.task_id)
-            existing = conn.execute(
-                """
-                SELECT * FROM job_runs
-                WHERE workspace_id = ? AND idempotency_key = ?
-                """,
-                (run.workspace_id, run.idempotency_key),
-            ).fetchone()
-            if existing is not None:
-                persisted = self._job_run_from_row(existing)
-                if (
-                    persisted.task_id != run.task_id
-                    or persisted.kind != run.kind
-                    or persisted.input_digest != run.input_digest
-                ):
-                    raise ValueError("幂等键已绑定到不同的任务输入")
-                return persisted
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO job_runs
-                        (id, workspace_id, task_id, kind, idempotency_key,
-                         input_digest, status, progress, attempt, output_refs_json,
-                         failure_reason, impact, repair_action, created_at,
-                         started_at, finished_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    _job_run_values(run),
-                )
-            except sqlite3.IntegrityError as exc:
-                raced = conn.execute(
-                    "SELECT * FROM job_runs WHERE workspace_id = ? AND idempotency_key = ?",
-                    (run.workspace_id, run.idempotency_key),
-                ).fetchone()
-                if raced is not None:
-                    persisted = self._job_run_from_row(raced)
-                    if (
-                        persisted.task_id != run.task_id
-                        or persisted.kind != run.kind
-                        or persisted.input_digest != run.input_digest
-                    ):
-                        raise ValueError("幂等键已绑定到不同的任务输入") from exc
-                    return persisted
-                raise ValueError("任务运行记录 ID 已存在") from exc
-        return run if connection is not None else self.get_job_run(run.workspace_id, run.id)
 
-    def get_job_run(self, workspace_id: str, job_id: str, *, connection=None) -> _JobRun:
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM job_runs WHERE workspace_id = ? AND id = ?",
-                (workspace_id, job_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(job_id)
-        return self._job_run_from_row(row)
 
-    def get_job_run_by_idempotency_key(
-        self, workspace_id: str, idempotency_key: str
-    ) -> _JobRun | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM job_runs
-                WHERE workspace_id = ? AND idempotency_key = ?
-                """,
-                (workspace_id, idempotency_key),
-            ).fetchone()
-        return self._job_run_from_row(row) if row is not None else None
 
-    def list_job_runs(self, workspace_id: str, task_id: str) -> list[_JobRun]:
-        with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM job_runs
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._job_run_from_row(row) for row in rows]
 
-    def list_pending_task_media_jobs(self, kind: str):
-        with self._connect() as conn:
-            pending_media = conn.execute("SELECT * FROM job_runs WHERE kind=? AND status IN ('queued','interrupted','running','cancelled')", (kind,)).fetchall()
-        return (self._job_run_from_row(row) for row in pending_media)
 
     def list_creation_job_request_states(self, workspace_id: str, job_id: str):
         with self._connect() as conn:
@@ -3504,7 +3424,7 @@ class ProductionRepository:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND task_id=? AND idempotency_key=?",
                 (workspace_id, task_id, f"storyboard-regeneration:{task_id}:{request_id}")).fetchone()
-        return self._job_run_from_row(row) if row is not None else None
+        return self.job_records.job_run_from_row(row) if row is not None else None
 
     def read_storyboard_regeneration_receipt(self, workspace_id: str, task_id: str, request_id: str):
         """Read job status and its committed result from the same SQLite snapshot."""
@@ -3514,7 +3434,7 @@ class ProductionRepository:
                 (workspace_id, task_id, f"storyboard-regeneration:{task_id}:{request_id}")).fetchone()
             if row is None:
                 raise KeyError(request_id)
-            job = self._job_run_from_row(row)
+            job = self.job_records.job_run_from_row(row)
             start = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
                 (workspace_id, f"event_{job.id}_start")).fetchone()
             if start is None:
@@ -3530,7 +3450,7 @@ class ProductionRepository:
             row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?",
                 (run.workspace_id, run.idempotency_key)).fetchone()
             if row is not None:
-                saved = self._job_run_from_row(row)
+                saved = self.job_records.job_run_from_row(row)
                 event = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
                     (run.workspace_id, f"event_{saved.id}_start")).fetchone()
                 if event is None:
@@ -3554,7 +3474,7 @@ class ProductionRepository:
                     (run.workspace_id, run.task_id)).fetchone():
                 raise ValueError("原制作单元尚未释放，不能重新生成故事板")
             verify_inputs(conn, task)
-            saved = self.create_job_run(run, connection=conn)
+            saved = self.job_records.create_job_run(run, connection=conn)
             self.execution_records.append_task_event(_TaskEvent(id=f"event_{saved.id}_start", workspace_id=saved.workspace_id,
                 task_id=saved.task_id, job_id=saved.id, event_type="storyboard_regeneration_requested",
                 payload=payload, created_at=saved.created_at), connection=conn)
@@ -3585,69 +3505,9 @@ class ProductionRepository:
                 "SELECT * FROM job_runs WHERE kind = 'creation_task_execution' "
                 "AND status IN ('queued', 'interrupted') ORDER BY created_at ASC, id ASC"
             ).fetchall()
-        return [self._job_run_from_row(row) for row in rows]
+        return [self.job_records.job_run_from_row(row) for row in rows]
 
-    def claim_job_run(self, workspace_id: str, job_id: str, *, connection: sqlite3.Connection | None = None) -> _JobRun:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            row = conn.execute(
-                "SELECT * FROM job_runs WHERE workspace_id = ? AND id = ?",
-                (workspace_id, job_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(job_id)
-            current = self._job_run_from_row(row)
-            if current.status not in {"queued", "interrupted"}:
-                raise ValueError("任务运行记录当前不可领取")
-            now = utc_now()
-            changed = conn.execute(
-                """
-                UPDATE job_runs
-                SET status = 'running', attempt = ?, started_at = ?, finished_at = NULL,
-                    failure_reason = NULL, impact = NULL, repair_action = NULL,
-                    updated_at = ?
-                WHERE workspace_id = ? AND id = ? AND status = ?
-                """,
-                (
-                    current.attempt + 1,
-                    now.isoformat(),
-                    now.isoformat(),
-                    workspace_id,
-                    job_id,
-                    current.status,
-                ),
-            ).rowcount
-            if changed != 1:
-                raise ValueError("任务运行记录已被其他执行者领取")
-            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)).fetchone()
-            return self._job_run_from_row(row)
 
-    def update_job_run_progress(
-        self, workspace_id: str, job_id: str, progress: int
-    ) -> _JobRun:
-        if not 0 <= progress <= 100:
-            raise ValueError("任务进度必须在 0 到 100 之间")
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT progress, status FROM job_runs WHERE workspace_id = ? AND id = ?",
-                (workspace_id, job_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(job_id)
-            if str(row["status"]) != "running":
-                raise ValueError("只能更新运行中任务的进度")
-            if progress < int(row["progress"]):
-                raise ValueError("任务进度不能倒退")
-            now = utc_now()
-            changed = conn.execute(
-                """
-                UPDATE job_runs SET progress = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ? AND status = 'running'
-                """,
-                (progress, now.isoformat(), workspace_id, job_id),
-            ).rowcount
-            if changed != 1:
-                raise ValueError("任务运行记录已结束，进度未写入")
-        return self.get_job_run(workspace_id, job_id)
 
     def reject_creation_execution_admission(self, workspace_id, job_id, request_id, input_digest, *,
                                            event, reason, impact, repair_action, connection):
@@ -3672,7 +3532,7 @@ class ProductionRepository:
         now=event.created_at.isoformat()
         connection.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,finished_at=?,updated_at=? "
             "WHERE workspace_id=? AND id=?",(reason,impact,repair_action,now,now,workspace_id,job_id))
-        return self._job_run_from_row(connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
+        return self.job_records.job_run_from_row(connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
             (workspace_id,job_id)).fetchone())
 
     def find_segment_revision_request(self, workspace_id, task_id, member_id, request_id):
@@ -3746,7 +3606,7 @@ class ProductionRepository:
             join = " FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id AND e.id='event_'||j.id||'_start' WHERE "+where
             count = conn.execute('SELECT count(*)'+join,args).fetchone()[0]
             rows = conn.execute('SELECT j.*'+join+' ORDER BY j.created_at DESC,j.id LIMIT ? OFFSET ?',(*args,limit,offset)).fetchall()
-            return [self._job_run_from_row(row) for row in rows],count
+            return [self.job_records.job_run_from_row(row) for row in rows],count
 
     def create_native_operation(self,actor,origin,request_id,operation,arguments,resources,*,write_guard):
         identity = {'operation':operation,'arguments':arguments,'origin':origin,'resources':resources}
@@ -3760,7 +3620,7 @@ class ProductionRepository:
             task = self._require_creation_task(conn,actor.workspace_id,origin['task_id'])
             if task.owner_user_id!=(actor.user_id or actor.member_id):
                 raise PermissionError('通用执行提交时任务归属不一致')
-            job = self.create_job_run(run,connection=conn)
+            job = self.job_records.create_job_run(run,connection=conn)
             event = _TaskEvent(id=f'event_{job.id}_start',workspace_id=job.workspace_id,task_id=job.task_id,
                 job_id=job.id,event_type='native_operation_submitted',payload={**actor.identity_payload(),
                     'request_id':request_id,**identity},created_at=job.created_at)
@@ -3771,13 +3631,13 @@ class ProductionRepository:
         with nullcontext(connection) if connection is not None else self._connect() as conn:
             if connection is None:
                 conn.execute('BEGIN IMMEDIATE')
-            current = self.get_job_run(job.workspace_id,job.id,connection=conn)
+            current = self.job_records.get_job_run(job.workspace_id,job.id,connection=conn)
             if current.status=='queued' and status!='cancelled':
-                self.claim_job_run(job.workspace_id,job.id,connection=conn)
+                self.job_records.claim_job_run(job.workspace_id,job.id,connection=conn)
             event = _TaskEvent(id=f'event_{job.id}_native_result',workspace_id=job.workspace_id,task_id=job.task_id,
                 job_id=job.id,event_type='native_operation_result',payload=result)
             self.execution_records.append_task_event(event,connection=conn)
-            self.finish_job_run(job.workspace_id,job.id,status=status,connection=conn,
+            self.job_records.finish_job_run(job.workspace_id,job.id,status=status,connection=conn,
                 output_refs=[item['logical_ref'] for item in result.get('artifacts',[])],
                 failure_reason=result.get('error') or f'native_operation_{status}' if status!='succeeded' else None,
                 impact='原任务已采用成果保留' if status!='succeeded' else None,
@@ -3813,7 +3673,7 @@ class ProductionRepository:
             return json.loads(row[0]) if row else None
 
     def settle_native_execution(self,grant,*,elapsed_seconds,output_bytes,connection):
-        job = self.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
+        job = self.job_records.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
         self.execution_records.append_task_event(_TaskEvent(id=f'event_{job.id}_native_usage_{grant.generation}',workspace_id=job.workspace_id,
             task_id=job.task_id,job_id=job.id,event_type='task_execution_unit_settled',payload={
                 'usage_id':f'{grant.request_id}:{grant.generation}','request_id':grant.request_id,'permit_generation':grant.generation,
@@ -3850,7 +3710,7 @@ class ProductionRepository:
                     or self.stage_section_version(task.workspace_id, task.id, section.id, connection=conn) != command['expected_segment_version']
                     or hashlib.sha256(section.content.encode()).hexdigest() != command['source_text_sha256']):
                 raise ValueError('提交前段版本已变化，原采用成果保持不变')
-            job = self.create_job_run(run, connection=conn)
+            job = self.job_records.create_job_run(run, connection=conn)
             if job.id != run.id:
                 return job  # The concurrent original commit owns its baseline.
             source_id = self.seal_creation_narration_source(job, prepared, input_digest=input_digest,
@@ -3875,7 +3735,7 @@ class ProductionRepository:
             values = []
             for row in rows:
                 event = self.execution_records.task_event_from_row(row)
-                job = self.get_job_run(workspace_id, event.job_id, connection=conn)
+                job = self.job_records.get_job_run(workspace_id, event.job_id, connection=conn)
                 result = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
                     "AND event_type='segment_publication' ORDER BY created_at DESC LIMIT 1", (workspace_id,job.id)).fetchone()
                 waiting = conn.execute("SELECT wait_reason,last_failure_reason FROM device_work_requests WHERE workspace_id=? "
@@ -3907,7 +3767,7 @@ class ProductionRepository:
                 (grant.workspace_id,grant.owner_id)).fetchone()
             if pending:
                 raise RecoveryBlocked('原段落执行的用量未知，保留原请求待核查')
-            job = self.claim_job_run(grant.workspace_id,grant.owner_id,connection=conn)
+            job = self.job_records.claim_job_run(grant.workspace_id,grant.owner_id,connection=conn)
             event = _TaskEvent(id=f'event_{job.id}_unit_start_{grant.generation}', workspace_id=job.workspace_id,
                 task_id=job.task_id,job_id=job.id,event_type='task_execution_unit_started',payload={
                     'usage_id':f'{grant.request_id}:{grant.generation}','request_id':grant.request_id,
@@ -3931,7 +3791,7 @@ class ProductionRepository:
     def settle_segment_unit(self, grant, *, elapsed_seconds, output_bytes, connection):
         if elapsed_seconds < 0 or output_bytes < 0 or not math.isfinite(elapsed_seconds):
             raise ValueError('段落计量必须来自本次执行的非负实测值')
-        job = self.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
+        job = self.job_records.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
         event = _TaskEvent(id=f'event_{job.id}_unit_settle_{grant.generation}',workspace_id=job.workspace_id,
             task_id=job.task_id,job_id=job.id,event_type='task_execution_unit_settled',payload={
                 'usage_id':f'{grant.request_id}:{grant.generation}','request_id':grant.request_id,
@@ -3940,14 +3800,14 @@ class ProductionRepository:
         self.execution_records.append_task_event(event,connection=connection)
 
     def checkpoint_segment_unit(self, grant, *, status, connection, reason=None, payload=None):
-        job = self.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
+        job = self.job_records.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
         if status == 'queued':
             changed = connection.execute("UPDATE job_runs SET status='queued',updated_at=? WHERE workspace_id=? AND id=? AND status='running'",
                 (utc_now().isoformat(),job.workspace_id,job.id)).rowcount
             if changed != 1:
                 raise ValueError('原段落作业不可继续提交')
         elif not (status=='cancelled' and job.status=='cancelled'):
-            self.finish_job_run(job.workspace_id,job.id,status=status,connection=connection,
+            self.job_records.finish_job_run(job.workspace_id,job.id,status=status,connection=connection,
                 failure_reason=reason,impact='原已采用有声版本保留' if reason else None,
                 repair_action='核查原请求及执行回执后恢复' if reason else None)
         event = _TaskEvent(id=f'event_{job.id}_unit_checkpoint_{grant.generation}',workspace_id=job.workspace_id,
@@ -4083,7 +3943,7 @@ class ProductionRepository:
                 if timeline_change is None:
                     raise ValueError('局部修改缺少同源时间线联动负责人')
                 snapshot,tracks = timeline_change(task,snapshot,payload['section_id'],payload['montage'],segment,
-                    result_version_id,self.get_job_run(task.workspace_id,event.job_id,connection=connection),connection)
+                    result_version_id,self.job_records.get_job_run(task.workspace_id,event.job_id,connection=connection),connection)
                 operation_id = f'operation_{uuid4().hex}'
                 history['operation_id'] = operation_id
                 intent = _EditIntent(id=f'intent_{uuid4().hex}',workspace_id=task.workspace_id,task_id=task.id,
@@ -4205,7 +4065,7 @@ class ProductionRepository:
             snapshot = dict(current.snapshot)
             snapshot['stage_segments'] = {**snapshot.get('stage_segments',{}),section_id:publication.id}
             version_id = f'timeline_{uuid4().hex}'
-            persisted_job = self.get_job_run(workspace_id,job.id,connection=conn)
+            persisted_job = self.job_records.get_job_run(workspace_id,job.id,connection=conn)
             if persisted_job.task_id!=task_id or persisted_job.kind!='section_timeline_restore' or persisted_job.status!='running':
                 raise ValueError('局部恢复作业不属于当前运行请求')
             source_version = self.get_timeline_version(workspace_id,history[f'{expected}_timeline_version_id'],connection=conn)
@@ -4250,7 +4110,7 @@ class ProductionRepository:
             self.execution_records.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=workspace_id,task_id=task_id,
                 job_id=job.id,event_type='section_edit_dependencies',payload={'operation_id':operation.id,
                 'dependencies':self.section_dependency_snapshot(workspace_id,task_id,section_id,connection=conn)}),connection=conn)
-            self.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[track.artifact_ref for track in tracks
+            self.job_records.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[track.artifact_ref for track in tracks
                 if track.artifact_ref and track.transform_id==f'transform_artifact_{version_id}_{track.language}'],connection=conn)
         return operation,full,task
 
@@ -4571,7 +4431,7 @@ class ProductionRepository:
     def creation_execution_input(self, workspace_id, job_id, *, connection=None):
         """Read effective inputs while keeping the original start audit immutable."""
         with nullcontext(connection) if connection is not None else self._connect() as conn:
-            job = self.get_job_run(workspace_id, job_id, connection=conn)
+            job = self.job_records.get_job_run(workspace_id, job_id, connection=conn)
             start = self.execution_records.get_task_event(workspace_id, f'event_{job_id}_start', connection=conn)
             if (start.task_id, start.job_id) != (job.task_id, job.id):
                 raise ValueError('原制作开始记录不属于当前任务')
@@ -4609,7 +4469,7 @@ class ProductionRepository:
     def creation_narration_source_binding(self, workspace_id, job_id, *, connection=None):
         from app.device_scheduler import RecoveryBlocked
         with nullcontext(connection) if connection is not None else self._connect() as conn:
-            job = self.get_job_run(workspace_id, job_id, connection=conn)
+            job = self.job_records.get_job_run(workspace_id, job_id, connection=conn)
             inputs = self.creation_execution_input(workspace_id, job_id, connection=conn)
             source_id = inputs.get('source_binding_event_id')
             if source_id is None:
@@ -4678,7 +4538,7 @@ class ProductionRepository:
             payload={'start_event_id': f'event_{job.id}_start', 'selection_event_id': selection_event_id,
                 'previous_input_digest': job.input_digest, 'input_digest': input_digest,
                 'source_binding_event_id': source_binding_event_id}), connection=connection)
-        return self.get_job_run(job.workspace_id, job.id, connection=connection)
+        return self.job_records.get_job_run(job.workspace_id, job.id, connection=connection)
 
     def start_creation_narration_unit(self, grant, resources, pending_segments, *, pending_segment_for=None):
         from app.device_scheduler import RecoveryBlocked
@@ -4694,7 +4554,7 @@ class ProductionRepository:
             usage = self.creation_narration_usage(grant.workspace_id, grant.owner_id, connection=conn)
             if usage['unsettled']:
                 raise RecoveryBlocked('原配音单元消耗尚未结算，须先核对原请求与进程回执')
-            job = self.claim_job_run(grant.workspace_id, grant.owner_id, connection=conn)
+            job = self.job_records.claim_job_run(grant.workspace_id, grant.owner_id, connection=conn)
             task = self._require_creation_task(conn, job.workspace_id, job.task_id)
             if (job.kind != 'creation_task_narration_edit' and task.stage != 'narration'
                     or task.confirmed_script_id != resources['script_id']):
@@ -4902,7 +4762,7 @@ class ProductionRepository:
 
     def checkpoint_creation_narration_merge(self, grant, *, source_digest, section_ids,
                                           input_references, pcm_receipt, connection):
-        job = self.get_job_run(grant.workspace_id, grant.owner_id, connection=connection)
+        job = self.job_records.get_job_run(grant.workspace_id, grant.owner_id, connection=connection)
         task = self._require_creation_task(connection, job.workspace_id, job.task_id)
         if (job.kind != 'creation_task_narration_edit' and task.stage != 'narration' or len(section_ids) < 1
                 or pcm_receipt['job_id'] != job.id
@@ -4961,7 +4821,7 @@ class ProductionRepository:
         row = connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
             (run.workspace_id, run.id)).fetchone()
         task = self._require_creation_task(connection, run.workspace_id, run.task_id)
-        if (row is None or self._job_run_from_row(row) != run
+        if (row is None or self.job_records.job_run_from_row(row) != run
                 or run.kind != 'creation_task_execution' or run.status != 'succeeded'
                 or not expected_timeline_version_id or task.current_timeline_version_id != expected_timeline_version_id
                 or (event.workspace_id, event.task_id, event.job_id) != (run.workspace_id, run.task_id, run.id)
@@ -4978,17 +4838,8 @@ class ProductionRepository:
             "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
             (event.created_at.isoformat(), run.workspace_id, run.id))
         self.execution_records.append_task_event(event, connection=connection)
-        return self.get_job_run(run.workspace_id, run.id, connection=connection)
+        return self.job_records.get_job_run(run.workspace_id, run.id, connection=connection)
 
-    def reopen_failed_job_run(self, workspace_id, job_id, *, expected_updated_at, expected_attempt, connection):
-        if not connection.in_transaction:
-            raise ValueError('恢复失败作业必须属于原调度事务')
-        changed=connection.execute("""UPDATE job_runs SET status='queued',finished_at=NULL,updated_at=?
-            WHERE workspace_id=? AND id=? AND status='failed' AND updated_at=? AND attempt=?""",
-            (utc_now().isoformat(),workspace_id,job_id,_revision_value(expected_updated_at),expected_attempt)).rowcount
-        if changed!=1:
-            raise ValueError('失败作业状态、版本或尝试序号已变化，未恢复')
-        return self.get_job_run(workspace_id,job_id,connection=connection)
 
 
     def resume_creation_narration_job(self, workspace_id, job_id, *, connection):
@@ -5001,85 +4852,6 @@ class ProductionRepository:
         if changed != 1:
             raise ValueError('原配音作业当前不可显式继续')
 
-    def finish_job_run(
-        self,
-        workspace_id: str,
-        job_id: str,
-        *,
-        status: Literal["succeeded", "failed", "cancelled", "interrupted"],
-        output_refs: list[str] | None = None,
-        failure_reason: str | None = None,
-        impact: str | None = None,
-        repair_action: str | None = None,
-        connection: sqlite3.Connection | None = None, write_guard=None,
-    ) -> _JobRun:
-        if status != "succeeded" and not all(
-            value is not None and value.strip()
-            for value in (failure_reason, impact, repair_action)
-        ):
-            raise ValueError("未成功的任务必须记录原因、影响和修复动作")
-        refs = output_refs or []
-        for reference in refs:
-            _validate_logical_reference(reference, "产物输出引用")
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            if write_guard is not None:
-                if not conn.in_transaction:
-                    conn.execute("BEGIN IMMEDIATE")
-                write_guard(conn)
-            row = conn.execute(
-                "SELECT status, task_id FROM job_runs WHERE workspace_id = ? AND id = ?",
-                (workspace_id, job_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(job_id)
-            current_status = str(row["status"])
-            allowed_sources = {"running"}
-            if status == "cancelled":
-                allowed_sources.update({"queued", "interrupted"})
-            if current_status not in allowed_sources:
-                raise ValueError("任务运行记录当前不可结束")
-            if status == "succeeded" and refs:
-                registered_refs = {
-                    str(artifact_row["logical_ref"])
-                    for artifact_row in conn.execute(
-                        """
-                        SELECT logical_ref FROM artifact_records
-                        WHERE workspace_id = ? AND task_id = ? AND producer_job_id = ?
-                        """,
-                        (workspace_id, str(row["task_id"]), job_id),
-                    ).fetchall()
-                }
-                missing_refs = [ref for ref in refs if ref not in registered_refs]
-                if missing_refs:
-                    raise ValueError("成功任务的输出必须先登记为可追溯产物")
-            now = utc_now()
-            progress = 100 if status == "succeeded" else None
-            changed = conn.execute(
-                """
-                UPDATE job_runs
-                SET status = ?, progress = COALESCE(?, progress), output_refs_json = ?,
-                    failure_reason = ?, impact = ?, repair_action = ?,
-                    finished_at = ?, updated_at = ?
-                WHERE workspace_id = ? AND id = ? AND status = ?
-                """,
-                (
-                    status,
-                    progress,
-                    json.dumps(refs, ensure_ascii=False),
-                    None if status == "succeeded" else failure_reason,
-                    None if status == "succeeded" else impact,
-                    None if status == "succeeded" else repair_action,
-                    now.isoformat(),
-                    now.isoformat(),
-                    workspace_id,
-                    job_id,
-                    current_status,
-                ),
-            ).rowcount
-            if changed != 1:
-                raise ValueError("任务运行记录已被其他执行者结束")
-            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)).fetchone()
-            return self._job_run_from_row(row)
 
     def get_task_authorization(self, workspace_id: str, task_id: str, *, connection=None, metadata_only=False):
         from app.creation.contracts import TaskAuthorization as _TaskAuthorization
@@ -5227,25 +4999,6 @@ class ProductionRepository:
                     (json.dumps(payload, ensure_ascii=False), now, event.workspace_id, event.task_id))
         self.execution_records.append_task_event(event, connection=connection)
 
-    def interrupt_running_job_runs(self, workspace_id: str | None = None) -> int:
-        now = utc_now().isoformat()
-        with self._connect() as conn:
-            workspace_clause = "" if workspace_id is None else " AND workspace_id = ?"
-            parameters = (
-                (now, now) if workspace_id is None else (now, now, workspace_id)
-            )
-            return conn.execute(
-                """
-                UPDATE job_runs
-                SET status = 'interrupted', failure_reason = 'process_interrupted',
-                    impact = '本次执行未产生可信的成功结果。',
-                    repair_action = '重新领取该任务并从已持久化输入恢复。',
-                    finished_at = ?, updated_at = ?
-                WHERE status = 'running'
-                """
-                + workspace_clause,
-                parameters,
-            ).rowcount
 
 
 
@@ -5574,7 +5327,7 @@ class ProductionRepository:
                     or proposal.operation.get("operation_type") != "GenerateCoverFromFrame"
                     or normalized != operation):
                 raise ValueError("封面原提案已经变化")
-            job = self.create_job_run(run, connection=conn)
+            job = self.job_records.create_job_run(run, connection=conn)
             self.execution_records.append_task_event(_TaskEvent(id=f"event_{job.id}_cover_start", workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type="cover_submitted", payload=payload,
                 created_at=job.created_at), connection=conn)
@@ -5589,7 +5342,7 @@ class ProductionRepository:
                 raise TimelineVersionConflict("提交预览前时间线发生变化，请重新预览")
             if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
                 raise PermissionError("当前成员不能安排此任务的媒体处理")
-            job = self.create_job_run(run, connection=conn)
+            job = self.job_records.create_job_run(run, connection=conn)
             self.execution_records.append_task_event(_TaskEvent(id=f"event_{job.id}_start", workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type="task_media_submitted", payload=payload,
                 created_at=job.created_at), connection=conn)
@@ -6392,13 +6145,6 @@ class ProductionRepository:
 
 
 
-    @staticmethod
-    def _lineage_job_belongs(connection, workspace_id, task_id, job_id):
-        row = connection.execute(
-            "SELECT task_id FROM job_runs WHERE workspace_id = ? AND id = ?",
-            (workspace_id, job_id),
-        ).fetchone()
-        return row is not None and str(row["task_id"]) == task_id
 
 
     def _write_topic_task(self, connection, task):
@@ -6778,7 +6524,7 @@ class ProductionRepository:
             self.execution_records.append_task_event(_TaskEvent(event_id, workspace_id, task_id, None, "task_narration_voice_selected",
                 {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
             if active_jobs:
-                queued_job_rebind(conn, self._job_run_from_row(active_jobs[0]), previous_plan, event_id)
+                queued_job_rebind(conn, self.job_records.job_run_from_row(active_jobs[0]), previous_plan, event_id)
             return receipt
 
     def complete_creation_task_narration(
@@ -7441,43 +7187,6 @@ class ProductionRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
 
-    @staticmethod
-    def _job_run_from_row(row: sqlite3.Row) -> _JobRun:
-        return _JobRun(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            kind=str(row["kind"]),
-            idempotency_key=str(row["idempotency_key"]),
-            input_digest=str(row["input_digest"]),
-            status=str(row["status"]),  # type: ignore[arg-type]
-            progress=int(row["progress"]),
-            attempt=int(row["attempt"]),
-            output_refs=_string_list_from_text(str(row["output_refs_json"])),
-            failure_reason=(
-                str(row["failure_reason"])
-                if row["failure_reason"] is not None
-                else None
-            ),
-            impact=str(row["impact"]) if row["impact"] is not None else None,
-            repair_action=(
-                str(row["repair_action"])
-                if row["repair_action"] is not None
-                else None
-            ),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            started_at=(
-                datetime.fromisoformat(str(row["started_at"]))
-                if row["started_at"] is not None
-                else None
-            ),
-            finished_at=(
-                datetime.fromisoformat(str(row["finished_at"]))
-                if row["finished_at"] is not None
-                else None
-            ),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
-        )
 
 
     @staticmethod
@@ -7840,26 +7549,6 @@ def _json_list_from_text(value: str) -> list[object]:
     return decoded
 
 
-def _job_run_values(run: _JobRun) -> tuple[object, ...]:
-    return (
-        run.id,
-        run.workspace_id,
-        run.task_id,
-        run.kind,
-        run.idempotency_key,
-        run.input_digest,
-        run.status,
-        run.progress,
-        run.attempt,
-        json.dumps(run.output_refs, ensure_ascii=False),
-        run.failure_reason,
-        run.impact,
-        run.repair_action,
-        run.created_at.isoformat(),
-        run.started_at.isoformat() if run.started_at else None,
-        run.finished_at.isoformat() if run.finished_at else None,
-        run.updated_at.isoformat(),
-    )
 
 
 def _narration_segment_values(segment: _NarrationSegment) -> tuple[object, ...]:
@@ -7913,27 +7602,6 @@ def _validate_timeline_version(version: _TimelineVersion) -> None:
     _json_object(version.snapshot)
 
 
-def _validate_new_job_run(run: _JobRun) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            run.id,
-            run.workspace_id,
-            run.task_id,
-            run.kind,
-            run.idempotency_key,
-            run.input_digest,
-        )
-    ):
-        raise ValueError("任务运行记录缺少必要标识或输入摘要")
-    if run.status != "queued" or run.progress != 0 or run.attempt != 0:
-        raise ValueError("新任务运行记录必须从 queued、0% 且未尝试开始")
-    if run.started_at is not None or run.finished_at is not None:
-        raise ValueError("新任务运行记录不能已有开始或结束时间")
-    if run.output_refs or any(
-        value is not None for value in (run.failure_reason, run.impact, run.repair_action)
-    ):
-        raise ValueError("新任务运行记录不能预先包含输出或失败结果")
 
 
 

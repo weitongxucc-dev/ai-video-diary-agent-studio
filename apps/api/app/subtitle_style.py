@@ -68,9 +68,9 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
     parameters = {**asdict(caption),"canvas":size}
     identity = uuid4().hex
     digest = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()
-    job = repository.create_job_run(JobRun(id=f"job_{identity}", workspace_id=workspace_id, task_id=task_id,
+    job = repository.job_records.create_job_run(JobRun(id=f"job_{identity}", workspace_id=workspace_id, task_id=task_id,
         kind="subtitle_style_preview", idempotency_key=f"subtitle_style_preview:{identity}", input_digest=digest))
-    running = repository.claim_job_run(workspace_id, job.id)
+    running = repository.job_records.claim_job_run(workspace_id, job.id)
     try:
         temporary_root.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix="subtitle-style-", dir=temporary_root) as folder:
@@ -87,9 +87,9 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
         for index, reference in enumerate(input_refs):
             repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,
                 task_id=task_id,upstream_ref=reference,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
-        repository.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
+        repository.job_records.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
         return record
     except Exception as exc:
-        repository.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
+        repository.job_records.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
             impact="字幕和成片没有改变",repair_action="检查本机字体与外接盘后重试")
         raise

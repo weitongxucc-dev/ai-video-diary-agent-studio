@@ -78,7 +78,7 @@ def test_original_delivery_runs_complete_quality_worker(tmp_path, monkeypatch):
     handoff = []
     def completed(workspace_id, task_id, job_id):
         assert job_id == case.job.id
-        assert case.repo.get_job_run(workspace_id, job_id).status == 'succeeded'
+        assert case.repo.job_records.get_job_run(workspace_id, job_id).status == 'succeeded'
         task = case.repo.get_creation_task(workspace_id, task_id)
         version = case.repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         assert version.snapshot['audio_delivery']['job_id'] == job_id
@@ -90,7 +90,7 @@ def test_original_delivery_runs_complete_quality_worker(tmp_path, monkeypatch):
         handoff.append((check_id, version.id, artifact))
     case.executor.on_render_completed = completed
     original_tts = list(case.generated)
-    job = case.repo.get_job_run('local', case.job.id)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
     case.scheduler.submit(next_creation_intent(case.repo, case.scheduler, job), case.actor)
     qc_probe = None
     try:
@@ -99,8 +99,8 @@ def test_original_delivery_runs_complete_quality_worker(tmp_path, monkeypatch):
             assert grant is not None
             assert grant.owner_id == job.id and grant.owner_type == 'creation_job'
             case.executor.execute(grant, case.scheduler)
-            assert case.scheduler._get(grant.request_id).state == 'done', case.repo.get_job_run('local', job.id)
-            if case.repo.get_job_run('local', job.id).status == 'succeeded':
+            assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', job.id)
+            if case.repo.job_records.get_job_run('local', job.id).status == 'succeeded':
                 break
         assert len(handoff) == 1
         case.scheduler.assert_released(grant)

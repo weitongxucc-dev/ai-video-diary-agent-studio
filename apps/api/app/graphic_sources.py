@@ -36,9 +36,9 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
         normalized.save(path)
         identity=uuid4().hex
         parameters={'name':name,'width':normalized.width,'height':normalized.height,'original_sha256':digest.hexdigest()}
-        job=repository.create_job_run(JobRun(id=f'job_{identity}',workspace_id=workspace_id,task_id=task_id,
+        job=repository.job_records.create_job_run(JobRun(id=f'job_{identity}',workspace_id=workspace_id,task_id=task_id,
             kind='graphic_import',idempotency_key=f'graphic_import:{identity}',input_digest=digest.hexdigest()))
-        running=repository.claim_job_run(workspace_id,job.id)
+        running=repository.job_records.claim_job_run(workspace_id,job.id)
         try:
             published=store.publish_file(f'artifacts/{task_id}/{job.id}/source.png',path)
             file_stat=store.resolve_file(published.logical_ref).stat()
@@ -49,16 +49,16 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
             repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{identity}',workspace_id=workspace_id,task_id=task_id,job_id=job.id,
                 transform_type='graphic_import',input_digest=digest.hexdigest(),input_refs=[],output_refs=[record.logical_ref],engine='local-pillow-v1',
                 parameters=parameters,status='succeeded',started_at=running.started_at,finished_at=utc_now()))
-            repository.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[record.logical_ref])
+            repository.job_records.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[record.logical_ref])
             return {'source_ref':record.logical_ref,'artifact_id':record.id,**{key:parameters[key] for key in ('name','width','height')}}
         except Exception as exc:
-            repository.finish_job_run(workspace_id,job.id,status='failed',failure_reason=type(exc).__name__,
+            repository.job_records.finish_job_run(workspace_id,job.id,status='failed',failure_reason=type(exc).__name__,
                 impact='当前叠加层和成片没有改变',repair_action='检查外接盘后重新导入图片')
             raise
 
 
 def _successful_graphic_transform(repository,workspace_id,task_id,record):
-    job=repository.get_job_run(workspace_id,record.producer_job_id)
+    job=repository.job_records.get_job_run(workspace_id,record.producer_job_id)
     if job.task_id!=task_id or job.status!='succeeded' or record.logical_ref not in job.output_refs:
         raise ValueError('图片生产作业尚未成功，不作为可编辑来源')
     transform=next((item for item in repository.lineage_records.list_transform_runs(workspace_id,task_id)
@@ -121,7 +121,7 @@ def graphic_source_facts(repository, store, workspace_id, task_id, reference, *,
     if record is None:
         raise ValueError('图片不是当前任务登记来源')
     transform = _successful_graphic_transform(repository, workspace_id, task_id, record)
-    job = repository.get_job_run(workspace_id, record.producer_job_id)
+    job = repository.job_records.get_job_run(workspace_id, record.producer_job_id)
     if ((transform.transform_type == 'graphic_import' and job.kind != 'graphic_import')
             or (transform.transform_type == 'media_script' and job.kind != TASK_MEDIA_KIND)):
         raise ValueError('PNG生产作业类型与来源记录不一致')

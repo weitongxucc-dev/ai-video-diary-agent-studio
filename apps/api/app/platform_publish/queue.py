@@ -32,7 +32,7 @@ class PlatformPublishOwnerVerifier:
         row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?", (workspace_id, job_id)).fetchone()
         if row is None:
             raise KeyError(job_id)
-        job = self.repository._job_run_from_row(row)
+        job = self.repository.job_records.job_run_from_row(row)
         event = conn.execute(
             "SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? AND event_type='platform_publish_prepared'",
             (workspace_id, job_id),
@@ -205,7 +205,7 @@ class PlatformPublishExecutor:
             ).fetchone()
         if row is None or event is None:
             raise ValueError("持久发布作业或用户确认已丢失")
-        return self.repository._job_run_from_row(row), self.repository.execution_records.task_event_from_row(event)
+        return self.repository.job_records.job_run_from_row(row), self.repository.execution_records.task_event_from_row(event)
 
     def _event(self, conn, *, job, event_type: str, payload: dict[str, object]):
         event_id = f"event_{job.id}_{event_type.removeprefix('platform_publish_')}"
@@ -216,7 +216,7 @@ class PlatformPublishExecutor:
 
     def execute(self, grant: Grant, scheduler) -> None:
         job, prepared = self._load(grant)
-        self.repository.claim_job_run(job.workspace_id, job.id)
+        self.repository.job_records.claim_job_run(job.workspace_id, job.id)
         p = prepared.payload
         actor = self.actor_from_event(p["identity"]) if self.actor_from_event else None
         account_id = p["identity"].get("user_id") or p["identity"]["member_id"]
@@ -319,7 +319,7 @@ def recover_platform_publish_jobs(repository, runtime, *, actor_from_event,
             "SELECT * FROM job_runs WHERE kind='platform_publish' AND status IN ('queued','running') ORDER BY created_at,id"
         ).fetchall()
     for row in rows:
-        job = repository._job_run_from_row(row)
+        job = repository.job_records.job_run_from_row(row)
         events = repository.execution_records.list_task_events(job.workspace_id, job.task_id)
         prepared = next((event for event in events
                          if event.job_id == job.id and event.event_type == "platform_publish_prepared"), None)

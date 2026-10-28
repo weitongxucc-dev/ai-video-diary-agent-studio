@@ -67,7 +67,7 @@ def test_continue_http_preserves_original_check_and_uses_registered_service(syst
     assert client.post(url, headers=headers, json=payload).json() == response.json()
     for _ in QUALITY_PHASES[1:]:
         assert runtime.run_once()
-    assert repo.get_job_run('local', job_id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local', job_id).status == 'succeeded'
     assert calls.count('metadata') == 1
     count = len(starts)
     assert client.post(url, headers=headers, json=payload).json() == response.json()

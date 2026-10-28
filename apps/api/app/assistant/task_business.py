@@ -177,7 +177,7 @@ class TaskBusiness:
 
     def visual_job_belongs_to_goal(self, goal, actor, job_id):
         from app.assistant_goal_continuation import GoalResultProjection
-        job=self.production.get_job_run(goal['workspace_id'],job_id)
+        job=self.production.job_records.get_job_run(goal['workspace_id'],job_id)
         if job.task_id!=goal['task_id']:
             return False
         if job.kind=='creation_task_execution':
@@ -210,7 +210,7 @@ class TaskBusiness:
                     "ORDER BY j.created_at DESC,j.id DESC LIMIT 24",(ws,task_id,actor.member_id)).fetchall()
             candidates.update(row['id'] for row in revisions if self.visual_job_belongs_to_goal(goal,actor,row['id']))
             if candidates:
-                job_id=max((self.production.get_job_run(ws,key) for key in candidates),key=lambda job:(job.created_at,job.id)).id
+                job_id=max((self.production.job_records.get_job_run(ws,key) for key in candidates),key=lambda job:(job.created_at,job.id)).id
             else:
                 return {'task_id':task_id,'job':None,'stages':[],'video_ready':False,
                     'waiting_reason':'原目标没有可核验的制作作业定位，请按原回执查询。',

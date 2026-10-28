@@ -125,7 +125,7 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
         state.execution.execute("ws", receipt["job_id"])
     run(state)
     completed = state.client.get(receipt["result_url"]).json()
-    assert completed["status"] == "succeeded" and len(state.builds) == 1, state.repo.get_job_run("ws", receipt["job_id"]).failure_reason
+    assert completed["status"] == "succeeded" and len(state.builds) == 1, state.repo.job_records.get_job_run("ws", receipt["job_id"]).failure_reason
     result = completed["result"]
     current = state.repo.get_creation_task_montage_plan("ws", state.task.id)
     assert current["id"] == result["montage_plan_id"] == before["id"]
@@ -206,7 +206,7 @@ def test_existing_queued_work_requires_explicit_product_cancel_and_release(state
     state.executor.execute(grant, state.scheduler)
     state.scheduler.assert_released(grant)
     assert state.client.get(receipt["result_url"]).json()["status"] == "cancelled"
-    assert state.repo.get_job_run("ws", old.id).status == "cancelled"
+    assert state.repo.job_records.get_job_run("ws", old.id).status == "cancelled"
     assert not state.builds
 
 
@@ -326,7 +326,7 @@ def test_real_metadata_planner_builds_candidate_only_after_permit_without_media_
     grant = run(state)
     state.scheduler.assert_released(grant)
     result = state.client.get(receipt["result_url"]).json()
-    assert result["status"] == "succeeded", state.repo.get_job_run("ws", receipt["job_id"]).failure_reason
+    assert result["status"] == "succeeded", state.repo.job_records.get_job_run("ws", receipt["job_id"]).failure_reason
     plan = state.repo.get_creation_task_montage_plan("ws", state.task.id)
     assert plan["clips"] != before[1]["clips"] and plan["duration_seconds"] == 4
     assert plan["graphic_overlays"] == before[1]["graphic_overlays"]
@@ -362,7 +362,7 @@ def test_original_ready_audio_replans_30_through_existing_storyboard_request(sta
     receipt = enqueue(state)
     run(state)
     completed = state.client.get(receipt['result_url']).json()
-    assert completed['status'] == 'succeeded', state.repo.get_job_run('ws', receipt['job_id']).failure_reason
+    assert completed['status'] == 'succeeded', state.repo.job_records.get_job_run('ws', receipt['job_id']).failure_reason
     after = state.repo.get_creation_task_montage_plan('ws', task.id)
     assert after['duration_seconds'] == 30
     assert sum(cue['duration_seconds'] for cue in after['cues']) == 4
@@ -432,7 +432,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     run(state)
     completed = state.client.get(receipt['result_url']).json()
     assert completed['status'] == 'succeeded'
-    job = state.repo.get_job_run('ws', receipt['job_id'])
+    job = state.repo.job_records.get_job_run('ws', receipt['job_id'])
     start = state.repo.execution_records.get_task_event('ws', f'event_{job.id}_start')
     task = state.repo.get_creation_task('ws', state.task.id)
     base = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
@@ -454,7 +454,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     requests = state.repo.list_creation_job_request_states('ws', job.id)
     pending = [row for row in requests if row['state'] == 'waiting']
     assert len(pending) == 1 and pending[0]['unit_key'].startswith('render:')
-    assert state.repo.get_job_run('ws', job.id).status == 'queued'
+    assert state.repo.job_records.get_job_run('ws', job.id).status == 'queued'
     state.control.resume('ws', task.id, state.actor, state.runtime, verify_media=False)
     assert state.repo.list_creation_job_request_states('ws', job.id) == requests
     from app.creation_execution import next_creation_intent
@@ -601,7 +601,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
         assert len(observed) == 1
         current = repo.get_creation_task('local', task.id)
         if outcome in {'normal', 'unknown_commit'}:
-            assert current.current_timeline_version_id != base.id, repo.get_job_run('local', receipt['job_id']).failure_reason
+            assert current.current_timeline_version_id != base.id, repo.job_records.get_job_run('local', receipt['job_id']).failure_reason
             result = case.control.regenerate_storyboard('local', task.id, payload, case.actor, case.runtime)
             assert result['job_id'] == receipt['job_id'] and result['status'] == 'succeeded'
             assert case.scheduler._get(grant.request_id).state == 'done'

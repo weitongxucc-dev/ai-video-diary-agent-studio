@@ -315,7 +315,7 @@ def fixture(tmp_path):
         verify_identity=MemberDeviceAccess(members).verify_identity,
     )
     digest = narration_edit_digest(proposal.operation)
-    job = repo.create_job_run(
+    job = repo.job_records.create_job_run(
         JobRun(
             "job",
             "local",
@@ -460,7 +460,7 @@ def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
         f.repo.get_creation_task("local", f.task.id).current_timeline_version_id
         == "result"
     )
-    assert f.repo.get_job_run("local", f.job.id).status == "succeeded"
+    assert f.repo.job_records.get_job_run("local", f.job.id).status == "succeeded"
     assert (
         f.repo.list_narration_segments("local", f.task.id, "script")[1] == f.segments[1]
     )
@@ -605,7 +605,7 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
         == f.base.id
     )
     assert f.repo.get_edit_proposal("local", f.proposal.id).status == "proposed"
-    assert f.repo.get_job_run("local", f.job.id).status == (
+    assert f.repo.job_records.get_job_run("local", f.job.id).status == (
         "cancelled" if kind == "cancel" else "failed"
     )
     if kind != "stale_after_generation":

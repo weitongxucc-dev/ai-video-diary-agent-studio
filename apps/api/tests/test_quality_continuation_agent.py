@@ -98,7 +98,7 @@ def test_agent_continuation_keeps_original_job_and_replays_before_new_head_or_ru
 def test_agent_current_guard_rolls_back_original_continuation_in_owner_transaction(failed_quality, monkeypatch):
     _, repo, checks, service, actor, runtime, failed, starts, business, host, options = failed_quality
     pair = {'job_id': failed['owner_id'], 'failed_request_id': failed['id']}
-    before_job = repo.get_job_run('local', pair['job_id'])
+    before_job = repo.job_records.get_job_run('local', pair['job_id'])
     before_check = checks.get('local', 'task')
     reconcile = runtime.scheduler.reconcile_released
     def released():
@@ -108,7 +108,7 @@ def test_agent_current_guard_rolls_back_original_continuation_in_owner_transacti
     monkeypatch.setattr(runtime.scheduler, 'reconcile_released', released)
     result = host('continue_task_quality_check', {'payload': pair}, **options)
     assert not result['ok'] and result['failure']['status_code'] == 409
-    assert repo.get_job_run('local', pair['job_id']) == before_job
+    assert repo.job_records.get_job_run('local', pair['job_id']) == before_job
     assert checks.get('local', 'task') == before_check and starts == []
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM device_work_requests WHERE owner_id=?', (pair['job_id'],)).fetchone()[0] == 2
@@ -126,7 +126,7 @@ def test_agent_new_continuation_rejects_stale_head_and_foreign_pair(failed_quali
     repo.create_timeline_version(TimelineVersion('v2', 'local', 'task', 'v1', 2, {}, None))
     denied = host('continue_task_quality_check', {'payload': pair}, **options)
     assert not denied['ok'] and denied['failure']['status_code'] == 409 and starts == []
-    assert repo.get_job_run('local', pair['job_id']).status == 'failed'
+    assert repo.job_records.get_job_run('local', pair['job_id']).status == 'failed'
 
 
 @pytest.mark.parametrize('background', [False, True], ids=['chat-response', 'goal-finish'])

@@ -113,7 +113,7 @@ class ExecutionBudgetScopes:
 
     def bind(self, connection, workspace_id, job_id, actor, *, scope_id, expected_revision):
         self._transaction(connection)
-        job = self.repository.get_job_run(workspace_id, job_id, connection=connection)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=connection)
         self._owner(connection, workspace_id, job.task_id, actor)
         event_id = self._id('binding', workspace_id, job_id)
         try:
@@ -199,7 +199,7 @@ class ExecutionBudgetScopes:
     def reserve(self, connection, workspace_id, job_id, actor, *, request_id, permit_generation,
                 started_event_id, receipt_id, maximum, authorization_revision):
         self._transaction(connection)
-        job = self.repository.get_job_run(workspace_id, job_id, connection=connection)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=connection)
         self._owner(connection, workspace_id, job.task_id, actor)
         binding = self.binding(connection, workspace_id, job_id)
         current = self.current(connection, workspace_id, binding.payload['scope_id'])

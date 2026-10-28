@@ -534,7 +534,7 @@ def test_default_presenter_budget_required_before_queueing(presenter_permit_case
             submit_creation_stage(case.execution, scheduler, case.job, case.actor)
         with case.repo._connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone()[0] == 0
-        rejected = case.repo.get_job_run(WORKSPACE, case.job.id)
+        rejected = case.repo.job_records.get_job_run(WORKSPACE, case.job.id)
         assert rejected.status == "failed" and "专属预算尚未标定" in rejected.failure_reason
         assert rejected.finished_at is not None and rejected.output_refs == []
     finally:
@@ -616,7 +616,7 @@ def _complete_presenter_fixture(case, context=None):
             "person_render", cache, [segment.audio_reference], [logical_ref], "synthetic-provider",
             {"language": segment.language, "presenter_input_facts": input_facts}, "succeeded", datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
         return JobResult((logical_ref,))
-    assert TaskRuntime(case.repo).run(inner, work).status == "succeeded"
+    assert TaskRuntime(case.repo.job_records).run(inner, work).status == "succeeded"
     case.repo.finish_person_render(WORKSPACE, task.id, render.id, status="ready", output_path=str(output),
         duration_seconds=1, alignment_evidence="synthetic timing; no media decoding")
     case.repo.bind_person_render_artifact(WORKSPACE, task.id, render.id, logical_ref)
@@ -636,7 +636,7 @@ def test_presenter_unit_executes_with_registered_child_and_queues_metadata_after
         case.registration.executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
         assert scheduler._get(request_id).state == "done"
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == "queued"
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == "queued"
         task = case.repo.get_creation_task(WORKSPACE, case.task.id)
         assert task.narration_cache_key == "narration" and task.confirmed_script_id == "script"
         with case.repo._connect() as conn:
@@ -792,7 +792,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         JobRun=JobRun, JobFailure=JobFailure, JobResult=JobResult, MediaAuthorityError=MediaAuthorityError,
         AvatarAndLipSyncService=SyntheticService, avatar_lipsync_cache_key=avatar_lipsync_cache_key,
         presenter_inputs=presenter_inputs, presenter_input_facts=presenter_input_facts, current_presenter_render=current_presenter_render,
-        video_job_runner=VideoJobRunner(case.repo), creation_execution=case.execution,
+        video_job_runner=VideoJobRunner(case.repo.job_records), creation_execution=case.execution,
         montage_waiting_for_confirmation=montage_waiting_for_confirmation,
         device_runtime=SimpleNamespace(), _creation_render_is_valid=lambda *args, **kwargs: False,
         _EXECUTION_WAITING_TEXT={})
@@ -823,7 +823,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
         assert len(rendered) == 1 and rendered[0].status == "ready"
         assert store.resolve_file(rendered[0].artifact_ref).read_bytes() == b"synthetic-person"
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == "queued"
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == "queued"
         events = case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)
         assert any(event.payload.get("stage") == "person_render" and event.payload.get("status") == "running" for event in events)
     finally:
@@ -932,7 +932,7 @@ def _stream_person_executor(case, monkeypatch, boundary):
     monkeypatch.setattr(module, 'AvatarAndLipSyncService', PaidProvider)
     root = case.tmp_path/'stream-output'; root.mkdir(exist_ok=True)
     stage = PersonStageUseCase(case.repo, metadata, SimpleNamespace(provider=lambda quality: provider),
-        VideoJobRunner(case.repo), SimpleNamespace(video_output_path=root))
+        VideoJobRunner(case.repo.job_records), SimpleNamespace(video_output_path=root))
     def forbidden(*args, **kwargs):
         pytest.fail('person stream must not hydrate whole input DTOs or execute a worker')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
@@ -958,7 +958,7 @@ def test_presenter_row_owner_executes_after_reader_release_and_reuses_original_r
         assert boundary == [request_id]
         assert scheduler._get(request_id).resources == original.resources
         assert scheduler._get(request_id).state == 'done'
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == 'queued'
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == 'queued'
         assert len(case.repo.list_person_renders(WORKSPACE, case.task.id)) == 1
         scheduler.assert_released(grant)
     finally:
@@ -1009,7 +1009,7 @@ def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(pre
         executor.execute(grant, scheduler)
         assert next_units == [None] and injected and boundary == [request_id]
         assert scheduler._get(request_id).state != 'done'
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == 'interrupted'
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == 'interrupted'
         rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
         assert len(rendered) == 1 and rendered[0].status == 'ready'
         assert not [event for event in case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)

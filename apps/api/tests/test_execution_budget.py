@@ -22,7 +22,7 @@ def scope_case(tmp_path):
             task.owner_user_id = actor.member_id
             conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
                 (json.dumps(asdict(task), default=str), 'local', task_id))
-    jobs = [repo.create_job_run(JobRun(id=f'job_scope_{i}', workspace_id='local', task_id=task_id,
+    jobs = [repo.job_records.create_job_run(JobRun(id=f'job_scope_{i}', workspace_id='local', task_id=task_id,
         kind='creation_task_execution', idempotency_key=f'scope-test-{i}', input_digest=str(i) * 64))
         for i, task_id in enumerate((first, second), 1)]
     command = dict(scope_id='shared-goal', expected_revision=-1, request_id='approved-original',
@@ -197,7 +197,7 @@ def test_task_budget_mixed_scopes_do_not_claim_whole_task_exhausted(scope_case):
     settle(repo, jobs[0], 'old-scope-work', 10, 100)
     repo.authorize_execution_budget_scope('local', origin, actor, **{**command,
         'scope_id': 'additional-goal', 'request_id': 'additional-authorization'})
-    job = repo.create_job_run(JobRun(id='job_new_scope', workspace_id='local', task_id=origin,
+    job = repo.job_records.create_job_run(JobRun(id='job_new_scope', workspace_id='local', task_id=origin,
         kind='creation_task_execution', idempotency_key='new-scope-job', input_digest='c' * 64))
     repo.bind_execution_budget_scope('local', job.id, actor, scope_id='additional-goal', expected_revision=0)
     response = TaskBudgetUseCase(repo).read('local', origin, actor)

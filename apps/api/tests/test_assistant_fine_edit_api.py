@@ -146,7 +146,7 @@ def test_fine_edits_reject_invalid_request_without_version_or_media_effect(fine_
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id == payload["expected_timeline_version_id"] or failure == "old_version"
     assert state.production.list_edit_operations(state.workspace_id, task.id) == []
-    assert state.production.list_job_runs(state.workspace_id, task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, task.id) == []
 
 
 def test_visual_lock_and_full_default_omission_boundaries(fine_state):
@@ -176,7 +176,7 @@ def test_queued_fine_edit_keeps_sparse_dto_and_real_target_refs(fine_state, monk
         saved = state.production.execution_records.get_task_event(state.workspace_id, f"event_{receipt['job_id']}_start").payload
         assert saved["arguments"]["payload"] == action
         assert saved["arguments"]["_typed_source"]["action"] == action
-        assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+        assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
     finally:
         runtime.scheduler.close()
 
@@ -210,4 +210,4 @@ def test_nonzero_face_effect_is_explicitly_unavailable_before_media_submission(f
     response = state.client.post(state.base_url + "/edits/exact/preview", json=bound(state,
         operation_type="AdjustVisualEffects", clip_ids=[state.clip.id], effects={"beauty_strength": .2}))
     assert response.status_code == 422 and "受许可执行路径" in response.text
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []

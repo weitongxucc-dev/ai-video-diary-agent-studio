@@ -3782,7 +3782,7 @@ def _task_observation_metadata(task,member_id):
             (workspace_id, task_id, TASK_MEDIA_KIND, member_id)).fetchall()
     observations = []
     for row in rows:
-        job = production_repo.get_job_run(workspace_id, row["id"])
+        job = production_repo.job_records.get_job_run(workspace_id, row["id"])
         start = json.loads(row["payload_json"])
         result = None
         if job.status == "succeeded":
@@ -3903,7 +3903,7 @@ def cancel_task_media_job(task_id: str, job_id: str, request: Request):
         for row in rows:
             runtime.scheduler.cancel(row["id"], actor)
             runtime.registrations["creation_job"].executor.request_cancel(row["id"])
-        production_repo.finish_job_run(job.workspace_id, job.id, status="cancelled", failure_reason="user_cancelled",
+        production_repo.job_records.finish_job_run(job.workspace_id, job.id, status="cancelled", failure_reason="user_cancelled",
             impact="当前时间线保持不变。", repair_action="需要时重新安排媒体处理。")
     return _media_result_receipt(media, job, actor, runtime)
 
@@ -4121,7 +4121,7 @@ def adopt_creation_task_recording(
 
 
 def _require_task_media_artifact(record, request):
-    job = production_repo.get_job_run(record.workspace_id, record.producer_job_id)
+    job = production_repo.job_records.get_job_run(record.workspace_id, record.producer_job_id)
     if job.kind != TASK_MEDIA_KIND:
         return
     actor = _require_permit_actor(request, record.workspace_id)
@@ -4370,7 +4370,7 @@ def save_media_script_tool(task_id: str, request: Request, payload: MediaScriptT
         if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise HTTPException(status_code=409, detail="保存配方的原任务目标已变化")
     try:
-        producer = production_repo.get_job_run(task.workspace_id, payload.producer_job_id)
+        producer = production_repo.job_records.get_job_run(task.workspace_id, payload.producer_job_id)
         if producer.task_id != task_id:
             raise KeyError(payload.producer_job_id)
         return _media_script_tools().create_from_job(actor, producer.id, request_id=payload.request_id,
@@ -12806,7 +12806,7 @@ app.include_router(build_creation_execution_router(
     require_task_open=lambda request, workspace_id, task_id: _require_automation_task_open(request, workspace_id, task_id),
     runtime_for_execution=lambda: _creation_runtime(),
     current_runtime=lambda: device_runtime,
-    list_job_runs=lambda workspace_id, task_id: production_repo.list_job_runs(workspace_id, task_id),
+    list_job_runs=lambda workspace_id, task_id: production_repo.job_records.list_job_runs(workspace_id, task_id),
     assistant_source=lambda task_id, request, turn_id, action, digest: _assistant_execution_source(
         task_id, request, turn_id, action, digest),
     bind_assistant_result=lambda task_id, request, turn_id, result, *, source: _bind_assistant_execution_result(
@@ -12884,12 +12884,12 @@ def cancel_device_request(request_id: str, request: Request) -> dict[str, object
             try:
                 if job.kind == COVER_JOB_KIND:
                     if detail["state"] == "cancelled" and job.status in {"queued", "interrupted"}:
-                        production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
+                        production_repo.job_records.finish_job_run(workspace_id, job.id, status="cancelled",
                             failure_reason="user_cancelled", impact="当前时间线保持不变。",
                             repair_action="查询原封面请求后重新发起。")
                 elif job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND, TASK_MEDIA_KIND, 'creation_task_segment_revision'}:
                     if job.status in {"queued", "interrupted", "running"}:
-                        production_repo.finish_job_run(workspace_id, job.id, status="cancelled",
+                        production_repo.job_records.finish_job_run(workspace_id, job.id, status="cancelled",
                             failure_reason="user_cancelled", impact="目标片段和当前版本保持不变。",
                             repair_action="需要时重新预览该片段修改。")
                 else:

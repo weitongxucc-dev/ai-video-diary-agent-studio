@@ -206,13 +206,13 @@ def test_busy_or_downstream_task_rejects_addition_without_silent_invalidation(st
         state.repository.confirm_creation_task_script('local', 'task', old.id,
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     else:
-        state.repository.create_job_run(JobRun(id='busy', workspace_id='local', task_id='task', kind='script_generation',
+        state.repository.job_records.create_job_run(JobRun(id='busy', workspace_id='local', task_id='task', kind='script_generation',
             idempotency_key='busy', input_digest='digest'))
         if busy == 'running':
-            state.repository.claim_job_run('local', 'busy')
+            state.repository.job_records.claim_job_run('local', 'busy')
         elif busy == 'interrupted':
-            state.repository.claim_job_run('local', 'busy')
-            state.repository.interrupt_running_job_runs('local')
+            state.repository.job_records.claim_job_run('local', 'busy')
+            state.repository.job_records.interrupt_running_job_runs('local')
     body = command(state, knowledge(state))
     before = rows(state, ('creation_plans', 'creation_tasks', 'creation_task_scripts', 'script_generation_runs', 'task_events', 'job_runs'))
     response = adopt(state, body)

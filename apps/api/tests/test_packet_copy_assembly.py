@@ -32,9 +32,9 @@ def _packet_case(tmp_path, monkeypatch, *, before_prepare=None, montage_adjust=N
         submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
         for _ in range(3):
             grant = case.scheduler.pick_and_grant()
-            assert grant is not None, (case.repo.get_job_run('local', case.job.id).failure_reason, case.repo.list_creation_job_request_states('local', case.job.id))
+            assert grant is not None, (case.repo.job_records.get_job_run('local', case.job.id).failure_reason, case.repo.list_creation_job_request_states('local', case.job.id))
             case.executor.execute(grant, case.scheduler)
-    case.job = case.repo.get_job_run('local', case.job.id)
+    case.job = case.repo.job_records.get_job_run('local', case.job.id)
     source = tmp_path / 'library' / 'source.mp4'
     source.parent.mkdir(exist_ok=True)
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=24:duration=1',
@@ -119,7 +119,7 @@ def test_original_job_packet_tree_restarts_with_original_parents_and_real_limits
     first = case.scheduler.pick_and_grant()
     assert first is not None
     case.executor.execute(first, case.scheduler)
-    assert case.scheduler._get(first.request_id).state == 'done', case.repo.get_job_run('local', case.job.id).failure_reason
+    assert case.scheduler._get(first.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
     completed = case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
     old_path = store.resolve_file(completed.logical_ref)
     old_sha, old_mtime = completed.sha256, old_path.stat().st_mtime_ns
@@ -135,8 +135,8 @@ def test_original_job_packet_tree_restarts_with_original_parents_and_real_limits
     following = scheduler.pick_and_grant()
     assert following is not None and following.unit_key != first.unit_key
     executor.execute(following, scheduler)
-    assert scheduler._get(following.request_id).state == 'done', repo.get_job_run('local', case.job.id).failure_reason
-    master = service.master(repo.get_job_run('local', case.job.id))
+    assert scheduler._get(following.request_id).state == 'done', repo.job_records.get_job_run('local', case.job.id).failure_reason
+    master = service.master(repo.job_records.get_job_run('local', case.job.id))
     assert master is not None and master.id == plan['master_artifact_id']
     assert master.producer_job_id == case.job.id
     assert old_path.stat().st_mtime_ns == old_mtime and hashlib.sha256(old_path.read_bytes()).hexdigest() == old_sha
@@ -264,7 +264,7 @@ def test_packet_parent_admission_reads_only_stats_and_sha_runs_in_original_grant
     request = case.scheduler._get(grant.request_id)
     if corrupt:
         assert not copied and request.state == 'failed'
-        assert '完整SHA' in case.repo.get_job_run('local', case.job.id).failure_reason
+        assert '完整SHA' in case.repo.job_records.get_job_run('local', case.job.id).failure_reason
         measured = case.repo.execution_records.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_output')
         assert measured.payload['consumption_known'] is True and measured.payload['output_bytes'] == 0
         with pytest.raises(KeyError):
@@ -273,5 +273,5 @@ def test_packet_parent_admission_reads_only_stats_and_sha_runs_in_original_grant
         assert copied == [True] and request.state == 'done'
         checkpoint = case.repo.execution_records.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_parents_verified')
         assert len(checkpoint.payload['parents']) == 2
-        assert service.master(case.repo.get_job_run('local', case.job.id)) is None
+        assert service.master(case.repo.job_records.get_job_run('local', case.job.id)) is None
     case.scheduler.close()

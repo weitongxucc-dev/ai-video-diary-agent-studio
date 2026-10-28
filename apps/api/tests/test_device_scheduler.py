@@ -227,9 +227,9 @@ def test_production_snapshot_contends_with_original_scheduler_checkpoint(tmp_pat
     repository, task_id, _, _ = _seed(tmp_path, workspace_id="private-a", voice=False)
     scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock", owners=Owners(),
                                 resources=Resources(), processes=Processes())
-    job = repository.create_job_run(JobRun("snapshot-job", "private-a", task_id, "snapshot-checkpoint",
+    job = repository.job_records.create_job_run(JobRun("snapshot-job", "private-a", task_id, "snapshot-checkpoint",
                                            "snapshot-job", "sha256:one"))
-    repository.claim_job_run(job.workspace_id, job.id)
+    repository.job_records.claim_job_run(job.workspace_id, job.id)
     request = scheduler.submit(_intent(job.id), "member-a")
     grant = scheduler.pick_and_grant()
     assert grant is not None and grant.request_id == request.id
@@ -241,7 +241,7 @@ def test_production_snapshot_contends_with_original_scheduler_checkpoint(tmp_pat
 
     def checkpoint(conn, current):
         assert conn.in_transaction and current.request_id == request.id
-        repository.finish_job_run(job.workspace_id, job.id, status="succeeded", connection=conn)
+        repository.job_records.finish_job_run(job.workspace_id, job.id, status="succeeded", connection=conn)
         repository.execution_records.append_task_event(TaskEvent(event_id, job.workspace_id, task_id, job.id,
                                                "snapshot_checkpoint", {}), connection=conn)
         return event_id

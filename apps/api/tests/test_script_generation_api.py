@@ -86,10 +86,10 @@ def test_generation_main_host_uses_request_scope_without_constructing_media_exec
     from types import SimpleNamespace
     execution = main._new_creation_execution(api_state.repository)
     monkeypatch.setattr(main, "creation_execution", execution)
-    original_job = api_state.repository.create_job_run(JobRun(
+    original_job = api_state.repository.job_records.create_job_run(JobRun(
         "persisted-execution", "local", "task", "creation_task_execution", "original", "a" * 64))
-    api_state.repository.claim_job_run("local", original_job.id)
-    original_job = api_state.repository.finish_job_run("local", original_job.id, status="failed",
+    api_state.repository.job_records.claim_job_run("local", original_job.id)
+    original_job = api_state.repository.job_records.finish_job_run("local", original_job.id, status="failed",
         failure_reason="原制作失败", impact="尚未完成制作", repair_action="检查原作业后恢复")
     api_state.repository.execution_records.append_task_event(TaskEvent(
         "original-stage", "local", "task", original_job.id, "creation_execution_stage",
@@ -123,7 +123,7 @@ def test_generation_main_host_uses_request_scope_without_constructing_media_exec
     from fastapi.encoders import jsonable_encoder
     assert {key: jsonable_encoder(full[key]) for key in summary} == summary
     assert full["video_ready"] is True and "visual_decisions" in full
-    assert len(api_state.repository.list_job_runs("local", "task")) == 1
+    assert len(api_state.repository.job_records.list_job_runs("local", "task")) == 1
     rejected = host("confirm_saved_script", {"script_id": "unrelated", "payload": {}}, **options)
     assert not rejected["ok"] and rejected["failure"]["status_code"] == 403
     assert api_state.repository.get_creation_task("local", "task").confirmed_script_id is None

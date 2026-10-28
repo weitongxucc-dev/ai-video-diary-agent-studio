@@ -67,13 +67,13 @@ def test_submission_replay_is_persistent_and_does_not_start_work(tmp_path):
     job = media.submit(runtime, actor, 'task', 'audio_listen', {'payload': {'start': 0}}, 'audio_listen')
     again = factory().submit(runtime, actor, 'task', 'audio_listen', {'payload': {'start': 0}}, 'audio_listen')
     assert again.id == job.id
-    assert state['calls'] == 0 and repo.get_job_run('local', job.id).status == 'queued'
+    assert state['calls'] == 0 and repo.job_records.get_job_run('local', job.id).status == 'queued'
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
     runtime.stop(0)
     rebuilt = build(factory())
     assert rebuilt.run_once()
-    assert repo.get_job_run('local', job.id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
     assert state['calls'] == 1
     assert media.read('local', job.id)[1]['arguments'] == {'payload': {'start': 0}}
     assert repo.execution_records.get_task_event('local', f'event_{job.id}_result').payload['result']['audio_url'] == '/saved-output'
@@ -91,7 +91,7 @@ def test_waiting_units_do_not_run_after_input_identity_or_resource_rejection(tmp
     elif change == 'identity':
         media.verify_identity = lambda actor: 'unauthorized'
     assert not runtime.run_once()
-    assert state['calls'] == 0 and repo.get_job_run('local', job.id).status == 'queued'
+    assert state['calls'] == 0 and repo.job_records.get_job_run('local', job.id).status == 'queued'
     runtime.stop(0)
 
 
@@ -110,7 +110,7 @@ def test_cancel_before_grant_never_calls_media(tmp_path):
     with repo._connect() as conn:
         request_id = conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.cancel(request_id, actor)
-    repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled', impact='unchanged', repair_action='resubmit')
+    repo.job_records.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled', impact='unchanged', repair_action='resubmit')
     assert not runtime.run_once()
     assert state['calls'] == 0
     runtime.stop(0)
@@ -125,12 +125,12 @@ def test_post_receipt_pressure_revalidates_without_reexecuting(tmp_path):
     runtime = build(media)
     job = media.submit(runtime, actor, 'task', 'audio_listen', {}, 'audio_listen')
     assert runtime.run_once()
-    assert repo.get_job_run('local', job.id).status == 'interrupted'
+    assert repo.job_records.get_job_run('local', job.id).status == 'interrupted'
     with repo._connect() as conn:
         conn.execute("UPDATE device_work_requests SET retry_not_before_utc=?", ((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),))
     assert runtime.run_once()
     assert state['calls'] == 1 and state['checks'] == 2
-    assert repo.get_job_run('local', job.id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
     runtime.stop(0)
 
 
@@ -266,14 +266,14 @@ def test_resource_receipt_history_survives_cancel_retry_and_restart(tmp_path, mo
             request_id = conn.execute('SELECT id FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()[0]
         first = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request_id), 'queued')
         runtime.scheduler.cancel(request_id, actor)
-        repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
+        repo.job_records.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
                             impact='unchanged', repair_action='resubmit')
-        cancelled = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+        cancelled = media.resource_admission_receipt(repo.job_records.get_job_run('local',job.id), start, actor,
                                                     runtime.scheduler._get(request_id), 'cancelled')
         assert cancelled['context'] == 'history' and cancelled['observation_id'] == first['observation_id']
         runtime.scheduler.retry_existing(request_id, actor, reason='cancelled')
         assert not runtime.run_once()
-        second = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+        second = media.resource_admission_receipt(repo.job_records.get_job_run('local',job.id), start, actor,
                                                  runtime.scheduler._get(request_id), 'interrupted')
         assert second['attempt_number'] == 2 and second['last_grant_generation'] is None
         assert second['observation_id'] != first['observation_id']
@@ -281,7 +281,7 @@ def test_resource_receipt_history_survives_cancel_retry_and_restart(tmp_path, mo
         rebuilt = build(media)
         try:
             monkeypatch.setattr(media, 'facts', lambda *args: (_ for _ in ()).throw(AssertionError('no fact resample on history read')))
-            history = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+            history = media.resource_admission_receipt(repo.job_records.get_job_run('local',job.id), start, actor,
                                                       rebuilt.scheduler._get(request_id), 'stale')
             assert history['context'] == 'history' and history['checked_at'] == second['checked_at']
         finally:
@@ -336,7 +336,7 @@ def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_
     runtime.scheduler.processes = HostProcessProbe()
     job = media.submit(runtime, actor, 'task', 'audio_import', {}, 'audio_source')
     assert runtime.run_once()
-    saved = repo.get_job_run('local', job.id)
+    saved = repo.job_records.get_job_run('local', job.id)
     assert saved.status == 'succeeded' and len(saved.output_refs) == 1
     record = repo.execution_records.list_artifact_records('local','task')[0]
     with wave.open(str(store.resolve_file(record.logical_ref))) as wav:
@@ -417,7 +417,7 @@ def test_unknown_and_known_source_probe_rejects_before_dsp(tmp_path, monkeypatch
     runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status == 'failed'
+    assert repo.job_records.get_job_run('local',job.id).status == 'failed'
     assert dsp == ['ffprobe']
     assert not (tmp_path/'mixed.wav').exists()
     runtime.stop(0)
@@ -482,7 +482,7 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
         memory_monitor=IsolatedMemoryMonitor())
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
-    saved=repo.get_job_run('local',job.id)
+    saved=repo.job_records.get_job_run('local',job.id)
     assert saved.status == 'succeeded', saved.failure_reason
     assert state['picture_calls'] == 1
     assert store.resolve_file(saved.output_refs[0]).stat().st_size > 0
@@ -721,14 +721,14 @@ def test_explicit_failed_retry_reuses_job_and_original_request(tmp_path):
     runtime=build(media)
     job=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status == 'failed'
+    assert repo.job_records.get_job_run('local',job.id).status == 'failed'
     replay=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
     assert replay.id == job.id and not runtime.run_once()
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local',job.id).status == 'succeeded'
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 1
         assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
@@ -776,14 +776,14 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
     runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
+    assert repo.job_records.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
     assert repo.execution_records.list_artifact_records('local','task') == []
     assert repo.lineage_records.list_transform_runs('local','task') == []
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status=='succeeded' and state['render_calls']==1
+    assert repo.job_records.get_job_run('local',job.id).status=='succeeded' and state['render_calls']==1
     assert len(repo.execution_records.list_artifact_records('local','task'))==1
     assert len(repo.lineage_records.list_transform_runs('local','task'))==1
     runtime.stop(0)

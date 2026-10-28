@@ -32,7 +32,7 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
             'transition':{'operation_type':'SetClipTransition', 'clip_id':'clip_2', 'transition_seconds':.1},
             'audio':{'operation_type':'EditAudioTimeline', 'audio_edit':{'action':'update', 'target_id':'voice-clip', 'values':{'gain_db':-3}}},
         }
-        jobs = len(repo.list_job_runs('local', 'task'))
+        jobs = len(repo.job_records.list_job_runs('local', 'task'))
         if action == 'audio':
             # The fixture deliberately locks its narrator; only this control's test input unlocks it.
             original['audio_timeline']['tracks'][0]['locked'] = False
@@ -50,7 +50,7 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
         assert response.status_code == 200, response.text
         assert response.json()['operation']['operation_type'] == payloads[action]['operation_type']
         saved = repo.get_creation_task_montage_plan('local', 'task')
-        assert len(repo.list_job_runs('local', 'task')) == jobs
+        assert len(repo.job_records.list_job_runs('local', 'task')) == jobs
         assert len(repo.list_edit_operations('local', 'task')) == 1
         assert len(repo.list_edit_proposals('local', 'task')) == 1
         assert repo.list_edit_proposals('local', 'task')[0].status == 'confirmed'
@@ -96,7 +96,7 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
                 raise ValueError('injected atomic commit failure')
             monkeypatch.setattr(repo if failure == 'after_proposal' else repo.edit_adoption,
                 'create_edit_proposal' if failure == 'after_proposal' else 'confirm', crash)
-        jobs = len(repo.list_job_runs('local', 'task'))
+        jobs = len(repo.job_records.list_job_runs('local', 'task'))
         response = client.post('/api/creation-tasks/task/edits/exact', json={
             'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}})
         assert response.status_code == 409, response.text
@@ -105,7 +105,7 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
         assert repo.list_edit_intents('local', 'task') == []
         assert repo.list_edit_proposals('local', 'task') == []
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        assert len(repo.list_job_runs('local', 'task')) == jobs
+        assert len(repo.job_records.list_job_runs('local', 'task')) == jobs
         assert len(repo.list_subtitle_tracks('local', 'task')) == 1
     finally:
         runtime.stop(0)

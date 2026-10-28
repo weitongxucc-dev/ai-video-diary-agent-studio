@@ -188,7 +188,7 @@ class MediaScriptTools:
 
     def _definition(self, actor, job_id):
         owner = self._identity(actor)
-        job = self.repository.get_job_run(actor.workspace_id, job_id)
+        job = self.repository.job_records.get_job_run(actor.workspace_id, job_id)
         task = self.repository.get_creation_task(actor.workspace_id, job.task_id)
         if self.authorize_task_write(actor, task) is False:
             raise PermissionError("current creator cannot write the producer task")
@@ -272,7 +272,7 @@ class MediaScriptTools:
                     references=[metadata["definition_ref"]]) != "ready":
                 raise PermissionError("配方来源不在原任务授权范围内")
         record = self.repository.execution_records.get_artifact_record(actor.workspace_id, metadata["recipe_artifact_id"])
-        job = self.repository.get_job_run(actor.workspace_id, run.job_id)
+        job = self.repository.job_records.get_job_run(actor.workspace_id, run.job_id)
         if (job.kind != "media_script_tool_registration" or job.status != "succeeded" or run.status != "succeeded"
                 or record.kind != "media_script_tool_recipe" or record.producer_job_id != job.id
                 or record.task_id != run.task_id or record.logical_ref not in run.output_refs
@@ -313,7 +313,7 @@ class MediaScriptTools:
         if len(content) > 65536:
             raise ScriptToolError("recipe exceeds bounded metadata size")
         input_digest = hashlib.sha256(content).hexdigest()
-        previous = self.repository.get_job_run_by_idempotency_key(actor.workspace_id,idempotency_key)
+        previous = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id,idempotency_key)
         if previous is not None:
             if (previous.id != registration_id or previous.kind != "media_script_tool_registration"
                     or previous.input_digest != input_digest):
@@ -321,10 +321,10 @@ class MediaScriptTools:
             if previous.status != "succeeded":
                 raise ScriptToolUnknown("original registration result is unknown; query without recreating")
             return tool_id
-        registration = self.repository.create_job_run(JobRun(id=registration_id, workspace_id=actor.workspace_id,
+        registration = self.repository.job_records.create_job_run(JobRun(id=registration_id, workspace_id=actor.workspace_id,
             task_id=job.task_id, kind="media_script_tool_registration", idempotency_key=idempotency_key,
             input_digest=input_digest), connection=conn)
-        registration = self.repository.claim_job_run(actor.workspace_id, registration.id, connection=conn)
+        registration = self.repository.job_records.claim_job_run(actor.workspace_id, registration.id, connection=conn)
         published = self.store.publish_bytes(f"script-tools/{tool_id}/{version}-{registration.id}.json", content)
         if self.store.describe(published.logical_ref) != published:
             raise ScriptToolError("recipe publication cannot be verified")
@@ -339,7 +339,7 @@ class MediaScriptTools:
             input_refs=[record.logical_ref], output_refs=[artifact.logical_ref], engine="trusted-recipe-metadata",
             parameters={**value,"active":True,"recipe_artifact_id":artifact.id}, status="succeeded",
             started_at=registration.started_at, finished_at=now), connection=conn)
-        self.repository.finish_job_run(actor.workspace_id, registration.id, status="succeeded",
+        self.repository.job_records.finish_job_run(actor.workspace_id, registration.id, status="succeeded",
             output_refs=[artifact.logical_ref], connection=conn)
         return tool_id
 
@@ -353,7 +353,7 @@ class MediaScriptTools:
 
     def get_created_for_request(self, actor, request_id):
         tool_id, registration_id, key = self.registration_identity(actor,request_id)
-        job = self.repository.get_job_run_by_idempotency_key(actor.workspace_id,key)
+        job = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id,key)
         if job is None:
             raise KeyError(str(request_id))
         if job.id != registration_id or job.kind != "media_script_tool_registration" or job.status != "succeeded":

@@ -24,14 +24,14 @@ def _delivery_case(tmp_path, monkeypatch):
             clip.gain_db = -12
         montage.audio_timeline = graph
     case, picture, _, store, picture_manifest, original_next = _packet_case(tmp_path, monkeypatch, montage_adjust=add_audio)
-    current = case.repo.get_job_run('local', case.job.id)
+    current = case.repo.job_records.get_job_run('local', case.job.id)
     intent = original_next(case.repo, case.scheduler, current)
     case.scheduler.submit(intent, case.actor)
     for _ in range(2):
         grant = case.scheduler.pick_and_grant()
         assert grant is not None
         case.executor.execute(grant, case.scheduler)
-        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.get_job_run('local', case.job.id).failure_reason
+        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
     audio = TaskAudio(case.repo, store, tmp_path/'audio')
     case.owner.audio_assembly = case.executor.audio_assembly = audio
     case.owner.narration_audio_budget = replace(case.owner.narration_audio_budget, max_input_count=2)
@@ -46,14 +46,14 @@ def _delivery_case(tmp_path, monkeypatch):
         return None
     with monkeypatch.context() as setup:
         setup.setattr('app.creation_execution.next_creation_intent', audio_only)
-        intent = audio_only(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id))
+        intent = audio_only(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id))
         case.scheduler.submit(intent, case.actor)
         while True:
             grant = case.scheduler.pick_and_grant()
             if grant is None:
                 break
             case.executor.execute(grant, case.scheduler)
-            assert case.scheduler._get(grant.request_id).state == 'done', case.repo.get_job_run('local', case.job.id).failure_reason
+            assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
     encoded_budget = AudioEncodeBudget('b'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
     mux_budget = FinalMuxBudget('c'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
     delivery = AudioDeliveryAssembly(case.repo, store, tmp_path/'work', audio=audio, packet_copy_assembly=picture,
@@ -84,7 +84,7 @@ def test_native_durable_aac_then_copy_restarts_and_keeps_priming_and_original_ma
                 commands_seen.append((resources['kind'], list(command)))
         return original_run(scheduler, grant, command, **kwargs)
     monkeypatch.setattr(commands, 'run_granted_command', capture)
-    original_job = case.repo.get_job_run('local', case.job.id)
+    original_job = case.repo.job_records.get_job_run('local', case.job.id)
     intent = original_next(case.repo, case.scheduler, original_job)
     assert intent.unit_key.startswith('render:audio-encode:v1:')
     case.scheduler.submit(intent, case.actor)
@@ -92,7 +92,7 @@ def test_native_durable_aac_then_copy_restarts_and_keeps_priming_and_original_ma
     assert encode is not None
     baseline = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['generated_bytes']
     case.executor.execute(encode, case.scheduler)
-    assert case.scheduler._get(encode.request_id).state == 'done', case.repo.get_job_run('local', case.job.id).failure_reason
+    assert case.scheduler._get(encode.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
     manifest = delivery.manifest(original_job, actor=case.actor)
     encoded = delivery._artifact(original_job, manifest, 'audio_encode')
     assert encoded['parent']['clock']['sample_count'] == 48000
@@ -117,8 +117,8 @@ def test_native_durable_aac_then_copy_restarts_and_keeps_priming_and_original_ma
     mux = scheduler.pick_and_grant()
     assert mux is not None and mux.unit_key.startswith('render:final-mux:v1:')
     executor.execute(mux, scheduler)
-    assert scheduler._get(mux.request_id).state == 'done', repo.get_job_run('local', case.job.id).failure_reason
-    completed = delivery.completed(repo.get_job_run('local', case.job.id), actor=case.actor)
+    assert scheduler._get(mux.request_id).state == 'done', repo.job_records.get_job_run('local', case.job.id).failure_reason
+    completed = delivery.completed(repo.job_records.get_job_run('local', case.job.id), actor=case.actor)
     assert completed is not None and completed['parent']['clock']['audio']['sample_count'] == 48000
     assert path.stat().st_mtime_ns == mtime and hashlib.sha256(path.read_bytes()).hexdigest() == encoded['parent']['binding']['sha256']
     assert [kind for kind, _ in commands_seen] == ['creation_audio_encode', 'creation_final_mux']
@@ -138,7 +138,7 @@ def test_audio_encode_original_parent_quota_and_unknown_boundaries(tmp_path, mon
     from app.creation.execution_budget_scope import BudgetScopeExhausted
     from app.device_scheduler import RecoveryBlocked
     case, picture, store, audio, delivery, original_next = _delivery_case(tmp_path, monkeypatch)
-    job = case.repo.get_job_run('local', case.job.id)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
     if problem == 'master_hash':
         facts = delivery._master(job, case.actor)
         with Path(facts['path']).open('r+b') as output:
@@ -166,7 +166,7 @@ def test_audio_encode_original_parent_quota_and_unknown_boundaries(tmp_path, mon
         monkeypatch.setattr(commands, 'run_granted_command', no_media)
         case.executor.execute(grant, case.scheduler)
         assert case.scheduler._get(grant.request_id).state == 'failed'
-        assert '完整SHA' in case.repo.get_job_run('local', case.job.id).failure_reason
+        assert '完整SHA' in case.repo.job_records.get_job_run('local', case.job.id).failure_reason
         measured = case.repo.execution_records.get_task_event('local', delivery.measured_event_id(grant))
         assert measured.payload['consumption_known'] and measured.payload['output_bytes'] == 0
     else:

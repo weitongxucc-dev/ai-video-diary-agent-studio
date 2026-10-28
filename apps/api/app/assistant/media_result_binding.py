@@ -52,7 +52,7 @@ class AssistantMediaResultBinding:
                 facts = graphic_source_facts(self.repository, self.artifacts, task.workspace_id, task.id, item["source_ref"], actor=actor)
                 if facts["artifact_id"] != item["expected_artifact_id"] or facts["sha256"] != item["expected_sha256"]:
                     raise ValueError("原固定输入登记修订已变化")
-            job = self.repository.get_job_run(task.workspace_id, slot["job_id"])
+            job = self.repository.job_records.get_job_run(task.workspace_id, slot["job_id"])
             start = self.repository.execution_records.get_task_event(task.workspace_id, f"event_{job.id}_start").payload
             result = self.repository.execution_records.get_task_event(task.workspace_id, f"event_{job.id}_result").payload["result"]
         except PermissionError as exc:

@@ -765,7 +765,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         creation_task_montage_plan_to_payload(montage),
     )
     monkeypatch.setattr(main_module, "production_repo", production)
-    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production.job_records))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(output_root))
     monkeypatch.setattr(
         main_module,
@@ -1082,7 +1082,7 @@ def prepare_current_presenter_media(state, monkeypatch):
         status="pending", output_path=None, artifact_ref=None, duration_seconds=None, alignment_evidence=None))
     state.production.claim_person_render(state.workspace_id, task.id, render.id)
     published = main_module.artifact_store.publish_file(f"artifacts/{task.id}/synthetic-presenter.mp4", path)
-    job = state.production.create_job_run(JobRun(id="synthetic-presenter-job", workspace_id=state.workspace_id,
+    job = state.production.job_records.create_job_run(JobRun(id="synthetic-presenter-job", workspace_id=state.workspace_id,
         task_id=task.id, kind="person_render", idempotency_key=key, input_digest=key))
     state.production.execution_records.create_artifact_record(ArtifactRecord(id="synthetic-presenter-artifact", workspace_id=state.workspace_id,
         task_id=task.id, kind="person_render", logical_ref=published.logical_ref, sha256=published.sha256,
@@ -2326,7 +2326,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         return rendered_plan
 
     monkeypatch.setattr(main_module, "production_repo", production)
-    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production.job_records))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(output_root))
     monkeypatch.setattr(
         main_module, "settings", SimpleNamespace(video_output_path=str(output_root), video_inbox_path=str(tmp_path), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp")
@@ -2357,7 +2357,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     with pytest.raises(SimulatedProcessExit):
         main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
 
-    interrupted_job = production.list_job_runs(workspace_id, task.id)[0]
+    interrupted_job = production.job_records.list_job_runs(workspace_id, task.id)[0]
     assert interrupted_job.status == "running"
     assert production.execution_records.list_artifact_records(workspace_id, task.id) == []
     assert (output_root / "artifacts" / task.id / interrupted_job.id / "preview.mp4").is_file()
@@ -2377,7 +2377,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     response = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
 
     assert response.status == "rendered"
-    jobs = production.list_job_runs(workspace_id, task.id)
+    jobs = production.job_records.list_job_runs(workspace_id, task.id)
     assert len(jobs) == 1 and jobs[0].status == "succeeded"
     artifacts = production.execution_records.list_artifact_records(workspace_id, task.id)
     assert {artifact.kind for artifact in artifacts} == {
@@ -3062,7 +3062,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         rendered_plan.status = "rendered"
         return rendered_plan
 
-    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production))
+    monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production.job_records))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
     monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output"), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"))
     monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
@@ -5170,7 +5170,7 @@ def test_extract_original_audio_rejects_silent_video_without_timeline_change(per
         'context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']})
     assert response.status_code==202
     assert state.preview_runtime.run_once()
-    assert state.production.get_job_run(state.workspace_id,response.json()['job_id']).status=='failed'
+    assert state.production.job_records.get_job_run(state.workspace_id,response.json()['job_id']).status=='failed'
     assert state.client.get(base).json()['montage']==before['montage']
     assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
 
@@ -5591,17 +5591,17 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     published_person = main_module.artifact_store.publish_file(
         person_artifact_ref, Path(state.old_render.output_path),
     )
-    person_job = state.production.create_job_run(JobRun(
+    person_job = state.production.job_records.create_job_run(JobRun(
         id="job_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
         kind="person_render", idempotency_key="v3-person-lineage", input_digest=state.old_render.cache_key,
     ))
-    state.production.claim_job_run(state.workspace_id, person_job.id)
+    state.production.job_records.claim_job_run(state.workspace_id, person_job.id)
     state.production.execution_records.create_artifact_record(ArtifactRecord(
         id="artifact_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
         kind="person_render", logical_ref=person_artifact_ref, sha256=published_person.sha256,
         size_bytes=published_person.size_bytes, producer_job_id=person_job.id, input_refs=person_input_refs,
     ))
-    state.production.finish_job_run(state.workspace_id, person_job.id, status="succeeded", output_refs=[person_artifact_ref])
+    state.production.job_records.finish_job_run(state.workspace_id, person_job.id, status="succeeded", output_refs=[person_artifact_ref])
     state.production.bind_person_render_artifact(state.workspace_id, state.task.id, state.old_render.id, person_artifact_ref)
     state.old_render = state.production.get_person_render(state.workspace_id, state.task.id, state.old_render.id)
     state.production.lineage_records.create_transform_run(TransformRun(
@@ -5641,14 +5641,14 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     source = tmp_path / "synthetic-output.bin"
     source.write_bytes(b"synthetic-registered-output")
     published = main_module.artifact_store.publish_file(state.montage.output_path, source)
-    job = state.production.create_job_run(JobRun(id="job_v3_fixture", workspace_id=state.workspace_id,
+    job = state.production.job_records.create_job_run(JobRun(id="job_v3_fixture", workspace_id=state.workspace_id,
         task_id=state.task.id, kind="creation_task_montage_render", idempotency_key="v3-fixture",
         input_digest=render_input_digest))
-    state.production.claim_job_run(state.workspace_id, job.id)
+    state.production.job_records.claim_job_run(state.workspace_id, job.id)
     state.production.execution_records.create_artifact_record(ArtifactRecord(id="artifact_v3_fixture", workspace_id=state.workspace_id,
         task_id=state.task.id, kind="rendered_video", logical_ref=published.logical_ref,
         sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs))
-    state.production.finish_job_run(state.workspace_id, job.id, status="succeeded", output_refs=[published.logical_ref])
+    state.production.job_records.finish_job_run(state.workspace_id, job.id, status="succeeded", output_refs=[published.logical_ref])
     transform_id = "transform_job_v3_fixture"
     now = main_module.utc_now()
     state.production.lineage_records.create_transform_run(TransformRun(id=transform_id, workspace_id=state.workspace_id,
@@ -5687,13 +5687,13 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
         state.workspace_id, state.task.id, verify_media=False, timeline_version=unsealed,
     )
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
-    jobs_before = state.production.list_job_runs(state.workspace_id, state.task.id)
+    jobs_before = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     changed = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"1:1"})
     assert changed.status_code == 200, changed.text
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id != original.id and not task.output_ready
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)["aspect_ratio"] == "1:1"
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == jobs_before
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == jobs_before
     changed_input_version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     changed_seal_snapshot = dict(original.snapshot)
     changed_seal_snapshot["render_input_timeline_version_id"] = changed_input_version.id
@@ -5786,7 +5786,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
     duplicate = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal_id}/confirm")
     assert duplicate.status_code == 202 and duplicate.json() == queued
     assert state.runtime.run_once()
-    job = state.production.get_job_run(state.workspace_id, queued["job_id"])
+    job = state.production.job_records.get_job_run(state.workspace_id, queued["job_id"])
     assert job.status == "succeeded"
     assert len(state.provider.output_cache_keys) == 1
     assert len(_person_edit_versions(state)) == 2
@@ -5831,7 +5831,7 @@ def test_person_edit_blocked_before_grant_never_calls_provider(permitted_person_
     assert state.provider.output_cache_keys == []
     assert [asdict(version) for version in _person_edit_versions(state)] == before
     assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
-    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status != "succeeded"
+    assert state.production.job_records.get_job_run(state.workspace_id, queued["job_id"]).status != "succeeded"
     with state.production._connect() as conn:
         assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] in {"blocked", "cancelled"}
 
@@ -5858,7 +5858,7 @@ def test_person_edit_loses_permission_or_fails_without_committing_version(permit
         return original(**kwargs)
     monkeypatch.setattr(state.provider, "render", interrupted)
     assert state.runtime.run_once()
-    job = state.production.get_job_run(state.workspace_id, queued["job_id"])
+    job = state.production.job_records.get_job_run(state.workspace_id, queued["job_id"])
     assert job.status == ("cancelled" if block == "cancel" else "failed")
     assert job.failure_reason
     versions = _person_edit_versions(state)
@@ -5885,7 +5885,7 @@ def test_person_edit_publication_rolls_back_with_failed_job(permitted_person_edi
     assert len(state.provider.output_cache_keys) == 1
     assert [asdict(version) for version in _person_edit_versions(state)] == before
     assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
-    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
+    assert state.production.job_records.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
     with state.production._connect() as conn:
         assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
         assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] == "failed"
@@ -5901,7 +5901,7 @@ def test_failed_person_edit_requires_new_preview_and_reuses_concurrent_active_re
         raise RuntimeError("synthetic provider failed once")
     monkeypatch.setattr(state.provider, "render", failed)
     assert state.runtime.run_once()
-    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
+    assert state.production.job_records.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
     assert len(_person_edit_versions(state)) == 1
     base = f"/api/creation-tasks/{state.task.id}"
     assert state.client.post(base + f"/edits/{proposal_id}/confirm").status_code == 409
@@ -5925,8 +5925,8 @@ def test_failed_person_edit_requires_new_preview_and_reuses_concurrent_active_re
         assert conn.execute("SELECT count(*) FROM task_events WHERE event_type='person_edit_requested'").fetchone()[0] == 2
         assert conn.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 2
     assert state.runtime.run_once()
-    assert state.production.get_job_run(state.workspace_id, retried["job_id"]).status == "succeeded"
-    assert state.production.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
+    assert state.production.job_records.get_job_run(state.workspace_id, retried["job_id"]).status == "succeeded"
+    assert state.production.job_records.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
     assert len(_person_edit_versions(state)) == 2
     assert len(state.provider.output_cache_keys) == 1
     assert not state.runtime.run_once()

@@ -61,7 +61,7 @@ def test_montage_waits_without_failure_or_render_then_confirm_and_continue_once(
     state = waiting_state
     before = state.repo.get_creation_task_montage_plan("local", state.task.id)
     assert state.runtime.run_once()
-    assert state.repo.get_job_run("local", state.normal_job.id).status == "queued"
+    assert state.repo.job_records.get_job_run("local", state.normal_job.id).status == "queued"
     assert state.runtime.scheduler._get(state.request.id).state == "done"
     assert state.repo.get_creation_task_montage_plan("local", state.task.id) == state.produced_plan
     assert state.produced_plan["clips"] == before["clips"]
@@ -69,7 +69,7 @@ def test_montage_waits_without_failure_or_render_then_confirm_and_continue_once(
     assert task.stage_status == "waiting_for_user" and task.narration_cache_key == "old"
     assert task.current_timeline_version_id == state.base.id
     assert submit_creation_stage(state.execution, state.runtime.scheduler,
-        state.repo.get_job_run("local", state.normal_job.id), state.actor) is None
+        state.repo.job_records.get_job_run("local", state.normal_job.id), state.actor) is None
     assert not state.runtime.run_once()
     assert len(state.montage_calls) == 1
     status = state.client.get(f"/api/creation-tasks/{state.task.id}/execution")
@@ -99,7 +99,7 @@ def test_waiting_handoff_preserves_cancel_revocation_and_unknown_gate(waiting_st
         state.execution.cancel("local", state.task.id, member_id=state.actor.member_id)
         state.runtime.scheduler.cancel(state.request.id, state.actor)
         assert not state.runtime.run_once()
-        assert state.repo.get_job_run("local", state.normal_job.id).status == "cancelled"
+        assert state.repo.job_records.get_job_run("local", state.normal_job.id).status == "cancelled"
         assert not state.montage_calls
     elif boundary == "revoked":
         state.members.remove_member(state.actor.member_id)
@@ -112,7 +112,7 @@ def test_waiting_handoff_preserves_cancel_revocation_and_unknown_gate(waiting_st
                 state.runtime.run_once()
             with state.repo._connect() as connection:
                 assert connection.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] != "free"
-            assert state.repo.get_job_run("local", state.normal_job.id).status == "running"
+            assert state.repo.job_records.get_job_run("local", state.normal_job.id).status == "running"
         finally:
             state.resources.release = True
             state.resources.allowed = False

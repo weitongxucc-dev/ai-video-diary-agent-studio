@@ -66,7 +66,7 @@ def seed_render(system, content=b"fake video", *, register=True, ref="artifacts/
     _, repo, store, _, _, _, _ = system
     publication = store.publish_bytes(ref, content)
     if register:
-        repo.create_job_run(JobRun(id="fixture-job-" + version, workspace_id="local", task_id="task",
+        repo.job_records.create_job_run(JobRun(id="fixture-job-" + version, workspace_id="local", task_id="task",
                                    kind="creation_task_montage_render", idempotency_key=version,
                                    input_digest=version))
         repo.execution_records.create_artifact_record(ArtifactRecord("artifact-" + version, "local", "task", "rendered_video",

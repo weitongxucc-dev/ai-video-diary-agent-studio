@@ -42,7 +42,7 @@ def test_confirm_queues_once_and_publishes_only_after_real_grant(narration_api):
     assert state.runtime.run_once()
     assert len(state.calls) == 1
     assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == "result"
-    assert state.repo.get_job_run("local", receipt["job_id"]).status == "succeeded"
+    assert state.repo.job_records.get_job_run("local", receipt["job_id"]).status == "succeeded"
     assert state.client.post(state.confirm_url, json={}).status_code == 409
 
 
@@ -54,7 +54,7 @@ def test_queue_cancel_preserves_audio_and_version(narration_api):
     receipt = response.json()
     response = state.client.post(f"/api/device/queue/{receipt['request_id']}/cancel", json={})
     assert response.status_code == 200, response.text
-    assert state.repo.get_job_run("local", receipt["job_id"]).status == "cancelled"
+    assert state.repo.job_records.get_job_run("local", receipt["job_id"]).status == "cancelled"
     assert not state.runtime.run_once()
     assert not state.calls
     unchanged(state)
@@ -208,7 +208,7 @@ def test_draft_narration_confirm_retimes_audio_without_confirming_low_confidence
     assert not state.generated_calls
     state.resources.allowed = True
     assert state.runtime.run_once()
-    assert state.repo.get_job_run("local", receipt.json()["job_id"]).status == "succeeded"
+    assert state.repo.job_records.get_job_run("local", receipt.json()["job_id"]).status == "succeeded"
     assert len(state.generated_calls) == 1
     assert state.generated_calls[0]["delivery_instruction"] == "这句以0.7倍速重新配音"
     updated = state.repo.get_creation_task_montage_plan("local", state.task.id)
@@ -241,7 +241,7 @@ def test_draft_narration_retime_still_rejects_insufficient_source_footage(genera
     assert queued.status_code == 202, queued.text
     state.resources.allowed = True
     assert state.runtime.run_once()
-    assert state.repo.get_job_run("local", queued.json()["job_id"]).status == "failed"
+    assert state.repo.job_records.get_job_run("local", queued.json()["job_id"]).status == "failed"
     current = state.repo.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id == state.base.id
     assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
@@ -308,7 +308,7 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     state.resources.allowed = True
     assert state.runtime.run_once()
     assert len(state.generated_calls) == 1
-    completed_job = state.repo.get_job_run("local", response.json()["job_id"])
+    completed_job = state.repo.job_records.get_job_run("local", response.json()["job_id"])
     assert completed_job.status == "succeeded", completed_job.failure_reason
     current = state.repo.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id != state.base.id
@@ -324,7 +324,7 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     assert len(tracks) == 1
     assert (tracks[0].status, tracks[0].failure_reason, tracks[0].impact, tracks[0].repair_action) == (
         "unavailable", "未翻译", "无英文输出", "选择模型后翻译")
-    assert state.repo.get_job_run("local", response.json()["job_id"]).status == "succeeded"
+    assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "succeeded"
     assert state.runtime.scheduler._get(response.json()["request_id"]).state == "done"
 
 
@@ -345,7 +345,7 @@ def test_actual_callback_failure_keeps_original_audio_and_version(generator_api,
     assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
     assert state.repo.get_narration_artifact("local", "2" * 64) is None
-    assert state.repo.get_job_run("local", response.json()["job_id"]).status == "failed"
+    assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "failed"
 
 
 @pytest.mark.parametrize("mutation", ["other_segment", "other_source", "montage"])
@@ -382,7 +382,7 @@ def test_actual_generator_cancellation_retains_original_facts(generator_api, mon
     response = state.client.post(state.confirm_url, json={})
     state.resources.allowed = True
     assert state.runtime.run_once()
-    assert state.repo.get_job_run("local", response.json()["job_id"]).status == "cancelled"
+    assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "cancelled"
     assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
 

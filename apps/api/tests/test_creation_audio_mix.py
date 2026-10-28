@@ -120,7 +120,7 @@ def test_missing_audio_budget_marks_registered_job_rejected_without_queue(tmp_pa
         job = execution.start('local', task_id, script_id, digest, actor=actor)
         with pytest.raises(ValueError, match='音频处理预算尚未标定'):
             submit_creation_stage(execution, scheduler, job, actor)
-        saved = repo.get_job_run('local', job.id)
+        saved = repo.job_records.get_job_run('local', job.id)
         assert saved.status == 'failed' and '音频处理预算尚未标定' in saved.failure_reason
         assert saved.impact and saved.repair_action
         with repo._connect() as conn:
@@ -138,7 +138,7 @@ def test_unknown_submission_does_not_invent_failed_state(tmp_path, monkeypatch):
         monkeypatch.setattr(scheduler, 'submit', lambda *args: (_ for _ in ()).throw(OSError('transport unknown')))
         with pytest.raises(OSError, match='transport unknown'):
             submit_creation_stage(execution, scheduler, job, actor)
-        assert repo.get_job_run('local', job.id).status == 'queued'
+        assert repo.job_records.get_job_run('local', job.id).status == 'queued'
         assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.execution_records.list_task_events('local', task_id))
     finally:
         scheduler.close()
@@ -311,7 +311,7 @@ def test_existing_blocked_request_is_not_invented_as_never_submitted_failure(tmp
         owner.audio_mix_facts = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError('audio input changed'))
         with pytest.raises(ValueError, match='audio input changed'):
             submit_creation_stage(execution, scheduler, job, actor)
-        assert repo.get_job_run('local', job.id).status == 'queued'
+        assert repo.job_records.get_job_run('local', job.id).status == 'queued'
         assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.execution_records.list_task_events('local', task_id))
         with repo._connect() as conn:
             pending = conn.execute('SELECT state,wait_reason FROM device_work_requests WHERE id=?',(request_id,)).fetchone()
@@ -384,7 +384,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         job = media.submit(SimpleNamespace(scheduler=scheduler, wake=lambda:None), actor, task_id, 'command_edit_preview', args, 'edit_preview')
         grant = scheduler.pick_and_grant()
         assert grant is not None
-        repo.claim_job_run('local', job.id)
+        repo.job_records.claim_job_run('local', job.id)
         context = CpuRenderGrantContext(scheduler, grant, time.monotonic()+30, 8_000_000, 1)
         token = TASK_MEDIA_CONTEXT.set((context, job, media.read('local',job.id)[1], actor))
         before = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan('local', task_id))

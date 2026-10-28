@@ -193,7 +193,7 @@ class OutputObservationUseCase:
             binding = {'kind': 'composed_output', 'montage': creation_task_montage_plan_to_payload(plan)}
             width, height = canvas_size(plan.aspect_ratio)
         else:
-            job = self.repository.get_job_run(workspace_id, target.job_id)
+            job = self.repository.job_records.get_job_run(workspace_id, target.job_id)
             if job.task_id != task_id or job.kind != TASK_MEDIA_KIND or job.status != 'succeeded':
                 raise ValueError('只能观察本任务真实成功的媒体作业输出')
             start = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start').payload

@@ -32,7 +32,7 @@ class QualityApplication:
 
     def _job(self, workspace_id, task_id, job_id, actor):
         self._task(workspace_id, task_id, actor.user_id or actor.member_id)
-        job = self.production.get_job_run(workspace_id, job_id)
+        job = self.production.job_records.get_job_run(workspace_id, job_id)
         if job.task_id != task_id or job.kind != QUALITY_KIND:
             raise KeyError(job_id)
         return job

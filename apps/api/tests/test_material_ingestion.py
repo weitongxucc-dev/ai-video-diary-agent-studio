@@ -801,7 +801,7 @@ def test_concurrent_job_creation_reuses_same_persisted_idempotency_key(tmp_path:
 
     def create(index: int) -> JobRun:
         gate.wait()
-        return repo.create_job_run(JobRun(
+        return repo.job_records.create_job_run(JobRun(
             id=f"job-{index}", workspace_id="one", task_id="task-one",
             kind="creation_task_execution", idempotency_key="same-request", input_digest="same-input",
         ))
@@ -809,19 +809,19 @@ def test_concurrent_job_creation_reuses_same_persisted_idempotency_key(tmp_path:
     with ThreadPoolExecutor(max_workers=12) as pool:
         created = list(pool.map(create, range(12)))
     assert len({job.id for job in created}) == 1
-    assert len(repo.list_job_runs("one", "task-one")) == 1
+    assert len(repo.job_records.list_job_runs("one", "task-one")) == 1
     with pytest.raises(ValueError, match="不同的任务输入"):
-        repo.create_job_run(JobRun(
+        repo.job_records.create_job_run(JobRun(
             id="different-input", workspace_id="one", task_id="task-one",
             kind="creation_task_execution", idempotency_key="same-request", input_digest="changed",
         ))
     with pytest.raises(ValueError, match="ID 已存在"):
-        repo.create_job_run(JobRun(
+        repo.job_records.create_job_run(JobRun(
             id=created[0].id, workspace_id="one", task_id="task-one",
             kind="creation_task_execution", idempotency_key="different-request", input_digest="different",
         ))
     seed_creation_task(repo, "two", "task-two")
-    other = repo.create_job_run(JobRun(
+    other = repo.job_records.create_job_run(JobRun(
         id="other-workspace-job", workspace_id="two", task_id="task-two",
         kind="creation_task_execution", idempotency_key="same-request", input_digest="same-input",
     ))
@@ -831,7 +831,7 @@ def test_concurrent_job_creation_reuses_same_persisted_idempotency_key(tmp_path:
 def test_concurrent_identical_task_event_returns_one_record(tmp_path: Path) -> None:
     repo, _ = make_repo(tmp_path)
     seed_creation_task(repo, "one", "task-one")
-    job = repo.create_job_run(JobRun(
+    job = repo.job_records.create_job_run(JobRun(
         id="job-one", workspace_id="one", task_id="task-one", kind="creation_task_execution",
         idempotency_key="request-one", input_digest="input-one",
     ))

@@ -116,7 +116,7 @@ def test_selection_keeps_the_existing_stage_gate(state, stage, status):
 
 
 def test_queued_production_cannot_race_a_voice_change(state):
-    state.repo.create_job_run(JobRun("job", "workspace", "task", "creation_execution", "job-key", "f"*64))
+    state.repo.job_records.create_job_run(JobRun("job", "workspace", "task", "creation_execution", "job-key", "f"*64))
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="未结束"):
         state.repo.select_creation_task_narration_voice(**command(state))
@@ -222,11 +222,11 @@ def confirm(state, script, **changes):
 @pytest.mark.parametrize("status", ["queued", "running", "interrupted"])
 def test_script_confirmation_refuses_active_production_in_the_same_transaction(state, status):
     script = script_candidate(state)
-    state.repo.create_job_run(JobRun("job", "workspace", "task", "creation_execution", "job-key", "f"*64))
+    state.repo.job_records.create_job_run(JobRun("job", "workspace", "task", "creation_execution", "job-key", "f"*64))
     if status != "queued":
-        state.repo.claim_job_run("workspace", "job")
+        state.repo.job_records.claim_job_run("workspace", "job")
     if status == "interrupted":
-        state.repo.finish_job_run("workspace", "job", status="interrupted", failure_reason="interrupted",
+        state.repo.job_records.finish_job_run("workspace", "job", status="interrupted", failure_reason="interrupted",
             impact="保留原任务", repair_action="回读原请求")
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="未结束"):

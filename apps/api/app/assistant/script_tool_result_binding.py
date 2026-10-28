@@ -59,7 +59,7 @@ class AssistantScriptToolResultBinding:
             raise ScriptToolReceiptRejected(str(exc)) from exc
 
     def check_save_result(self, workspace_id, task_id, tool, submitted_input):
-        producer = self.production.get_job_run(workspace_id, tool['source_job_id'])
+        producer = self.production.job_records.get_job_run(workspace_id, tool['source_job_id'])
         if producer.task_id != task_id or tool['version'] != 1:
             raise ScriptToolReceiptRejected(detail='工具登记结果不属于原任务的v1')
         if submitted_input is not None and any((tool[key] != submitted_input[field] for key, field in (('source_job_id', 'producer_job_id'), ('name', 'name'), ('description', 'description'), ('parameter_schema', 'parameter_schema')))):

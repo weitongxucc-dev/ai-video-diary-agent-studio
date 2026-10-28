@@ -97,7 +97,7 @@ class TaskAudio:
                 raise ValueError("音轨来源在读取摘要期间发生变化")
             record = records.get(reference)
             if record is not None:
-                producer = self.repository.get_job_run(workspace_id, record.producer_job_id)
+                producer = self.repository.job_records.get_job_run(workspace_id, record.producer_job_id)
                 transform = self._transform_for(workspace_id, task_id, record)
                 own_fragment = (producer.id == assembly_job_id and record.kind == 'audio_assembly_fragment'
                     and transform.transform_type == 'audio_assembly')
@@ -277,7 +277,7 @@ class TaskAudio:
 
     def assembly_unit_facts(self, workspace_id, task_id, manifest, unit_id, *, actor, budget, job_id, connection=None):
         task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
-        job = self.repository.get_job_run(workspace_id, job_id, connection=connection)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=connection)
         manifest.validate_scope(workspace_id, task_id, job_id)
         if (actor.workspace_id != workspace_id or task.owner_user_id != (actor.user_id or actor.member_id)
                 or job.task_id != task_id):
@@ -311,7 +311,7 @@ class TaskAudio:
         context.check()
         if context.scheduler.database_path != Path(self.repository.database_path).resolve():
             raise PermissionError('音频组装许可与原任务数据库不一致')
-        job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
+        job = self.repository.job_records.get_job_run(workspace_id, context.grant.owner_id)
         def measured_output(size, *, reused_ref=None):
             self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_audio_assembly_measured_{context.grant.generation}',
                 workspace_id=workspace_id, task_id=task_id, job_id=job.id, event_type='audio_assembly_output_measured',
@@ -412,7 +412,7 @@ class TaskAudio:
                     raise PermissionError("当前成员不能读取音频来源素材")
             elif current in records:
                 record = records[current]
-                job = self.repository.get_job_run(workspace_id, record.producer_job_id)
+                job = self.repository.job_records.get_job_run(workspace_id, record.producer_job_id)
                 if job.kind == TASK_MEDIA_KIND:
                     event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
                     if CreationExecutionActor.from_event(workspace_id, event.payload) != actor:
@@ -426,7 +426,7 @@ class TaskAudio:
                        if item.logical_ref == reference and item.kind == "task_recording"), None)
         if record is None:
             raise ValueError("当前任务没有这条电脑录音")
-        job = self.repository.get_job_run(workspace_id, record.producer_job_id)
+        job = self.repository.job_records.get_job_run(workspace_id, record.producer_job_id)
         transform = self._transform_for(workspace_id, task_id, record)
         duration_ms = transform.parameters.get("duration_ms")
         task = self.repository.get_creation_task(workspace_id, task_id)
@@ -885,7 +885,7 @@ class TaskMediaJobs:
                              (workspace_id, job_id, f"event_{job_id}_start")).fetchone()
         if row is None or event is None:
             raise KeyError(job_id)
-        return self.repository._job_run_from_row(row), json.loads(event["payload_json"])
+        return self.repository.job_records.job_run_from_row(row), json.loads(event["payload_json"])
 
     def _read_access(self, job, event, actor, *, check_scope=True):
         from app.creation_execution import CreationExecutionActor
@@ -1066,7 +1066,7 @@ class TaskMediaJobs:
                 conn.execute("BEGIN IMMEDIATE")
                 if write_guard is not None:
                     write_guard(conn)
-                job = self.repository.create_job_run(run, connection=conn)
+                job = self.repository.job_records.create_job_run(run, connection=conn)
                 self.repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_start", workspace_id=job.workspace_id, task_id=task_id, job_id=job.id,
                     event_type="task_media_submitted", payload=payload, created_at=job.created_at), connection=conn)
@@ -1300,7 +1300,7 @@ class TaskMediaJobs:
                 time.monotonic() + resources["timeout_seconds"] - max(0, elapsed),
                 resources["max_output_bytes"], resources["threads"], cancellation)
             if job.status in {"queued", "interrupted"}:
-                job = self.repository.claim_job_run(job.workspace_id, job.id)
+                job = self.repository.job_records.claim_job_run(job.workspace_id, job.id)
             direct_clip = "_clip_preview" in event["arguments"]
             context.check()
             try:
@@ -1384,7 +1384,7 @@ class TaskMediaJobs:
         except PermissionError:
             if executor._pause_for_quit(grant, scheduler):
                 return
-            if self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+            if self.repository.job_records.get_job_run(job.workspace_id, job.id).status == "cancelled":
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             elif not executor._defer_permission_loss(grant, scheduler):
@@ -1392,7 +1392,7 @@ class TaskMediaJobs:
         except Exception as exc:
             if executor._pause_for_quit(grant, scheduler):
                 return
-            if self.repository.get_job_run(job.workspace_id, job.id).status == "cancelled":
+            if self.repository.job_records.get_job_run(job.workspace_id, job.id).status == "cancelled":
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
             else:

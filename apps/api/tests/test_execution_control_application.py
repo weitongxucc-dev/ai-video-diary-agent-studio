@@ -135,14 +135,49 @@ def test_bounded_execution_preview_preserves_metadata_relationship_guards(tmp_pa
     assert error.value.status_code == 409
 
 
+def _declared_job_control_profiles(repo, member_id, monkeypatch):
+    """Persist real owner/source/authorization facts; media inspection is a declared metadata port."""
+    from datetime import datetime, timezone
+    from app.materials.contracts import MaterialAsset
+    from app.profiles.contracts import Authorization, PersonProfile, VoiceProfile, ProfileReference
+    import app.materials.source_files as source_files
+
+    sources = {}
+    assets = {}
+    for kind, filename, media_type in (("person", "person.png", "image"), ("voice", "voice.mp3", "audio")):
+        path = repo.video_library_path / "declared-control" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(("declared metadata bytes for " + kind).encode())
+        stat = path.stat()
+        asset = repo._save_asset(MaterialAsset(id="declared-" + kind, workspace_id="local", file_name=filename,
+            path=str(path), size_bytes=stat.st_size, modified_at=datetime.fromtimestamp(stat.st_mtime),
+            media_type=media_type, duration_seconds=2 if kind == "voice" else None, owner_user_id=member_id))
+        sources[path] = media_type
+        assets[kind] = asset
+    def declared_type(path):
+        assert Path(path) in sources
+        return sources[Path(path)]
+    monkeypatch.setattr(source_files, '_probe_file_media_type', declared_type)
+    def authorization(identifier, content_types, scopes):
+        return Authorization(identifier, 'v1', 'declared member', content_types, scopes,
+            datetime(2025,1,1,tzinfo=timezone.utc), None, 'fixture://declared-control/' + identifier, 'active', 'local')
+    person = repo.save_person_profile(PersonProfile('person_1','local','declared person','v1',
+        repo.workspace_media_reference_for_asset('local',assets['person'].id), ('studio',), ('medium',),
+        authorization('person_auth_1',('person_likeness','avatar_video'),('avatar_lipsync',)),
+        ProfileReference(asset_id=assets['person'].id)), verified_owner_user_id=member_id)
+    voice = repo.save_versioned_voice_profile(VoiceProfile(id='voice_1',workspace_id='local',version='v1',language='zh',
+        reference_audio_path=repo.workspace_media_reference_for_asset('local',assets['voice'].id),
+        reference_text='declared reference', person_profile_id=person.id, person_version=person.version,
+        model_id='declared-control-voice', display_name='declared voice', authorization=authorization('voice_auth_1',('voice',),('narration',)),
+        reference=ProfileReference(asset_id=assets['voice'].id)), verified_owner_user_id=member_id)
+    return person, voice
+
+
 def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tmp_path, monkeypatch):
     repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local')
     members = LocalMemberService(repo.database_path)
     member, token = members.join(members.create_invite_code(), '执行控制 normal 合成成员')
-    person, voice, *_ = register_synthetic_profiles(repo, workspace_id='local', member_id=member.member_id,
-        person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh',
-        model_id='declared-control-voice', person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1',
-        voice_usage_scopes=('narration',))
+    person, voice = _declared_job_control_profiles(repo, member.member_id, monkeypatch)
     plan = repo.plan_records.get_creation_plan('local', 'plan_local')
     plan.presenter_share_target = 0
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
@@ -245,7 +280,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         assert interrupted.json()['stages'][-1]['status']=='running'
         main._recover_creation_executions()
         assert len(repo.list_creation_job_request_states('local',first_job))==1
-        local=repo.create_job_run(JobRun(id='declared-local-edit-job',workspace_id='local',task_id=task_id,
+        local=repo.job_records.create_job_run(JobRun(id='declared-local-edit-job',workspace_id='local',task_id=task_id,
             kind=PERSON_EDIT_KIND,idempotency_key='declared-local-edit-job',input_digest=request['input_digest']))
         repo.execution_records.append_task_event(TaskEvent(id=f'event_{local.id}_start',workspace_id='local',task_id=task_id,job_id=local.id,
             event_type='declared_local_start',payload={**actor.identity_payload(),'input_digest':local.input_digest}))
@@ -269,29 +304,29 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         main._recover_creation_executions()
         assert len(repo.list_creation_job_request_states('local',second_job))==1
         assert client.post(url+'/execution/cancel').status_code==200
-        assert repo.get_job_run('local',second_job).status=='cancelled'
+        assert repo.job_records.get_job_run('local',second_job).status=='cancelled'
         assert repo.list_creation_job_request_states('local',second_job)[0]['state']=='cancelled'
         # Finite read-port fixtures below are not submitted work or worker-success substitutes.
         kind='declared-control-read-probe'
         for index in range(2):
-            repo.create_job_run(JobRun(id=f'declared-read-{index}',workspace_id='local',task_id=task_id,kind=kind,
+            repo.job_records.create_job_run(JobRun(id=f'declared-read-{index}',workspace_id='local',task_id=task_id,kind=kind,
                 idempotency_key=f'declared-read-{index}',input_digest='declared-read'))
         decoded=[]
-        original_decoder=repo._job_run_from_row
+        original_decoder=repo.job_records.job_run_from_row
         def observe_decoder(row):
             decoded.append(row['id'])
             return original_decoder(row)
         with monkeypatch.context() as observe:
-            observe.setattr(repo,'_job_run_from_row',observe_decoder)
-            snapshot=repo.list_pending_task_media_jobs(kind)
+            observe.setattr(repo.job_records,'job_run_from_row',observe_decoder)
+            snapshot=repo.job_records.list_pending_task_media_jobs(kind)
             assert isinstance(snapshot,GeneratorType) and decoded==[]
             first_decoded=next(snapshot)
             assert decoded==[first_decoded.id]
-            repo.create_job_run(JobRun(id='declared-read-after-query',workspace_id='local',task_id=task_id,kind=kind,
+            repo.job_records.create_job_run(JobRun(id='declared-read-after-query',workspace_id='local',task_id=task_id,kind=kind,
                 idempotency_key='declared-read-after-query',input_digest='declared-read'))
             remainder=list(snapshot)
             assert {first_decoded.id,*[j.id for j in remainder]}=={'declared-read-0','declared-read-1'}
-        assert list(repo.list_pending_task_media_jobs(TASK_MEDIA_KIND))==[]
+        assert list(repo.job_records.list_pending_task_media_jobs(TASK_MEDIA_KIND))==[]
         with repo._connect() as conn:
             source=dict(conn.execute('SELECT * FROM device_work_requests WHERE id=?',(request_id,)).fetchone())
             for index in range(2):
@@ -316,7 +351,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
             'declared_interrupted_projection':interrupted.json(),'local_kind_query_status':local_query.status_code,
             'current_original_job_identity_rejection':identity_query.json(),
             'cancelled':cancelled.json(),'resumed':resumed.json(),'request_rows':request_rows,'permits':permits,
-            'lazy_decoder_ids':decoded,'ordered_wait_fixture':dict(latest),'jobs':[asdict(j) for j in repo.list_job_runs('local',task_id)],
+            'lazy_decoder_ids':decoded,'ordered_wait_fixture':dict(latest),'jobs':[asdict(j) for j in repo.job_records.list_job_runs('local',task_id)],
             'narration_budget':asdict(budget),'host_budget':asdict(host_budget),
             'OS_fixture':{'cpu_percent':0,'swap_used_bytes':0,'actual_swap_before':swap.used,'disk_io_baseline':disk._asdict(),
                 'per_device_disk_io_baseline':{name:value._asdict() for name,value in disk_devices.items()}},

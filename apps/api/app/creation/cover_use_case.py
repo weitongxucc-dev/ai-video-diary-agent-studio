@@ -215,7 +215,7 @@ class CoverUseCase:
         return self._job(command.workspace_id, command.task_id, command.proposal_id, command.input_digest)
 
     def _job(self, workspace_id, task_id, proposal_id, input_digest):
-        job = self.repository.get_job_run_by_idempotency_key(workspace_id, f"cover:{proposal_id}")
+        job = self.repository.job_records.get_job_run_by_idempotency_key(workspace_id, f"cover:{proposal_id}")
         if job is not None and (job.task_id != task_id or job.kind != COVER_JOB_KIND
                                 or job.input_digest != input_digest):
             raise ValueError("原封面幂等键已绑定不同任务或输入")
@@ -382,7 +382,7 @@ class CoverUseCase:
                     "result_version_id": version_id}, created_at=receipt.generated_at), connection=connection)
             commit_change_set(self.repository, change, connection=connection)
             if job.status == "running":
-                self.repository.finish_job_run(command.workspace_id, job.id, status="succeeded",
+                self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="succeeded",
                     output_refs=[evidence.output_ref], connection=connection)
             return f"cover:{job.id}:{version_id}"
 
@@ -406,7 +406,7 @@ class CoverUseCase:
                 "max_stdout_bytes": budget.max_stdout_bytes, "max_stderr_bytes": budget.max_stderr_bytes}
 
     def _start(self, workspace_id, job_id, connection=None):
-        job = self.repository.get_job_run(workspace_id, job_id)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id)
         try:
             event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_cover_start", connection=connection)
         except KeyError as exc:
@@ -526,7 +526,7 @@ class CoverUseCase:
         if result is not None:
             return result
         budget = self.require_budget()  # before a new Job or generation
-        job = self.repository.get_job_run_by_idempotency_key(actor.workspace_id, f"cover:{proposal_id}")
+        job = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id, f"cover:{proposal_id}")
         if job is None:
             command = self.prepare(actor, task_id, proposal_id, request_id=request_id)
             submitted = datetime.now(timezone.utc)
@@ -549,7 +549,7 @@ class CoverUseCase:
             result = self.read_result(command, actor)
             if result is not None:
                 return result
-            current = self.repository.get_job_run(command.workspace_id, job.id)
+            current = self.repository.job_records.get_job_run(command.workspace_id, job.id)
             if current.status in {"failed", "cancelled"}:
                 raise CoverUnresolved(current, current.failure_reason or current.status)
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
@@ -559,10 +559,10 @@ class CoverUseCase:
                         detail = runtime.scheduler.cancel(row["id"], actor)
                         runtime.registrations["creation_job"].executor.request_cancel(row["id"])
                         if detail["state"] == "cancelled" and current.status in {"queued", "interrupted"}:
-                            self.repository.finish_job_run(command.workspace_id, job.id, status="cancelled",
+                            self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="cancelled",
                                 failure_reason="cover_deadline", impact="当前时间线保持不变。",
                                 repair_action="回读原封面请求，确认释放后重新发起。")
-                raise CoverUnresolved(self.repository.get_job_run(command.workspace_id, job.id),
+                raise CoverUnresolved(self.repository.job_records.get_job_run(command.workspace_id, job.id),
                     "封面原请求时限已到；未确认释放或采用的结果保持未确定，不重复生成")
             threading.Event().wait(min(budget.runtime_sample_seconds, remaining))
 
@@ -591,7 +591,7 @@ class CoverUseCase:
                         raise RecoveryBlocked("原封面副作用未知，缺少回执，不重claim或重生成")
                 else:
                     raise RecoveryBlocked("原封面worker已启动但无可信回执，不能盲重放")
-                job = self.repository.claim_job_run(command.workspace_id, job.id)
+                job = self.repository.job_records.claim_job_run(command.workspace_id, job.id)
                 control_ref = f"artifacts/{command.task_id}/{job.id}/cover-request.json"
                 control = {"command": asdict(command), "job_id": job.id,
                            "threads": budget.decoder_threads, "max_receipt_bytes": budget.max_receipt_bytes,
@@ -624,7 +624,7 @@ class CoverUseCase:
             if executor._pause_for_quit(grant, scheduler):
                 return
             def cancelled(connection, current):
-                self.repository.finish_job_run(command.workspace_id, job.id, status="cancelled",
+                self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="cancelled",
                     failure_reason="user_cancelled", impact="当前时间线保持不变。",
                     repair_action="回读原封面状态后重新发起。", connection=connection)
                 return f"cover:{job.id}:cancelled"
@@ -637,7 +637,7 @@ class CoverUseCase:
                 return
             if known_failure:
                 def failed(connection, current):
-                    self.repository.finish_job_run(command.workspace_id, job.id, status="failed",
+                    self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="failed",
                         failure_reason=str(exc), impact="当前时间线保持不变。",
                         repair_action="检查原成片、选帧和本机FFmpeg后重新发起。", connection=connection)
                     return f"cover:{job.id}:failed"

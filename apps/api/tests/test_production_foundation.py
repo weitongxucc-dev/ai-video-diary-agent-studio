@@ -758,7 +758,7 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
     )
-    created = production.create_job_run(
+    created = production.job_records.create_job_run(
         JobRun(
             id="job-1",
             workspace_id="workspace_a",
@@ -768,16 +768,16 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
             input_digest="input-digest-v1",
         )
     )
-    idempotent = production.create_job_run(
+    idempotent = production.job_records.create_job_run(
         replace(created, id="job-duplicate")
     )
     assert idempotent.id == created.id
 
-    running = production.claim_job_run("workspace_a", created.id)
+    running = production.job_records.claim_job_run("workspace_a", created.id)
     assert (running.status, running.attempt) == ("running", 1)
-    assert production.update_job_run_progress("workspace_a", created.id, 40).progress == 40
+    assert production.job_records.update_job_run_progress("workspace_a", created.id, 40).progress == 40
     with pytest.raises(ValueError, match="可追溯产物"):
-        production.finish_job_run(
+        production.job_records.finish_job_run(
             "workspace_a",
             created.id,
             status="succeeded",
@@ -806,7 +806,7 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
             payload={"artifact_id": artifact.id},
         )
     )
-    succeeded = production.finish_job_run(
+    succeeded = production.job_records.finish_job_run(
         "workspace_a",
         created.id,
         status="succeeded",
@@ -818,7 +818,7 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
         [artifact.logical_ref],
     )
 
-    interrupted_candidate = production.create_job_run(
+    interrupted_candidate = production.job_records.create_job_run(
         JobRun(
             id="job-2",
             workspace_id="workspace_a",
@@ -828,26 +828,26 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
             input_digest="input-digest-v2",
         )
     )
-    production.claim_job_run("workspace_a", interrupted_candidate.id)
+    production.job_records.claim_job_run("workspace_a", interrupted_candidate.id)
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.get_job_run("workspace_a", created.id) == succeeded
+    assert reloaded.job_records.get_job_run("workspace_a", created.id) == succeeded
     assert reloaded.execution_records.get_artifact_record("workspace_a", artifact.id) == artifact
     assert reloaded.execution_records.get_task_event("workspace_a", event.id) == event
-    assert reloaded.get_job_run("workspace_a", interrupted_candidate.id).status == "running"
-    assert reloaded.interrupt_running_job_runs("workspace_a") == 1
-    interrupted = reloaded.get_job_run("workspace_a", interrupted_candidate.id)
+    assert reloaded.job_records.get_job_run("workspace_a", interrupted_candidate.id).status == "running"
+    assert reloaded.job_records.interrupt_running_job_runs("workspace_a") == 1
+    interrupted = reloaded.job_records.get_job_run("workspace_a", interrupted_candidate.id)
     assert interrupted.status == "interrupted"
     assert interrupted.failure_reason == "process_interrupted"
 
-    reloaded.claim_job_run("workspace_a", interrupted.id)
+    reloaded.job_records.claim_job_run("workspace_a", interrupted.id)
     _save_creation_task(
         reloaded, workspace_id="workspace_b", task_id="task-b"
     )
-    workspace_b_job = reloaded.create_job_run(
+    workspace_b_job = reloaded.job_records.create_job_run(
         JobRun(
             id="job-workspace-b",
             workspace_id="workspace_b",
@@ -857,20 +857,20 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
             input_digest="input-digest-workspace-b",
         )
     )
-    reloaded.claim_job_run("workspace_b", workspace_b_job.id)
-    assert reloaded.interrupt_running_job_runs() == 2
-    assert reloaded.get_job_run("workspace_a", interrupted.id).status == "interrupted"
-    assert reloaded.get_job_run("workspace_b", workspace_b_job.id).status == "interrupted"
+    reloaded.job_records.claim_job_run("workspace_b", workspace_b_job.id)
+    assert reloaded.job_records.interrupt_running_job_runs() == 2
+    assert reloaded.job_records.get_job_run("workspace_a", interrupted.id).status == "interrupted"
+    assert reloaded.job_records.get_job_run("workspace_b", workspace_b_job.id).status == "interrupted"
 
     for getter, record_id in (
-        (reloaded.get_job_run, created.id),
+        (reloaded.job_records.get_job_run, created.id),
         (reloaded.execution_records.get_artifact_record, artifact.id),
         (reloaded.execution_records.get_task_event, event.id),
     ):
         with pytest.raises(KeyError):
             getter("workspace_b", record_id)
     with pytest.raises(KeyError):
-        reloaded.create_job_run(
+        reloaded.job_records.create_job_run(
             JobRun(
                 id="job-cross-workspace",
                 workspace_id="workspace_b",
@@ -880,6 +880,62 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
                 input_digest="input-digest-cross-workspace",
             )
         )
+
+
+    # New record ports must see the caller's uncommitted Job and full artifact tail.
+    pending = JobRun("borrowed-job", "workspace_a", "task-a", "render_preview", "borrowed-key", "borrowed-input")
+    pending_artifact = ArtifactRecord("borrowed-artifact", "workspace_a", "task-a", "preview",
+        "artifacts/task-a/borrowed.mp4", hashlib.sha256(b"declared").hexdigest(), 8, pending.id, [])
+    records = reloaded.job_records
+    with reloaded._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        assert records.create_job_run(pending, connection=connection) == pending
+        running = records.claim_job_run("workspace_a", pending.id, connection=connection)
+        assert (running.status, running.attempt) == ("running", 1)
+        reloaded.execution_records.create_artifact_record(pending_artifact, connection=connection)
+        with pytest.raises(ValueError, match="先登记"):
+            records.finish_job_run("workspace_a", pending.id, status="succeeded",
+                output_refs=[pending_artifact.logical_ref, "artifacts/task-a/missing-tail.mp4"], connection=connection)
+        assert records.get_job_run("workspace_a", pending.id, connection=connection).status == "running"
+        completed = records.finish_job_run("workspace_a", pending.id, status="succeeded",
+            output_refs=[pending_artifact.logical_ref, pending_artifact.logical_ref], connection=connection)
+        assert completed.output_refs == [pending_artifact.logical_ref, pending_artifact.logical_ref]
+        assert connection.in_transaction
+        with sqlite3.connect(reloaded.database_path) as observer:
+            assert observer.execute("SELECT COUNT(*) FROM job_runs WHERE id=?", (pending.id,)).fetchone()[0] == 0
+            assert observer.execute("SELECT COUNT(*) FROM artifact_records WHERE id=?", (pending_artifact.id,)).fetchone()[0] == 0
+        connection.rollback()
+    with pytest.raises(KeyError):
+        records.get_job_run("workspace_a", pending.id)
+    # finish's borrowed-idle guard BEGIN is the original special case.
+    guarded = []
+    with reloaded._connect() as connection:
+        assert not connection.in_transaction
+        def guard(current):
+            assert current is connection and current.in_transaction
+            guarded.append(current)
+        cancelled = records.finish_job_run("workspace_a", interrupted.id, status="cancelled",
+            failure_reason="declared stop", impact="no output", repair_action="explicit retry",
+            connection=connection, write_guard=guard)
+        assert cancelled.status == "cancelled" and guarded == [connection] and connection.in_transaction
+        connection.rollback()
+    assert records.get_job_run("workspace_a", interrupted.id).status == "interrupted"
+    failed = records.create_job_run(JobRun("retry-job", "workspace_a", "task-a", "render_preview", "retry-key", "original-input"))
+    records.claim_job_run("workspace_a", failed.id)
+    failed = records.finish_job_run("workspace_a", failed.id, status="failed", failure_reason="declared failure",
+        impact="no output", repair_action="retry original")
+    with reloaded._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        for version, attempt in (("stale-version", failed.attempt), (failed.updated_at, failed.attempt + 1)):
+            with pytest.raises(ValueError, match="状态、版本或尝试序号已变化"):
+                records.reopen_failed_job_run("workspace_a", failed.id, expected_updated_at=version,
+                    expected_attempt=attempt, connection=connection)
+        reopened = records.reopen_failed_job_run("workspace_a", failed.id, expected_updated_at=failed.updated_at,
+            expected_attempt=failed.attempt, connection=connection)
+        assert (reopened.id, reopened.status, reopened.attempt, reopened.input_digest) == (failed.id, "queued", failed.attempt, failed.input_digest)
+        assert connection.in_transaction
+        connection.rollback()
+    assert records.get_job_run("workspace_a", failed.id) == failed
 
 
 @pytest.fixture
@@ -905,7 +961,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
     _save_creation_task(
         production, workspace_id="workspace_b", task_id="task-b"
     )
-    job = production.create_job_run(
+    job = production.job_records.create_job_run(
         JobRun(
             id="job-render",
             workspace_id="workspace_a",
@@ -915,7 +971,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
             input_digest="render-input-digest",
         )
     )
-    production.claim_job_run("workspace_a", job.id)
+    production.job_records.claim_job_run("workspace_a", job.id)
     preview_ref = "artifacts/task-a/job-render/preview.mp4"
     subtitles_ref = "artifacts/task-a/job-render/subtitles.srt"
     for artifact_id, kind, logical_ref, payload in (
@@ -1015,7 +1071,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
     )
-    job = production.create_job_run(
+    job = production.job_records.create_job_run(
         JobRun(
             id="job-replay",
             workspace_id="workspace_a",
@@ -1025,7 +1081,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
             input_digest="replay-input-digest",
         )
     )
-    production.claim_job_run("workspace_a", job.id)
+    production.job_records.claim_job_run("workspace_a", job.id)
     artifact = ArtifactRecord(
         id="artifact-replay",
         workspace_id="workspace_a",
@@ -1082,7 +1138,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
         created_by_operation_id="operation-replay",
     )
     production.create_timeline_version(version)
-    production.finish_job_run(
+    production.job_records.finish_job_run(
         "workspace_a",
         job.id,
         status="succeeded",
@@ -1875,7 +1931,7 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
         )
     )
     artifact_store = ArtifactStore(tmp_path / "workspace-files")
-    runner = VideoJobRunner(production)
+    runner = VideoJobRunner(production.job_records)
     run = JobRun(
         id="job-render-v1",
         workspace_id="workspace_a",
@@ -1919,7 +1975,7 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
     assert completed.status == "succeeded"
     assert completed.output_refs == ["artifacts/task-a/timeline-v1/preview.mp4"]
 
-    pending_restart = production.create_job_run(
+    pending_restart = production.job_records.create_job_run(
         JobRun(
             id="job-restart",
             workspace_id="workspace_a",
@@ -1929,15 +1985,15 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
             input_digest=hashlib.sha256(b"render-final-v1").hexdigest(),
         )
     )
-    production.claim_job_run("workspace_a", pending_restart.id)
+    production.job_records.claim_job_run("workspace_a", pending_restart.id)
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    restarted_runner = VideoJobRunner(reloaded)
+    restarted_runner = VideoJobRunner(reloaded.job_records)
     assert restarted_runner.recover_after_restart("workspace_a") == 1
-    assert reloaded.get_job_run("workspace_a", pending_restart.id).status == "interrupted"
+    assert reloaded.job_records.get_job_run("workspace_a", pending_restart.id).status == "interrupted"
     assert reloaded.get_creation_task(
         "workspace_a", "task-a"
     ).current_timeline_version_id == version.id
@@ -2237,7 +2293,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
             status="pending",
         )
     )
-    producer_job = production.create_job_run(
+    producer_job = production.job_records.create_job_run(
         JobRun(
             id="job-person-render-a",
             workspace_id="workspace_a",
@@ -2284,7 +2340,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         workspace_id="workspace_a",
         task_id="task-person-other",
     )
-    foreign_job = production.create_job_run(
+    foreign_job = production.job_records.create_job_run(
         JobRun(
             id="job-person-render-other",
             workspace_id="workspace_a",
@@ -4295,7 +4351,7 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
         created_by_transform_id=transform.id)
     with production._connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        production.create_job_run(job, connection=connection)
+        production.job_records.create_job_run(job, connection=connection)
         production.execution_records.create_artifact_record(artifact, connection=connection)
         assert production.lineage_records.create_transform_run(transform, connection=connection) == transform
         assert production.lineage_records.create_dependency_edge(edge, connection=connection) == edge
@@ -4304,10 +4360,10 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
         with sqlite3.connect(production.database_path) as observer:
             assert observer.execute("SELECT COUNT(*) FROM transform_runs").fetchone()[0] == 0
         connection.rollback()
-    assert production.list_job_runs("workspace_a", "task-a") == []
+    assert production.job_records.list_job_runs("workspace_a", "task-a") == []
     assert production.execution_records.list_artifact_records("workspace_a", "task-a") == []
     assert production.lineage_records.list_transform_runs("workspace_a", "task-a") == []
-    production.create_job_run(job)
+    production.job_records.create_job_run(job)
     tail = replace(edge, id="lineage-tail", upstream_ref=transform.input_refs[1])
     with production._connect() as connection:
         connection.execute("""CREATE TRIGGER refuse_lineage_tail BEFORE INSERT ON dependency_edges
@@ -4317,7 +4373,7 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
         production.record_task_media_publication(artifact, transform, [edge, tail])
     assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
     assert str(refused.value.__cause__) == "isolated lineage tail refusal"
-    assert production.get_job_run("workspace_a", job.id) == job
+    assert production.job_records.get_job_run("workspace_a", job.id) == job
     assert production.execution_records.list_artifact_records("workspace_a", "task-a") == []
     assert production.lineage_records.list_transform_runs("workspace_a", "task-a") == []
     assert production.lineage_records.list_dependency_edges("workspace_a", "task-a") == []
@@ -4344,7 +4400,7 @@ def test_execution_records_borrow_pending_job_and_rollback_artifact_event_tail(t
         "last_grant_generation": 3, "label": "原请求"})
     with production._connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        production.create_job_run(job, connection=connection)
+        production.job_records.create_job_run(job, connection=connection)
         assert records.create_artifact_record(artifact, connection=connection) == artifact
         assert records.append_task_event(event, connection=connection) == event
         assert records.get_artifact_record("workspace_a", artifact.id, connection=connection) == artifact
@@ -4364,12 +4420,12 @@ def test_execution_records_borrow_pending_job_and_rollback_artifact_event_tail(t
     with pytest.raises(ValueError, match="任务事件 ID 已存在") as refused:
         with production._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            production.create_job_run(job, connection=connection)
+            production.job_records.create_job_run(job, connection=connection)
             records.create_artifact_record(artifact, connection=connection)
             records.append_task_event(event, connection=connection)
     assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
     assert str(refused.value.__cause__) == "isolated execution event tail refusal"
-    assert production.list_job_runs("workspace_a", "task-a") == []
+    assert production.job_records.list_job_runs("workspace_a", "task-a") == []
     assert records.list_artifact_records("workspace_a", "task-a") == []
     assert records.list_task_events("workspace_a", "task-a") == []
 

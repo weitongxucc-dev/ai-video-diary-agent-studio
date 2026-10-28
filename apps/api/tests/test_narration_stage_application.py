@@ -81,7 +81,7 @@ def narration_preparation(tmp_path):
     def no_write(*args,**kwargs):
         pytest.fail('preparation must leave the business checkpoint to its owner')
     repository=SimpleNamespace(
-        get_job_run=lambda _ws,_job:job,execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
+        job_records=SimpleNamespace(get_job_run=lambda _ws,_job:job),execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
         creation_execution_input=lambda *_:start.payload,
         get_creation_task=read_task,plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),get_creation_task_script=lambda *_:script,
         effective_creation_script=lambda *_:script,
@@ -448,7 +448,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     queued=s.client.post(confirm_url,json={});assert queued.status_code==202,queued.text
     assert s.client.post(confirm_url,json={}).json()==queued.json()
     assert s.runtime.run_once(),s.runtime.last_error
-    job=repo.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
+    job=repo.job_records.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
     current=repo.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
     updated=repo.list_narration_segments('local',s.task_id,s.script_id)
     changed=next(item for item in updated if item.id==target.id)
