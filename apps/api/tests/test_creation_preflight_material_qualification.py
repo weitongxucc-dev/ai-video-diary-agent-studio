@@ -161,7 +161,7 @@ def test_prepare_confirm_freezes_only_actual_qualified_pairs(qualification_state
         assert conn.execute('SELECT COUNT(*) FROM creation_plans').fetchone()[0] == 1
         assert conn.execute('SELECT COUNT(*) FROM creation_tasks').fetchone()[0] == 1
     task = repository.list_creation_tasks(WORKSPACE)[0]
-    persisted = repository.get_creation_plan(WORKSPACE, task.plan_id)
+    persisted = repository.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     assert {(item.asset_ref.removeprefix('asset:'), item.segment_ref.removeprefix('segment:'))
             for item in persisted.material_matches} == expected
     assert material_rows(repository) == before

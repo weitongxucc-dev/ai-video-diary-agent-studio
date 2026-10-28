@@ -15,7 +15,8 @@ from app.artifact_store import ArtifactStore
 from app.creation.quality_inspection_use_case import QualityInspectionUseCase
 from app.creation.output_observation_use_case import OutputObservationUseCase
 from app.creation_execution import CreationExecutionActor
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
@@ -34,7 +35,7 @@ def test_production_snapshot_contends_with_original_quality_recovery(tmp_path, m
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     actor = CreationExecutionActor("local", "member")
     store = ArtifactStore(tmp_path / "artifacts")
     checks = QualityCheckRepository(repository.database_path)
@@ -129,7 +130,7 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     actor = CreationExecutionActor("local", "member")
     store = ArtifactStore(tmp_path / "artifacts")
     checks = QualityCheckRepository(repository.database_path)

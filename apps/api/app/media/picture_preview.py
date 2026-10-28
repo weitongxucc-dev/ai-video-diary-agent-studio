@@ -384,7 +384,7 @@ class PicturePreviewRenderer:
         person_ids = set()
         if any((clip.person_render_id for clip in plan.clips)):
             from app.creation_execution import presenter_inputs, current_presenter_render
-            creation_plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
             script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
             for segment, person_request in presenter_inputs(self.repository, task, script, creation_plan, self.presenter_model_ids()):
                 current = current_presenter_render(self.repository, task, segment, person_request, self.person_path)

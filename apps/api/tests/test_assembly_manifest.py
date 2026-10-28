@@ -196,7 +196,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
                         snapshot={'montage': creation_task_montage_plan_to_payload(montage)},
                         created_by_operation_id=None), connection=conn, expected_current_version_id='adopted-input')
                     actual_task = case.repo.get_creation_task('local', case.task_id, connection=conn)
-                    actual_plan = case.repo.get_creation_plan('local', actual_task.plan_id)
+                    actual_plan = case.repo.plan_records.get_creation_plan('local', actual_task.plan_id)
                     _, current_resources = case.owner.render_facts(conn, actual_task, actual_plan,
                         actor=case.actor, job=case.job, prepare_assembly=True)
                     assert current_resources['input_timeline_version_id'] == 'uncommitted-adoption'

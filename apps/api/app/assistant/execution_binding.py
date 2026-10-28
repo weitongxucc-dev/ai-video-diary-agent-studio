@@ -155,7 +155,7 @@ class AssistantExecutionBinding:
             raise ExecutionBindingRejected('原助手制作要求的阶段或目标版本已失效')
         if origin['context'].get('stage') in {'topic', 'script'}:
             try:
-                plan = self.production.get_creation_plan(task.workspace_id, task.plan_id)
+                plan = self.production.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
             except KeyError as exc:
                 raise ExecutionBindingRejected('creation task not found', kind='not_found') from exc
             if plan.creation_task_id != task.id:

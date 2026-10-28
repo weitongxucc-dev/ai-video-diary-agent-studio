@@ -30,13 +30,8 @@ from app.device_scheduler import DeviceScheduler, ProcessIdentity
 from app.host_resource_probes import HostCapacity, HostProcessProbe
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import (
-    CreationPlan,
-    MaterialAsset,
-    MaterialSegment,
-    NarrationArtifactRecord,
-    ProductionRepository,
-)
+from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
     CreationTask,
@@ -76,7 +71,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
     )
     task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id,
                         name="测试", scenario="knowledge_explanation")
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
     now = datetime.now(timezone.utc).isoformat()
     script_id = f"script_{workspace_id}{task_suffix}"
     payload = {
@@ -109,7 +104,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
                 (json.dumps(asdict(task), default=str), now, workspace_id, task_id),
             )
     script = repo.get_creation_task_script(workspace_id, script_id)
-    persisted_plan = repo.get_creation_plan(workspace_id, plan.id)
+    persisted_plan = repo.plan_records.get_creation_plan(workspace_id, plan.id)
     return repo, task_id, script_id, revision_digest(script, persisted_plan)
 
 
@@ -134,7 +129,7 @@ def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_pa
         conn.execute("UPDATE creation_plans SET payload=?, visibility='shared' WHERE id=?",
                      (json.dumps(payload), task.plan_id))
     script = repo.get_creation_task_script("workspace_a", script_id)
-    plan = repo.get_creation_plan("workspace_a", task.plan_id)
+    plan = repo.plan_records.get_creation_plan("workspace_a", task.plan_id)
     actor = CreationExecutionActor("workspace_a", "member-a")
     _qualify_start_voice(repo,task_id,actor.member_id,workspace_id='workspace_a')
     job = _execution(repo).start("workspace_a", task_id, script_id, revision_digest(script, plan), actor=actor)
@@ -171,7 +166,7 @@ def _render_version_fixture(tmp_path):
         person_id="person_1", voice_id="voice_1", person_version="v1", voice_version="v1",
         language="zh", model_id="test",
     )
-    plan = repo.get_creation_plan("local", "plan_local")
+    plan = repo.plan_records.get_creation_plan("local", "plan_local")
     plan.selected_person = CreationPlanPersonReference(person.id, person.version)
     plan.selected_voice = CreationPlanVoiceReference(
         voice.id, voice.version, person.id, person.version,
@@ -233,7 +228,7 @@ def _render_version_fixture(tmp_path):
         resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
                                   released=lambda _grant: True), processes=HostProcessProbe())
     persisted_script = repo.get_creation_task_script("local", script_id)
-    persisted_plan = repo.get_creation_plan("local", plan.id)
+    persisted_plan = repo.plan_records.get_creation_plan("local", plan.id)
     return (repo, task_id, script_id, revision_digest(persisted_script, persisted_plan),
             actor, execution, owner, scheduler, version, members)
 
@@ -254,7 +249,7 @@ def test_cpu_render_counts_repeated_source_once_and_preserves_all_clips(tmp_path
             base, id="timeline_repeated_source", parent_version_id=base.id, sequence=2,
             snapshot={"montage": montage}))
         task = repo.get_creation_task("local", task_id)
-        plan = repo.get_creation_plan("local", task.plan_id)
+        plan = repo.plan_records.get_creation_plan("local", task.plan_id)
         manifests = []
         original_dumps = json.dumps
 
@@ -664,7 +659,7 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
     user = member.member_id
     assert members.resolve_member(member_token) == member
     monkeypatch.setattr(main_module, "local_members_service", members)
-    plan = repo.get_creation_plan(workspace, f"plan_{workspace}")
+    plan = repo.plan_records.get_creation_plan(workspace, f"plan_{workspace}")
     plan.presenter_share_target = 0
     person, voice, _avatar_authorization, _voice_path, _image_path = register_synthetic_profiles(
         repo, workspace_id=workspace, member_id=user,
@@ -1640,7 +1635,7 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
                 (json.dumps(asdict(script), default=str), script.id))
     if scenario in {"newer_execution", "newer_input_and_execution"}:
         newer_digest = revision_digest(repo.get_creation_task_script("local", script_id),
-            repo.get_creation_plan("local", repo.get_creation_task("local", task_id).plan_id))
+            repo.plan_records.get_creation_plan("local", repo.get_creation_task("local", task_id).plan_id))
         newer = repo.create_job_run(JobRun("newer-execution", "local", task_id,
             "creation_task_execution", "newer-execution-input", newer_digest))
         repo.execution_records.append_task_event(TaskEvent(f"event_{newer.id}_start", "local", task_id, newer.id,
@@ -1999,7 +1994,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         language="zh", model_id="test", person_authorization_id="person_auth_1",
         voice_authorization_id="voice_auth_1", voice_usage_scopes=("narration",),
     )
-    plan = repo.get_creation_plan("local", "plan_local")
+    plan = repo.plan_records.get_creation_plan("local", "plan_local")
     plan.selected_person = CreationPlanPersonReference(person.id, person.version)
     plan.selected_voice = CreationPlanVoiceReference(
         voice.id, voice.version, person.id, person.version,
@@ -2230,7 +2225,7 @@ def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_o
         path.write_bytes(b"metadata-only fixture")
         repo._save_asset(MaterialAsset(asset_id, "local", path.name, str(path), path.stat().st_size,
             datetime.now(timezone.utc), visibility="shared"))
-    plan = repo.get_creation_plan("local", task.plan_id)
+    plan = repo.plan_records.get_creation_plan("local", task.plan_id)
     plan.material_matches = [MaterialSegmentMatch("asset:selected", "segment:selected", 1, ["explicit selection"])]
     with repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
@@ -2753,7 +2748,7 @@ def _queued_creation_admission_case(tmp_path, *, static):
             owned = json.loads(row['payload']); owned['owner_user_id'] = actor.member_id
             conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
     task = repo.get_creation_task('local', task_id)
-    digest = revision_digest(repo.get_creation_task_script('local', script_id), repo.get_creation_plan('local', task.plan_id))
+    digest = revision_digest(repo.get_creation_task_script('local', script_id), repo.plan_records.get_creation_plan('local', task.plan_id))
     job=execution.start('local',task_id,script_id,digest,actor=actor)
     budget=NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024)
     owner=CreationJobOwnerVerifier(repo,narration_budget=budget,verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
@@ -2865,7 +2860,7 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo._script_payload(conn, seeded), script_id))
     task = repo.get_creation_task('local', task_id)
     script = repo.get_creation_task_script('local', script_id)
-    plan = repo.get_creation_plan('local', task.plan_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     execution = _execution(repo)
     if local_policy:
         from app.creation.task_budget_use_case import TaskBudgetUseCase
@@ -3749,7 +3744,7 @@ def _queued_narration_voice_selection_case(tmp_path):
     case.original_authorization = case.authorizations.ensure(task, case.actor)
     case.owner.task_authorizations = case.authorizations
     case.request_id = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
-    plan = case.repo.get_creation_plan('local', task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
     case.control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     case.runtime = SimpleNamespace(scheduler=case.scheduler,
         registrations={'creation_job': SimpleNamespace(owner=case.owner,executor=case.executor)}, wake=lambda: None, last_error=None)
@@ -3998,7 +3993,7 @@ def test_narration_legacy_static_refusal_migrates_idempotently_without_new_job(t
     case = _narration_units_case(tmp_path)
     task = case.repo.get_creation_task('local', case.task_id)
     script = case.repo.get_creation_task_script('local', case.script_id)
-    plan = case.repo.get_creation_plan('local', task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
     key, resources = creation_stage_facts(case.repo, task, script, plan, 'narration', case.owner.narration_budget, None)
     request = case.scheduler.submit(SubmissionIntent('local', 'creation_job', case.job.id, case.job.input_digest, key, SchedulePolicy()), case.actor)
     decision = HostResourceDecision(False, resources, {'text_chars': {'actual': resources['text_chars'], 'maximum': 374, 'passed': False}},
@@ -4253,7 +4248,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
     if legacy:
         task = case.repo.get_creation_task('local', case.task_id)
         script = case.repo.get_creation_task_script('local', case.script_id)
-        plan = case.repo.get_creation_plan('local', task.plan_id)
+        plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
         key, _ = creation_stage_facts(case.repo, task, script, plan, 'narration', case.owner.narration_budget, None)
         old = case.scheduler.submit(SubmissionIntent('local', 'creation_job', case.job.id,
             case.job.input_digest, key, SchedulePolicy()), case.actor)
@@ -4267,7 +4262,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
         previous['narration_reference']['reference']['device'] -= 4
         task = case.repo.get_creation_task('local',case.task_id)
         script = case.repo.get_creation_task_script('local',case.script_id)
-        plan = case.repo.get_creation_plan('local',task.plan_id)
+        plan = case.repo.plan_records.get_creation_plan('local',task.plan_id)
         old_key,_ = creation_stage_facts(case.repo,task,script,plan,'narration',case.owner.narration_budget,None,
             comparison_reference=previous['narration_reference'])
         # Simulate the persisted pre-remount snapshot; only st_dev differs, and
@@ -4431,7 +4426,7 @@ def _account_voice_selection_case(tmp_path, monkeypatch):
     authorization = authorizations.ensure(task, actor)
     execution = _execution(repo)
     script = repo.get_creation_task_script(workspace, script_id)
-    plan = repo.get_creation_plan(workspace, task.plan_id)
+    plan = repo.plan_records.get_creation_plan(workspace, task.plan_id)
     job = execution.start(workspace, task_id, script_id, revision_digest(script, plan), actor=actor)
     narration = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
         input_scope='single_call_experiment_v1')
@@ -5303,7 +5298,7 @@ def _bounded_narration_start_case(tmp_path, monkeypatch):
         conn.execute('PRAGMA journal_mode=WAL')
     task = repo.get_creation_task('local', case.task_id)
     case.digest = revision_digest(repo.get_creation_task_script('local', case.script_id),
-        repo.get_creation_plan('local', task.plan_id))
+        repo.plan_records.get_creation_plan('local', task.plan_id))
     case.owner.task_authorizations = TaskAuthorizationUseCase(repo, lambda identity: 'ready')
     case.owner.segments = SegmentProductionUseCase(repo, narration_stage=case.stage,
         renderer=None, artifact_store=None, output_root=tmp_path/'unused-output')
@@ -5902,7 +5897,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
     repo = case.repo
     task = repo.get_creation_task('local', case.task_id)
     script = repo.get_creation_task_script('local', case.script_id)
-    plan = repo.get_creation_plan('local', task.plan_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
         voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
     pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
@@ -6176,7 +6171,7 @@ def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_pa
             conn.execute('BEGIN')
             conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',
                 (repo._script_payload(conn, script), script.id))
-        plan = repo.get_creation_plan('local', task.plan_id)
+        plan = repo.plan_records.get_creation_plan('local', task.plan_id)
         rows = []
         for index, section in enumerate(script.sections):
             path = tmp_path / f'paid-edit-source-{index}.wav'
@@ -6358,7 +6353,7 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
     repo = case.repo
     task = repo.get_creation_task('local', case.task_id)
     script = repo.get_creation_task_script('local', case.script_id)
-    plan = repo.get_creation_plan('local', task.plan_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
         voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
     pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
@@ -6700,7 +6695,7 @@ def test_section_context_projection_preserves_facts_without_unrelated_bodies(tmp
     def forbidden(*args,**kwargs):
         raise AssertionError('whole document reader used')
     for name in ('effective_creation_script','get_creation_task_script','list_narration_segments','get_timeline_version','get_creation_plan'):
-        monkeypatch.setattr(case.repo,name,forbidden)
+        monkeypatch.setattr(case.repo.plan_records if name == 'get_creation_plan' else case.repo,name,forbidden)
     decode = json.loads
     def bounded(value,*args,**kwargs):
         assert 'FORBIDDEN_' not in value

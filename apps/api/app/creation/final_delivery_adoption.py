@@ -52,7 +52,7 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
         raise ValueError('最终采用期间当前HEAD已变化，原产物保留')
     subtitle = picture_fragments.subtitle_artifact(job, actor=actor, connection=conn)
     plan = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn))
-    DurationRequirement.from_plan(repo.get_creation_plan(job.workspace_id, task.plan_id)).require(plan.duration_seconds, 30)
+    DurationRequirement.from_plan(repo.plan_records.get_creation_plan(job.workspace_id, task.plan_id)).require(plan.duration_seconds, 30)
     tracks = picture_fragments.metadata.current_subtitle_tracks(job.workspace_id, task, montage=plan)
     parent_version = repo.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     tracks = tracks if tracks or (parent_version is not None and 'subtitle_track_ids' in parent_version.snapshot) else None

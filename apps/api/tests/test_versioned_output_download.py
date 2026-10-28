@@ -18,7 +18,7 @@ def output(linked, tmp_path, monkeypatch):
     repository = ProductionRepository(tmp_path / 'output.sqlite3', tmp_path / 'library')
     plan = replace(make_plan(), workspace_id=WORKSPACE, id='plan', creation_task_id=None)
     task = CreationTask(id='task', workspace_id=WORKSPACE, plan_id=plan.id, name='版本下载', scenario='output')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=USER)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=USER)
     store = ArtifactStore(tmp_path / 'outputs')
     job = repository.create_job_run(JobRun('job', WORKSPACE, task.id, 'fixture', 'fixture', 'fixture'))
     monkeypatch.setattr(main, 'production_repo', repository)

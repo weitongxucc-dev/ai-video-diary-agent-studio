@@ -18,7 +18,8 @@ from app.device_runtime import build_device_runtime
 from app.device_scheduler import ProcessIdentity, VerifiedSession
 from app.platform_publish.queue import platform_publish_registration, recover_platform_publish_jobs
 from app.platform_publish.routes import build_platform_publish_router
-from app.production import CreationPlan, ProductionRepository, _json_payload
+from app.production import ProductionRepository, _json_payload
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask, TimelineVersion
 
 
@@ -239,7 +240,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     )
     task = CreationTask(id=task_id, workspace_id=workspace, plan_id=plan.id,
                         name=plan.name, scenario=plan.goal)
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=member)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member)
     repository.create_timeline_version(TimelineVersion(
         id=version_id, workspace_id=workspace, task_id=task_id, parent_version_id=None,
         sequence=1, snapshot={"montage": {"output_path": ref}, "output_refs": [ref]},

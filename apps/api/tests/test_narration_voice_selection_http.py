@@ -47,7 +47,7 @@ def test_voice_http_replay_and_query_return_original_receipt_not_head(http_state
     lookup = state.client.get('/api/creation-tasks/task/narration/voice/requests/' + original['request_id'])
     assert selected.json() == replay.json() == lookup.json()
     assert lookup.json()['selected_voice']['profile_id'] == 'voice-1'
-    assert state.repo.get_creation_plan('workspace', 'plan').selected_voice.profile_id == 'voice-2'
+    assert state.repo.plan_records.get_creation_plan('workspace', 'plan').selected_voice.profile_id == 'voice-2'
     assert state.client.get('/api/creation-tasks/task/narration/voice/requests/' + original['request_id'],
         headers={'X-Test-Member': 'another-member'}).status_code in {403, 404}
 
@@ -67,7 +67,7 @@ def test_pi_voice_selection_uses_real_current_task_turn_and_rejects_draft_only(h
     if allowed:
         assert response.json()['selected_voice']['profile_id'] == 'voice-1'
     else:
-        assert state.repo.get_creation_plan('workspace', 'plan').selected_voice is None
+        assert state.repo.plan_records.get_creation_plan('workspace', 'plan').selected_voice is None
 
 
 def test_pi_cannot_select_voice_with_another_tasks_turn(http_state):
@@ -78,7 +78,7 @@ def test_pi_cannot_select_voice_with_another_tasks_turn(http_state):
         str(uuid4()), saved['draft_version'], request_context={'kind': 'task', 'task_id': 'other-task'})
     response = state.client.post('/api/creation-tasks/task/narration/voice', json={**body(state), 'assistant_turn_id': turn['id']})
     assert response.status_code == 409
-    assert state.repo.get_creation_plan('workspace', 'plan').selected_voice is None
+    assert state.repo.plan_records.get_creation_plan('workspace', 'plan').selected_voice is None
 
 
 def test_jobless_voice_selection_and_replay_do_not_require_device_execution_permission(http_state, monkeypatch):
@@ -89,7 +89,7 @@ def test_jobless_voice_selection_and_replay_do_not_require_device_execution_perm
     first = http_state.client.post(route,json=original)
     assert first.status_code == 200, first.text
     assert http_state.client.post(route,json=original).json() == first.json()
-    assert http_state.repo.get_creation_plan('workspace','plan').selected_voice.profile_id == 'voice-1'
+    assert http_state.repo.plan_records.get_creation_plan('workspace','plan').selected_voice.profile_id == 'voice-1'
 
 
 

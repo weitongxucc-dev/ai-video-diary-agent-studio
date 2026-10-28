@@ -11,11 +11,8 @@ from uuid import UUID
 import pytest
 from starlette.requests import Request
 
-from app.production import (
-    CreationPlan,
-    CreationPlanKnowledgeReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference
 from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
@@ -94,8 +91,8 @@ def confirm_plan_from_reply(
         stage="topic",
     )
     if not from_reply:
-        return repo.confirm_creation_plan(plan, task, verified_owner_user_id=OWNER)
-    return repo.confirm_creation_plan_from_reply(
+        return repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=OWNER)
+    return repo.plan_confirmation.confirm_creation_plan_from_reply(
         plan, task, reply_reference=REPLY_REFERENCE, request_id=request_id,
         verified_owner_user_id=OWNER,
     )
@@ -140,7 +137,7 @@ def ready_task_for_transfer(tmp_path: Path, *, from_reply: bool = True):
     )
     repo.topic_records.complete_topic_generation(run.id, [topic], [evidence])
     repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
-    plan = repo.get_creation_plan(WORKSPACE, plan.id)
+    plan = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
     task = repo.get_creation_task(WORKSPACE, task.id)
     return repo, plan, task
 
@@ -176,7 +173,21 @@ def transfer(repo, plan, task, **overrides):
 
 
 def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: Path) -> None:
+    import sqlite3
+
     repo = make_repo(tmp_path)
+    with repo._connect() as connection:
+        connection.execute("""CREATE TRIGGER reject_plan_confirmation_event BEFORE INSERT ON task_events
+            WHEN NEW.event_type = 'assistant_reply_plan_confirmed'
+            BEGIN SELECT RAISE(ABORT, 'isolated plan confirmation event refusal'); END""")
+    with pytest.raises(ValueError, match="任务事件 ID 已存在") as refused:
+        confirm_plan_from_reply(repo)
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert str(refused.value.__cause__) == "isolated plan confirmation event refusal"
+    with repo._connect() as connection:
+        for table in ("creation_plans", "creation_tasks", "task_events"):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        connection.execute("DROP TRIGGER reject_plan_confirmation_event")
     plan, task = confirm_plan_from_reply(repo)
     retry_plan, retry_task = confirm_plan_from_reply(
         repo, plan_id="generated-new-plan-id", task_id="generated-new-task-id",
@@ -189,7 +200,7 @@ def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: P
     assert REPLY_TEXT not in str(event[0].payload)
 
     with pytest.raises(ValueError, match="请求身份已用于不同"):
-        repo.confirm_creation_plan_from_reply(
+        repo.plan_confirmation.confirm_creation_plan_from_reply(
             make_plan("changed-plan"),
             CreationTask(
                 id="changed-task", workspace_id=WORKSPACE, plan_id="changed-plan",
@@ -201,7 +212,7 @@ def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: P
         )
     assert len(repo.execution_records.list_task_events(WORKSPACE, task.id)) == 1
     with pytest.raises(ValueError, match="SHA-256 摘要"):
-        repo.confirm_creation_plan_from_reply(
+        repo.plan_confirmation.confirm_creation_plan_from_reply(
             make_plan("bad-digest"),
             CreationTask(id="bad-task", workspace_id=WORKSPACE, plan_id="bad-digest",
                          name="bad", scenario="knowledge_explanation"),
@@ -550,7 +561,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     }
     assert REPLY_TEXT not in str(events[0].payload)
 
-    plan = repo.get_creation_plan(WORKSPACE, first["plan_id"])
+    plan = repo.plan_records.get_creation_plan(WORKSPACE, first["plan_id"])
     task = repo.get_creation_task(WORKSPACE, first["task_id"])
     topic_run = TopicGenerationRun(
         id="http-topic-run", workspace_id=WORKSPACE, task_id=task.id, plan_id=plan.id,
@@ -570,7 +581,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         source_url=None,
     )])
     repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
-    plan = repo.get_creation_plan(WORKSPACE, plan.id)
+    plan = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
     task = repo.get_creation_task(WORKSPACE, task.id)
     topic = repo.topic_records.list_topic_candidates(WORKSPACE, task.id)[0]
     readable = SimpleNamespace(
@@ -596,7 +607,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
     ))
     monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", lambda _case, _workspace, _task_id: (
-        repo.get_creation_task(WORKSPACE, task.id), repo.get_creation_plan(WORKSPACE, plan.id),
+        repo.get_creation_task(WORKSPACE, task.id), repo.plan_records.get_creation_plan(WORKSPACE, plan.id),
         topic, (bounded_source,), INPUT_REFERENCES,
     ))
     transfer_payload = AssistantReplyScriptTransferRequest(

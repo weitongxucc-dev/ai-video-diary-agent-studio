@@ -184,10 +184,10 @@ def test_script_unknown_receipt_keeps_earlier_job_from_same_real_turn(state, tmp
 
 
 def test_saved_program_uses_new_task_without_inheriting_old_timeline_or_input_authorization(state):
-    plan = state.production.get_creation_plan(state.workspace_id, state.task.plan_id)
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     task = replace(state.task, id="new-program-target", plan_id="new-program-plan", montage_plan_id=None,
                    confirmed_script_id=None, current_timeline_version_id=None, narration_cache_key=None, output_ready=False)
-    state.production.confirm_creation_plan(replace(plan, id=task.plan_id, creation_task_id=task.id), task,
+    state.production.plan_confirmation.confirm_creation_plan(replace(plan, id=task.plan_id, creation_task_id=task.id), task,
                                             verified_owner_user_id=state.member.member_id)
     call = {**invocation(state), "expected_timeline_version_id": None, "expected_timeline_sequence": 0}
     queued = state.client.post(f"/api/creation-tasks/{task.id}/media-script-tools/{state.tool['tool_id']}/preview", json=call)
@@ -444,7 +444,8 @@ def receipt_state(tmp_path, monkeypatch):
     from app.artifact_store import ArtifactStore
     from app.local_members import LocalMemberService
     from app.models import utc_now
-    from app.production import ProductionRepository, CreationPlan
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask, JobRun, ArtifactRecord, TransformRun
     from app.task_audio import TASK_MEDIA_KIND
     def forbidden(*args, **kwargs):
@@ -469,7 +470,7 @@ def receipt_state(tmp_path, monkeypatch):
     plan = CreationPlan('receipt-plan','local','declared metadata','declared metadata',1,'zh-CN','9:16',5,
         [],[],None,[],0,0,'',[],[],[],'declared-producer')
     task = CreationTask('receipt-task','local',plan.id,'declared metadata','knowledge_explanation',owner_user_id=member.member_id)
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
     task = repo.get_creation_task('local',task.id)
     store = ArtifactStore(tmp_path/'blobs')
     # Succeeded is a seed fact, not a claim that a script/model was executed.

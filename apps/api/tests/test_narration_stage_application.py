@@ -83,7 +83,7 @@ def narration_preparation(tmp_path):
     repository=SimpleNamespace(
         get_job_run=lambda _ws,_job:job,execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
         creation_execution_input=lambda *_:start.payload,
-        get_creation_task=read_task,get_creation_plan=lambda *_:plan,get_creation_task_script=lambda *_:script,
+        get_creation_task=read_task,plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),get_creation_task_script=lambda *_:script,
         effective_creation_script=lambda *_:script,
         resolve_creation_task_narration_inputs=lambda **_:inputs,
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
@@ -347,7 +347,7 @@ def narration_application(tmp_path,monkeypatch):
         person_id='person_1',voice_id='voice_1',person_version='v1',voice_version='v1',language='zh',
         model_id=provider.model_id,person_authorization_id='person_auth_1',voice_authorization_id='voice_auth_1',
         voice_usage_scopes=('narration',))
-    plan=repo.get_creation_plan('local','plan_local');plan.presenter_share_target=0
+    plan=repo.plan_records.get_creation_plan('local','plan_local');plan.presenter_share_target=0
     plan.selected_person=CreationPlanPersonReference(person.id,person.version)
     plan.selected_voice=CreationPlanVoiceReference(voice.id,voice.version,person.id,person.version,
         person.authorization.id,person.authorization.version,voice.authorization.id,voice.authorization.version,'zh-CN',voice.model_id)

@@ -12,12 +12,8 @@ from typing import Literal
 from uuid import uuid4
 
 from app.creation.script_draft_use_case import ScriptDraftRejected, ScriptDraftUseCase
-from app.production import (
-    CreationPlan,
-    CreationPlanKnowledgeReference,
-    CreationPlanSourceReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository
@@ -119,7 +115,7 @@ class ScriptLibraryUseCase:
         if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
                                 visibility=task.visibility, owner_user_id=task.owner_user_id):
             raise KeyError(entry['id'])
-        plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         if plan.creation_task_id != task.id:
             raise KeyError(task.id)
         knowledge = {reference.id: reference for reference in plan.knowledge_references}

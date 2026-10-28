@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import CreationPlan, ProductionRepository, VideoTemplate
+from app.production import ProductionRepository, VideoTemplate
+from app.creation.plan_contracts import CreationPlan
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.contracts import CreationTask
 
@@ -82,14 +83,14 @@ def task_for(workspace_id: str, plan_id: str, task_id: str = "task-1") -> Creati
 def test_task_and_plan_owner_binds_to_verified_identity_and_is_not_self_reported(
     production: ProductionRepository,
 ) -> None:
-    plan, task = production.confirm_creation_plan(
+    plan, task = production.plan_confirmation.confirm_creation_plan(
         plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"),
         verified_owner_user_id=ALICE,
     )
     # 归属来自已验证身份并随持久化回读。
     assert plan.owner_user_id == ALICE
     assert task.owner_user_id == ALICE
-    assert production.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == ALICE
+    assert production.plan_records.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == ALICE
     assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == ALICE
 
     # 私有只对上传者：另一位成员读不到。
@@ -130,7 +131,7 @@ def test_template_owner_binds_and_survives_version_save(production: ProductionRe
 
 def test_local_members_in_one_workspace_are_isolated_by_member_id(production: ProductionRepository) -> None:
     # 本地产品多名成员同处 local：私有按 member_id 隔离，不因有令牌就全量可见。
-    production.confirm_creation_plan(
+    production.plan_confirmation.confirm_creation_plan(
         plan_for(LOCAL), task_for(LOCAL, "plan-1"),
         verified_owner_user_id="member-owner",
     )
@@ -149,7 +150,7 @@ def test_local_members_in_one_workspace_are_isolated_by_member_id(production: Pr
 
 def test_confirm_without_verified_identity_keeps_legacy_ownerless_row(production: ProductionRepository) -> None:
     # legacy 调用不传身份：归属留空，不被算成任何成员的私有资产，且不报错。
-    plan, task = production.confirm_creation_plan(plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"))
+    plan, task = production.plan_confirmation.confirm_creation_plan(plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"))
     assert plan.owner_user_id is None
     assert task.owner_user_id is None
     assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id is None
@@ -181,19 +182,19 @@ def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
 
     forged = replace(plan_for(WORKSPACE), owner_user_id=ALICE)
     forged_task = replace(task_for(WORKSPACE, "plan-1"), owner_user_id=ALICE)
-    plan, task = production.confirm_creation_plan(
+    plan, task = production.plan_confirmation.confirm_creation_plan(
         forged, forged_task, verified_owner_user_id=BOB
     )
 
     assert plan.owner_user_id == BOB
     assert task.owner_user_id == BOB
-    assert production.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == BOB
+    assert production.plan_records.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == BOB
     assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == BOB
 
     # 没有可验证身份时，自填的归属也不算数：不算任何成员的私有内容。
     other = replace(plan_for("ws-2", plan_id="plan-unowned"), owner_user_id=ALICE)
     other_task = replace(task_for("ws-2", "plan-unowned", task_id="task-unowned"), owner_user_id=ALICE)
-    unowned_plan, unowned_task = production.confirm_creation_plan(other, other_task)
+    unowned_plan, unowned_task = production.plan_confirmation.confirm_creation_plan(other, other_task)
     assert unowned_plan.owner_user_id is None
     assert unowned_task.owner_user_id is None
 

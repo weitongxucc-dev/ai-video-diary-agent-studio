@@ -9,7 +9,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import CreationPlan, CreationPlanKnowledgeReference, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference
 from app.creation.contracts import CreationTask
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
@@ -59,7 +60,7 @@ def _script_task(tmp_path: Path):
         id="task-one", workspace_id="local", plan_id=plan.id, name="测试视频",
         scenario="knowledge_explanation", stage="script", selected_topic_id="topic-one", visibility="shared",
     )
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
     return repo
 
 
@@ -316,7 +317,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         task = main_module._creation_task_or_404(workspace_id, task_id)
         if task.stage != "script" or task.confirmed_script_id:
             raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
-        plan = repo.get_creation_plan(workspace_id, task.plan_id)
+        plan = repo.plan_records.get_creation_plan(workspace_id, task.plan_id)
         plan.knowledge_references = [CreationPlanKnowledgeReference(
             id="one", version="v1", title=source.title, authorization="available", ownership="workspace",
         )]

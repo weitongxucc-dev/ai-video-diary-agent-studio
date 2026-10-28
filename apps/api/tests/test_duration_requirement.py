@@ -81,7 +81,7 @@ def test_delivery_window_override_changes_only_target_clock(task_inputs):
     task = SimpleNamespace(workspace_id=script.workspace_id, id=script.task_id, plan_id='plan')
     previous = {'0': SectionWindow('0', 0, 5), '1': SectionWindow('1', 5, 21)}
     repository = SimpleNamespace(
-        get_creation_plan=lambda *_: SimpleNamespace(duration_target_seconds=31),
+        plan_records=SimpleNamespace(get_creation_plan=lambda *_: SimpleNamespace(duration_target_seconds=31)),
         stage_segment_state=lambda _ws, _task, section: {
             'montage': {'delivery_window': vars(previous[section])}} if section in previous else None)
     segments = [SimpleNamespace(source_section_id=str(i), duration_seconds=seconds, status='ready')
@@ -204,7 +204,7 @@ def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inpu
             states[window.section_id] = {'narration_reference': segment.audio_reference,
                 'montage': montage.creation_task_montage_plan_to_payload(local)}
         repository = SimpleNamespace(effective_creation_script=lambda *args: replace(task_inputs['script'], sections=sections),
-            list_narration_segments=lambda *args: audio, get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30),
+            list_narration_segments=lambda *args: audio, plan_records=SimpleNamespace(get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30)),
             stage_segment_state=lambda ws, task, section: states[section])
         task = SimpleNamespace(workspace_id='workspace', id='task', plan_id='plan')
         plan = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=repository), task, plan)

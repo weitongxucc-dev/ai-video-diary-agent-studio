@@ -19,7 +19,8 @@ from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
 from app.creation.transactions import clone_subtitle_track
 from app.montage import creation_task_montage_plan_to_payload
-from app.production import MaterialAsset, MaterialSegment, CreationPlan
+from app.production import MaterialAsset, MaterialSegment
+from app.creation.plan_contracts import CreationPlan
 from test_metadata_edit_use_case import metadata_state, editorial_rows
 
 
@@ -200,7 +201,7 @@ def test_shared_base_three_branches_and_narration_snapshot_keep_original_rules(s
         [], [], None, [], 0, 0, 'fixed source', [], [], [], 'fixture')
     legacy = replace(state.task, id='legacy-task', plan_id=plan.id, current_timeline_version_id=None,
         confirmed_script_id='legacy-script')
-    state.repo.confirm_creation_plan(plan, legacy, verified_owner_user_id=state.member.member_id)
+    state.repo.plan_confirmation.confirm_creation_plan(plan, legacy, verified_owner_user_id=state.member.member_id)
     snapshot = state.case.current_narration_snapshot('ws', legacy)
     assert snapshot == {'narration_segments': [], 'narration_cache_key': state.narration.cache_key}
     legacy_montage = replace(state.plan, task_id=legacy.id)

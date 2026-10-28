@@ -108,9 +108,9 @@ def test_preflight_preserves_exact_voice_version_and_new_plan_snapshot(state):
     result = response.json()
     assert result["creation_task"]["selected_topic_id"] is None
     assert result["creation_task"]["output_ready"] is False
-    before = asdict(production.get_creation_plan("workspace_a", result["id"]))
+    before = asdict(production.plan_records.get_creation_plan("workspace_a", result["id"]))
     production.save_video_template(replace(template, version=2, settings={**template.settings, "duration_target_seconds": 45}))
-    assert asdict(production.get_creation_plan("workspace_a", result["id"])) == before
+    assert asdict(production.plan_records.get_creation_plan("workspace_a", result["id"])) == before
     changed = client.post("/api/creation-plans/confirm", json={**payload, "template_version": 2, "preflight_fingerprint": preview["preflight_fingerprint"]})
     assert changed.status_code == 409
 
@@ -153,7 +153,7 @@ def test_lipsync_quality_defaults_and_stays_in_versioned_plan(state):
     assert legacy["lipsync_quality"] == "fast"
     confirmed = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": legacy["preflight_fingerprint"]})
     assert confirmed.status_code == 201, confirmed.text
-    assert production.get_creation_plan("workspace_a", confirmed.json()["id"]).lipsync_quality == "fast"
+    assert production.plan_records.get_creation_plan("workspace_a", confirmed.json()["id"]).lipsync_quality == "fast"
 
     production.save_video_template(replace(template, version=2, settings={**template.settings, "lipsync_quality": "high"}))
     inherited = client.post("/api/creation-plans/preview", json={**payload, "template_version": 2}).json()
@@ -342,7 +342,7 @@ def test_explicit_knowledge_pin_preserves_history_and_rechecks_current_access(st
     assert sum(ref["id"] == item.id for ref in preview["knowledge_references"]) == 1
     confirmed = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": preview["preflight_fingerprint"]})
     assert confirmed.status_code == 201, confirmed.text
-    persisted = ProductionRepository(production.database_path, production.video_library_path).get_creation_plan("workspace_a", confirmed.json()["id"])
+    persisted = ProductionRepository(production.database_path, production.video_library_path).plan_records.get_creation_plan("workspace_a", confirmed.json()["id"])
     assert next(ref for ref in persisted.knowledge_references if ref.id == item.id).version == "1"
     assert not confirmed.json()["creation_task"]["output_ready"]
     assert client.post("/api/creation-plans/preview", headers={"x-test-workspace": "workspace_b"}, json=payload).status_code == 404

@@ -13,7 +13,8 @@ from app.device_scheduler import RecoveryBlocked
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.task_audio import TASK_MEDIA_CONTEXT, TaskMediaJobs, TaskMediaRequired
 from test_device_runtime import Resources, Processes
@@ -27,7 +28,7 @@ def case(tmp_path, action=None, validate=None, resources=None):
         knowledge_references=[], source_references=[], selected_voice=None,
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
         material_rule_summary='', model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint='test')
-    repo.confirm_creation_plan(plan, CreationTask(id='task', workspace_id='local', plan_id='plan', name='test', scenario='knowledge_explanation'))
+    repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id='task', workspace_id='local', plan_id='plan', name='test', scenario='knowledge_explanation'))
     members = LocalMemberService(repo.database_path)
     actor = CreationExecutionActor('local', members.whoami(None)[0].member_id)
     access = MemberDeviceAccess(members)

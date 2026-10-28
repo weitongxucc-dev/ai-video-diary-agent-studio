@@ -11,7 +11,7 @@ from app.creation.contracts import CreationTask
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 
 if TYPE_CHECKING:
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
 
 
 @dataclass(frozen=True)

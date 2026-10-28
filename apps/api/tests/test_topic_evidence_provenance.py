@@ -4,12 +4,8 @@ import pytest
 from fastapi import HTTPException
 
 import app.main as main
-from app.production import (
-    CreationPlan,
-    CreationPlanKnowledgeReference,
-    CreationPlanSourceReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference
 from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
@@ -55,7 +51,7 @@ def evidence_context(tmp_path, monkeypatch):
     )
     task = CreationTask(id="task", workspace_id="qa", plan_id=plan.id, name=plan.name,
                         scenario="knowledge_explanation")
-    plan, task = production.confirm_creation_plan(plan, task, verified_owner_user_id="owner")
+    plan, task = production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="owner")
     return sources, production, plan, task
 
 

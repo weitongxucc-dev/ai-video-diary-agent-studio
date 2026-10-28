@@ -24,13 +24,8 @@ from app.montage import (
     CreationTaskMontagePlan, MontageClip, NarrationCue,
     creation_task_montage_plan_to_payload,
 )
-from app.production import (
-    ProductionRepository,
-    CreationPlan,
-    MaterialAsset,
-    MaterialSegment,
-    NarrationArtifactRecord,
-)
+from app.production import ProductionRepository, MaterialAsset, MaterialSegment, NarrationArtifactRecord
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.task_audio import TaskAudio
 
@@ -48,7 +43,7 @@ def metadata_state(tmp_path):
         [], [], None, [], 0, 0, 'fixed source', [], [], [], 'fixture')
     task = CreationTask('task', 'ws', plan.id, 'metadata', 'knowledge_explanation',
         stage='montage', owner_user_id=owner, visibility='private', narration_cache_key='fixed-narration')
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
     # The fixture begins at an already-produced editorial state. This is input
     # seeding, not evidence of a script/model/production workflow completing.
     with repo._connect() as conn:

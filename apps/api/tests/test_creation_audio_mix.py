@@ -148,7 +148,7 @@ def test_composite_missing_specs_or_purpose_cannot_borrow_render_budget(tmp_path
     repo, task_id, _, _, actor, _, owner, scheduler, _, _, _, _ = case(tmp_path)
     try:
         task = repo.get_creation_task('local', task_id)
-        plan = repo.get_creation_plan('local', task.plan_id)
+        plan = repo.plan_records.get_creation_plan('local', task.plan_id)
         with repo._connect() as conn:
             _, resources = owner.render_facts(conn, task, plan, actor=actor)
         no_audio_budget = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,),

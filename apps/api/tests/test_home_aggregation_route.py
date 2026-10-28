@@ -65,7 +65,7 @@ def _counts(body) -> dict[str, int]:
 
 
 def _save_task(production, task_id, name, owner_user_id, visibility, status="created", **overrides):
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask
 
     plan = CreationPlan(
@@ -82,7 +82,7 @@ def _save_task(production, task_id, name, owner_user_id, visibility, status="cre
         **overrides,
     )
     # 归属只认服务端核过的身份：直接往 dataclass 塞 owner_user_id 不算数。
-    production.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
+    production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
     return task
 
 

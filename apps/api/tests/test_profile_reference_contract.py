@@ -39,7 +39,7 @@ from app.host_resource_probes import (
     SceneRuntimeLimits,
 )
 from app.granted_subprocess import GrantedCommandCancelled
-from app.production import CreationPlan
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
 from app.avatar_lipsync import AvatarAndLipSyncService, avatar_lipsync_cache_key
 from app.voice_clone import VoiceCloneError, VoiceCloneResult
@@ -886,22 +886,22 @@ def test_range_selected_person_persists_independent_fixed_version_and_legacy_rea
     task = CreationTask(
         id="task", workspace_id="ws", plan_id=plan.id, name="test", scenario="test"
     )
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="member")
-    assert repository.get_creation_plan("ws", "plan").selected_person == explicit
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    assert repository.plan_records.get_creation_plan("ws", "plan").selected_person == explicit
     payload = json.loads(json.dumps(asdict(plan), default=str))
     assert (
-        repository._creation_plan_from_payload(dict(payload)).selected_person
+        repository.plan_records.creation_plan_from_payload(dict(payload)).selected_person
         == explicit
     )
     payload.pop("selected_person")
-    legacy = repository._creation_plan_from_payload(dict(payload))
+    legacy = repository.plan_records.creation_plan_from_payload(dict(payload))
     assert legacy.selected_person == CreationPlanPersonReference("legacy-person", "v3")
     payload["selected_person"] = None
-    assert repository._creation_plan_from_payload(dict(payload)).selected_person is None
+    assert repository.plan_records.creation_plan_from_payload(dict(payload)).selected_person is None
     payload.pop("selected_person")
     payload["selected_voice"]["person_version"] = ""
-    assert repository._creation_plan_from_payload(dict(payload)).selected_person is None
-    assert repository.get_creation_plan("ws", "plan").selected_person == explicit
+    assert repository.plan_records.creation_plan_from_payload(dict(payload)).selected_person is None
+    assert repository.plan_records.get_creation_plan("ws", "plan").selected_person == explicit
 
 
 @pytest.mark.parametrize("values", [("", "v1"), ("person", "")])

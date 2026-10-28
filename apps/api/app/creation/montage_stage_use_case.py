@@ -8,7 +8,7 @@ from dataclasses import replace
 from app.creation_execution import CreationStageGrantContext, current_presenter_render, iter_presenter_inputs
 from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.materials.contracts import MediaAuthorityError
-from app.production import CreationPlan
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.visual_effects import reusable_color_settings
 
@@ -61,7 +61,7 @@ def delivery_windows_for_task(repository, task, script, segments, *, exclude_sec
                               measured_override=None, text_override=None):
     # Whole-storyboard consumers already own their full script. They use the
     # same scalar allocator as the single-section snapshot reader.
-    plan = repository.get_creation_plan(task.workspace_id, task.plan_id)
+    plan = repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
     measured = {segment.source_section_id: float(segment.duration_seconds)
                 for segment in segments if segment.duration_seconds is not None and segment.status == 'ready'}
     def section_inputs():
@@ -385,7 +385,7 @@ class MontageStageUseCase:
         task: CreationTask,
     ) -> CreationPlan:
         try:
-            plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise MontageStageRejected(status_code=404, detail="creation task not found") from exc
         if plan.creation_task_id != task.id:

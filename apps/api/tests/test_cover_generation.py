@@ -299,7 +299,8 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     from app.host_resource_probes import CoverBudget, HostResourceDecision
     from app.member_permits import creation_job_registration
     from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
-    from app.production import CreationPlan, ProductionRepository
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask
 
     assert "app.main" not in sys.modules
@@ -312,7 +313,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     plan = CreationPlan("plan", "workspace", "制作封面", "cover", 1, "zh-CN", "9:16", 15,
         [], [], None, [], 0, 0, "declared metadata fixture", [], [], [], "fixture")
     task = CreationTask("task", "workspace", plan.id, plan.name, "declared-cover-fixture")
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     montage = CreationTaskMontagePlan("montage", "workspace", task.id, "script", "cover", "rendered", [], [], 1.0, 0)
     base = repo.create_timeline_version(TimelineVersion("base", "workspace", task.id, None, 1,
         {"montage": creation_task_montage_plan_to_payload(montage), "subtitle_track_ids": []}, None))

@@ -4,11 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import (
-    CreationPlan,
-    CreationPlanKnowledgeReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference
 from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
@@ -54,7 +51,7 @@ def ready_script(tmp_path: Path) -> tuple[ProductionRepository, CreationTaskScri
         id="task-cas", workspace_id=WORKSPACE, plan_id=plan.id, name=plan.name,
         scenario="knowledge_explanation", stage="topic",
     )
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=OWNER)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=OWNER)
     topic_run = TopicGenerationRun(
         id="topic-run-cas", workspace_id=WORKSPACE, task_id=task.id, plan_id=plan.id,
         status="running", route_snapshot={"provider": "test-double"},

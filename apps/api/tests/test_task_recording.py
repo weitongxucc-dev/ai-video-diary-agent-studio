@@ -19,13 +19,8 @@ from app.creation_execution import (CpuRenderLimits, CreationExecution,
                                     cpu_render_facts, next_creation_intent, revision_digest)
 from app.audio_timeline import AudioEditRequest, apply_audio_edit, narration_audio_timeline
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import (
-    CreationPlan,
-    MaterialAsset,
-    MaterialSegment,
-    NarrationArtifactRecord,
-    ProductionRepository,
-)
+from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
     CreationTask,
@@ -85,7 +80,7 @@ def recording_task(tmp_path, monkeypatch):
     task = CreationTask(id=task_id, workspace_id=workspace_id, plan_id=plan.id,
                         name="录音测试", scenario="knowledge_explanation")
     task.owner_user_id = member.member_id
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
     from _media_preview_test_fixtures import register_synthetic_video_asset
     asset, source_reference = register_synthetic_video_asset(repo, workspace_id=workspace_id, member_id=member.member_id,
         path=repo.video_library_path / "source.mp4", asset_id="asset_1", seconds=1)
@@ -162,7 +157,7 @@ def _prepare_first_recording_adoption(repo: ProductionRepository, task_id: str) 
     task.montage_plan_id = None
     task.current_timeline_version_id = None
     task.output_ready = False
-    plan = repo.get_creation_plan("local", task.plan_id)
+    plan = repo.plan_records.get_creation_plan("local", task.plan_id)
     plan.selected_voice = None
     plan.presenter_share_target = 0
     with repo._connect() as conn:
@@ -176,10 +171,10 @@ def _prepare_first_recording_adoption(repo: ProductionRepository, task_id: str) 
 
 def test_initial_recording_requires_explicit_adoption_then_persists_narration_for_continuation(recording_task, tmp_path):
     repo, task_id, _old_version_id, client = recording_task
-    authorized_voice = repo.get_creation_plan("local", "plan_recording").selected_voice
+    authorized_voice = repo.plan_records.get_creation_plan("local", "plan_recording").selected_voice
     generated_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
     assert generated_preview.status_code == 200, generated_preview.text
-    assert generated_preview.json()["requirements"]["presenter_share_target"] == repo.get_creation_plan(
+    assert generated_preview.json()["requirements"]["presenter_share_target"] == repo.plan_records.get_creation_plan(
         "local", "plan_recording").presenter_share_target
     assert generated_preview.json()["requirements"]["can_continue"] is True
     assert generated_preview.json()["narration_source"]["source_kind"] == "generated"
@@ -229,7 +224,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     assert preview_body["requirements"]["can_continue"] is True
     assert preview_body["requirements"]["continuation_blocker"] is None
 
-    plan = repo.get_creation_plan("local", task.plan_id)
+    plan = repo.plan_records.get_creation_plan("local", task.plan_id)
     plan.presenter_share_target = 20
     plan.selected_voice = authorized_voice
     with repo._connect() as conn:
@@ -252,7 +247,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     assert reloaded == saved_artifact
     assert restarted.list_narration_segments("local", task_id) == [segment]
     current_script = restarted.get_creation_task_script("local", "script_recording")
-    current_plan = restarted.get_creation_plan("local", "plan_recording")
+    current_plan = restarted.plan_records.get_creation_plan("local", "plan_recording")
     execution = CreationExecution(
         restarted,
         run_narration=lambda _workspace, _task: pytest.fail("录音采用后不应再次生成配音"),
@@ -669,7 +664,7 @@ def recording_metadata(tmp_path, monkeypatch):
         selected_voice=None,pronunciation_references=[],approved_asset_count=0,approved_clip_count=0,
         material_rule_summary='',model_snapshot=[],confirmation_points=[],blockers=[],preflight_fingerprint='declared')
     task = CreationTask('task_metadata','local',plan.id,'metadata recording','knowledge_explanation',owner_user_id=member.member_id)
-    repo.confirm_creation_plan(plan,task,verified_owner_user_id=member.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan,task,verified_owner_user_id=member.member_id)
     task = repo.get_creation_task('local',task.id)
     now = utc_now().isoformat()
     script = {'id':'script_metadata','workspace_id':'local','task_id':task.id,'run_id':'declared-run','topic_id':'declared-topic',
@@ -742,7 +737,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     assert preview.status_code==200,preview.text
     assert preview.json()['narration_source']=={'source_kind':'recorded','source_artifact_ref':state.source.logical_ref,'duration_seconds':1}
     assert preview.json()['requirements']['can_continue'] is True and preview.json()['requirements']['continuation_blocker'] is None
-    plan = repo.get_creation_plan('local',task.plan_id)
+    plan = repo.plan_records.get_creation_plan('local',task.plan_id)
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?',
             (json.dumps(asdict(replace(plan,presenter_share_target=20)),default=str),'local',plan.id))

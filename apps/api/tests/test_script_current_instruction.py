@@ -104,7 +104,7 @@ def test_actual_script_adoption_triggers_one_existing_continuation(api_state, mo
     actual = state.repository.get_creation_task_script('local', script['id'])
     source = conversations.task_turn_source(turn['id'], 'local', state.owner.member_id, 'task')
     current = state.repository.get_creation_task('local', 'task')
-    plan = state.repository.get_creation_plan('local', current.plan_id)
+    plan = state.repository.plan_records.get_creation_plan('local', current.plan_id)
     service = main._goal_service()
     # Same real receipt is replayed; no second event or adoption is invented.
     assert service.record_script_adoption(turn['id'], 'local', state.owner.member_id, current, plan, actual, source)

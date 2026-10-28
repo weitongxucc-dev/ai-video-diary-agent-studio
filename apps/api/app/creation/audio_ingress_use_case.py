@@ -311,7 +311,7 @@ class AudioIngressUseCase:
         facts = {'base_version_id':task.current_timeline_version_id, 'script_id':task.confirmed_script_id,
             'script_digest':self.repository.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
                 if task.confirmed_script_id else None,
-            'plan_id':task.plan_id, 'plan_digest':media_digest(asdict(self.repository.get_creation_plan(workspace_id,task.plan_id))),
+            'plan_id':task.plan_id, 'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),
             'montage':snapshot, 'files':files, 'narration_cache_key':task.narration_cache_key}
         if operation == 'audio_import':
             facts = {'base_version_id':None, 'files':files}

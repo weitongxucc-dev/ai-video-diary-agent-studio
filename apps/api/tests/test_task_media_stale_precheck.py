@@ -11,7 +11,8 @@ import pytest
 from app.creation.contracts import EditIntent, TimelineVersion
 from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier
 from app.device_runtime import OwnerRegistration, build_device_runtime
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.task_audio import TaskMediaJobs
 from test_device_runtime import Access, CompletingExecutor, Processes, Resources
@@ -29,7 +30,7 @@ def media_case(tmp_path):
             knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
             approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
             confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
-        repo.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan",
+        repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan",
             name="test", scenario="knowledge_explanation"))
         base = repo.create_timeline_version(TimelineVersion("timeline-base", "local", "task", None, 1, {}, None))
         state = {"identity_calls": 0, "facts_calls": 0, "verdict": "ready", "revision": 1,

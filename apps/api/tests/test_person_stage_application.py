@@ -140,7 +140,7 @@ def person_application(tmp_path,monkeypatch):
     person,voice,*_=register_synthetic_profiles(repo,workspace_id='local',member_id=member.member_id,
         person_id='person_1',voice_id='voice_1',person_version='v1',voice_version='v1',language='zh',model_id='synthetic-recorded-narration',
         person_authorization_id='person_auth_1',voice_authorization_id='voice_auth_1')
-    plan=repo.get_creation_plan('local','plan_local');plan.presenter_share_target=100;plan.lipsync_quality='fast'
+    plan=repo.plan_records.get_creation_plan('local','plan_local');plan.presenter_share_target=100;plan.lipsync_quality='fast'
     plan.selected_person=CreationPlanPersonReference(person.id,person.version)
     plan.selected_voice=CreationPlanVoiceReference(voice.id,voice.version,person.id,person.version,person.authorization.id,
         person.authorization.version,voice.authorization.id,voice.authorization.version,'zh-CN',voice.model_id)

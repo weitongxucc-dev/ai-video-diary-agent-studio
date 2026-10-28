@@ -63,17 +63,8 @@ from app.creation.contracts import (
     SubtitleTrack,
     TimelineVersion,
 )
-from app.production import (
-    CreationPlan,
-    MaterialAsset,
-    MaterialSegment,
-    MaterialSegmentMatch,
-    NarrationArtifactRecord,
-    PersonRender,
-    ProductionBatch,
-    ProductionProfile,
-    ProductionRepository,
-)
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, NarrationArtifactRecord, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import register_synthetic_profiles, synthetic_wav_bytes, write_synthetic_video
@@ -542,7 +533,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         scenario=creation_plan.goal,
         owner_user_id=member.member_id,
     )
-    production.confirm_creation_plan(creation_plan, task, verified_owner_user_id=member.member_id)
+    production.plan_confirmation.confirm_creation_plan(creation_plan, task, verified_owner_user_id=member.member_id)
     now = datetime.now(timezone.utc)
     script = CreationTaskScript(
         id="script-person-edit",
@@ -970,7 +961,7 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     from app.repository import LEGACY_WORKSPACE_ID
 
     state = _person_render_edit_state(tmp_path, monkeypatch, LEGACY_WORKSPACE_ID)
-    plan = state.production.get_creation_plan(state.workspace_id, state.task.plan_id)
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     plan.presenter_share_target = 100
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
@@ -1009,7 +1000,7 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     @contextmanager
     def granted(stage="person_render"):
         current = state.production.get_creation_task(state.workspace_id, state.task.id)
-        plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
+        plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
         def forbidden(*args):
             pytest.fail("diagnostic must not run ungranted creation actions")
@@ -1080,7 +1071,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     monkeypatch.setattr(main_module, "_presenter_model_ids", lambda: {"high": state.provider.model_id, "fast": state.provider.model_id})
     task = state.production.get_creation_task(state.workspace_id, state.task.id)
     script = state.production.get_creation_task_script(state.workspace_id, task.confirmed_script_id)
-    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, task.plan_id)
     plan.presenter_share_target = 100
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
@@ -2106,7 +2097,7 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
         stage_repair_action="修复后重试。",
         stage_retryable=True,
     )
-    production.confirm_creation_plan(creation_plan, task)
+    production.plan_confirmation.confirm_creation_plan(creation_plan, task)
     plan = CreationTaskMontagePlan(
         id="task-montage-review",
         workspace_id=workspace_id,
@@ -2270,7 +2261,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         recovery_point="montage",
         owner_user_id=member.member_id,
     )
-    production.confirm_creation_plan(creation_plan, task, verified_owner_user_id=member.member_id)
+    production.plan_confirmation.confirm_creation_plan(creation_plan, task, verified_owner_user_id=member.member_id)
     plan = CreationTaskMontagePlan(
         id="montage-render-route",
         workspace_id=workspace_id,
@@ -2803,7 +2794,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         name=creation_plan.name,
         scenario=creation_plan.goal,
     )
-    production.confirm_creation_plan(creation_plan, task)
+    production.plan_confirmation.confirm_creation_plan(creation_plan, task)
     now = datetime.now(timezone.utc)
     script = CreationTaskScript(
         id="script-subtitle-edit",
@@ -3434,7 +3425,7 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     task.stage = "montage"
     task.stage_status = "not_started"
     task.current_timeline_version_id = None
-    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, task.plan_id)
     plan.language = language
     plan.template_settings = {"fit_mode": "fit", "subtitle_style": {"position": "top", "font_size": 48}}
     if color_mode != "legacy":
@@ -3475,7 +3466,7 @@ def test_first_subtitle_projection_spans_two_shots_but_keeps_explicit_short_trac
         duration_seconds=5, low_confidence_clip_count=0, subtitle_path="artifacts/subtitles.srt")
     persisted = []
     monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(
-        get_creation_plan=lambda *_: SimpleNamespace(language="zh-CN"),
+        plan_records=SimpleNamespace(get_creation_plan=lambda *_: SimpleNamespace(language="zh-CN")),
         list_subtitle_tracks=lambda *_, **__: persisted))
     projected = main_module._current_subtitle_tracks("workspace", task,
         current_version=version, montage=montage)
@@ -3495,7 +3486,7 @@ def test_initial_montage_generates_face_only_for_selected_share(permitted_person
     task.stage = "montage"
     task.stage_status = "not_started"
     task.current_timeline_version_id = None
-    plan = state.production.get_creation_plan(state.workspace_id, task.plan_id)
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, task.plan_id)
     plan.presenter_share_target = target
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
@@ -3571,7 +3562,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
         progress=70,
         recovery_point="montage",
     )
-    production.confirm_creation_plan(creation_plan, task)
+    production.plan_confirmation.confirm_creation_plan(creation_plan, task)
     plan = CreationTaskMontagePlan(
         id="montage-render-route",
         workspace_id=workspace_id,
@@ -4585,10 +4576,10 @@ def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_s
     assert foreign.status_code==422
     from app.creation.contracts import CreationTask
     from dataclasses import replace
-    other_plan=replace(state.production.get_creation_plan(state.workspace_id,state.task.plan_id),id='other-image-plan')
+    other_plan=replace(state.production.plan_records.get_creation_plan(state.workspace_id,state.task.plan_id),id='other-image-plan')
     other=CreationTask(id='other-image-task',workspace_id=state.workspace_id,
         plan_id=other_plan.id,name='Other task',scenario=state.task.scenario)
-    state.production.confirm_creation_plan(other_plan,other)
+    state.production.plan_confirmation.confirm_creation_plan(other_plan,other)
     other_import=state.client.post(f'/api/creation-tasks/{other.id}/graphics/import',files={'image':('other.png',content.getvalue(),'image/png')})
     assert other_import.status_code==200,other_import.text
     other_source=other_import.json()
@@ -4877,7 +4868,7 @@ def test_person_generation_reads_narration_language(permitted_person_edit_state,
     )
     state.production.save_narration_segments(state.workspace_id, state.task.id, segment.script_id,
                                             [replace(segment, voice_version='v2', language='en')])
-    plan = state.production.get_creation_plan(state.workspace_id, state.task.plan_id)
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     plan.selected_voice = replace(plan.selected_voice, version='v2', language='en')
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))

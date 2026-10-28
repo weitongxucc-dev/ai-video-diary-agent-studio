@@ -48,7 +48,7 @@ def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_p
     from app.creation_execution import revision_digest
     repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
     old_script = repo.get_creation_task_script('workspace_a', script_id)
-    old_plan = repo.get_creation_plan('workspace_a', 'plan_workspace_a')
+    old_plan = repo.plan_records.get_creation_plan('workspace_a', 'plan_workspace_a')
     expected = revision_digest(old_script, old_plan)
     original = repo.script_records.iter_execution_script_sections
     def concurrent_tail_change(connection, workspace_id, selected_script_id):
@@ -69,7 +69,7 @@ def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_p
     with monkeypatch.context() as patch:
         patch.setattr(repo.script_records, 'iter_execution_script_sections', concurrent_tail_change)
         patch.setattr(repo, 'get_creation_task_script', no_full_getter)
-        patch.setattr(repo, 'get_creation_plan', no_full_getter)
+        patch.setattr(repo.plan_records, 'get_creation_plan', no_full_getter)
         patch.setattr(execution, 'validate_input', no_full_getter)
         preview = control.preview('workspace_a', task_id)
     assert preview['input_digest'] == expected
@@ -88,7 +88,7 @@ def test_bounded_execution_preview_replays_the_original_job_and_keeps_full_valid
     from app.creation_execution import revision_digest
     repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
     task = repo.get_creation_task('workspace_a', task_id)
-    old_digest = revision_digest(repo.get_creation_task_script('workspace_a', script_id), repo.get_creation_plan('workspace_a', task.plan_id))
+    old_digest = revision_digest(repo.get_creation_task_script('workspace_a', script_id), repo.plan_records.get_creation_plan('workspace_a', task.plan_id))
     original = execution.start('workspace_a', task_id, script_id, old_digest)
     original_event = repo.execution_records.get_task_event('workspace_a', f'event_{original.id}_start')
     preview = control.preview('workspace_a', task_id)
@@ -143,7 +143,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh',
         model_id='declared-control-voice', person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1',
         voice_usage_scopes=('narration',))
-    plan = repo.get_creation_plan('local', 'plan_local')
+    plan = repo.plan_records.get_creation_plan('local', 'plan_local')
     plan.presenter_share_target = 0
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version, 'zh-CN', voice.model_id)

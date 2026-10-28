@@ -30,7 +30,8 @@ from app.device_scheduler import (
 from app.host_resource_probes import NarrationBudget
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import CreationPlan, NarrationArtifactRecord, ProductionRepository
+from app.production import NarrationArtifactRecord, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
     CreationTask,
@@ -155,7 +156,7 @@ def fixture(tmp_path):
         "knowledge_explanation",
         owner_user_id=member.member_id,
     )
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
     now = datetime.now(timezone.utc).isoformat()
     script = {
         "id": "script",
@@ -304,7 +305,7 @@ def fixture(tmp_path):
         )
     )
     task = repo.get_creation_task("local", task.id)
-    plan = repo.get_creation_plan("local", plan.id)
+    plan = repo.plan_records.get_creation_plan("local", plan.id)
     budget = NarrationBudget(
         1000, 1, 1000000, 10, 1000000, 1, 60, 1000000, 2, 0.1, 1000000, 1000000
     )

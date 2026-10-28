@@ -84,7 +84,7 @@ class TaskAuthorizationUseCase:
                                               for asset_id in allowed_assets})
         except (KeyError, MediaAuthorityError) as exc:
             raise TaskAuthorizationDenied(f"原任务素材引用不可用：{exc}") from exc
-        plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         if plan.selected_voice is not None:
             try:
                 self.repository.creation_plan_voice_reference(workspace_id, plan.selected_voice.profile_id,
@@ -192,7 +192,7 @@ class TaskAuthorizationUseCase:
             raise TaskAuthorizationDenied('原任务授权无效，不能扩大声音范围')
         if self.verify_identity(identity) != 'ready':
             raise TaskAuthorizationDenied('本次设备或账号权限尚未核实，声音选择未提交')
-        plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
+        plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         previous_voice = f'{plan.selected_voice.profile_id}:{plan.selected_voice.version}' if plan.selected_voice else None
         with self.repository._connect() as conn:
             candidate_current = self.repository.capture_profile_local_check(conn, task.workspace_id,
@@ -326,7 +326,7 @@ class TaskAuthorizationUseCase:
         authorization = self.ensure(task,actor,interactive=True)
         if self.status(task.workspace_id,task.id,identity=self.identity(actor)) != "valid":
             raise TaskAuthorizationDenied("原目标授权尚未核实，未封存后台读取范围")
-        plan = self.repository.get_creation_plan(task.workspace_id,task.plan_id)
+        plan = self.repository.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
         source_revisions=self.repository.task_source_revisions(task.workspace_id,
             [item.id for item in plan.knowledge_references],[item.id for item in plan.source_references])
         payload = {"authorization_id":authorization.id,"identity":authorization.identity,

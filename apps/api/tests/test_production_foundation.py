@@ -37,18 +37,8 @@ from app.creation.contracts import (
     TimelineVersion,
     TransformRun,
 )
-from app.production import (
-    CreationPlan,
-    CreationPlanBlocker,
-    MaterialCollection,
-    NarrationArtifactRecord,
-    PersonRender,
-    PronunciationEntry,
-    ProductionBatch,
-    ProductionProfile,
-    ProductionRepository,
-    VersionedVoiceProfile,
-)
+from app.production import MaterialCollection, NarrationArtifactRecord, PersonRender, PronunciationEntry, ProductionBatch, ProductionProfile, ProductionRepository, VersionedVoiceProfile
+from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker
 from app.creation.script_contracts import ScriptGenerationRun
 from app.repository import LEGACY_WORKSPACE_ID
 from app.source_repository import SourceRepository
@@ -157,7 +147,7 @@ def _save_creation_task(
         name=plan.name,
         scenario="knowledge_explanation",
     )
-    return production.confirm_creation_plan(plan, task)[1]
+    return production.plan_confirmation.confirm_creation_plan(plan, task)[1]
 
 
 def _seed_confirmed_script(
@@ -563,12 +553,12 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     )
     plan.owner_user_id = member.member_id
     task.owner_user_id = member.member_id
-    saved_plan, _ = production.confirm_creation_plan(
+    saved_plan, _ = production.plan_confirmation.confirm_creation_plan(
         plan, task, verified_owner_user_id=member.member_id
     )
     assert saved_plan.material_matches == [structured[0]]
     with pytest.raises(ValueError, match="实际命中"):
-        production.confirm_creation_plan(
+        production.plan_confirmation.confirm_creation_plan(
             replace(
                 plan,
                 id="plan-without-material-match",
@@ -608,14 +598,14 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.get_creation_plan("workspace_a", plan.id).material_matches == [
+    assert reloaded.plan_records.get_creation_plan("workspace_a", plan.id).material_matches == [
         structured[0]
     ]
     assert reloaded.search_material_segments(
         "workspace_a", query="办公室打字", viewer_user_id=member.member_id
     )[0].segment_ref == structured[0].segment_ref
     assert (
-        reloaded.get_creation_plan("workspace_a", "legacy-plan-read-only").material_matches
+        reloaded.plan_records.get_creation_plan("workspace_a", "legacy-plan-read-only").material_matches
         == []
     )
 
@@ -2156,7 +2146,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         person_id="person-a", voice_id="voice-person", person_version="v1",
         voice_version="v1", language="zh", model_id="qwen3-tts",
     )
-    plan = production.get_creation_plan("workspace_a", "plan-task-person")
+    plan = production.plan_records.get_creation_plan("workspace_a", "plan-task-person")
     plan.selected_person = CreationPlanPersonReference(person.id, person.version)
     plan.selected_voice = CreationPlanVoiceReference(
         voice.id, voice.version, person.id, person.version,
@@ -2616,7 +2606,7 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
     assert natural_materials.json()[0]["segment_ref"] in {
         item["segment_ref"] for item in structured_materials.json()
     }
-    saved_plan = production.get_creation_plan("workspace_a", confirmed_body["id"])
+    saved_plan = production.plan_records.get_creation_plan("workspace_a", confirmed_body["id"])
     saved_task = production.get_creation_task(
         "workspace_a", confirmed_body["creation_task"]["id"]
     )
@@ -2640,9 +2630,9 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
     )
     rejected_task = replace(saved_task, plan_id=rejected_plan.id)
     with pytest.raises(sqlite3.IntegrityError):
-        production.confirm_creation_plan(rejected_plan, rejected_task)
+        production.plan_confirmation.confirm_creation_plan(rejected_plan, rejected_task)
     with pytest.raises(KeyError):
-        production.get_creation_plan("workspace_a", rejected_plan.id)
+        production.plan_records.get_creation_plan("workspace_a", rejected_plan.id)
     assert (
         client.get(
             f"/api/creation-plans/{confirmed_body['id']}",
@@ -2920,7 +2910,7 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
         for item in generated_body["evidence_references"]
         if item["kind"] == "source"
     )
-    confirmed_plan = production.get_creation_plan("workspace_a", created.json()["id"])
+    confirmed_plan = production.plan_records.get_creation_plan("workspace_a", created.json()["id"])
     assert source_evidence["version_or_identity"] == confirmed_plan.source_references[0].identity
     assert source_evidence["version_or_identity"] != source_evidence["reference_id"]
     source_input = next(
@@ -3305,7 +3295,7 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         owner_user_id=plan_owner[0].member_id,
     )
     plan.owner_user_id = plan_owner[0].member_id
-    plan, task = production.confirm_creation_plan(
+    plan, task = production.plan_confirmation.confirm_creation_plan(
         plan, task, verified_owner_user_id=plan_owner[0].member_id
     )
     voice = _save_versioned_voice(
@@ -3355,14 +3345,14 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
     assert current_task.stage == "narration" and current_task.stage_status == "not_started"
     assert current_task.stage_reason is None
     assert not any(
-        blocker.stage == "narration" for blocker in production.get_creation_plan(workspace_id, plan.id).blockers
+        blocker.stage == "narration" for blocker in production.plan_records.get_creation_plan(workspace_id, plan.id).blockers
     )
     reloaded = ProductionRepository(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
     assert reloaded.get_creation_task(workspace_id, task.id).confirmed_script_id == "script-confirmed"
-    assert reloaded.get_creation_plan(workspace_id, plan.id).selected_voice.profile_id == voice.id
+    assert reloaded.plan_records.get_creation_plan(workspace_id, plan.id).selected_voice.profile_id == voice.id
 
 
 def test_creation_task_can_regenerate_script_after_duration_preflight_failure(
@@ -3409,7 +3399,7 @@ def test_creation_task_can_regenerate_script_after_duration_preflight_failure(
         stage_repair_action="拼合后的配音超过创作方案上限，请先压缩文案",
         stage_retryable=True,
     )
-    production.confirm_creation_plan(plan, task)
+    production.plan_confirmation.confirm_creation_plan(plan, task)
     run = ScriptGenerationRun(
         id="script-run-duration-repair",
         workspace_id=workspace_id,
@@ -3512,7 +3502,7 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
         lambda _settings: LocalGenerator(),
     )
     task = production.get_creation_task("workspace_a", license_task)
-    plan = production.get_creation_plan("workspace_a", task.plan_id)
+    plan = production.plan_records.get_creation_plan("workspace_a", task.plan_id)
     prepared, references, _ = main_module._source_inputs_use_case().prepare(
         "workspace_a", task, plan, cloud_egress=True,
     )

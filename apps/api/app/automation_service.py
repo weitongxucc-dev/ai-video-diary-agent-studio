@@ -220,7 +220,7 @@ class AutomationService:
                 if current[0] or not AutomationTrigger.model_validate(run["definition"]["trigger"]).allows(utc_now()):
                     raise ValueError("安排已暂停或窗口已关闭，未创建任务")
                 self.require_actor(actor)
-                production.insert_confirmed_creation_plan(conn,plan,task)
+                production.plan_records.insert_confirmed_creation_plan(conn,plan,task)
                 confirmation = {"plan":{"fingerprint":fingerprint,"confirmed_at":now.isoformat(),"member_id":actor.member_id}}
                 conn.execute("UPDATE automation_runs SET plan_id=?,task_id=?,confirmation_json=?,state='waiting_review',stage='topic',reason_code='topic_confirmation_required',reason='方案已确认，选题等待逐次确认',repair_action='打开创作任务继续',revision=revision+1,updated_at=? WHERE id=?",(plan.id,task.id,dump(confirmation),now.isoformat(),run_id))
 

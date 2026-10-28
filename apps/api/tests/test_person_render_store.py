@@ -1,4 +1,5 @@
 """Person-render storage through real public wiring; metadata fixtures, no media execution."""
+from app.creation import plan_contracts
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
@@ -12,7 +13,7 @@ from app.profiles.contracts import PersonProfile, ProfileReference, VoiceProfile
 
 
 def seed_task(repo, task_id):
-    plan = production.CreationPlan(
+    plan = plan_contracts.CreationPlan(
         id="plan-" + task_id, workspace_id="ws", goal="合成存储测试", name="人物片段夹具",
         target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=60,
         knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
@@ -20,7 +21,7 @@ def seed_task(repo, task_id):
         model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="fixture-" + task_id,
     )
     task = CreationTask(task_id, "ws", plan.id, plan.name, "knowledge_explanation")
-    return repo.confirm_creation_plan(plan, task)[1]
+    return repo.plan_confirmation.confirm_creation_plan(plan, task)[1]
 
 
 def case(tmp_path):

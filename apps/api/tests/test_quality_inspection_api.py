@@ -14,7 +14,8 @@ from app.artifact_store import ArtifactStore
 from app.local_members import LocalMemberService
 from app.montage import creation_task_montage_plan_to_payload
 from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TimelineVersion
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from test_quality_inspection import montage
 from test_quality_resource_owner import (fixture_budget, licensed_native_port, metadata_result,
     build_metadata_runtime)
@@ -37,7 +38,7 @@ def system(tmp_path, monkeypatch, request):
                         blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="检查",
                         scenario="knowledge_explanation", stage="review")
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=owner.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner.member_id)
     store = ArtifactStore(tmp_path / "artifacts")
     checks = inspection.QualityCheckRepository(tmp_path / "studio.sqlite")
     for name, value in [("production_repo", repo), ("artifact_store", store),

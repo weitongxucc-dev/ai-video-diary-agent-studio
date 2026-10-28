@@ -220,7 +220,7 @@ def test_replan_applies_new_goals_and_rejects_old_window_and_revision(client_sta
 
 
 def test_confirm_checks_live_blocking_condition_even_when_digest_is_unchanged(client_state, monkeypatch):
-    from app.production import CreationPlanBlocker
+    from app.creation.plan_contracts import CreationPlanBlocker
     c = client_state
     base, data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "原主题"})
     prepare = main._creation_plan_preflight

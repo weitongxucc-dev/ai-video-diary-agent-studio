@@ -87,7 +87,7 @@ class NarrationStageUseCase:
         if (job.task_id != task.id or job.kind != 'creation_task_segment_revision'
                 or grant.unit_key != expected_key):
             raise PermissionError('局部改写配音许可与原作业不一致')
-        plan = self.repository.get_creation_plan(task.workspace_id,task.plan_id)
+        plan = self.repository.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
         script = self.repository.effective_creation_script(task.workspace_id,task.id)
         inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
             task_id=task.id,voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
@@ -431,7 +431,7 @@ class NarrationStageUseCase:
 
     def plan_for_task(self, workspace_id: str, task: CreationTask) -> CreationPlan:
         try:
-            plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise NarrationStageRejected(status_code=404, detail='creation task not found') from exc
         if plan.creation_task_id != task.id:

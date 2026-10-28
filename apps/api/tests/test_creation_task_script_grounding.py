@@ -14,11 +14,8 @@ import app.main as main
 from app.config import Settings, llm_service_verification, record_llm_service_verification
 from app.local_members import LocalMemberService
 from app.creation.script_generation_use_case import ScriptGenerationUseCase, ScriptGenerationRejected
-from app.production import (
-    CreationPlan,
-    CreationPlanKnowledgeReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference
 from app.creation.topic_contracts import (
     TopicCandidate,
     TopicEvidenceReference,
@@ -614,7 +611,7 @@ def _script_domain_state(tmp_path, monkeypatch):
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary='无媒体',
         model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint='isolated')
     task = CreationTask(id='task', workspace_id='local', plan_id=plan.id, name=plan.name, scenario=GOAL)
-    plan, task = repository.confirm_creation_plan(plan, task, verified_owner_user_id=owner.member_id)
+    plan, task = repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner.member_id)
     _, input_refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     run = TopicGenerationRun(id='topic-run', workspace_id='local', task_id=task.id, plan_id=plan.id,
         status='running', route_snapshot={}, prompt_schema_version='isolated', input_references=input_refs)
@@ -2754,7 +2751,7 @@ def test_library_rows_reuse_patch_and_confirm_without_hydrating_library_or_scrip
     header=store.save_script_library_entry_header('local',source_script_id=source.id,name='长库稿',category='fixture')
     assert header['sections'] is None and header['sections_total_count']==25
     case.read_library_header=store.read_script_library_entry_header
-    plan=replace(state.repository.get_creation_plan('local','plan'),id='library-plan',name='新的复用',creation_task_id=None)
+    plan=replace(state.repository.plan_records.get_creation_plan('local','plan'),id='library-plan',name='新的复用',creation_task_id=None)
     payload=Reuse(request_id=uuid4(),expected_entry_updated_at=header['updated_at'],name=plan.name,aspect_ratio=plan.aspect_ratio,
         duration_target_seconds=plan.duration_target_seconds,requirements_confirmed=True)
     with monkeypatch.context() as bounded:

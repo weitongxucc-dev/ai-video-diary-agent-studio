@@ -21,7 +21,8 @@ from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
 from app.models import utc_now
 from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TaskEvent, TransformRun
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.task_audio import TASK_MEDIA_KIND
 from app.media_script_jobs import script_definition
 from app.media_script import ScriptInputRevision
@@ -113,7 +114,7 @@ def case(tmp_path, monkeypatch):
         confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="fixture",
         scenario="knowledge_explanation", owner_user_id=actor.member_id, visibility="private")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=actor.member_id)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=actor.member_id)
     store = ArtifactStore(tmp_path / "blobs")
     access = MemberDeviceAccess(members)
 
@@ -357,9 +358,9 @@ def test_same_uuid_is_private_to_current_member_and_workspace(case):
         tools().get_created_for_request(other,request)
     with pytest.raises(PermissionError):
         tools().get_created_for_request(replace(actor,workspace_id="foreign"),request)
-    plan = replace(repository.get_creation_plan("local","plan"),id="other-plan")
+    plan = replace(repository.plan_records.get_creation_plan("local","plan"),id="other-plan")
     task = CreationTask(id="other-task",workspace_id="local",plan_id=plan.id,name="other",scenario="knowledge_explanation")
-    repository.confirm_creation_plan(plan,task,verified_owner_user_id=other.member_id)
+    repository.plan_confirmation.confirm_creation_plan(plan,task,verified_owner_user_id=other.member_id)
     other_job,_ = producer(2,owner=other.member_id,task_id=task.id)
     created = tools().create_from_job(other,other_job,request_id=request,name="other",description="other",parameter_schema=SCHEMA)
     assert created["tool_id"] != saved["tool_id"]

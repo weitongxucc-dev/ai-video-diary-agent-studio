@@ -223,7 +223,7 @@ class QualityInspectionUseCase:
             "file_identity": file_identity(path), "path": str(path)}
         from app.creation.duration_requirement import DurationRequirement
         source['duration_requirement'] = DurationRequirement.from_plan(
-            self.production.get_creation_plan(workspace_id, task.plan_id)).payload()
+            self.production.plan_records.get_creation_plan(workspace_id, task.plan_id)).payload()
         return task, plan, source
 
     def resources(self, source, budget):
@@ -387,7 +387,7 @@ class QualityInspectionUseCase:
         from app.creation.duration_requirement import DurationRequirement
         task = self.production.get_creation_task(source['workspace_id'], source['task_id'])
         current_requirement = DurationRequirement.from_plan(
-            self.production.get_creation_plan(task.workspace_id, task.plan_id))
+            self.production.plan_records.get_creation_plan(task.workspace_id, task.plan_id))
         if ('duration_requirement' not in source
                 or DurationRequirement(**source['duration_requirement']) != current_requirement):
             raise ValueError("质检固定的交付时长约定已变化，请重新检查当前成片")

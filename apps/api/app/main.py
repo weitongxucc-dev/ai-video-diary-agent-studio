@@ -274,28 +274,8 @@ from app.scheduled_tasks import (
     ScheduledTaskUpdateRequest,
 )
 from app.materials.contracts import MediaAuthorityError
-from app.production import (
-    EXACT_EDIT_SOURCE,
-    MaterialVersionConflict,
-    TimelineVersionConflict,
-    CreationPlan,
-    VideoTemplate,
-    CreationPlanBlocker,
-    CreationPlanKnowledgeReference,
-    CreationPlanPronunciationReference,
-    CreationPlanSourceReference,
-    MaterialCollection,
-    MaterialAssetNote,
-    MaterialBusinessObject,
-    MaterialLinkProvenanceSink,
-    NarrationArtifactRecord,
-    PersonRender,
-    ProductionBatch,
-    ProductionProfile,
-    ProductionRepository,
-    effective_segment_usage_role,
-    material_segment_eligible,
-)
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.topic_contracts import (
     TopicCandidate as CreationTaskTopicCandidate,
@@ -4022,7 +4002,7 @@ def _clip_preview_use_case(repository=None):
         except HostBudgetUncalibrated as exc:
             raise ClipPreviewUnavailable(str(exc)) from exc
     def presenter_source(task, clip):
-        plan = repo.get_creation_plan(task.workspace_id, task.plan_id)
+        plan = repo.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         script = repo.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
         matches = [current_presenter_render(repo, task, segment, request, _person_render_media_path)
             for segment, request in presenter_inputs(repo, task, script, plan, _presenter_model_ids())]
@@ -5716,7 +5696,7 @@ def _creation_request_item_response(item: dict) -> dict:
     task_payload = item.get("task")
     task = production_repo._creation_task_from_payload(task_payload) if task_payload else None
     return {**item, "plan": _creation_plan_preview_response(
-        production_repo._creation_plan_from_payload(plan)
+        production_repo.plan_records.creation_plan_from_payload(plan)
     ).model_dump(mode="json") if plan else None,
         "task": project_task_summary(production_repo, task).summary if task else None}
 
@@ -6174,7 +6154,7 @@ def confirm_creation_plan(
     )
     try:
         # 方案与任务的归属只认这次请求的可信身份，调用方自填的值不参与判断。
-        saved_plan, saved_task = production_repo.confirm_creation_plan(
+        saved_plan, saved_task = production_repo.plan_confirmation.confirm_creation_plan(
             plan, task,
             verified_owner_user_id=reply_owner_id or _content_reader(request, workspace_id)[0],
             local_diagnostic=local_diagnostic if reply_reference is not None else _content_reader(request, workspace_id)[1],
@@ -6214,7 +6194,7 @@ def set_creation_plan_visibility_route(
         raise HTTPException(status_code=404, detail="creation plan not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    plan = production_repo.get_creation_plan(workspace_id, plan_id)
+    plan = production_repo.plan_records.get_creation_plan(workspace_id, plan_id)
     if plan.creation_task_id is None:
         raise HTTPException(status_code=404, detail="creation plan not found")
     task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
@@ -6228,7 +6208,7 @@ def set_creation_plan_visibility_route(
 def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
     workspace_id = current_workspace_id(request)
     try:
-        plan = production_repo.get_creation_plan(workspace_id, plan_id)
+        plan = production_repo.plan_records.get_creation_plan(workspace_id, plan_id)
         if plan.creation_task_id is None:
             raise KeyError(plan_id)
         task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
@@ -6295,7 +6275,7 @@ def _creation_plan_for_task_or_404(
     task: CreationTask,
 ) -> CreationPlan:
     try:
-        plan = production_repo.get_creation_plan(workspace_id, task.plan_id)
+        plan = production_repo.plan_records.get_creation_plan(workspace_id, task.plan_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task not found") from exc
     if plan.creation_task_id != task.id:

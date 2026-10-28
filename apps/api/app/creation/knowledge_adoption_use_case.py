@@ -25,7 +25,7 @@ class TaskKnowledgeAdoptionUseCase:
         self.production, self.sources = production, sources
 
     def adopt(self, workspace_id: str, task_id: str, member_id: str, command: KnowledgeAdoptionCommand) -> dict[str, object]:
-        from app.production import CreationPlanKnowledgeReference
+        from app.creation.plan_contracts import CreationPlanKnowledgeReference
 
         if not 1 <= len(command.references) <= 64 or len(set(command.references)) != len(command.references):
             raise ValueError("一次采用需包含1至64份不同的固定资料版本。")

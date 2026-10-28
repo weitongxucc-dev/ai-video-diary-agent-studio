@@ -11,7 +11,8 @@ from app.creation.quality_inspection_use_case import QualityInspectionUseCase
 from app.creation.output_observation_use_case import OutputObservationUseCase
 from app.creation_execution import CreationExecutionActor
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
@@ -25,7 +26,7 @@ def test_quality_pressure_defers_to_future_without_terminal_result(tmp_path):
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
     actor = CreationExecutionActor("local", "original-owner")
     store = ArtifactStore(tmp_path / "artifacts")
     checks = QualityCheckRepository(repository.database_path)

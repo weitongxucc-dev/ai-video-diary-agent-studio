@@ -29,7 +29,7 @@ def state(tmp_path, monkeypatch):
     state = restore_http_state(tmp_path, monkeypatch)
     person, voice, *_ = register_synthetic_profiles(state.repo, workspace_id="ws",
         member_id=state.member.member_id, voice_usage_scopes=("narration",))
-    plan = state.repo.get_creation_plan("ws", state.task.plan_id)
+    plan = state.repo.plan_records.get_creation_plan("ws", state.task.plan_id)
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version,
         "zh-CN", voice.model_id)
@@ -93,7 +93,7 @@ def state(tmp_path, monkeypatch):
 def inputs(state):
     task = state.repo.get_creation_task("ws", state.task.id)
     script = state.repo.get_creation_task_script("ws", task.confirmed_script_id)
-    plan = state.repo.get_creation_plan("ws", task.plan_id)
+    plan = state.repo.plan_records.get_creation_plan("ws", task.plan_id)
     version = state.repo.get_timeline_version("ws", task.current_timeline_version_id)
     return {"request_id": str(uuid4()), "script_id": script.id, "input_digest": revision_digest(script, plan),
         "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence}
@@ -352,7 +352,7 @@ def test_original_ready_audio_replans_30_through_existing_storyboard_request(sta
     state.repo._save_asset(replace(asset, duration_seconds=40,
         segments=[replace(asset.segments[0], end_seconds=40)]))
     task = state.repo.get_creation_task('ws', state.task.id)
-    plan = state.repo.get_creation_plan('ws', task.plan_id)
+    plan = state.repo.plan_records.get_creation_plan('ws', task.plan_id)
     plan.duration_target_seconds = 30
     with state.repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
@@ -426,7 +426,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     from app.creation_execution import CpuRenderLimits
     from app.task_audio import TaskAudio
     from test_creation_audio_mix import audio_budget
-    plan = state.repo.get_creation_plan('ws', state.task.plan_id)
+    plan = state.repo.plan_records.get_creation_plan('ws', state.task.plan_id)
     state.repo.save_narration_artifact(replace(state.narration, voice_profile_id=plan.selected_voice.profile_id))
     receipt = enqueue(state)
     run(state)

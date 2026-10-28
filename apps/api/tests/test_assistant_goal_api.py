@@ -77,7 +77,7 @@ def material_execution_input(state):
     """A confirmed material-only fixture; no presenter or media execution claim."""
     from dataclasses import asdict
     from app.montage import creation_task_montage_plan_to_payload
-    plan=state.production.get_creation_plan(state.workspace_id,state.task.plan_id)
+    plan=state.production.plan_records.get_creation_plan(state.workspace_id,state.task.plan_id)
     plan.presenter_share_target=0
     with state.production._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?",(json.dumps(asdict(plan),default=str),plan.id))
@@ -329,7 +329,7 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
                 if len(calls) == 2:
                     current = state.production.get_creation_task(state.workspace_id, state.task.id)
                     script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
-                    plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
+                    plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
                     actor = main._require_permit_actor(state.request, state.workspace_id)
                     source, prior = main._assistant_execution_source(current.id,state.request,kwargs["turn_id"],"start",revision_digest(script,plan))
                     assert prior is None
@@ -454,7 +454,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
             return "已读取原作业与实际登记输出。", None
         current = state.production.get_creation_task(state.workspace_id, state.task.id)
         script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
-        plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
+        plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         actor = main._require_permit_actor(state.request, state.workspace_id)
         source, prior = main._assistant_execution_source(current.id,state.request,kwargs["turn_id"],"start",revision_digest(script,plan))
         assert prior is None
@@ -842,7 +842,7 @@ def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction
         state.conversations.finish_turn(turn['id'],'stopped',result={'reason':'user_stopped'})
     current=state.production.get_creation_task(state.workspace_id,state.task.id)
     script=state.production.get_creation_task_script(state.workspace_id,current.confirmed_script_id)
-    plan=state.production.get_creation_plan(state.workspace_id,current.plan_id)
+    plan=state.production.plan_records.get_creation_plan(state.workspace_id,current.plan_id)
     preview={'script_id':script.id,'input_digest':revision_digest(script,plan)}
     before=[job.id for job in state.production.list_job_runs(state.workspace_id,state.task.id)]
     response=state.raw_post(state.base_url+'/execution/start?assistant_turn_id='+(str(uuid4()) if rejection=='foreign_turn' else turn['id']),
@@ -1107,7 +1107,7 @@ def execution_binding_state(execution_http_state, monkeypatch):
     state = execution_http_state
     repo = state.production
     script = repo.get_creation_task_script(state.workspace_id, state.script_id)
-    plan = repo.get_creation_plan(state.workspace_id, state.task.plan_id)
+    plan = repo.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
     digest = revision_digest(script, plan)
     job = repo.create_creation_execution_job(JobRun(
@@ -1167,7 +1167,7 @@ def test_execution_binding_preserves_source_actor_and_receipt_error_order(execut
     state.conversations.finish_turn(current_turn, 'completed', result={})
     missing_turn = new_turn('script')
     with monkeypatch.context() as missing:
-        missing.setattr(state.production, 'get_creation_plan',
+        missing.setattr(state.production.plan_records, 'get_creation_plan',
             lambda *a,**kw:(_ for _ in ()).throw(KeyError('missing plan')))
         with pytest.raises(HTTPException) as no_plan:
             main._assistant_execution_source(task_id, request, missing_turn, 'start')

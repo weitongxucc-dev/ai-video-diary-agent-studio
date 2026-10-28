@@ -101,7 +101,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     script = CreationTaskScript("fixed-script", "ws", state.task.id, "fixture-run", "fixture-topic", "既有文案", "zh-CN",
         [CreationTaskScriptSection("section", "开头", "原字幕", "既有画面", ["fixture-evidence"])], selection_status="confirmed")
     task = replace(state.task, confirmed_script_id=script.id)
-    plan = replace(state.repo.get_creation_plan("ws", task.plan_id), duration_target_seconds=15)
+    plan = replace(state.repo.plan_records.get_creation_plan("ws", task.plan_id), duration_target_seconds=15)
     with state.repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan),default=str),plan.id))
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
@@ -603,10 +603,10 @@ def _bootstrap_input(s, bootstrap):
     from copy import deepcopy
     from app.creation.contracts import TimelineVersion
     from app.montage import creation_task_montage_plan_to_payload
-    creation_plan=replace(s.repo.get_creation_plan('ws',s.task.plan_id),id='bootstrap-plan')
+    creation_plan=replace(s.repo.plan_records.get_creation_plan('ws',s.task.plan_id),id='bootstrap-plan')
     seeded_task=replace(s.task,id='bootstrap-task',plan_id=creation_plan.id,current_timeline_version_id=None,
         montage_plan_id=None)
-    s.repo.confirm_creation_plan(creation_plan,seeded_task,verified_owner_user_id=s.member.member_id)
+    s.repo.plan_confirmation.confirm_creation_plan(creation_plan,seeded_task,verified_owner_user_id=s.member.member_id)
     montage=deepcopy(s.plan)
     montage.id='bootstrap-montage'
     montage.task_id=seeded_task.id

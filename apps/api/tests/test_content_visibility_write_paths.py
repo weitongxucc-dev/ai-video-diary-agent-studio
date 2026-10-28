@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import CreationPlan, MaterialAsset, ProductionRepository, VideoTemplate
+from app.production import MaterialAsset, ProductionRepository, VideoTemplate
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 
 
@@ -92,7 +93,7 @@ def _task(workspace_id: str, plan_id: str, task_id: str = "task-1") -> CreationT
 
 def _confirm(production: ProductionRepository, plan: CreationPlan, task: CreationTask) -> None:
     # 沿既有确认契约：方案与任务的上传者取自这次已验证身份。
-    production.confirm_creation_plan(
+    production.plan_confirmation.confirm_creation_plan(
         plan, task, verified_owner_user_id=UPLOADER
     )
 
@@ -113,7 +114,7 @@ def test_new_content_is_private_in_both_column_and_read_back(tmp_path):
 
     assert _stored_visibility(production, "creation_plans", plan.id, WORKSPACE) == "private"
     assert _stored_visibility(production, "creation_tasks", task.id, WORKSPACE) == "private"
-    assert production.get_creation_plan(WORKSPACE, plan.id).visibility == "private"
+    assert production.plan_records.get_creation_plan(WORKSPACE, plan.id).visibility == "private"
     assert production.get_creation_task(WORKSPACE, task.id).visibility == "private"
 
 
@@ -137,7 +138,7 @@ def test_explicit_share_and_revoke_are_visible_to_readers(tmp_path):
     production.set_asset_visibility(WORKSPACE, "asset-1", "shared")
 
     assert production.get_creation_task(WORKSPACE, task.id).visibility == "shared"
-    assert production.get_creation_plan(WORKSPACE, plan.id).visibility == "shared"
+    assert production.plan_records.get_creation_plan(WORKSPACE, plan.id).visibility == "shared"
     assert production.get_asset(WORKSPACE, "asset-1").visibility == "shared"
 
     production.set_asset_visibility(WORKSPACE, "asset-1", "private")

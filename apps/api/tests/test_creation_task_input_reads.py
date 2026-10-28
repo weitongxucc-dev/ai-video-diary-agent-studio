@@ -1,4 +1,5 @@
 """Complete caller-connection reads with native isolated SQLite and canonical values."""
+from app.creation import plan_contracts
 from contextlib import closing
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -135,14 +136,14 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
         tmp_path / "narration-reads.sqlite3", library,
         duration_reader=lambda _: 2.0, scene_reader=lambda *_: [],
     )
-    plan = production.CreationPlan(
+    plan = plan_contracts.CreationPlan(
         id=task.plan_id, workspace_id=task.workspace_id, goal="合成读取", name="读取夹具",
         target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=60,
         knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
         approved_asset_count=0, approved_clip_count=0, material_rule_summary="合成记录",
         model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="reads-fixture",
     )
-    task = repo.confirm_creation_plan(plan, task)[1]
+    task = repo.plan_confirmation.confirm_creation_plan(plan, task)[1]
     segment = replace(segment, source_kind="generated", source_artifact_ref=None,
                       source_sha256=None, source_script_digest=None)
 

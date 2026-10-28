@@ -60,7 +60,7 @@ class ScriptGenerationUseCase:
     ) -> CreationTask:
         try:
             task = self.repository.get_creation_task(workspace_id, task_id)
-            plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise ScriptGenerationRejected(
                 kind="not_found", reason="creation task not found",

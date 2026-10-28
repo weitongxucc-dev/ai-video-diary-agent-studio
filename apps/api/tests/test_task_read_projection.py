@@ -78,7 +78,7 @@ def test_all_nested_task_responses_agree_after_edit_undo_and_redo(person_render_
             assert response.status_code == 200, response.text
             nested.append(response.json()[field])
         current = state.production.get_creation_task(state.workspace_id, state.task.id)
-        plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
+        plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         item = CreationRequestItemResponse.model_validate(main._creation_request_item_response({
             "ordinal": 1, "plan_id": plan.id, "task_id": current.id,
             "plan": asdict(plan), "task": asdict(current),

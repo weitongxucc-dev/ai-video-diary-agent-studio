@@ -62,7 +62,7 @@ class ScriptGenerationIntent:
         return task, member_id
 
     def _capture_input(self, conn, task, member_id, route_snapshot):
-        plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
+        plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         if plan.creation_task_id != task.id:
             raise ValueError("当前任务与制作要求不匹配")
         goal = CreationIntentUseCase.script_goal(self.repository, plan, task, viewer_user_id=member_id)

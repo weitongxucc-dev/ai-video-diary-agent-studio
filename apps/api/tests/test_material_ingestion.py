@@ -19,7 +19,8 @@ from app.material_ingestion import (
     MaterialHashOwnerVerifier, MaterialHashServiceActor, MaterialHashUnitExecutor,
     MaterialIngestionService,
 )
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.material_hash import material_hash_candidate as _material_hash_candidate
 from app.material_probe import MaterialProbeDependency, material_probe_unit_key
 from app.creation.contracts import CreationTask, JobRun, TaskEvent
@@ -390,7 +391,7 @@ def seed_creation_task(repo: ProductionRepository, workspace_id: str, task_id: s
         scenario="knowledge_explanation", stage="script" if script_stage else "topic",
         selected_topic_id="topic-one" if script_stage else None,
     )
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
 
 
 def test_unbound_copy_confirmation_restart_and_changed_content(tmp_path: Path) -> None:

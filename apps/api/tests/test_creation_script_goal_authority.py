@@ -45,7 +45,7 @@ def adopted(tmp_path):
         confirmed = repository.creation_request_adoption.confirm_creation_request_window(WORKSPACE, saved["id"], window["id"],
             expected_revision=saved["revision"], input_fingerprint=window["input_fingerprint"],
             verified_owner_user_id=OWNER, adoption_kind=adoption_kind)
-        pairs = [(repository.get_creation_plan(WORKSPACE, item["plan_id"]),
+        pairs = [(repository.plan_records.get_creation_plan(WORKSPACE, item["plan_id"]),
                   repository.get_creation_task(WORKSPACE, item["task_id"]))
                  for item in confirmed["current_window"]["entries"]]
         return SimpleNamespace(repository=repository, request=confirmed, pairs=pairs, goal=goal, fixed_body=body)
@@ -237,7 +237,7 @@ def test_real_main_script_consumers_send_original_user_goal_to_model(consumer_st
     context_response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
     assert context_response.status_code == 200, context_response.text
     context = context_response.json()
-    plan = state.repository.get_creation_plan("local", state.task.plan_id)
+    plan = state.repository.plan_records.get_creation_plan("local", state.task.plan_id)
     assert context["goal"] == state.goal
     assert context["creative_proposal"] == plan.goal and context["creative_proposal"] != context["goal"]
     assert "可修订" in context["creative_proposal_role"] and "不是用户已定稿正文" in context["creative_proposal_role"]
@@ -279,7 +279,7 @@ def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixe
     state = consumer_state(kind=kind, adoption_kind=adoption_kind)
     monkeypatch.setattr(main, "_creation_task_script_generator_for",
         lambda *_: pytest.fail("读取文案上下文不能调用模型"))
-    plan = state.repository.get_creation_plan("local", state.task.plan_id)
+    plan = state.repository.plan_records.get_creation_plan("local", state.task.plan_id)
     response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
     assert "creative_proposal" not in response.json() and "creative_proposal_role" not in response.json()
     if kind == "goal_delegation":
@@ -292,7 +292,7 @@ def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixe
         script = state.repository.get_creation_task_script("local", state.task.confirmed_script_id)
         assert script.sections[0].content == state.fixed_body
         assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
-    assert state.repository.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent
+    assert state.repository.plan_records.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent
 
 
 @pytest.mark.parametrize('entry', ['http', 'task_business'])

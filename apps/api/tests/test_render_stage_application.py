@@ -43,7 +43,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh',
         model_id='declared-synthetic-narration', person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1',
         voice_usage_scopes=('narration',))
-    plan = repo.get_creation_plan('local', 'plan_local')
+    plan = repo.plan_records.get_creation_plan('local', 'plan_local')
     plan.presenter_share_target = 0
     plan.duration_target_seconds = 15
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,

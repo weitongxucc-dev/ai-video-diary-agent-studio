@@ -36,7 +36,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh',
         model_id='declared-synthetic-narration', person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1',
         voice_usage_scopes=('narration',))
-    plan = repo.get_creation_plan('local', 'plan_local')
+    plan = repo.plan_records.get_creation_plan('local', 'plan_local')
     plan.presenter_share_target = 0
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version, 'zh-CN', voice.model_id)
@@ -245,7 +245,7 @@ def _montage_stream_case(tmp_path, monkeypatch):
     runtime = SimpleNamespace(scheduler=scheduler, wake=lambda: None,
         registrations={'creation_job': SimpleNamespace(owner=owner, executor=executor)})
     control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *args, **kwargs: False), lambda _: 'ready')
-    plan = repo.get_creation_plan('local', task.plan_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     from app.creation_execution import revision_digest
     digest = revision_digest(script, plan)
     return SimpleNamespace(repo=repo, task=task, script=script, plan=plan, rows=rows, record=record, asset=asset,

@@ -11,7 +11,8 @@ import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
                          creation_task_montage_plan_to_payload)
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
     CreationTask,
@@ -93,7 +94,7 @@ def history_task(tmp_path, monkeypatch):
     plan = make_plan("plan_history", "历史版本测试")
     task = CreationTask(id="task_history", workspace_id=WORKSPACE_ID, plan_id=plan.id,
                         name="历史版本测试", scenario="knowledge_explanation")
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
     task = repo.get_creation_task(WORKSPACE_ID, task.id)
     task.confirmed_script_id = "script_history"
     task.montage_plan_id = "montage_history"
@@ -140,7 +141,7 @@ def history_task(tmp_path, monkeypatch):
     other_plan = make_plan("plan_other", "另一个任务")
     other_task = CreationTask(id="task_other", workspace_id=WORKSPACE_ID, plan_id=other_plan.id,
                               name="另一个任务", scenario="knowledge_explanation")
-    repo.confirm_creation_plan(other_plan, other_task)
+    repo.plan_confirmation.confirm_creation_plan(other_plan, other_task)
     other_task = repo.get_creation_task(WORKSPACE_ID, other_task.id)
     other_task.confirmed_script_id = "script_other"
     other_task.montage_plan_id = "montage_other"

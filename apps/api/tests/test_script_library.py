@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 import pytest
 
 import app.main as main
-from app.production import CreationPlan, CreationPlanKnowledgeReference, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference
 from app.creation.contracts import CreationTask
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.source_repository import SourceRepository
@@ -45,7 +46,7 @@ def library(tmp_path, monkeypatch):
         id="task_original", workspace_id="local", plan_id=plan.id, name=plan.name,
         scenario="manual_fixture", stage="script", stage_status="waiting_for_user",
     )
-    repo.confirm_creation_plan(plan, task,verified_owner_user_id=owner.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task,verified_owner_user_id=owner.member_id)
     # Existing manual draft fixture; no fake generation run or model result.
     script = CreationTaskScript(
         id="script_original", workspace_id="local", task_id=task.id, run_id="", topic_id="",

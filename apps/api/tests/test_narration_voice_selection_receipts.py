@@ -10,7 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.materials.contracts import MediaAuthorityError
-from app.production import CreationPlan, CreationPlanBlocker, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker
 from app.creation.contracts import CreationTask, JobRun
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse
@@ -30,14 +31,14 @@ def state(tmp_path):
     task = CreationTask(id="task", workspace_id="workspace", plan_id="plan", name="原任务", scenario="中文介绍",
         stage="narration", stage_status="failed", status="failed", confirmed_script_id="confirmed-script",
         selected_topic_id="original-topic", stage_reason="voice_identity_missing")
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id="owner")
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="owner")
     voices = [register_synthetic_profiles(repo, workspace_id="workspace", member_id="owner",
         person_id=f"person-{i}", voice_id=f"voice-{i}", voice_version="v1", language="zh")[1] for i in (1, 2)]
     return SimpleNamespace(repo=repo, voices=voices)
 
 
 def command(state, **changes):
-    plan = state.repo.get_creation_plan("workspace", "plan")
+    plan = state.repo.plan_records.get_creation_plan("workspace", "plan")
     task = state.repo.get_creation_task("workspace", "task")
     return dict(workspace_id="workspace", task_id="task", member_id="owner", request_id=str(uuid4()),
         voice_profile_id="voice-1", voice_version="v1", expected_plan_updated_at=plan.updated_at,
@@ -59,7 +60,7 @@ def test_selection_replay_and_query_preserve_the_original_receipt_after_another_
     current = state.repo.get_creation_task("workspace", "task")
     assert current.stage == "narration" and current.stage_status == "not_started"
     assert current.selected_topic_id == "original-topic" and current.confirmed_script_id == "confirmed-script"
-    assert not state.repo.get_creation_plan("workspace", "plan").blockers
+    assert not state.repo.plan_records.get_creation_plan("workspace", "plan").blockers
     second = state.repo.select_creation_task_narration_voice(**command(state, voice_profile_id="voice-2"))
     assert second["previous_voice"] == first["selected_voice"]
     before = snapshot(state.repo)
@@ -67,7 +68,7 @@ def test_selection_replay_and_query_preserve_the_original_receipt_after_another_
     assert reloaded.select_creation_task_narration_voice(**body) == first
     assert reloaded.get_creation_task_narration_voice_selection("workspace", "task", body["request_id"], member_id="owner") == first
     assert snapshot(reloaded) == before
-    assert reloaded.get_creation_plan("workspace", "plan").selected_voice.profile_id == "voice-2"
+    assert reloaded.plan_records.get_creation_plan("workspace", "plan").selected_voice.profile_id == "voice-2"
 
 
 @pytest.mark.parametrize("field,value", [("voice_profile_id", "voice-2"), ("voice_version", "v2"),
@@ -176,9 +177,9 @@ def test_concurrent_different_requests_cannot_both_adopt_from_one_revision(state
 def test_request_and_receipt_cannot_be_reused_for_another_owned_task(state):
     body = command(state)
     state.repo.select_creation_task_narration_voice(**body)
-    plan = state.repo.get_creation_plan("workspace", "plan")
+    plan = state.repo.plan_records.get_creation_plan("workspace", "plan")
     task = state.repo.get_creation_task("workspace", "task")
-    second_plan, second_task = state.repo.confirm_creation_plan(
+    second_plan, second_task = state.repo.plan_confirmation.confirm_creation_plan(
         replace(plan, id="plan-2", creation_task_id=None), replace(task, id="task-2", plan_id="plan-2"),
         verified_owner_user_id="owner")
     before = snapshot(state.repo)

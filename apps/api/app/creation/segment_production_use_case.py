@@ -694,7 +694,7 @@ class SegmentProductionUseCase:
             return (tuple(task_row) if task_row else None,tuple(plan_row) if plan_row else None,
                 digest(dependencies),tuple(assets))
         before = read(conn)
-        plan = self.repository._read_creation_plan(conn,request.workspace_id,task.plan_id)
+        plan = self.repository.plan_records.read_creation_plan(conn,request.workspace_id,task.plan_id)
         profiles = self.repository.capture_profile_local_check(conn,request.workspace_id,
             [('voice',plan.selected_voice.profile_id,plan.selected_voice.version)],
             [(item.id,item.version) for item in plan.pronunciation_references])
@@ -740,7 +740,7 @@ class SegmentProductionUseCase:
             from app.schemas import NarrationRevisionRequest
             command = NarrationRevisionRequest.model_validate(event['command'])
             self.verify_revision(task.workspace_id, task.id, actor, command, connection=connection)
-            plan = self.repository.get_creation_plan(task.workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
             if reference_preparation is None:
                 with self.repository._connect() if connection is None else nullcontext(connection) as conn:
                     reference_preparation = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)

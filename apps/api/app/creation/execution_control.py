@@ -17,7 +17,7 @@ from app.creation.render_stage_use_case import RenderRejected
 from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, RecoveryBlocked
-from app.production import CreationPlan
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
 from app.task_audio import TASK_MEDIA_KIND
@@ -416,7 +416,7 @@ class CreationExecutionControl:
                 job=self.repository.get_job_run(job.workspace_id,job.id)
                 if job.status=='succeeded':
                     continue
-                plan=self.repository.get_creation_plan(job.workspace_id,task.plan_id)
+                plan=self.repository.plan_records.get_creation_plan(job.workspace_id,task.plan_id)
                 key,_=owner.narration_edit_facts(job,task,start,plan)
                 runtime.scheduler.submit(SubmissionIntent(job.workspace_id,'creation_job',job.id,
                     job.input_digest,key,SchedulePolicy()),original)
@@ -525,7 +525,7 @@ class CreationExecutionControl:
         operation=proposal.operation
         source=self._edit_source(task,proposal,actor,source)
         script=self.repository.get_creation_task_script(workspace_id,task.confirmed_script_id)
-        plan=self.repository.get_creation_plan(workspace_id,task.plan_id)
+        plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
         digest=person_edit_digest(operation)
         payload={**actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,
             'revision_digest':revision_digest(script,plan),'input_digest':digest,'edit_proposal_id':proposal.id,'source':source}
@@ -777,7 +777,7 @@ class CreationExecutionControl:
         task: CreationTask,
     ) -> CreationPlan:
         try:
-            plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="creation task not found") from exc
         if plan.creation_task_id != task.id:

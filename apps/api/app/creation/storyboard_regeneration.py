@@ -238,7 +238,7 @@ class StoryboardRegeneration:
         previous = creation_task_montage_plan_from_payload(base.snapshot["montage"])
         candidate = self.montage_stage.build_candidate(job.workspace_id, job.task_id, grant_context=context)
         from app.creation.duration_requirement import DurationRequirement
-        DurationRequirement.from_plan(self.repository.get_creation_plan(task.workspace_id, task.plan_id)).require(
+        DurationRequirement.from_plan(self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)).require(
             candidate.duration_seconds, 30)
         voice = move_preserved_voice(previous, candidate)
         # The task owns one montage object; immutable TimelineVersions own its revisions.

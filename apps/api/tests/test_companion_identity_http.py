@@ -208,7 +208,7 @@ def test_same_workspace_does_not_expose_another_members_private_task(linked, tmp
     repository = ProductionRepository(tmp_path / 'task.sqlite3', tmp_path / 'library')
     plan = replace(make_plan(), workspace_id=WORKSPACE, id='plan', creation_task_id=None)
     task = CreationTask(id='task', workspace_id=WORKSPACE, plan_id='plan', name='私人作品', scenario='private')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=OTHER)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=OTHER)
     monkeypatch.setattr(main, 'production_repo', repository)
     def forbidden_read(*args, **kwargs):
         pytest.fail('private output must be rejected before resolving a file')
@@ -222,7 +222,7 @@ def test_current_member_can_read_own_private_or_explicitly_shared_task(linked, t
     repository = ProductionRepository(tmp_path / 'readable.sqlite3', tmp_path / 'library')
     plan = replace(make_plan(), workspace_id=WORKSPACE, id='plan', creation_task_id=None)
     task = CreationTask(id='readable', workspace_id=WORKSPACE, plan_id=plan.id, name='可读任务', scenario='read')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
     if owner == OTHER:
         repository.set_creation_task_visibility(WORKSPACE, task.id, 'shared')
     monkeypatch.setattr(main, 'production_repo', repository)

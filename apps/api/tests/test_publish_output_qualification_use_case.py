@@ -8,7 +8,8 @@ import sqlite3
 from app import main
 from app.artifact_store import ArtifactStore
 from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TimelineVersion
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 
 
 def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch):
@@ -22,7 +23,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
         model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="0" * 64)
     declared_task = CreationTask(id="task-metadata", workspace_id=workspace, plan_id=plan.id,
         name="元数据任务", scenario="metadata", output_ready=True)
-    _, task = repository.confirm_creation_plan(plan, declared_task, verified_owner_user_id=owner)
+    _, task = repository.plan_confirmation.confirm_creation_plan(plan, declared_task, verified_owner_user_id=owner)
     store = ArtifactStore(tmp_path / "controlled-artifacts")
     logical_ref = "fixtures/output.NONMEDIA"
     content = b"NONMEDIA qualification fixture; no video or render"

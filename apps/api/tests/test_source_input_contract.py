@@ -11,11 +11,8 @@ import app.main as main_module
 from app.external_sources import FetchedWebPage
 from app.knowledge_web import snapshot_web_page
 from app.local_members import LocalMemberService
-from app.production import (
-    CreationPlanKnowledgeReference,
-    CreationPlanSourceReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlanKnowledgeReference, CreationPlanSourceReference
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 

@@ -14,7 +14,7 @@ from app.persistence_json import _json_default, _json_object, _json_payload
 from app.source_policy import content_owner
 
 if TYPE_CHECKING:
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
 
 
 class CreationRequestRecordStore:

@@ -12,7 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationPlanVoiceReference, CreationTask, JobRun
 
 WORKSPACE = "workspace-job"
@@ -47,7 +48,7 @@ def seed_task(repo: ProductionRepository, workspace_id: str, task_id: str, *, ow
         id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name,
         scenario="knowledge_explanation", stage="montage", owner_user_id=owner_user_id,
     )
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
     assert repo.get_creation_task(workspace_id, task_id).owner_user_id == owner_user_id
 
 

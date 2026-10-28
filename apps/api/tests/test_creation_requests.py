@@ -6,13 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.production import (
-    CreationPlan,
-    MaterialAsset,
-    MaterialSegment,
-    MaterialSegmentMatch,
-    ProductionRepository,
-)
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.request_contracts import CreationRequestConflict
 from app.creation.contracts import CreationTask
 import app.database_migrations as migrations
@@ -109,7 +104,7 @@ def test_large_goal_is_scalar_then_two_bounded_windows_replay_and_rebuild(reposi
 
 def test_window_cannot_attach_existing_task_identity(repository):
     existing_plan,existing_task = entries(count=1)[0]
-    repository.confirm_creation_plan(existing_plan,existing_task,verified_owner_user_id="another-member")
+    repository.plan_confirmation.confirm_creation_plan(existing_plan,existing_task,verified_owner_user_id="another-member")
     request = create(repository)
     with pytest.raises(CreationRequestConflict,match="现有对象"):
         save(repository,request,[(existing_plan,existing_task)])
@@ -142,11 +137,11 @@ def test_incremental_request_migration_preserves_old_multi_count_plan_without_ex
         old = ProductionRepository(database, tmp_path / "library")
         plan,task = entries(count=1)[0]
         plan.target_count = 5
-        old.confirm_creation_plan(plan,task,verified_owner_user_id=OWNER)
+        old.plan_confirmation.confirm_creation_plan(plan,task,verified_owner_user_id=OWNER)
         with old._connect() as conn:
             before = tuple(conn.execute("SELECT payload FROM creation_plans").fetchone())
     upgraded = ProductionRepository(database,tmp_path / "library")
-    assert upgraded.get_creation_plan(WORKSPACE,plan.id).target_count == 5
+    assert upgraded.plan_records.get_creation_plan(WORKSPACE,plan.id).target_count == 5
     with upgraded._connect() as conn:
         assert tuple(conn.execute("SELECT payload FROM creation_plans").fetchone()) == before
         assert conn.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 1

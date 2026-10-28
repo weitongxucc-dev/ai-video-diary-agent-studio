@@ -16,7 +16,8 @@ from app.device_scheduler import ProcessIdentity, RecoveryBlocked, VerifiedSessi
 from app.host_resource_probes import HostResourceDecision
 from app.montage import CreationTaskMontagePlan, MontageClip, creation_task_montage_plan_to_payload
 from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TimelineVersion
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.quality_checks import QualityReport, QualityUnavailable, quality_report_evidence
 from app.quality_inspection import QualityCheckRepository
 from app.quality_worker_runtime import (QualityBudget, source_receipt, QUALITY_PHASES,
@@ -196,7 +197,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
     repository.set_creation_task_visibility("local", "task", "shared")
     actor = CreationExecutionActor("local", "shared-reader")
     store = ArtifactStore(tmp_path / "artifacts")
@@ -575,7 +576,7 @@ def test_quality_phase_cancellation_preserves_prefix_without_completing_current_
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     actor = CreationExecutionActor("local", "member")
     store = ArtifactStore(tmp_path / "artifacts")
     checks = QualityCheckRepository(repository.database_path)
@@ -782,7 +783,7 @@ def test_quality_measurement_requires_commit_and_keeps_successful_prefix_on_fail
         blockers=[], preflight_fingerprint='isolated')
     task = CreationTask(id='task', workspace_id='local', plan_id='plan', name='测量',
         scenario='knowledge_explanation', stage='review')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
     actor = CreationExecutionActor('local', 'owner')
     store = ArtifactStore(tmp_path / 'artifacts')
     checks = QualityCheckRepository(repository.database_path)
@@ -841,7 +842,7 @@ def test_failed_quality_phase_continues_original_job_with_sealed_policy_and_pref
         blockers=[], preflight_fingerprint='isolated')
     task = CreationTask(id='task', workspace_id='local', plan_id='plan', name='恢复',
         scenario='knowledge_explanation', stage='review')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
     actor = CreationExecutionActor('local', 'owner')
     store = ArtifactStore(tmp_path / 'artifacts')
     checks = QualityCheckRepository(repository.database_path)
@@ -960,7 +961,7 @@ def test_quality_continuation_projection_is_read_only_and_declares_conditions(tm
         blockers=[], preflight_fingerprint='isolated')
     task = CreationTask(id='task', workspace_id='local', plan_id='plan', name='读取',
         scenario='knowledge_explanation', stage='review')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='owner')
     actor = CreationExecutionActor('local', 'owner')
     store = ArtifactStore(tmp_path / 'artifacts')
     checks = QualityCheckRepository(repository.database_path)

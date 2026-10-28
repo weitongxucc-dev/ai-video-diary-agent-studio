@@ -204,12 +204,12 @@ class AutomationRuntime:
         plan.created_at = plan.confirmed_at = now
         task = CreationTask(id="task_"+hashlib.sha256(run_id.encode()).hexdigest()[:24],workspace_id=actor.workspace_id,
             plan_id=plan.id,name=plan.name,scenario=plan.goal,created_at=now,updated_at=now)
-        plan,task = self.production.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=self.reader(actor),local_diagnostic=False)
+        plan,task = self.production.plan_confirmation.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=self.reader(actor),local_diagnostic=False)
         self.service.bind_confirmed_plan(self.production,actor,run_id,run,fingerprint,plan,task,now)
         return self.bound_result(actor,self.service.get_run(actor,run_id))
 
     def bound_result(self, actor, run):
-        return self.plan_response(self.production.get_creation_plan(actor.workspace_id,run["plan_id"]),self.production.get_creation_task(actor.workspace_id,run["task_id"]))
+        return self.plan_response(self.production.plan_records.get_creation_plan(actor.workspace_id,run["plan_id"]),self.production.get_creation_task(actor.workspace_id,run["task_id"]))
 
     def project_run(self, actor, run):
         projection = self.project_state(actor, run)

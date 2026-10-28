@@ -15,14 +15,8 @@ from app import main as main_module
 from app.local_members import LocalMemberService
 from app.artifact_store import ArtifactStore
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import (
-    CreationPlan,
-    MaterialAsset,
-    MaterialSegment,
-    MaterialSegmentMatch,
-    NarrationArtifactRecord,
-    ProductionRepository,
-)
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, NarrationArtifactRecord, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 
 
@@ -81,7 +75,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         status="waiting_for_user", progress=70, recovery_point="montage",
         owner_user_id=creator_id,
     )
-    repository.confirm_creation_plan(plan, task)
+    repository.plan_confirmation.confirm_creation_plan(plan, task)
     repository.save_narration_artifact(NarrationArtifactRecord(
         id="voice-trim", workspace_id=workspace_id, script_id="script-trim", voice_profile_id=None,
         cache_key="voice-trim", audio_path=str(voice), duration_seconds=1, sample_rate=44100,

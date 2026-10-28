@@ -10,7 +10,8 @@ from typing import Literal
 from app.creation.script_draft_use_case import ScriptDraftRejected, script_failure
 from app.creation.source_errors import SourcePreflightError
 from app.creation.source_inputs_use_case import CreationSourceInputs
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.topic_contracts import (
     TopicCandidate as CreationTaskTopicCandidate,
@@ -31,7 +32,7 @@ class ScriptContextUseCase:
 
     def _plan(self, workspace_id, task):
         try:
-            plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise ScriptDraftRejected(status_code=404, detail="creation task not found") from exc
         if plan.creation_task_id != task.id:

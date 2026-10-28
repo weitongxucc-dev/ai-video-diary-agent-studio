@@ -160,7 +160,7 @@ def _render_ready_state(tmp_path, *, aspect_ratio: str = "9:16", clips: int = 1,
                      (montage.id, task.workspace_id, task_id,
                       json.dumps(creation_task_montage_plan_to_payload(montage)),
                       datetime.now(timezone.utc).isoformat()))
-    plan = repo.get_creation_plan("workspace_a", "plan_workspace_a")
+    plan = repo.plan_records.get_creation_plan("workspace_a", "plan_workspace_a")
     return repo, task, plan, CpuRenderLimits(8_000_000, threads, 90)
 
 

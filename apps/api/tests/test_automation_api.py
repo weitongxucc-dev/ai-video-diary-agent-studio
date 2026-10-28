@@ -86,16 +86,16 @@ def test_atomic_confirm_rollback_does_not_leave_partial_plan_or_run_binding(auto
     production,template,client,actor,payload=automation_state
     definition,run=create_and_due(client,actor,payload)
     fp=client.post(f"/api/automations/runs/{run['id']}/preview").json()['preflight_fingerprint']
-    insert=production.insert_confirmed_creation_plan
+    insert=production.plan_records.insert_confirmed_creation_plan
     def interrupted(conn,plan,task):
         insert(conn,plan,task)
         raise ValueError('crash before binding')
-    monkeypatch.setattr(production,'insert_confirmed_creation_plan',interrupted)
+    monkeypatch.setattr(production.plan_records,'insert_confirmed_creation_plan',interrupted)
     assert client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp}).status_code==409
     with production._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_plans').fetchone()[0]==0
         assert conn.execute('SELECT task_id FROM automation_runs WHERE id=?',(run['id'],)).fetchone()[0] is None
-    monkeypatch.setattr(production,'insert_confirmed_creation_plan',insert)
+    monkeypatch.setattr(production.plan_records,'insert_confirmed_creation_plan',insert)
     assert client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp}).status_code==200
 
 
@@ -283,7 +283,7 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
 
     from app.automation_runtime import AutomationRuntime
     from app.automation_service import AutomationBlocked, AutomationCreate
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
 
     database = tmp_path / 'binding.sqlite3'
     production = ProductionRepository(database, tmp_path / 'media')
@@ -344,14 +344,14 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
         connection.set_trace_callback(item['sql'].append)
         return connection
 
-    prepare = production.prepare_confirmed_creation_plan
+    prepare = production.plan_confirmation.prepare_confirmed_creation_plan
     def observe_prepare(*args, **kwargs):
         value = prepare(*args, **kwargs)
         ordering.append('prepared_before_bind')
         return value
 
     monkeypatch.setattr(sqlite3, 'connect', observe_connect)
-    monkeypatch.setattr(production, 'prepare_confirmed_creation_plan', observe_prepare)
+    monkeypatch.setattr(production.plan_confirmation, 'prepare_confirmed_creation_plan', observe_prepare)
     result = runtime.confirm(None, actor, run['id'], fingerprint)
     bound = runtime.service.get_run(actor, run['id'])
     plan_id = 'plan_' + hashlib.sha256(run['id'].encode()).hexdigest()[:24]

@@ -266,7 +266,7 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
     )
     from app.device_scheduler import DeviceScheduler
     from app.host_resource_probes import NarrationBudget
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
     from _media_preview_test_fixtures import register_synthetic_profiles
 
@@ -291,7 +291,7 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
         approved_asset_count=0, approved_clip_count=0, material_rule_summary="测试", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
     task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation", owner_user_id=joined.member_id)
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=joined.member_id)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=joined.member_id)
     now = datetime.now(timezone.utc).isoformat()
     payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="测试",
@@ -305,7 +305,7 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",
             (json.dumps(asdict(task), default=str), task.id))
     script = repository.get_creation_task_script(WORKSPACE, "script")
-    plan = repository.get_creation_plan(WORKSPACE, plan.id)
+    plan = repository.plan_records.get_creation_plan(WORKSPACE, plan.id)
     budget = NarrationBudget(80, 1, 1024, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024)
     owner = CreationJobOwnerVerifier(repository, narration_budget=budget, verify_identity=access.verify_identity)
     # No model is executed; this fixture only permits the real scheduler's admission.
@@ -367,7 +367,8 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
     from types import SimpleNamespace
     from app.creation_execution import CreationExecution, revision_digest
     from app.host_resource_probes import MontageBudget, PresenterBudget
-    from app.production import CreationPlan, NarrationArtifactRecord
+    from app.production import NarrationArtifactRecord
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationPlanVoiceReference, CreationTask, NarrationSegment
     from app.creation.contracts import CreationPlanPersonReference
     from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
@@ -414,7 +415,7 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
         presenter_share_target=20)
     assert plan.presenter_share_target == 20
     task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation", owner_user_id=member.member_id)
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
     payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="合成文案",
             visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
@@ -452,7 +453,7 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
     execution = CreationExecution(repo, run_montage_plan=forbidden,
         run_render=forbidden, render_is_valid=forbidden)
     script = repo.get_creation_task_script(WORKSPACE, "script")
-    persisted = repo.get_creation_plan(WORKSPACE, plan.id)
+    persisted = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
     job = execution.start(WORKSPACE, task.id, script.id, revision_digest(script, persisted), actor=actor)
     registration = creation_job_registration(repo, render_action=forbidden, render_is_valid=forbidden,
         cpu_render_budget=cpu, presenter_cpu_render_budget=cpu, presenter_budget=budget,
@@ -592,7 +593,7 @@ def _complete_presenter_fixture(case, context=None):
     from app.task_runtime import TaskRuntime, JobResult
     task = case.repo.get_creation_task(WORKSPACE, case.task.id)
     script = case.repo.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     segment, request = presenter_inputs(case.repo, task, script, plan, {"fast": "fixture-avatar"})[0]
     input_facts = presenter_input_facts(request)
     cache = avatar_lipsync_cache_key(request, input_facts=input_facts)
@@ -718,7 +719,7 @@ def test_presenter_composition_accounts_for_actual_person_media_and_uses_its_own
     from app.creation_execution import CpuRenderLimits, cpu_render_facts, submit_creation_stage
     case = presenter_permit_case
     task = _presenter_montage_fixture(case, _complete_presenter_fixture(case))
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     with case.repo._connect() as conn:
         with pytest.raises(ValueError, match="人物组合.*专属预算"):
             cpu_render_facts(case.repo, conn, task, plan, CpuRenderLimits(99999999, 8, 999))
@@ -834,7 +835,7 @@ def test_ready_presenter_cache_rejects_changed_audio_or_visual_under_same_refere
     case = presenter_permit_case
     import os
     task = _presenter_montage_fixture(case, _complete_presenter_fixture(case))
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     assert case.registration.owner.person_valid(task)
     with case.repo._connect() as conn:
         case.registration.owner.render_facts(conn, task, plan)
@@ -866,7 +867,7 @@ def test_presenter_row_admission_preserves_original_json_key_and_resources(prese
     case = presenter_key_stream_case
     repo = case.repo
     script = repo.get_creation_task_script(WORKSPACE, 'script')
-    plan = replace(repo.get_creation_plan(WORKSPACE, case.task.plan_id), presenter_share_target=100)
+    plan = replace(repo.plan_records.get_creation_plan(WORKSPACE, case.task.plan_id), presenter_share_target=100)
     inputs = presenter_inputs(repo, case.task, script, plan, {'fast': 'fixture-avatar'})
     files = {fact['path']: fact for _, request in inputs for fact in presenter_input_facts(request)}
     facts = [files[path] for path in sorted(files)]
@@ -1025,7 +1026,7 @@ def test_presenter_cpu_row_inputs_keep_actual_source_accounting_and_cache_revali
     case = presenter_input_stream_case
     render = _complete_presenter_fixture(case)
     task = _presenter_montage_fixture(case, render)
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     def forbidden(*args, **kwargs):
         pytest.fail('person CPU admission must not load full input DTOs')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):

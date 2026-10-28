@@ -10,7 +10,8 @@ import app.main as main
 from app.assistant_pi import AssistantUnavailable
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
-from app.production import CreationPlan, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask, TimelineVersion
 
 
@@ -48,7 +49,7 @@ def task_client(tmp_path, monkeypatch):
                             name=plan.name, scenario="knowledge_explanation",
                             stage="narration" if sequence else "topic",
                             confirmed_script_id="script" if sequence else None)
-        production.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+        production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
         for number in range(1, sequence + 1):
             production.create_timeline_version(TimelineVersion(
                 id=f"timeline-{number}", workspace_id="qa", task_id=task.id,
@@ -107,10 +108,10 @@ def test_unavailable_or_unrelated_persisted_timeline_is_rejected(task_client, ta
     create, production, conversations, calls, member_id = task_client
     client, headers, payload = create(2)
     if target == "another-task":
-        other_plan = replace(production.get_creation_plan("qa", "plan"), id="other-plan")
+        other_plan = replace(production.plan_records.get_creation_plan("qa", "plan"), id="other-plan")
         other_task = CreationTask(id="other-task", workspace_id="qa", plan_id=other_plan.id,
                                   name="其他任务", scenario="knowledge_explanation")
-        production.confirm_creation_plan(other_plan, other_task, verified_owner_user_id=member_id)
+        production.plan_confirmation.confirm_creation_plan(other_plan, other_task, verified_owner_user_id=member_id)
         production.create_timeline_version(TimelineVersion(
             id=target, workspace_id="qa", task_id=other_task.id, parent_version_id=None,
             sequence=1, snapshot={}, created_by_operation_id=None,

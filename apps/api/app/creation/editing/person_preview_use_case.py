@@ -30,7 +30,7 @@ class PersonPreviewUseCase:
             clip = next((item for item in montage.clips if item.id == clip_id))
             cue = next((item for item in montage.cues if item.id == clip.cue_id))
             segment = self.repository.get_narration_segment(workspace_id, task.id, cue.narration_segment_id)
-            creation_plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
             person_provider = self.provider(creation_plan.lipsync_quality)
             selected_person = creation_plan.selected_person
             if selected_person is None:

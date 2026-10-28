@@ -132,7 +132,7 @@ class CreationIntentUseCase:
         else:
             # Adopted Plan + Task + window receipt were committed atomically.
             # Re-read that exact persisted proof, never scan historical items.
-            persisted = repository.get_creation_plan(plan.workspace_id, plan.id)
+            persisted = repository.plan_records.get_creation_plan(plan.workspace_id, plan.id)
             if persisted.adoption == adoption and persisted.creation_task_id == task.id:
                 return original["goal"]
             raise ValueError("文案目标不属于该请求已采用窗口中的当前任务，请重新核对采用关联。")

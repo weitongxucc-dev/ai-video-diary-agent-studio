@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+from app.creation.plan_contracts import (
+    CreationPlan as _CreationPlan,
+    CreationPlanBlocker as _CreationPlanBlocker,
+    CreationPlanKnowledgeReference as _CreationPlanKnowledgeReference,
+    CreationPlanPronunciationReference as _CreationPlanPronunciationReference,
+    CreationPlanSourceReference as _CreationPlanSourceReference,
+)
+from app.creation.plan_records import CreationPlanRecordStore
+from app.creation.plan_confirmation_use_case import CreationPlanConfirmationUseCase
+
 from app.creation.script_contracts import (
     ScriptGenerationRunStatus as _ScriptGenerationRunStatus, ScriptSelectionStatus as _ScriptSelectionStatus, ScriptGenerationRun as _ScriptGenerationRun,
     CreationTaskScriptSection as _CreationTaskScriptSection, CreationTaskScript as _CreationTaskScript, ScriptLibrarySection as _ScriptLibrarySection, ScriptLibraryEntry as _ScriptLibraryEntry,
@@ -341,86 +351,18 @@ class ProductionBatch:
         return sum(item.status in {"failed", "interrupted"} for item in self.items)
 
 
-@dataclass(frozen=True)
-class CreationPlanKnowledgeReference:
-    id: str
-    version: str
-    title: str
-    authorization: str
-    ownership: str
-
-
-@dataclass(frozen=True)
-class CreationPlanSourceReference:
-    id: str
-    connector_id: str
-    source_label: str
-    title: str
-    license: str
-    identity: str = ""
 
 
 
 
 
 
-@dataclass(frozen=True)
-class CreationPlanPronunciationReference:
-    id: str
-    version: str
-    scope: str
-    scope_reference: str | None
-    language: str
 
 
-@dataclass(frozen=True)
-class CreationPlanBlocker:
-    reason: str
-    impact: str
-    repair_action: str
-    stage: str
-    blocks_confirmation: bool
 
 
-@dataclass
-class CreationPlan:
-    id: str
-    workspace_id: str
-    goal: str
-    name: str
-    target_count: int
-    language: str
-    aspect_ratio: str
-    duration_target_seconds: int
-    knowledge_references: list[CreationPlanKnowledgeReference]
-    source_references: list[CreationPlanSourceReference]
-    selected_voice: _CreationPlanVoiceReference | None
-    pronunciation_references: list[CreationPlanPronunciationReference]
-    approved_asset_count: int
-    approved_clip_count: int
-    material_rule_summary: str
-    model_snapshot: list[dict[str, object]]
-    confirmation_points: list[str]
-    blockers: list[CreationPlanBlocker]
-    preflight_fingerprint: str
-    selected_person: _CreationPlanPersonReference | None = None
-    presenter_share_target: int = 0
-    lipsync_quality: Literal["high", "fast"] = "fast"
-    template_id: str | None = None
-    template_version: int | None = None
-    template_settings: dict[str, object] = field(default_factory=dict)
-    material_matches: list[MaterialSegmentMatch] = field(default_factory=list)
-    status: Literal["confirmed"] = "confirmed"
-    creation_task_id: str | None = None
-    visibility: ContentVisibility = CONTENT_VISIBILITY_DEFAULT
-    owner_user_id: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-    confirmed_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-    creation_intent: dict[str, object] | None = None
-    adoption: dict[str, object] | None = None
-    duration_mode: str = "exact"
-    duration_range_seconds: tuple[float, float] | None = None
+
+
 
 
 @dataclass(frozen=True)
@@ -633,17 +575,21 @@ class ProductionRepository:
             read_task=self.get_creation_task, require_task=self._require_creation_task,
             write_task=self._write_topic_task, read_plan_intent=self._topic_plan_intent,
             append_event=self.execution_records.append_task_event)
+        self.plan_records = CreationPlanRecordStore(self._connect,
+            read_asset=self._material_assets._asset_payload_row_by_id, decode_asset=self._asset_from_payload)
+        self.plan_confirmation = CreationPlanConfirmationUseCase(self._connect,
+            records=self.plan_records, read_task=self.get_creation_task, execution_records=self.execution_records)
         self.script_records = ScriptRecordStore(self._connect,
             read_task=self.get_creation_task, require_task=self._require_creation_task,
-            decode_plan=self._creation_plan_from_payload, read_topic=self.topic_records.get_topic_candidate,
+            decode_plan=self.plan_records.creation_plan_from_payload, read_topic=self.topic_records.get_topic_candidate,
             transition_task=self._script_task_transition, create_library_task=self._create_script_library_task,
             knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.execution_records.append_task_event,
             get_event=self.execution_records.get_task_event, decode_event=self.execution_records.task_event_from_row)
         self.creation_requests = CreationRequestRecordStore(self._connect)
         self.creation_request_adoption = CreationRequestAdoptionUseCase(self._connect,
-            records=self.creation_requests, decode_plan=self._creation_plan_from_payload,
+            records=self.creation_requests, decode_plan=self.plan_records.creation_plan_from_payload,
             decode_task=self._creation_task_from_payload,
-            prepare_plan=self.prepare_confirmed_creation_plan, insert_plan=self.insert_confirmed_creation_plan,
+            prepare_plan=self.plan_confirmation.prepare_confirmed_creation_plan, insert_plan=self.plan_records.insert_confirmed_creation_plan,
             read_asset=self._material_assets._asset_payload_visibility_row_by_id,
             decode_asset=self._asset_from_payload, material_eligible=material_segment_eligible,
             voice_reference=self.creation_plan_voice_reference, person_reference=self.creation_plan_person_reference,
@@ -2536,11 +2482,11 @@ class ProductionRepository:
 
     def set_creation_plan_visibility(
         self, workspace_id: str, plan_id: str, visibility: ContentVisibility
-    ) -> CreationPlan:
+    ) -> _CreationPlan:
         """明确共享或收回一个创作方案的可见性。"""
         if visibility not in ("private", "shared"):
             raise ValueError("可见性只能是 private 或 shared。")
-        plan = self.get_creation_plan(workspace_id, plan_id)
+        plan = self.plan_records.get_creation_plan(workspace_id, plan_id)
         plan = replace(plan, visibility=visibility, updated_at=utc_now())
         with self._connect() as conn:
             conn.execute(
@@ -2896,185 +2842,11 @@ class ProductionRepository:
 
 
 
-    def confirm_creation_plan(
-        self,
-        plan: CreationPlan,
-        task: _CreationTask,
-        *,
-        verified_owner_user_id: str | None = None,
-        local_diagnostic: bool = False,
-        reply_reference: dict[str, str] | None = None,
-        request_id: str | None = None,
-    ) -> tuple[CreationPlan, _CreationTask]:
-        if reply_reference is not None or request_id is not None:
-            if reply_reference is None or request_id is None:
-                raise ValueError("对话回复来源绑定需要稳定请求身份")
-            return self.confirm_creation_plan_from_reply(
-                plan,
-                task,
-                reply_reference=reply_reference,
-                request_id=request_id,
-                verified_owner_user_id=verified_owner_user_id,
-                local_diagnostic=local_diagnostic,
-            )
-        plan, task = self.prepare_confirmed_creation_plan(
-            plan, task, verified_owner_user_id=verified_owner_user_id,
-            local_diagnostic=local_diagnostic,
-        )
-        with self._connect() as conn:
-            self.insert_confirmed_creation_plan(conn, plan, task)
-        return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
 
-    def confirm_creation_plan_from_reply(
-        self,
-        plan: CreationPlan,
-        task: _CreationTask,
-        *,
-        reply_reference: dict[str, str],
-        request_id: str,
-        verified_owner_user_id: str | None = None,
-        local_diagnostic: bool = False,
-    ) -> tuple[CreationPlan, _CreationTask]:
-        reference = _validated_assistant_reply_reference(reply_reference)
-        if not request_id.strip():
-            raise ValueError("确认方案请求身份不能为空")
-        plan, task = self.prepare_confirmed_creation_plan(
-            plan, task, verified_owner_user_id=verified_owner_user_id,
-            local_diagnostic=local_diagnostic,
-        )
-        fingerprint_payload = {
-            "workspace_id": plan.workspace_id,
-            "owner_user_id": task.owner_user_id,
-            "reply_reference": reference,
-            "plan": _creation_plan_conversion_intent(plan),
-            "task": _creation_task_conversion_intent(task),
-        }
-        request_fingerprint = hashlib.sha256(
-            _json_object(fingerprint_payload).encode("utf-8")
-        ).hexdigest()
-        event_id = _assistant_reply_request_event_id(
-            "assistant_reply_plan_confirmed", plan.workspace_id, request_id,
-        )
-        replay_ids: tuple[str, str] | None = None
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute(
-                "SELECT * FROM task_events WHERE id = ?", (event_id,),
-            ).fetchone()
-            if existing is not None:
-                event = self.execution_records.task_event_from_row(existing)
-                if (
-                    event.event_type != "assistant_reply_plan_confirmed"
-                    or event.workspace_id != plan.workspace_id
-                    or event.payload.get("request_fingerprint") != request_fingerprint
-                ):
-                    raise ValueError("方案请求身份已用于不同的对话或方案输入")
-                replay_ids = (str(event.payload["plan_id"]), str(event.payload["task_id"]))
-            else:
-                self.insert_confirmed_creation_plan(conn, plan, task)
-                self.execution_records.append_task_event(
-                    _TaskEvent(
-                        id=event_id,
-                        workspace_id=plan.workspace_id,
-                        task_id=task.id,
-                        job_id=None,
-                        event_type="assistant_reply_plan_confirmed",
-                        payload={
-                            "request_id": request_id,
-                            "request_fingerprint": request_fingerprint,
-                            "reply_reference": reference,
-                            "reply_owner_user_id": task.owner_user_id,
-                            "plan_id": plan.id,
-                            "task_id": task.id,
-                        },
-                    ),
-                    connection=conn,
-                )
-        if replay_ids is not None:
-            return (
-                self.get_creation_plan(plan.workspace_id, replay_ids[0]),
-                self.get_creation_task(plan.workspace_id, replay_ids[1]),
-            )
-        return self.get_creation_plan(plan.workspace_id, plan.id), self.get_creation_task(task.workspace_id, task.id)
 
-    @staticmethod
-    def prepare_confirmed_creation_plan(
-        plan: CreationPlan,
-        task: _CreationTask,
-        *,
-        verified_owner_user_id: str | None,
-        local_diagnostic: bool,
-    ) -> tuple[CreationPlan, _CreationTask]:
-        if not plan.workspace_id.strip() or not task.workspace_id.strip():
-            raise ValueError("创作方案和任务必须属于工作区")
-        if plan.workspace_id != task.workspace_id or plan.id != task.plan_id:
-            raise ValueError("创作任务必须关联同一工作区的创作方案")
-        if not plan.goal.strip() or not plan.name.strip():
-            raise ValueError("创作方案必须包含目标和名称")
-        if not 1 <= plan.target_count <= 50:
-            raise ValueError("创作方案成片数必须在 1 到 50 之间")
-        if any(blocker.blocks_confirmation for blocker in plan.blockers):
-            raise ValueError("当前预检存在阻断选题阶段的事实缺口")
-        if plan.approved_clip_count > 0 and not plan.material_matches:
-            raise ValueError("新创作方案必须固化本次实际命中的素材片段")
-        _validate_plan_material_matches(plan.material_matches)
-        # 上传者只认已验证身份。dataclass 里的 owner_user_id 是调用方能自填的
-        # 字段，新建时一律以这里解析出的身份覆盖：自填的归属不参与判断，
-        # 没有可验证身份就不算任何成员的私有内容。
-        owner = content_owner(verified_owner_user_id)
-        if owner is None and not local_diagnostic:
-            # 认证范围里解析不出身份：不算任何成员的私有内容，也不采信输入值。
-            plan = replace(plan, owner_user_id=None)
-            task = replace(task, owner_user_id=None)
-        elif owner:
-            plan = replace(plan, owner_user_id=owner)
-            task = replace(task, owner_user_id=owner)
-        return plan, task
 
-    def insert_confirmed_creation_plan(
-        self, conn: sqlite3.Connection, plan: CreationPlan, task: _CreationTask,
-    ) -> None:
-        now = utc_now()
-        plan.creation_task_id = task.id
-        plan.updated_at = now
-        task.updated_at = now
-        for match in plan.material_matches:
-            asset_id = match.asset_ref.removeprefix("asset:")
-            segment_id = match.segment_ref.removeprefix("segment:")
-            asset_row = self._material_assets._asset_payload_row_by_id(
-                conn, plan.workspace_id, asset_id,
-            )
-            if asset_row is None:
-                raise ValueError("创作方案引用的素材不属于当前工作区")
-            asset = self._asset_from_payload(json.loads(str(asset_row["payload"])))
-            segment = next((item for item in asset.segments if item.id == segment_id), None)
-            if segment is None or not material_usage_eligibility(asset,segment,purpose='manual').eligible:
-                raise ValueError("创作方案引用的素材片段不可用")
-        conn.execute(
-            "INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (plan.id, plan.workspace_id, _json_payload(plan), plan.visibility, plan.updated_at.isoformat()),
-        )
-        conn.execute(
-            "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (task.id, task.workspace_id, task.plan_id, _json_payload(task), task.visibility, task.updated_at.isoformat()),
-        )
 
-    def get_creation_plan(self, workspace_id: str, plan_id: str) -> CreationPlan:
-        with self._connect() as conn:
-            return self._read_creation_plan(conn, workspace_id, plan_id)
 
-    def _read_creation_plan(self, connection, workspace_id, plan_id):
-        row = connection.execute(
-            """SELECT payload, visibility FROM creation_plans
-            WHERE workspace_id = ? AND id = ?""",
-            (workspace_id, plan_id),
-        ).fetchone()
-        if row is None:
-            raise KeyError(plan_id)
-        data = json.loads(str(row["payload"]))
-        if "visibility" in row.keys():
-            data["visibility"] = str(row["visibility"])
-        return self._creation_plan_from_payload(data)
 
     @contextmanager
     def creation_execution_read(self, connection=None):
@@ -3093,7 +2865,7 @@ class ProductionRepository:
             task = self._require_creation_task(conn, workspace_id, task_id)
             if not task.confirmed_script_id:
                 raise ValueError("请先确认实际文案")
-            plan = self._read_creation_plan(conn, workspace_id, task.plan_id)
+            plan = self.plan_records.read_creation_plan(conn, workspace_id, task.plan_id)
             header, fields = self.script_records.read_execution_script_metadata(conn, workspace_id, task.confirmed_script_id)
             digest = execution_input_digest(fields, plan,
                 self.script_records.iter_execution_script_sections(conn, workspace_id, header.id))
@@ -3232,7 +3004,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str, *, member_id: str, request_id: str,
         expected_plan_updated_at: datetime | str, expected_task_updated_at: datetime | str,
         requested_references: tuple[tuple[str, str], ...],
-        resolve_references: Callable[[], list[CreationPlanKnowledgeReference]],
+        resolve_references: Callable[[], list[_CreationPlanKnowledgeReference]],
     ) -> dict[str, object]:
         """Append fixed inputs and their immutable receipt under one write lock."""
         if not request_id.strip():
@@ -3253,7 +3025,7 @@ class ProductionRepository:
             row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
             if row is None:
                 raise KeyError(task.plan_id)
-            plan = self._creation_plan_from_payload(json.loads(row["payload"]))
+            plan = self.plan_records.creation_plan_from_payload(json.loads(row["payload"]))
             if (_revision_value(plan.updated_at) != _revision_value(expected_plan_updated_at)
                     or _revision_value(task.updated_at) != _revision_value(expected_task_updated_at)):
                 raise ValueError("方案或任务版本已变化，请读取当前版本后重新采用资料。")
@@ -4054,7 +3826,7 @@ class ProductionRepository:
 
     def create_segment_revision_job(self, task, actor, command, rules_check, *, write_guard=None, budget_policy=None):
         from app.creation.narration_pcm import prepare_narration_source
-        plan = self.get_creation_plan(task.workspace_id, task.plan_id)
+        plan = self.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         with prepare_narration_source(self, task, plan, actor) as prepared:
             return self._create_segment_revision_job(task, actor, command, rules_check,
                 prepared, write_guard=write_guard, budget_policy=budget_policy)
@@ -4570,7 +4342,7 @@ class ProductionRepository:
             script, _ = self.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
             current = self.read_creation_section_input(task,script,section_id,connection=conn)
             section, audio = current['section'], current['audio']
-            plan = self._read_creation_plan(conn,workspace_id,task.plan_id)
+            plan = self.plan_records.read_creation_plan(conn,workspace_id,task.plan_id)
             inputs = self._section_timeline_dependency_inputs(conn,task,section_id,current['adopted'])
             cue_ids = {item['id'] for item in inputs.cues}
             clips = [item for item in inputs.clip_clocks if item['cue_id'] in cue_ids]
@@ -6642,7 +6414,7 @@ class ProductionRepository:
             "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
             (workspace_id, plan_id),
         ).fetchone()
-        plan = self._creation_plan_from_payload(json.loads(row["payload"]))
+        plan = self.plan_records.creation_plan_from_payload(json.loads(row["payload"]))
         return plan.creation_intent
 
     def _script_task_transition(self, conn, task, transition, now, *, script_id=None,
@@ -6703,7 +6475,7 @@ class ProductionRepository:
         return self.script_records._require_assistant_reply_plan_event(conn, workspace_id=workspace_id, task_id=task_id, plan_id=plan_id, request_id=request_id, reply_reference=reply_reference, reply_owner_user_id=reply_owner_user_id)
 
     @staticmethod
-    def _validate_assistant_reply_inputs(plan: CreationPlan, input_references: dict[str, dict[str, object]]):
+    def _validate_assistant_reply_inputs(plan: _CreationPlan, input_references: dict[str, dict[str, object]]):
         return ScriptRecordStore._validate_assistant_reply_inputs(plan, input_references)
 
     def save_reviewed_script_generation(self, run, script, *, write_guard=None, result_write=None):
@@ -6812,7 +6584,7 @@ class ProductionRepository:
     def list_script_library_entries(self, workspace_id: str, *, query: str='', category: str='') -> list[_ScriptLibraryEntry]:
         return self.script_records.list_script_library_entries(workspace_id, query=query, category=category)
 
-    def reuse_script_library_entry(self, workspace_id: str, entry_id: str, *, plan: CreationPlan) -> tuple[_CreationTask, _CreationTaskScript]:
+    def reuse_script_library_entry(self, workspace_id: str, entry_id: str, *, plan: _CreationPlan) -> tuple[_CreationTask, _CreationTaskScript]:
         return self.script_records.reuse_script_library_entry(workspace_id, entry_id, plan=plan)
 
     def _demote_other_confirmed_scripts(self, conn: sqlite3.Connection, *, workspace_id: str, task_id: str, confirmed_script_id: str, updated_at: datetime) -> None:
@@ -6920,7 +6692,7 @@ class ProductionRepository:
             ).fetchone()
             if plan_row is None:
                 raise KeyError(task.plan_id)
-            plan = self._creation_plan_from_payload(json.loads(str(plan_row["payload"])))
+            plan = self.plan_records.creation_plan_from_payload(json.loads(str(plan_row["payload"])))
             if plan.creation_task_id != task.id:
                 raise ValueError("创作方案与任务不一致")
             if (not _content_readable(user_id=member_id, local_diagnostic=False,
@@ -6955,7 +6727,7 @@ class ProductionRepository:
             if selected_voice.language not in {{"zh-CN":"zh", "en-US":"en", "zh-CN/en-US":"zh-en"}[plan.language], "zh-en"}:
                 raise _MediaAuthorityError(reason="voice_language_unavailable", impact="声音语言不匹配。",
                     repair_action="选择匹配方案语言的声音。")
-            pronunciation_references = [CreationPlanPronunciationReference(id=entry.id, version=entry.version,
+            pronunciation_references = [_CreationPlanPronunciationReference(id=entry.id, version=entry.version,
                 scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language) for entry in entries]
 
             now = utc_now()
@@ -7627,56 +7399,6 @@ class ProductionRepository:
         ]
         return ProductionBatch(**data, items=items)
 
-    @staticmethod
-    def _creation_plan_from_payload(data: dict[str, object]) -> CreationPlan:
-        knowledge_payloads = data.pop("knowledge_references", [])
-        source_payloads = data.pop("source_references", [])
-        voice_payload = data.pop("selected_voice", None)
-        # Missing key identifies historical payloads only. Explicit None stays
-        # unselected even if an old voice relationship exists.
-        person_payload = data.pop("selected_person", None) if "selected_person" in data else (
-            {"profile_id": voice_payload["person_profile_id"], "version": voice_payload["person_version"]}
-            if isinstance(voice_payload, dict) and voice_payload.get("person_profile_id")
-            and voice_payload.get("person_version") else None)
-        pronunciation_payloads = data.pop("pronunciation_references", [])
-        blocker_payloads = data.pop("blockers", [])
-        material_match_payloads = data.pop("material_matches", [])
-        data = _with_datetime(data, "created_at", "confirmed_at", "updated_at")
-        return CreationPlan(
-            **data,
-            knowledge_references=[
-                CreationPlanKnowledgeReference(**item)
-                for item in knowledge_payloads
-                if isinstance(item, dict)
-            ],
-            source_references=[
-                CreationPlanSourceReference(**item)
-                for item in source_payloads
-                if isinstance(item, dict)
-            ],
-            selected_voice=(
-                _CreationPlanVoiceReference(**voice_payload)
-                if isinstance(voice_payload, dict)
-                else None
-            ),
-            selected_person=(_CreationPlanPersonReference(**person_payload)
-                             if isinstance(person_payload, dict) else None),
-            pronunciation_references=[
-                CreationPlanPronunciationReference(**item)
-                for item in pronunciation_payloads
-                if isinstance(item, dict)
-            ],
-            blockers=[
-                CreationPlanBlocker(**item)
-                for item in blocker_payloads
-                if isinstance(item, dict)
-            ],
-            material_matches=[
-                MaterialSegmentMatch(**item)
-                for item in material_match_payloads
-                if isinstance(item, dict)
-            ],
-        )
 
     @staticmethod
     def _template_from_row(row: sqlite3.Row) -> VideoTemplate:
@@ -8091,18 +7813,8 @@ def _revision_value(value: datetime | str) -> str:
 
 
 
-def _creation_plan_conversion_intent(plan: CreationPlan) -> dict[str, object]:
-    value = asdict(plan)
-    for key in ("id", "creation_task_id", "owner_user_id", "created_at", "confirmed_at", "updated_at"):
-        value.pop(key, None)
-    return value
 
 
-def _creation_task_conversion_intent(task: _CreationTask) -> dict[str, object]:
-    value = asdict(task)
-    for key in ("id", "plan_id", "owner_user_id", "created_at", "updated_at"):
-        value.pop(key, None)
-    return value
 
 
 def _json_object_from_text(value: str) -> dict[str, object]:
@@ -8403,26 +8115,6 @@ def _validate_edit_intent(intent: _EditIntent) -> None:
     _json_object(intent.constraints)
 
 
-def _validate_plan_material_matches(
-    matches: list[MaterialSegmentMatch],
-) -> None:
-    identities: set[tuple[str, str]] = set()
-    for match in matches:
-        if (
-            not match.asset_ref.startswith("asset:")
-            or not match.asset_ref.removeprefix("asset:").strip()
-            or not match.segment_ref.startswith("segment:")
-            or not match.segment_ref.removeprefix("segment:").strip()
-        ):
-            raise ValueError("创作方案素材命中必须使用逻辑 asset/segment 引用")
-        if not math.isfinite(match.score) or match.score < 0:
-            raise ValueError("创作方案素材命中分数无效")
-        if not match.reasons or any(not reason.strip() for reason in match.reasons):
-            raise ValueError("创作方案素材命中必须包含可解释理由")
-        identity = (match.asset_ref, match.segment_ref)
-        if identity in identities:
-            raise ValueError("创作方案不能重复引用同一素材片段")
-        identities.add(identity)
 
 
 def _validate_new_edit_proposal(proposal: _EditProposal) -> None:

@@ -23,7 +23,8 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     from fastapi.encoders import jsonable_encoder
     from app.assistant_goal_continuation import GoalResultProjection
     from app.creation.contracts import JobRun, TaskEvent, TimelineVersion
-    from app.production import CreationPlan, ProductionRepository
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask
 
     import subprocess
@@ -37,7 +38,7 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     plan = CreationPlan("plan", "workspace", "制作并检查输出", "goal", 1, "zh-CN", "9:16", 15,
         [], [], None, [], 0, 0, "declared metadata fixture", [], [], [], "fixture")
     task = CreationTask("task", "workspace", plan.id, plan.name, "declared-goal-fixture")
-    production.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     base = production.create_timeline_version(TimelineVersion(
         "version:one", "workspace", task.id, None, 1, {}, None))
     job = production.create_job_run(JobRun("execution:one", "workspace", task.id,
@@ -828,7 +829,8 @@ def test_host_pending_proposal_gate_can_stop_a_goal_still_waiting_for_preview_re
 
 
 def _adopted_groups_for_resume(tmp_path, *, groups=1):
-    from app.production import CreationPlan, ProductionRepository
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation_execution import CreationExecutionActor

@@ -200,7 +200,7 @@ def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(
     from app.creation.quality_execution import QualityCheckOwnerVerifier
     from app.creation.output_observation_use_case import OutputObservationUseCase
     from app.quality_inspection import QualityCheckRepository
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask
     from app.task_audio import TaskAudio
     from tests.test_quality_resource_owner import fixture_budget, seed_source, build_metadata_runtime
@@ -209,7 +209,7 @@ def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(
         language="zh", aspect_ratio="16:9", duration_target_seconds=2, knowledge_references=[],
         source_references=[], selected_voice=None, pronunciation_references=[], approved_asset_count=0,
         approved_clip_count=0, material_rule_summary="", model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
-    repo.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan", name="fixture", scenario="fixture", stage="review"), verified_owner_user_id="member")
+    repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan", name="fixture", scenario="fixture", stage="review"), verified_owner_user_id="member")
     store = ArtifactStore(tmp_path / "artifacts")
     outputs = OutputObservationUseCase(repo, store, TaskAudio(repo, store, tmp_path), tmp_path, None)
     service = QualityInspectionUseCase(repo, QualityCheckRepository(repo.database_path), outputs,
