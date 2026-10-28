@@ -4946,7 +4946,7 @@ def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict |
     owner, diagnostic = _content_reader(request, workspace_id)
     if not owner:
         return None
-    return production_repo.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
+    return production_repo.creation_requests.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
 
 
 def _assistant_conversation_response(row: dict, request: Request) -> dict:
@@ -5727,7 +5727,7 @@ def _creation_request_or_404(request: Request, request_id: str) -> dict:
     if not owner:
         raise HTTPException(status_code=403, detail="请先确认当前成员，再读取制作目标。")
     try:
-        return production_repo.get_creation_request(
+        return production_repo.creation_requests.get_creation_request(
             workspace_id, request_id, viewer_user_id=owner, local_diagnostic=diagnostic,
         )
     except KeyError as exc:
@@ -5893,7 +5893,7 @@ def create_creation_request(request: Request, payload: CreationRequestCreateRequ
         "requirements": values, "material_scope": scope,
     }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     try:
-        data = production_repo.create_creation_request(
+        data = production_repo.creation_requests.create_creation_request(
             workspace_id, request_key=str(payload.request_key), input_fingerprint=fingerprint,
             goal=goal, target_count=payload.target_count, output_relation=relation,
             requirements=values, material_scope={"kind": scope},
@@ -5913,7 +5913,7 @@ def read_current_input_creation_request(request: Request, assistant_turn_id: UUI
     if not owner:
         raise HTTPException(status_code=403, detail="请先确认当前成员，再读取制作目标。")
     request_key = source_input["input_id"] if source_input else turn["id"]
-    saved = production_repo.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
+    saved = production_repo.creation_requests.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
     # An absent row is a read observation, not proof that an in-flight POST failed.
     return _creation_request_response(saved) if saved is not None else None
 
@@ -5938,7 +5938,7 @@ def revise_creation_request(request_id: str, request: Request, payload: Creation
     if requirements["target_count"] != 1:
         raise HTTPException(status_code=422, detail="每条方案只制作一条视频；总数量保存在制作目标中。")
     try:
-        data = production_repo.revise_creation_request(
+        data = production_repo.creation_requests.revise_creation_request(
             workspace_id, request_id, expected_revision=payload.expected_revision,
             output_relation=relation, requirements=requirements, material_scope={"kind": scope},
             clarification_questions=_creation_request_questions(current["target_count"], relation, scope),
@@ -5989,7 +5989,7 @@ def _prepare_creation_request_window(request_id: str, request: Request, payload:
     }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     _creation_request_tool_input(request)
     try:
-        data = production_repo.save_creation_request_window(
+        data = production_repo.creation_requests.save_creation_request_window(
             workspace_id, request_id, expected_revision=payload.expected_revision,
             input_fingerprint=fingerprint, entries=entries, verified_owner_user_id=owner, local_diagnostic=diagnostic,
             replace_window_id=replace_window_id,
@@ -6070,7 +6070,7 @@ def confirm_creation_request_window(request_id: str, window_id: str, request: Re
         _creation_request_input(request, str(payload.assistant_turn_id))
     owner, diagnostic = _content_reader(request, current_workspace_id(request))
     try:
-        data = production_repo.confirm_creation_request_window(
+        data = production_repo.creation_request_adoption.confirm_creation_request_window(
             current_workspace_id(request), request_id, window_id, expected_revision=payload.expected_revision,
             input_fingerprint=payload.input_fingerprint, verified_owner_user_id=owner, local_diagnostic=diagnostic,
             adoption_kind=payload.adoption_kind,
@@ -6093,7 +6093,7 @@ def list_creation_request_items(request_id: str, request: Request, after_ordinal
     if after_ordinal < 0 or not 1 <= limit <= 100:
         raise HTTPException(status_code=422, detail="分页范围无效。")
     owner, diagnostic = _content_reader(request, current_workspace_id(request))
-    data = production_repo.list_creation_request_items(current_workspace_id(request), request_id,
+    data = production_repo.creation_requests.list_creation_request_items(current_workspace_id(request), request_id,
         after_ordinal=after_ordinal, limit=limit, viewer_user_id=owner, local_diagnostic=diagnostic)
     return CreationRequestItemsResponse.model_validate({**data,
         "items": [_creation_request_item_response(item) for item in data["items"]]})

@@ -849,7 +849,7 @@ def _adopted_groups_for_resume(tmp_path, *, groups=1):
         source={'kind':'conversation_input','turn_id':turn['id'],'conversation_id':chat['id'],'member_id':'member',
             'message_digest':hashlib.sha256(turn['user_message'].encode()).hexdigest()}
         intent={'kind':'goal_delegation','source':source}
-        saved=production.create_creation_request('workspace',request_key=turn['id'],input_fingerprint=source['message_digest'],
+        saved=production.creation_requests.create_creation_request('workspace',request_key=turn['id'],input_fingerprint=source['message_digest'],
             goal=turn['user_message'],target_count=2,output_relation='variants',requirements={'creation_intent':intent},
             material_scope={'kind':'workspace_library'},clarification_questions=[],verified_owner_user_id='member')
         entries=[]
@@ -859,10 +859,10 @@ def _adopted_groups_for_resume(tmp_path, *, groups=1):
                 [],[],None,[],0,0,'metadata fixture',[],[],[],'fingerprint-'+identity)
             task=CreationTask('task-'+identity,'workspace',plan.id,plan.name,'knowledge_explanation')
             entries.append((plan,task))
-        saved=production.save_creation_request_window('workspace',saved['id'],expected_revision=saved['revision'],
+        saved=production.creation_requests.save_creation_request_window('workspace',saved['id'],expected_revision=saved['revision'],
             input_fingerprint='window-'+str(group),entries=entries,verified_owner_user_id='member')
         window=saved['current_window']
-        saved=production.confirm_creation_request_window('workspace',saved['id'],window['id'],expected_revision=saved['revision'],
+        saved=production.creation_request_adoption.confirm_creation_request_window('workspace',saved['id'],window['id'],expected_revision=saved['revision'],
             input_fingerprint=window['input_fingerprint'],verified_owner_user_id='member',adoption_kind='delegated_system')
         for item in saved['current_window']['entries']:
             item['task']['timeline_sequence']=0  # No timeline exists in this metadata-only case.

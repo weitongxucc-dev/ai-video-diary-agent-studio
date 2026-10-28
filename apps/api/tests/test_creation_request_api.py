@@ -259,7 +259,7 @@ def test_resource_change_at_adoption_is_safe_and_does_not_create_tasks(client_st
     _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "原主题"})
     def revoked(*args, **kwargs):
         raise PermissionError("private-source-path-and-credential")
-    monkeypatch.setattr(c.repository, "confirm_creation_request_window", revoked)
+    monkeypatch.setattr(c.repository.creation_request_adoption, "confirm_creation_request_window", revoked)
     response = c.client.post(url, headers=c.alice, json=confirmation)
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "creation_window_resource_unavailable"
@@ -399,6 +399,21 @@ def test_final_copy_failure_rolls_back_entire_window(client_state):
     with c.repository._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM creation_plans").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM topic_candidates").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_intent_adopted'").fetchone()[0] == 0
+        conn.execute("DROP TRIGGER fail_final_copy")
+    # The same original request can now complete its real owner transaction.
+    accepted = c.client.post(url, headers=c.alice, json=confirmation)
+    assert accepted.status_code == 200, accepted.text
+    current = accepted.json()
+    assert current["id"] == saved["id"] and current["confirmed_count"] == 1
+    assert current["current_window"]["id"] == saved["current_window"]["id"]
+    entry = current["current_window"]["entries"][0]
+    task = c.repository.get_creation_task("request-test", entry["task_id"])
+    script = c.repository.get_creation_task_script("request-test", task.confirmed_script_id)
+    assert task.stage == "narration" and task.selected_topic_id
+    assert script.sections[0].content == "用户准确正文" and script.locked_body_digest
+    event = c.repository.execution_records.get_task_event("request-test", "creation_adopted_" + task.id)
+    assert event.payload["script_id"] == script.id and event.payload["script_adoption"] == script.adoption
 
 
 def test_delegated_script_adoption_records_real_version_without_fake_human_action(client_state):

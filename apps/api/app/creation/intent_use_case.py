@@ -105,7 +105,7 @@ class CreationIntentUseCase:
 
         # Authorization belongs to the current reader, never the original owner
         # supplied by the Plan. This read also preserves the repository's 404.
-        original = repository.get_creation_request(plan.workspace_id, adoption["request_id"],
+        original = repository.creation_requests.get_creation_request(plan.workspace_id, adoption["request_id"],
             viewer_user_id=viewer_user_id)
         saved_intent = original["requirements"].get("creation_intent") or {}
         source = intent.get("source") or {}

@@ -30,7 +30,7 @@ def adopted(tmp_path):
         intent = CreationIntentUseCase.receive_intent({"kind": kind, "topic_title": "脱壳机介绍",
             **({"final_script": {"title": "确认稿", "text": body}} if kind == "final_script" else {})},
             source=source, target_count=count, original_message=goal)
-        saved = repository.create_creation_request(WORKSPACE, request_key="original-request-key",
+        saved = repository.creation_requests.create_creation_request(WORKSPACE, request_key="original-request-key",
             input_fingerprint="human-input-digest", goal=goal, target_count=3 if count == 2 else 1,
             output_relation="variants" if count == 2 else "single",
             requirements={"creation_intent": intent, "language": "zh-CN", "duration_target_seconds": 30},
@@ -38,11 +38,11 @@ def adopted(tmp_path):
         proposed = [(replace(plan, goal="Agent自拟旁白：田间收好的玉米棒……；片尾静态署名。",
                             language="zh-CN" if index == 0 else "en-US", aspect_ratio="16:9"), task)
                     for index, (plan, task) in enumerate(entries(count=count))]
-        saved = repository.save_creation_request_window(WORKSPACE, saved["id"],
+        saved = repository.creation_requests.save_creation_request_window(WORKSPACE, saved["id"],
             expected_revision=saved["revision"], input_fingerprint="adopted-window-input", entries=proposed,
             verified_owner_user_id=OWNER)
         window = saved["current_window"]
-        confirmed = repository.confirm_creation_request_window(WORKSPACE, saved["id"], window["id"],
+        confirmed = repository.creation_request_adoption.confirm_creation_request_window(WORKSPACE, saved["id"], window["id"],
             expected_revision=saved["revision"], input_fingerprint=window["input_fingerprint"],
             verified_owner_user_id=OWNER, adoption_kind=adoption_kind)
         pairs = [(repository.get_creation_plan(WORKSPACE, item["plan_id"]),
@@ -120,7 +120,7 @@ def test_request_window_and_task_binding_cannot_be_substituted(adopted, change):
 
 def test_another_real_request_cannot_supply_this_tasks_goal(adopted):
     state = adopted()
-    other = state.repository.create_creation_request(WORKSPACE, request_key="other-human-input",
+    other = state.repository.creation_requests.create_creation_request(WORKSPACE, request_key="other-human-input",
         input_fingerprint="other-input-digest", goal="另一条用户目标", target_count=1, output_relation="single",
         requirements={}, material_scope={"mode": "workspace"}, clarification_questions=[], verified_owner_user_id=OWNER)
     plan, task = copy.deepcopy(state.pairs[0])
@@ -131,12 +131,12 @@ def test_another_real_request_cannot_supply_this_tasks_goal(adopted):
 
 def test_new_planning_window_does_not_invalidate_an_earlier_adopted_task(adopted, monkeypatch):
     state = adopted()
-    saved = state.repository.save_creation_request_window(WORKSPACE, state.request["id"],
+    saved = state.repository.creation_requests.save_creation_request_window(WORKSPACE, state.request["id"],
         expected_revision=state.request["revision"], input_fingerprint="next-window", entries=entries(start=3, count=1),
         verified_owner_user_id=OWNER)
     assert saved["current_window"]["status"] == "proposed"
     assert saved["current_window"]["id"] != state.pairs[0][0].adoption["window_id"]
-    monkeypatch.setattr(state.repository, "list_creation_request_items",
+    monkeypatch.setattr(state.repository.creation_requests, "list_creation_request_items",
         lambda *_a, **_kw: pytest.fail("文案目标解析不能扫描历史作品"))
     assert CreationIntentUseCase.script_goal(state.repository, *state.pairs[0], viewer_user_id=OWNER) == state.goal
     # Pointing an old task at that unadopted window is not a valid association.
@@ -194,17 +194,17 @@ def consumer_state(api_state, monkeypatch):
         intent = CreationIntentUseCase.receive_intent({"kind": kind, "topic_title": "本机工作区导览",
             **({"final_script": {"title": "确认稿", "text": fixed_body}} if kind == "final_script" else {})},
             source=source, target_count=1, original_message=goal)
-        saved = state.repository.create_creation_request("local", request_key="http-human-input",
+        saved = state.repository.creation_requests.create_creation_request("local", request_key="http-human-input",
             input_fingerprint="http-input", goal=goal, target_count=1, output_relation="single",
             requirements={"creation_intent": intent}, material_scope={"mode": "workspace"},
             clarification_questions=[], verified_owner_user_id=owner)
         plan = replace(state.plan, id="derived-plan", creation_task_id=None, goal="Agent自拟完整旁白，不得更改。",
             duration_target_seconds=30)
         task = CreationTask("derived-task", "local", plan.id, plan.name, goal)
-        saved = state.repository.save_creation_request_window("local", saved["id"],
+        saved = state.repository.creation_requests.save_creation_request_window("local", saved["id"],
             expected_revision=saved["revision"], input_fingerprint="http-window", entries=[(plan, task)],
             verified_owner_user_id=owner)
-        state.repository.confirm_creation_request_window("local", saved["id"], saved["current_window"]["id"],
+        state.repository.creation_request_adoption.confirm_creation_request_window("local", saved["id"], saved["current_window"]["id"],
             expected_revision=saved["revision"], input_fingerprint="http-window",
             verified_owner_user_id=owner, adoption_kind=adoption_kind)
         if failure == "private_request":

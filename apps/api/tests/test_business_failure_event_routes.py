@@ -29,7 +29,7 @@ def test_lost_creation_reply_is_read_by_original_input_without_creating_again(cl
         assert conn.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 0
     assert c.client.get(path, headers=c.bob).status_code == 404
     assert c.client.get(path, headers={**c.alice, 'X-Assistant-Input-ID':str(uuid4())}).status_code == 409
-    assert c.repository.find_creation_request_by_key('another-workspace', turn['id'], viewer_user_id=c.member.member_id) is None
+    assert c.repository.creation_requests.find_creation_request_by_key('another-workspace', turn['id'], viewer_user_id=c.member.member_id) is None
     c.conversations.finish_turn(turn['id'], 'failed', result={'kind':'failure', 'message':'response lost'})
     assert c.client.get(path, headers=c.alice).status_code == 409
 
