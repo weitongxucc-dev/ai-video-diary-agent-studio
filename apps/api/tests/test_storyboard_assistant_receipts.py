@@ -44,8 +44,65 @@ def test_projection_preserves_original_locator_and_discards_other_input_receipts
     assert project_business_result(current)[1] is None
 
 
+def _metadata_receipt_state(tmp_path, monkeypatch):
+    """Declared original-request facts only; no registration, scheduling or media."""
+    from dataclasses import asdict
+    from fastapi.testclient import TestClient
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.script_windows import write_script_sections
+    from app.local_portrait import LocalPortrait
+    from app.subtitle_tracks import OpenAICompatibleSubtitleTranslationProvider, UnavailableSubtitleTranslationProvider
+    from test_metadata_edit_use_case import metadata_state
+    from test_production_foundation import edit_adoption_no_execution
+
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(LocalPortrait, "process", forbidden)
+    monkeypatch.setattr(OpenAICompatibleSubtitleTranslationProvider, "translate", forbidden)
+    monkeypatch.setattr(UnavailableSubtitleTranslationProvider, "translate", forbidden)
+    state = metadata_state(tmp_path)
+    script = CreationTaskScript("fixed-script", "ws", state.task.id, "declared-run", "declared-topic",
+        "声明的已确认文案", "zh-CN", [CreationTaskScriptSection("section", "段落", "原配音", "素材画面", [])],
+        selection_status="confirmed")
+    state.task = replace(state.task, confirmed_script_id=script.id)
+    header = asdict(script)
+    sections = header.pop("sections")
+    header["_sections_storage"] = "rows"
+    with state.repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",
+                     (json.dumps(asdict(state.task), default=str), state.task.id))
+        conn.execute("INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
+            (script.id, "ws", state.task.id, script.run_id, json.dumps(header, default=str), script.updated_at.isoformat()))
+        write_script_sections(conn, "ws", script.id, sections)
+    monkeypatch.setattr(main, "production_repo", state.repo)
+    monkeypatch.setattr(main, "artifact_store", state.store)
+    monkeypatch.setattr(main, "local_members_service", state.members)
+    monkeypatch.setattr(main, "current_workspace_id", lambda request: request.headers.get("x-test-workspace", "ws"))
+    monkeypatch.setattr(main, "settings", replace(main.settings,
+        video_inbox_path=str(state.repo.video_library_path), video_output_path=str(tmp_path / "outputs")))
+    # The isolated local workspace uses the real roster/token identity path.
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
+    state.actor = CreationExecutionActor("ws", state.member.member_id)
+    state.control = CreationExecutionControl(state.repo, None, None, lambda _: "ready")
+    monkeypatch.setattr(main, "_creation_execution_control", lambda: state.control)
+    monkeypatch.setattr(main, "_require_permit_actor", lambda *_: state.actor)
+    state.client = TestClient(main.app, headers={"X-Local-Member-Token": state.token})
+    state.base_url = "/api/creation-tasks/" + state.task.id
+    state.url = state.base_url + "/montage/plan"
+    state.builds = []
+    state.metadata_receipts = True
+    return state
+
+
 @pytest.fixture
-def chat(state, tmp_path, monkeypatch):
+def chat(request, tmp_path, monkeypatch):
+    parameters = getattr(getattr(request.node, "callspec", None), "params", {})
+    metadata = (request.node.originalname == "test_http_turn_rereads_original_request_and_persists_dedicated_receipt"
+                and parameters.get("mode") == "forged_status") or (
+                request.node.originalname == "test_http_unknown_without_server_record_keeps_verified_original_UUID"
+                and parameters.get("kind") == "storyboard_regeneration_unknown")
+    state = _metadata_receipt_state(tmp_path, monkeypatch) if metadata else request.getfixturevalue("state")
     state.conversations = ConversationRepository(tmp_path / "conversation.sqlite3")
     monkeypatch.setattr(main, "conversation_repo", state.conversations)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
@@ -125,6 +182,22 @@ def request_id(task_id, turn_id):
 
 def submitted(state, turn_id):
     payload = {**inputs(state), "assistant_turn_id": turn_id, "request_id": request_id(state.task.id, turn_id)}
+    if getattr(state, "metadata_receipts", False):
+        from app.creation.contracts import JobRun, TaskEvent
+        # Seed an already-registered original request. This is not submission/execution evidence.
+        job = JobRun("job_" + uuid4().hex, "ws", state.task.id, "creation_task_execution",
+                     f"storyboard-regeneration:{state.task.id}:{payload['request_id']}", payload["input_digest"])
+        event = TaskEvent(f"event_{job.id}_start", "ws", state.task.id, job.id,
+            "storyboard_regeneration_requested", {"operation": "regenerate_storyboard", "request_inputs": payload,
+            "script_id": payload["script_id"], "narration_cache_key": state.task.narration_cache_key,
+            **state.actor.identity_payload()})
+        with state.repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            state.repo.job_records.create_job_run(job, connection=conn)
+            state.repo.execution_records.append_task_event(event, connection=conn)
+        response = state.client.get(state.url + "/requests/" + payload["request_id"])
+        assert response.status_code == 200, response.text
+        return response.json()
     response = state.client.post(state.url, json=payload)
     assert response.status_code == 202, response.text
     return response.json()
@@ -159,6 +232,10 @@ def test_http_turn_rereads_original_request_and_persists_dedicated_receipt(chat,
     replay = state.client.post(state.base_url + "/assistant/turn", json=payload)
     assert replay.status_code == 200 and replay.json()["storyboard_regeneration"] == result
     assert len(state.builds) == (1 if mode == "succeeded" else 0)
+    if getattr(state, "metadata_receipts", False):
+        with state.repo._connect() as conn:
+            jobs = conn.execute("SELECT id FROM job_runs WHERE workspace_id=? AND task_id=?", ("ws", state.task.id)).fetchall()
+        assert [row["id"] for row in jobs] == [result["receipt"]["job_id"]]
 
 
 @pytest.mark.parametrize("kind", ["storyboard_regeneration_unknown", "storyboard_regeneration_rejected"])
@@ -176,6 +253,11 @@ def test_http_unknown_without_server_record_keeps_verified_original_UUID(chat, m
     assert receipt["kind"] == kind and receipt["action"] == "submit"
     assert state.client.get(receipt["query_url"]).status_code == 404
     assert not state.builds and not state.repo.edit_records.list_edit_operations("ws", state.task.id)
+    if getattr(state, "metadata_receipts", False):
+        with state.repo._connect() as conn:
+            assert conn.execute("SELECT count(*) FROM job_runs WHERE workspace_id=? AND task_id=?", ("ws", state.task.id)).fetchone()[0] == 0
+        saved = state.conversations.get_turn(response.json()["turn_id"])["result"]
+        assert saved["storyboard_regeneration"] == receipt == saved["response"]["storyboard_regeneration"]
 
 
 def test_query_after_undo_returns_original_version_without_adopting_it_again(chat, monkeypatch):

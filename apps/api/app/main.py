@@ -3,6 +3,8 @@ from app.creation.task_input_reads import creation_task_from_payload
 from app.creation.media_result_use_case import MediaResultUseCase, MediaResultRejected
 from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
+from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
+    StoryboardResultRejected, UnknownStoryboardReference)
 from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
 from app.assistant.script_tool_result_binding import (AssistantScriptToolResultBinding,
     ScriptToolReceiptRejected, ScriptToolLookupRejected, tool_metadata)
@@ -6959,61 +6961,48 @@ def _assistant_applied_edit_receipt(task_id, request, turn_id, details):
         raise HTTPException(status_code=502, detail=exc.detail) from exc
 
 
+def _storyboard_result_binding():
+    return AssistantStoryboardResultBinding(
+        result_source=conversation_repo.task_result_source,
+        current_source=conversation_repo.task_turn_source,
+        read_original=lambda ws, task_id, request_id, actor: _creation_execution_control().read_storyboard_regeneration(ws, task_id, request_id, actor),
+        read_start_event=production_repo.execution_records.get_task_event,
+        read_task=production_repo.task_records.get_creation_task,
+        read_version=production_repo.timeline_records.get_timeline_version,
+        edited_execution_version=lambda *args, **values: _assistant_execution_binding().edited_execution_version(*args, **values),
+    )
+
+
 def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, details):
     workspace_id = current_workspace_id(request)
-    origin = _assistant_result_binding(task_id, request, turn_id, details)
     member_id = _assistant_member_id(request, workspace_id)
+    binding = _storyboard_result_binding()
     try:
-        current = conversation_repo.task_turn_source(turn_id, workspace_id, member_id, task_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail="故事板回执不属于当前有效输入") from exc
-    if (current.get("input_id"), current.get("input_turn_id")) != (origin.get("input_id"), origin.get("input_turn_id")):
-        raise HTTPException(status_code=502, detail="故事板回执属于先前输入，未归入当前要求")
-    kind, action = details.get("kind"), details.get("action")
-    reported = details.get("receipt") if kind == "storyboard_regeneration_receipt" else None
-    try:
-        request_id = UUID(str(reported["request_id"] if reported is not None else details["request_id"]))
-    except (KeyError, ValueError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="故事板回执缺少有效的原请求身份") from exc
-    if action not in {"submit", "query"} or action == "query" and reported is None:
-        raise HTTPException(status_code=502, detail="故事板回执动作不可核验")
-    query_url = f"/api/creation-tasks/{quote(task_id, safe='')}/montage/plan/requests/{request_id}"
-    if reported is not None and reported.get("task_id") != task_id or reported is None and details.get("query_url") != query_url:
-        raise HTTPException(status_code=502, detail="故事板原请求定位不属于当前任务")
-    if action == "submit":
-        call_id = details.get("tool_call_id")
-        if (not isinstance(call_id, str) or not 1 <= len(call_id) <= 128 or request_id != uuid5(NAMESPACE_URL,
-                json.dumps([task_id, turn_id, call_id], ensure_ascii=False, separators=(",", ":")))):
-            raise HTTPException(status_code=502, detail="故事板原请求与本轮实际工具调用不一致")
-    _exact_edit_access(task_id, request)
-    actor = _require_permit_actor(request, workspace_id)
-    try:
-        actual = _creation_execution_control().read_storyboard_regeneration(workspace_id, task_id, str(request_id), actor)
-    except ExecutionControlRejected as exc:
-        if exc.status_code != 404 or reported is not None:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        try:
-            return AssistantStoryboardRegenerationFailure.model_validate({
-                "kind": kind, "action": action, "request_id": request_id, "query_url": query_url,
-                "failure": {key: _assistant_stream_safe_text(details["failure"][key], workspace_id)[:500]
-                    for key in ("reason", "repair_action")}})
-        except (KeyError, ValidationError, TypeError) as invalid:
-            raise HTTPException(status_code=502, detail="故事板未知结果定位不可核验") from invalid
-    if reported is not None and reported.get("job_id") != actual["job_id"]:
-        raise HTTPException(status_code=502, detail="故事板回执与原请求的实际作业不一致")
-    if action == "submit":
-        original = production_repo.execution_records.get_task_event(workspace_id, f"event_{actual['job_id']}_start").payload["request_inputs"]
-        if original.get("assistant_turn_id") != str(turn_id):
-            raise HTTPException(status_code=502, detail="故事板原请求不属于本轮提交")
-        snapshot = origin["context"]["target_snapshot"]
-        base = (actual["base_timeline_version_id"], actual["base_timeline_sequence"])
-        if base != (snapshot["timeline_version_id"], snapshot["timeline_sequence"]):
-            task = production_repo.task_records.get_creation_task(workspace_id, task_id)
-            version = production_repo.timeline_records.get_timeline_version(workspace_id, base[0])
-            successor = _assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request)
-            if successor is None or base != (successor["timeline_version_id"], successor["timeline_sequence"]):
-                raise HTTPException(status_code=502, detail="故事板原请求与本轮目标版本不一致")
-    return AssistantStoryboardRegenerationReceipt(kind="storyboard_regeneration_receipt", action=action, receipt=actual)
+        origin = binding.source(workspace_id, task_id, member_id, turn_id, details)
+        member_id = _assistant_member_id(request, workspace_id)
+        reference = binding.reference(workspace_id, task_id, member_id, turn_id, details, origin)
+        _exact_edit_access(task_id, request)
+        actor = _require_permit_actor(request, workspace_id)
+        actual = binding.read(reference, actor)
+        if isinstance(actual, UnknownStoryboardReference):
+            try:
+                return AssistantStoryboardRegenerationFailure.model_validate({
+                    "kind": reference.kind, "action": reference.action, "request_id": reference.request_id, "query_url": reference.query_url,
+                    "failure": {key: _assistant_stream_safe_text(details["failure"][key], workspace_id)[:500]
+                        for key in ("reason", "repair_action")}})
+            except (KeyError, ValidationError, TypeError) as invalid:
+                raise HTTPException(status_code=502, detail="故事板未知结果定位不可核验") from invalid
+        pending = binding.check_original(reference, actual)
+        if pending is not None:
+            try:
+                binding.check_successor(pending, input_id=request.headers.get('X-Assistant-Input-ID') or None)
+            except ExecutionBindingRejected as exc:
+                raise _execution_binding_http(exc) from exc
+            except (GoalProjectionRejected, EditPreviewRejected) as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return AssistantStoryboardRegenerationReceipt(kind="storyboard_regeneration_receipt", action=reference.action, receipt=actual)
+    except StoryboardResultRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, preview, trusted_stage):
