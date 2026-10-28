@@ -79,7 +79,7 @@ def test_actual_plan_confirm_same_transaction_replay_and_input_mismatch(automati
         persisted=conn.execute('SELECT plan_id,task_id FROM automation_runs WHERE id=?',(run['id'],)).fetchone()
     assert tuple(persisted)==(plan_id,task_id)
     fresh=ProductionRepository(production.database_path,production.video_library_path)
-    assert fresh.get_creation_task(actor.workspace_id,task_id).plan_id==plan_id
+    assert fresh.task_records.get_creation_task(actor.workspace_id,task_id).plan_id==plan_id
 
 
 def test_atomic_confirm_rollback_does_not_leave_partial_plan_or_run_binding(automation_state,monkeypatch):
@@ -234,7 +234,7 @@ def test_publishing_guard_preserves_read_history_and_checks_original_run_member(
     runtime=main._automation_runtime()
     current_actor=[actor]
     external=Mock(side_effect=AssertionError('must not access platform browser'))
-    original=build_platform_publish_router(production,workspace_for=lambda request:actor.workspace_id,content_reader=lambda request,ws:(current_actor[0].member_id,False),actor_for=lambda request,ws:current_actor[0],auth_service=SimpleNamespace(sessions=SimpleNamespace(invoke=external)),task_for_user=lambda ws,id,user:production.get_creation_task(ws,id),publishable_output_for=external,runtime_for=lambda:None)
+    original=build_platform_publish_router(production,workspace_for=lambda request:actor.workspace_id,content_reader=lambda request,ws:(current_actor[0].member_id,False),actor_for=lambda request,ws:current_actor[0],auth_service=SimpleNamespace(sessions=SimpleNamespace(invoke=external)),task_for_user=lambda ws,id,user:production.task_records.get_creation_task(ws,id),publishable_output_for=external,runtime_for=lambda:None)
     app=FastAPI()
     app.include_router(build_automation_guarded_publish_router(original,guard=lambda request,id:guard_automation_task(runtime,actor.workspace_id,id,lambda:current_actor[0])))
     publishing=TestClient(app)

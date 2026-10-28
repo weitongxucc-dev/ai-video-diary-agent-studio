@@ -26,7 +26,7 @@ class ScriptContextUseCase:
 
     def _task(self, workspace_id, task_id):
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise ScriptDraftRejected(status_code=404, detail="creation task not found") from exc
 

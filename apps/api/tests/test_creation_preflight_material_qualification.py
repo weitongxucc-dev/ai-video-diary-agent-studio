@@ -146,7 +146,7 @@ def test_prepare_confirm_freezes_only_actual_qualified_pairs(qualification_state
     proposed = prepared.json()
     window = proposed['current_window']
     plan = window['entries'][0]['plan']
-    assert repository.list_creation_tasks(WORKSPACE) == []
+    assert repository.task_records.list_creation_tasks(WORKSPACE) == []
     confirmed = state.client.post(base + '/windows/' + window['id'] + '/confirm', json={
         'expected_revision': proposed['revision'], 'input_fingerprint': window['input_fingerprint'],
     })
@@ -160,7 +160,7 @@ def test_prepare_confirm_freezes_only_actual_qualified_pairs(qualification_state
     with repository._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM creation_plans').fetchone()[0] == 1
         assert conn.execute('SELECT COUNT(*) FROM creation_tasks').fetchone()[0] == 1
-    task = repository.list_creation_tasks(WORKSPACE)[0]
+    task = repository.task_records.list_creation_tasks(WORKSPACE)[0]
     persisted = repository.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     assert {(item.asset_ref.removeprefix('asset:'), item.segment_ref.removeprefix('segment:'))
             for item in persisted.material_matches} == expected
@@ -178,5 +178,5 @@ def test_scope_with_only_unqualified_materials_has_no_candidates_and_existing_bl
     assert plan['material_matches'] == []
     assert plan['approved_asset_count'] == 0 and plan['approved_clip_count'] == 0
     assert any(item['reason'] == 'approved_material_clips_missing' for item in plan['blockers'])
-    assert state.repository.list_creation_tasks(WORKSPACE) == []
+    assert state.repository.task_records.list_creation_tasks(WORKSPACE) == []
     assert material_rows(state.repository) == before

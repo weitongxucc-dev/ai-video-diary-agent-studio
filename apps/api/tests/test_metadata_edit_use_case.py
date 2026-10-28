@@ -82,7 +82,7 @@ def metadata_state(tmp_path):
     store = ArtifactStore(tmp_path / 'outputs')
     audio = TaskAudio(repo, store, tmp_path / 'temporary')
     case = MetadataEditUseCase(repo, store, output_root=tmp_path / 'outputs', audio_service=audio)
-    return SimpleNamespace(repo=repo, task=repo.get_creation_task('ws', task.id), plan=montage, base=base,
+    return SimpleNamespace(repo=repo, task=repo.task_records.get_creation_task('ws', task.id), plan=montage, base=base,
         asset=asset, source=source, case=case, store=store, members=members, member=member, token=token,
         identity={'member_id': owner, 'local_diagnostic': False}, narration=narration, track=track)
 
@@ -134,7 +134,7 @@ def test_replace_material_adoption_keeps_original_authority_or_reports_not_ready
     if authorization_state=='revoked_during_prepare':
         with pytest.raises(EditConflict,match='授权已变化'):
             s.case.save(s.task,command)
-        assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+        assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
         assert s.repo.list_edit_operations('ws',s.task.id)==[]
         assert reference not in s.repo.get_task_authorization('ws',s.task.id).resource_scope['references']
         return
@@ -174,7 +174,7 @@ def test_restore_material_uses_current_adoption_baseline_before_historical_subti
     base=TimelineVersion('without-material','ws',state.task.id,state.base.id,2,
         {**state.base.snapshot,'montage':payload,'subtitle_track_ids':[]},None)
     state.repo.create_timeline_version(base)
-    task=state.repo.get_creation_task('ws',state.task.id)
+    task=state.repo.task_records.get_creation_task('ws',state.task.id)
     now=datetime.now(timezone.utc)
     actor=CreationExecutionActor('ws',state.member.member_id)
     service=TaskAuthorizationUseCase(state.repo,lambda _:'ready',clock=lambda:now)
@@ -264,7 +264,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     assert service.status('ws',s.task.id,operation='render')=='valid'
     monkeypatch.setattr(main,'current_workspace_id',lambda _:'ws')
     monkeypatch.setattr(main,'production_repo',s.repo)
-    monkeypatch.setattr(main,'_exact_edit_access',lambda *_args,**_kwargs:(s.repo.get_creation_task('ws',s.task.id),actor.member_id))
+    monkeypatch.setattr(main,'_exact_edit_access',lambda *_args,**_kwargs:(s.repo.task_records.get_creation_task('ws',s.task.id),actor.member_id))
     monkeypatch.setattr(main,'_timeline_restore_use_case',lambda:restore)
     request=Request({'type':'http','method':'POST','path':'/','headers':[]})
     seen=s.repo.get_timeline_version('ws',undone.task.current_timeline_version_id)
@@ -303,10 +303,10 @@ def test_named_subtitle_restore_keeps_later_user_crop_and_rejects_changed_text(s
     with pytest.raises(EditConflict,match='普通撤销'):
         case.execute(TimelineRestoreCommand('ws',b.task,False),actor=actor,request_id='stale-default-undo',
             expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
-    assert state.repo.get_creation_task('ws',state.task.id).current_timeline_version_id==b.task.current_timeline_version_id
+    assert state.repo.task_records.get_creation_task('ws',state.task.id).current_timeline_version_id==b.task.current_timeline_version_id
     assert len(state.repo.list_timeline_versions('ws',state.task.id))==versions_before
     for redo,text in ((False,'原字幕'),(True,'更新后的字幕')):
-        task = state.repo.get_creation_task('ws',state.task.id)
+        task = state.repo.task_records.get_creation_task('ws',state.task.id)
         version = state.repo.get_timeline_version('ws',task.current_timeline_version_id)
         outcome = case.execute(TimelineRestoreCommand('ws',task,redo),actor=actor,
             request_id='subtitle-redo' if redo else 'subtitle-undo',target_operation_id=a.operation.id,
@@ -328,7 +328,7 @@ def test_named_subtitle_restore_keeps_later_user_crop_and_rejects_changed_text(s
     with pytest.raises(EditConflict,match='修改字段|变化'):
         case.execute(TimelineRestoreCommand('ws',changed.task,False),actor=actor,request_id='conflicting-subtitle-undo',
             target_operation_id=a.operation.id,expected_timeline_version_id=version.id,expected_timeline_sequence=version.sequence)
-    assert state.repo.get_creation_task('ws',state.task.id).current_timeline_version_id==version.id
+    assert state.repo.task_records.get_creation_task('ws',state.task.id).current_timeline_version_id==version.id
 
 
 def test_metadata_save_and_staged_request_replay_recover_original_version(state):
@@ -347,7 +347,7 @@ def test_metadata_save_and_staged_request_replay_recover_original_version(state)
     projection = json.loads(json.dumps({'operation': asdict(result.operation), 'montage_id': result.montage.id},
         default=lambda value: value.isoformat()))
     state.case.record_result(state.task, event_id, status_code=200, response=projection)
-    current = state.repo.get_creation_task('ws', state.task.id)
+    current = state.repo.task_records.get_creation_task('ws', state.task.id)
     _, replay = state.case.begin(current, state.member.member_id, request_id, inputs)
     assert replay.recorded_projection['response'] == projection
     with pytest.raises(ValueError, match='不同编辑输入'):
@@ -393,7 +393,7 @@ def test_metadata_commit_rechecks_real_source_and_version(state, monkeypatch, mu
         state.case.save(state.task, crop_command(state))
     assert state.repo.list_edit_operations('ws', state.task.id) == []
     assert state.repo.list_edit_proposals('ws', state.task.id) == []
-    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == (
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == (
         'concurrent' if mutation == 'version' else state.base.id)
 
 
@@ -402,11 +402,11 @@ def test_metadata_supplied_connection_does_not_commit_or_open_a_second_writer(st
         conn.execute('BEGIN IMMEDIATE')
         operation = state.case.save(state.task, crop_command(state), connection=conn)
         assert conn.execute('SELECT id FROM edit_operations').fetchone()[0] == operation.id
-        assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
+        assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
         conn.rollback()
     assert state.repo.list_edit_operations('ws', state.task.id) == []
     assert state.repo.list_edit_proposals('ws', state.task.id) == []
-    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
 
 
 def test_metadata_late_write_failure_rolls_back_change_but_keeps_prior_claim(state):
@@ -436,7 +436,7 @@ def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):
         {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['two-clips-zh']}, None)
     state.repo.create_timeline_version(base)
     state.repo.create_subtitle_track(replace(state.track, id='two-clips-zh', timeline_version_id=base.id))
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     preview = CreationTaskEditPreviewRequest(raw_command='交换第1和第2个镜头', context_stage='montage',
         selected_object_refs=['clip:clip', 'clip:clip-second'])
     _, proposal = state.case.preview_reorder(task, preview, ('swap', 0, 1), identity=state.identity,
@@ -448,7 +448,7 @@ def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):
     reopened = ProductionRepository(state.repo.database_path, tmp_path / 'library')
     versions = reopened.list_timeline_versions('ws', task.id)
     operations = reopened.list_edit_operations('ws', task.id)
-    current = reopened.get_creation_task('ws', task.id)
+    current = reopened.task_records.get_creation_task('ws', task.id)
     assert len(versions) == before + 1 and len(operations) == 1
     assert operations[0].proposal_id == proposal.id and operations[0].result_version_id == current.current_timeline_version_id
     assert reopened.get_edit_proposal('ws', proposal.id).status == 'confirmed'

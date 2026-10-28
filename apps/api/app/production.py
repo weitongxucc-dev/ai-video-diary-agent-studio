@@ -75,6 +75,7 @@ from app.creation.contracts import (
     validate_logical_reference as _validate_logical_reference,
 )
 from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
+from app.creation.task_records import TaskRecordStore
 from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload, narration_segment_from_row,
     narration_segment_row, narration_segment_rows,
@@ -521,9 +522,10 @@ class ProductionRepository:
 
     def _initialize_profile_stores(self) -> None:
         """Bind record owners; do not open connections or provision schema."""
+        self.task_records = TaskRecordStore(self._connect)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
-            require_task=self._require_creation_task, decode_proposal=self._edit_proposal_from_row,
-            read_task=self.get_creation_task, read_proposal=self.get_edit_proposal,
+            require_task=require_creation_task, decode_proposal=self._edit_proposal_from_row,
+            read_task=self.task_records.get_creation_task, read_proposal=self.get_edit_proposal,
             read_operation=self.get_edit_operation, read_version=self.get_timeline_version,
             read_narration_segment=self.get_narration_segment,
             iter_narration_edit_segments=self.iter_narration_edit_segments,
@@ -562,29 +564,29 @@ class ProductionRepository:
             assemble_scene_segments=self._material_assets.assemble_scene_segments,
             mark_scene_failed=self._material_assets.mark_scene_failed)
         self.job_records = JobRunRecordStore(self._connect,
-            require_task=self._require_creation_task, decode_reference_list=_string_list_from_text,
+            require_task=require_creation_task, decode_reference_list=_string_list_from_text,
             revision_token=_revision_value, registered_job_output_refs=ExecutionRecordStore.registered_job_output_refs)
         self.execution_records = ExecutionRecordStore(self._connect,
-            require_task=self._require_creation_task, job_belongs=self.job_records.job_belongs,
+            require_task=require_creation_task, job_belongs=self.job_records.job_belongs,
             decode_reference_list=_string_list_from_text, decode_payload_object=_json_object_from_text)
         self.restore_requests = TimelineRestoreRecordStore(self._connect,
             append_event=self.execution_records.append_task_event,
             get_event=self.execution_records.get_task_event,
             decode_operation=self._edit_operation_from_row, read_readiness=self.edit_execution_readiness)
         self.lineage_records = LineageRecordStore(self._connect,
-            require_task=self._require_creation_task,
+            require_task=require_creation_task,
             job_belongs=self.job_records.job_belongs, output_producers=self.execution_records.output_producers,
             decode_reference_list=_string_list_from_text, decode_parameter_object=_json_object_from_text)
         self.topic_records = TopicRecordStore(self._connect,
-            read_task=self.get_creation_task, require_task=self._require_creation_task,
-            write_task=self._write_topic_task, read_plan_intent=self._topic_plan_intent,
+            read_task=self.task_records.get_creation_task, require_task=require_creation_task,
+            write_task=self.task_records.write_adopted_task, read_plan_intent=self._topic_plan_intent,
             append_event=self.execution_records.append_task_event)
         self.plan_records = CreationPlanRecordStore(self._connect,
             read_asset=self._material_assets._asset_payload_row_by_id, decode_asset=self._asset_from_payload)
         self.plan_confirmation = CreationPlanConfirmationUseCase(self._connect,
-            records=self.plan_records, read_task=self.get_creation_task, execution_records=self.execution_records)
+            records=self.plan_records, read_task=self.task_records.get_creation_task, execution_records=self.execution_records)
         self.script_records = ScriptRecordStore(self._connect,
-            read_task=self.get_creation_task, require_task=self._require_creation_task,
+            read_task=self.task_records.get_creation_task, require_task=require_creation_task,
             decode_plan=self.plan_records.creation_plan_from_payload, read_topic=self.topic_records.get_topic_candidate,
             transition_task=self._script_task_transition, create_library_task=self._create_script_library_task,
             knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.execution_records.append_task_event,
@@ -592,12 +594,12 @@ class ProductionRepository:
         self.creation_requests = CreationRequestRecordStore(self._connect)
         self.creation_request_adoption = CreationRequestAdoptionUseCase(self._connect,
             records=self.creation_requests, decode_plan=self.plan_records.creation_plan_from_payload,
-            decode_task=self._creation_task_from_payload,
+            decode_task=creation_task_from_payload,
             prepare_plan=self.plan_confirmation.prepare_confirmed_creation_plan, insert_plan=self.plan_records.insert_confirmed_creation_plan,
             read_asset=self._material_assets._asset_payload_visibility_row_by_id,
             decode_asset=self._asset_from_payload, material_eligible=material_segment_eligible,
             voice_reference=self.creation_plan_voice_reference, person_reference=self.creation_plan_person_reference,
-            write_task=self._write_topic_task, topic_records=self.topic_records,
+            write_task=self.task_records.write_adopted_task, topic_records=self.topic_records,
             script_records=self.script_records, execution_records=self.execution_records)
 
 
@@ -2469,20 +2471,6 @@ class ProductionRepository:
     ) -> MaterialAsset:
         return self._material_assets.set_asset_visibility(workspace_id, asset_id, visibility)
 
-    def set_creation_task_visibility(
-        self, workspace_id: str, task_id: str, visibility: ContentVisibility
-    ) -> _CreationTask:
-        """明确共享或收回一条创作任务的可见性。"""
-        if visibility not in ("private", "shared"):
-            raise ValueError("可见性只能是 private 或 shared。")
-        task = self.get_creation_task(workspace_id, task_id)
-        task = replace(task, visibility=visibility, updated_at=utc_now())
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE creation_tasks SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
-                (_json_payload(task), visibility, task.updated_at.isoformat(), workspace_id, task_id),
-            )
-        return task
 
     def set_creation_plan_visibility(
         self, workspace_id: str, plan_id: str, visibility: ContentVisibility
@@ -2866,7 +2854,7 @@ class ProductionRepository:
         """Finish metadata, ordered body digest and count in one read transaction."""
         from app.creation.execution_input import ExecutionInputSnapshot, execution_input_digest
         with self.creation_execution_read(connection) as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             if not task.confirmed_script_id:
                 raise ValueError("请先确认实际文案")
             plan = self.plan_records.read_creation_plan(conn, workspace_id, task.plan_id)
@@ -2973,7 +2961,7 @@ class ProductionRepository:
 
     def creation_section_titles(self, workspace_id, task_id, section_ids, *, connection=None):
         with self.creation_execution_read(connection) as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             return {row['section_id']: row['title'] for row in conn.execute(
                 "SELECT section_id,json_extract(section_json,'$.title') AS title FROM creation_task_script_sections "
                 'WHERE workspace_id=? AND script_id=? AND section_id IN (SELECT value FROM json_each(?))',
@@ -2996,7 +2984,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str, request_id: str, *, member_id: str,
     ) -> dict[str, object]:
         with self._connect() as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             self._knowledge_adoption_owner(task, member_id)
             row = conn.execute("SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? AND event_type='task_knowledge_adopted'",
                 (workspace_id, self._knowledge_adoption_event_id(workspace_id, member_id, request_id))).fetchone()
@@ -3018,7 +3006,7 @@ class ProductionRepository:
         event_id = self._knowledge_adoption_event_id(workspace_id, member_id, request_id)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             self._knowledge_adoption_owner(task, member_id)
             previous = conn.execute("SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
             if previous:
@@ -3095,75 +3083,14 @@ class ProductionRepository:
 
     def script_knowledge_inputs_current(self, workspace_id: str, task_id: str, script_id: str) -> bool:
         with self._connect() as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             return self._script_knowledge_inputs_current(conn, task, script_id)
 
     def _script_knowledge_inputs_current(self, conn: sqlite3.Connection, task: _CreationTask, script_id: str) -> bool:
         return self.script_records._script_knowledge_inputs_current(conn, task, script_id)
 
-    def get_creation_task(
-        self,
-        workspace_id: str,
-        task_id: str,
-        *,
-        include_private: bool = True,
-        connection: sqlite3.Connection | None = None,
-    ) -> _CreationTask:
-        if connection is None:
-            with self._connect() as conn:
-                return self.get_creation_task(workspace_id, task_id,
-                    include_private=include_private, connection=conn)
-        visibility_clause = "" if include_private else " AND visibility = 'shared'"
-        row = connection.execute(
-            f"""
-            SELECT payload, visibility FROM creation_tasks
-            WHERE workspace_id = ? AND id = ?{visibility_clause}
-            """,
-            (workspace_id, task_id),
-        ).fetchone()
-        if row is None:
-            raise KeyError(task_id)
-        return self._task_from_row(row)
 
-    def list_creation_tasks(
-        self,
-        workspace_id: str,
-        *,
-        include_private: bool = True,
-        viewer_user_id: str | None = None,
-        local_diagnostic: bool = False,
-    ) -> list[_CreationTask]:
-        """列出创作任务。给出可信读取身份时，私有任务只对上传者本人可见。
 
-        `include_private` 是旧的粗粒度开关（本地单机用）；一旦传入可信身份，
-        判据就换成与内容域同一套规则：私有按 owner 过滤，不因为「没带令牌」
-        就把别人的私有任务也算进来。
-        """
-        if local_diagnostic or (viewer_user_id is None and include_private):
-            return self._list_creation_tasks_by_visibility(workspace_id, include_private)
-        return [
-            task for task in self._list_creation_tasks_by_visibility(workspace_id, True)
-            if _content_readable(
-                user_id=viewer_user_id,
-                local_diagnostic=False,
-                visibility=task.visibility,
-                owner_user_id=task.owner_user_id,
-            )
-        ]
-
-    def _list_creation_tasks_by_visibility(
-        self, workspace_id: str, include_private: bool
-    ) -> list[_CreationTask]:
-        with self._connect() as conn:
-            visibility_clause = "" if include_private else " AND visibility = 'shared'"
-            rows = conn.execute(
-                f"""
-                SELECT payload, visibility FROM creation_tasks
-                WHERE workspace_id = ?{visibility_clause} ORDER BY updated_at DESC
-                """,
-                (workspace_id,),
-            ).fetchall()
-        return [self._task_from_row(row) for row in rows]
 
     def create_timeline_version(
         self, version: _TimelineVersion, *, connection: sqlite3.Connection | None = None,
@@ -3177,7 +3104,7 @@ class ProductionRepository:
                     expected_current_version_id=expected_current_version_id)
             return self.get_timeline_version(version.workspace_id, version.id)
         conn = connection
-        task = self._require_creation_task(conn, version.workspace_id, version.task_id)
+        task = require_creation_task(conn, version.workspace_id, version.task_id)
         if (expected_current_version_id is not False
                 and task.current_timeline_version_id != expected_current_version_id):
             raise ValueError("当前时间线已变化，不能发布旧版本成片")
@@ -3292,7 +3219,7 @@ class ProductionRepository:
     def next_timeline_sequence(
         self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection,
     ) -> int:
-        self._require_creation_task(connection, workspace_id, task_id)
+        require_creation_task(connection, workspace_id, task_id)
         row = connection.execute(
             "SELECT MAX(sequence) FROM timeline_versions WHERE workspace_id = ? AND task_id = ?",
             (workspace_id, task_id),
@@ -3303,7 +3230,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str
     ) -> list[_TimelineVersion]:
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             rows = conn.execute(
                 """
                 SELECT * FROM timeline_versions
@@ -3463,7 +3390,7 @@ class ProductionRepository:
                 if original.get("request_inputs") != payload.get("request_inputs"):
                     raise ValueError("故事板请求身份已用于不同输入")
                 return saved, False
-            task = self._require_creation_task(conn, run.workspace_id, run.task_id)
+            task = require_creation_task(conn, run.workspace_id, run.task_id)
             if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? "
                     "AND status IN ('queued','running','interrupted') LIMIT 1",
                     (run.workspace_id, run.task_id)).fetchone():
@@ -3617,7 +3544,7 @@ class ProductionRepository:
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             write_guard(conn)
-            task = self._require_creation_task(conn,actor.workspace_id,origin['task_id'])
+            task = require_creation_task(conn,actor.workspace_id,origin['task_id'])
             if task.owner_user_id!=(actor.user_id or actor.member_id):
                 raise PermissionError('通用执行提交时任务归属不一致')
             job = self.job_records.create_job_run(run,connection=conn)
@@ -3701,7 +3628,7 @@ class ProductionRepository:
             conn.execute('BEGIN IMMEDIATE')
             if write_guard is not None:
                 write_guard(conn)
-            current = self._require_creation_task(conn, task.workspace_id, task.id)
+            current = require_creation_task(conn, task.workspace_id, task.id)
             if current.owner_user_id != (actor.user_id or actor.member_id):
                 raise PermissionError('局部修改的任务归属已变化')
             script = self.effective_creation_script(task.workspace_id, task.id, connection=conn)
@@ -3901,7 +3828,7 @@ class ProductionRepository:
 
     def publish_segment_version(self, event, artifacts, transform, edges, *, adopted, expected_version_id,
                                 expected_segment_version, segment=None, timeline_change=None, connection):
-        task = self._require_creation_task(connection,event.workspace_id,event.task_id)
+        task = require_creation_task(connection,event.workspace_id,event.task_id)
         payload = event.payload
         if self.stage_section_version(task.workspace_id,task.id,payload['section_id'],connection=connection) != expected_segment_version:
             raise ValueError('发布前段落或时间线已变化；原采用版本保留')
@@ -3979,7 +3906,7 @@ class ProductionRepository:
         return event.id
 
     def _invalidate_section_composition(self,workspace_id,task_id,connection):
-        task = self._require_creation_task(connection,workspace_id,task_id)
+        task = require_creation_task(connection,workspace_id,task_id)
         task.narration_cache_key = None
         task.output_ready = False
         task.stage,task.stage_status,task.status = 'narration','not_started','running'
@@ -4019,7 +3946,7 @@ class ProductionRepository:
     def verify_whole_timeline_restore(self,workspace_id,task_id,changed_version_id,*,connection=None):
         """The legacy snapshot restore is safe only while no later facts are lost."""
         with nullcontext(connection) if connection is not None else self._connect() as conn:
-            task = self._require_creation_task(conn,workspace_id,task_id)
+            task = require_creation_task(conn,workspace_id,task_id)
             changed = self.get_timeline_version(workspace_id,changed_version_id,connection=conn)
             current = self.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
             if (changed.task_id!=task_id or self._timeline_restore_business_facts(current,conn)
@@ -4044,7 +3971,7 @@ class ProductionRepository:
             conn.execute('BEGIN IMMEDIATE')
             if write_guard is not None:
                 write_guard(conn)
-            task = self._require_creation_task(conn,workspace_id,task_id)
+            task = require_creation_task(conn,workspace_id,task_id)
             state = self.stage_segment_state(workspace_id,task_id,section_id,connection=conn)
             if state is None or state['segment_version'] != history[f'{expected}_publication']:
                 raise ValueError('目标段在修改后已变化，不能覆盖新的采用成果')
@@ -4129,7 +4056,7 @@ class ProductionRepository:
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             write_guard(conn)
-            self._require_creation_task(conn, event.workspace_id, event.task_id)
+            require_creation_task(conn, event.workspace_id, event.task_id)
             row = conn.execute('SELECT * FROM task_events WHERE workspace_id=? AND id=?',
                 (event.workspace_id, event.id)).fetchone()
             if row is not None:
@@ -4198,7 +4125,7 @@ class ProductionRepository:
         if connection is not None and not connection.in_transaction:
             connection.execute('BEGIN')
         with self.creation_execution_read(connection) as conn:
-            task = self._require_creation_task(conn,workspace_id,task_id)
+            task = require_creation_task(conn,workspace_id,task_id)
             script, _ = self.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
             current = self.read_creation_section_input(task,script,section_id,connection=conn)
             section, audio = current['section'], current['audio']
@@ -4253,7 +4180,7 @@ class ProductionRepository:
         adopted = self.stage_segment_state(workspace_id, task_id, section_id, connection=connection)
         if adopted is not None:
             return adopted['segment_version']
-        task = self._require_creation_task(connection, workspace_id, task_id)
+        task = require_creation_task(connection, workspace_id, task_id)
         header, _ = self.script_records.read_execution_script_metadata(connection, workspace_id, task.confirmed_script_id)
         current = self.read_creation_section_input(task, header, section_id, connection=connection)
         section, audio = current['section'], current['audio']
@@ -4264,7 +4191,7 @@ class ProductionRepository:
         if connection is None or not connection.in_transaction:
             with self.creation_execution_read() as reader:
                 return self.stage_segment_state(workspace_id, task_id, section_id, connection=reader)
-        task = self._require_creation_task(connection, workspace_id, task_id)
+        task = require_creation_task(connection, workspace_id, task_id)
         version = connection.execute(
             "SELECT s.value AS publication_id,i.value AS invalidation_json FROM timeline_versions v "
             "JOIN json_each(v.snapshot_json,'$.stage_segments') s ON s.key=? "
@@ -4296,7 +4223,7 @@ class ProductionRepository:
         with nullcontext(connection) if connection is not None else self._connect() as conn:
             if not conn.in_transaction:
                 conn.execute("BEGIN")
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             row = conn.execute('SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND task_id=? AND id=?',
                 (workspace_id, task_id, task.confirmed_script_id)).fetchone()
             if row is None:
@@ -4313,7 +4240,7 @@ class ProductionRepository:
     def task_budget_projection(self, workspace_id, task_id, *, connection=None):
         """Read original resource receipts; missing monetary evidence never blocks local work."""
         with nullcontext(connection) if connection is not None else self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             jobs = conn.execute('SELECT id,attempt FROM job_runs WHERE workspace_id=? AND task_id=?',
                 (workspace_id, task_id)).fetchall()
             rows = conn.execute("SELECT job_id,payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
@@ -4388,7 +4315,7 @@ class ProductionRepository:
         with nullcontext(connection) if connection is not None else self._connect() as conn:
             if not conn.in_transaction:
                 conn.execute("BEGIN")
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             return ExecutionBudgetScopes(self).for_task(conn, workspace_id, task_id, actor)
 
     def execution_budget_scope_usage(self, workspace_id, scope_id):
@@ -4522,7 +4449,7 @@ class ProductionRepository:
                     "AND event_type IN ('creation_narration_unit_started','creation_narration_unit_settled') LIMIT 1",
                     (job.workspace_id, job.id)).fetchone()):
             raise ValueError('原配音作业已开始或消耗未知，不能改选声音')
-        task = self._require_creation_task(connection, job.workspace_id, job.task_id)
+        task = require_creation_task(connection, job.workspace_id, job.task_id)
         if (task.narration_cache_key is not None
                 or self.list_narration_segments(job.workspace_id, job.task_id, task.confirmed_script_id, connection=connection)
                 or connection.execute("SELECT 1 FROM narration_artifacts WHERE workspace_id=? "
@@ -4555,7 +4482,7 @@ class ProductionRepository:
             if usage['unsettled']:
                 raise RecoveryBlocked('原配音单元消耗尚未结算，须先核对原请求与进程回执')
             job = self.job_records.claim_job_run(grant.workspace_id, grant.owner_id, connection=conn)
-            task = self._require_creation_task(conn, job.workspace_id, job.task_id)
+            task = require_creation_task(conn, job.workspace_id, job.task_id)
             if (job.kind != 'creation_task_narration_edit' and task.stage != 'narration'
                     or task.confirmed_script_id != resources['script_id']):
                 raise PermissionError('配音许可与当前文案阶段不一致')
@@ -4716,7 +4643,7 @@ class ProductionRepository:
         if segment.status != 'ready' or segment.audio_reference != self.narration_artifact_reference(artifact.cache_key):
             raise ValueError('单段检查点必须绑定已核实的ready产物')
         self.save_narration_artifact(artifact, connection=connection)
-        task = self._require_creation_task(connection, segment.workspace_id, segment.task_id)
+        task = require_creation_task(connection, segment.workspace_id, segment.task_id)
         self.replace_adopted_narration_segment(task, segment, connection=connection)
 
     def checkpoint_creation_narration_segment(self, grant, artifact, segment, ordinal, *, connection):
@@ -4763,7 +4690,7 @@ class ProductionRepository:
     def checkpoint_creation_narration_merge(self, grant, *, source_digest, section_ids,
                                           input_references, pcm_receipt, connection):
         job = self.job_records.get_job_run(grant.workspace_id, grant.owner_id, connection=connection)
-        task = self._require_creation_task(connection, job.workspace_id, job.task_id)
+        task = require_creation_task(connection, job.workspace_id, job.task_id)
         if (job.kind != 'creation_task_narration_edit' and task.stage != 'narration' or len(section_ids) < 1
                 or pcm_receipt['job_id'] != job.id
                 or pcm_receipt['unit_id'] != f'{grant.request_id}:{grant.generation}'
@@ -4820,7 +4747,7 @@ class ProductionRepository:
             raise ValueError('重新输出必须使用原作业的提交事务')
         row = connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
             (run.workspace_id, run.id)).fetchone()
-        task = self._require_creation_task(connection, run.workspace_id, run.task_id)
+        task = require_creation_task(connection, run.workspace_id, run.task_id)
         if (row is None or self.job_records.job_run_from_row(row) != run
                 or run.kind != 'creation_task_execution' or run.status != 'succeeded'
                 or not expected_timeline_version_id or task.current_timeline_version_id != expected_timeline_version_id
@@ -4876,7 +4803,7 @@ class ProductionRepository:
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 return self.save_task_authorization(authorization, expected_revision=expected_revision, connection=conn)
-        self._require_creation_task(connection, authorization.workspace_id, authorization.task_id)
+        require_creation_task(connection, authorization.workspace_id, authorization.task_id)
         current = self.get_task_authorization(authorization.workspace_id, authorization.task_id, connection=connection)
         if (current.revision if current is not None else None) != expected_revision:
             from app.creation.contracts import TaskAuthorizationConflict as _TaskAuthorizationConflict
@@ -5036,7 +4963,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str, segment_id: str, *, connection=None
     ) -> _NarrationSegment:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             row = narration_segment_row(conn, workspace_id, task_id, segment_id)
         if row is None:
             raise KeyError(segment_id)
@@ -5046,7 +4973,7 @@ class ProductionRepository:
         """Original manifest order; the caller owns the entire read snapshot."""
         if not connection.in_transaction:
             raise ValueError('配音行读取必须属于原事务')
-        task = self._require_creation_task(connection, workspace_id, task_id)
+        task = require_creation_task(connection, workspace_id, task_id)
         if task.confirmed_script_id != script_id:
             raise ValueError('配音行不属于当前确认文案')
         cursor = connection.execute('SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? '
@@ -5071,7 +4998,7 @@ class ProductionRepository:
         *, connection: sqlite3.Connection | None = None,
     ) -> list[_NarrationSegment]:
         with nullcontext(connection) if connection is not None else self._connect() as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             current_script_id = script_id or task.confirmed_script_id
             if current_script_id is None:
                 return []
@@ -5129,7 +5056,7 @@ class ProductionRepository:
     ) -> _SubtitleTrack:
         _validate_subtitle_track(track)
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, track.workspace_id, track.task_id)
+            require_creation_task(conn, track.workspace_id, track.task_id)
             timeline = conn.execute(
                 """
                 SELECT 1 FROM timeline_versions
@@ -5166,7 +5093,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str, track_id: str, *, connection: sqlite3.Connection | None = None,
     ) -> _SubtitleTrack:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
                 SELECT * FROM subtitle_tracks
@@ -5187,7 +5114,7 @@ class ProductionRepository:
         connection: sqlite3.Connection | None = None,
     ) -> list[_SubtitleTrack]:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             if timeline_version_id is None:
                 rows = conn.execute(
                     """
@@ -5213,7 +5140,7 @@ class ProductionRepository:
     ) -> _CoverAsset:
         _validate_cover_asset(cover)
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, cover.workspace_id, cover.task_id)
+            require_creation_task(conn, cover.workspace_id, cover.task_id)
             timeline = conn.execute(
                 """
                 SELECT 1 FROM timeline_versions
@@ -5249,7 +5176,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str, cover_id: str, *, connection: sqlite3.Connection | None = None,
     ) -> _CoverAsset:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
                 SELECT * FROM cover_assets
@@ -5269,7 +5196,7 @@ class ProductionRepository:
         timeline_version_id: str | None = None,
     ) -> list[_CoverAsset]:
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             if timeline_version_id is None:
                 rows = conn.execute(
                     """
@@ -5293,7 +5220,7 @@ class ProductionRepository:
     def save_clip_preview_proposal(self, intent: _EditIntent, proposal: _EditProposal, *, expected_version_id: str):
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            task = self._require_creation_task(conn, intent.workspace_id, intent.task_id)
+            task = require_creation_task(conn, intent.workspace_id, intent.task_id)
             if task.current_timeline_version_id != expected_version_id:
                 raise TimelineVersionConflict("预览期间时间线发生变化，请重新预览")
             if (proposal.workspace_id, proposal.task_id, proposal.intent_id) != (intent.workspace_id, intent.task_id, intent.id):
@@ -5315,7 +5242,7 @@ class ProductionRepository:
             raise ValueError("封面Job与原封存输入或身份不一致")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            task = self._require_creation_task(conn, run.workspace_id, run.task_id)
+            task = require_creation_task(conn, run.workspace_id, run.task_id)
             if task.current_timeline_version_id != expected_version_id:
                 raise TimelineVersionConflict("提交封面前时间线发生变化，请重新预览")
             if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
@@ -5337,7 +5264,7 @@ class ProductionRepository:
         """Compare the caller's original version and save the job/input together."""
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            task = self._require_creation_task(conn, run.workspace_id, run.task_id)
+            task = require_creation_task(conn, run.workspace_id, run.task_id)
             if task.current_timeline_version_id != expected_version_id:
                 raise TimelineVersionConflict("提交预览前时间线发生变化，请重新预览")
             if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
@@ -5370,7 +5297,7 @@ class ProductionRepository:
                 self.create_edit_intent(intent, connection=conn, source=None)
             return self.get_edit_intent(intent.workspace_id, intent.id)
         conn = connection
-        self._require_creation_task(conn, intent.workspace_id, intent.task_id)
+        require_creation_task(conn, intent.workspace_id, intent.task_id)
         existing_row = conn.execute(
             "SELECT * FROM edit_intents WHERE id = ?",
             (intent.id,),
@@ -5556,7 +5483,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str
     ) -> list[_EditIntent]:
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             rows = conn.execute(
                 """
                 SELECT * FROM edit_intents
@@ -5573,7 +5500,7 @@ class ProductionRepository:
                 self.create_edit_proposal(proposal, connection=conn)
             return self.get_edit_proposal(proposal.workspace_id, proposal.id)
         conn = connection
-        self._require_creation_task(conn, proposal.workspace_id, proposal.task_id)
+        require_creation_task(conn, proposal.workspace_id, proposal.task_id)
         intent_row = conn.execute(
             """
             SELECT 1 FROM edit_intents
@@ -5642,7 +5569,7 @@ class ProductionRepository:
         if limit is not None and not 1 <= limit <= 100:
             raise ValueError("编辑提案读取数量需为1至100")
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             current_clause = " AND status='proposed' AND json_extract(operation_json,'$.payload.base_version_id') IS ?" if base_version_id is not False else ""
             order = "DESC" if limit is not None else "ASC"
             rows = conn.execute(
@@ -5663,7 +5590,7 @@ class ProductionRepository:
         status: Literal["confirmed", "rejected", "expired"],
     ) -> _EditProposal:
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
                 SELECT * FROM edit_proposals
@@ -5796,7 +5723,7 @@ class ProductionRepository:
                 return self.confirm_direct_edit(command, intent, proposal, change,
                     verify_sources=verify_sources, connection=conn)
         conn = connection
-        task = self._require_creation_task(conn, command.workspace_id, command.task_id)
+        task = require_creation_task(conn, command.workspace_id, command.task_id)
         if task.current_timeline_version_id != command.base_version_id:
             raise TimelineVersionConflict('当前时间线已变化，未保存这项修改')
         member = command.actor_identity.get('user_id') or command.actor_identity['member_id']
@@ -5814,7 +5741,7 @@ class ProductionRepository:
     def create_edit_operation(self, operation: _EditOperation) -> _EditOperation:
         _validate_edit_operation(operation)
         with self._connect() as conn:
-            self._require_creation_task(
+            require_creation_task(
                 conn, operation.workspace_id, operation.task_id
             )
             proposal_row = conn.execute(
@@ -5889,7 +5816,7 @@ class ProductionRepository:
         applied_at: datetime | None = None,
     ) -> _EditOperation:
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
                 SELECT * FROM edit_operations
@@ -5948,7 +5875,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str
     ) -> list[_EditOperation]:
         with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
+            require_creation_task(conn, workspace_id, task_id)
             rows = conn.execute(
                 """
                 SELECT * FROM edit_operations
@@ -5997,11 +5924,6 @@ class ProductionRepository:
         ):
             raise ValueError("编辑操作与时间线版本谱系不一致")
 
-    @staticmethod
-    def _require_creation_task(
-        conn: sqlite3.Connection, workspace_id: str, task_id: str
-    ) -> _CreationTask:
-        return require_creation_task(conn, workspace_id, task_id)
 
     def _upsert_narration_segments(
         self,
@@ -6012,7 +5934,7 @@ class ProductionRepository:
         script_id: str,
         segments: list[_NarrationSegment],
     ) -> None:
-        task = self._require_creation_task(conn, workspace_id, task_id)
+        task = require_creation_task(conn, workspace_id, task_id)
         if task.confirmed_script_id != script_id:
             raise ValueError("配音分段必须关联当前任务已确认的文案")
         script_row = conn.execute(
@@ -6147,13 +6069,6 @@ class ProductionRepository:
 
 
 
-    def _write_topic_task(self, connection, task):
-        if not connection.in_transaction:
-            raise ValueError("选题任务状态保存必须属于原事务")
-        connection.execute(
-            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-            (_json_payload(task), task.updated_at.isoformat(), task.workspace_id, task.id),
-        )
 
     def _topic_plan_intent(self, connection, workspace_id, plan_id):
         row = connection.execute(
@@ -6369,7 +6284,7 @@ class ProductionRepository:
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
         )
-        task = self.get_creation_task(workspace_id, task_id)
+        task = self.task_records.get_creation_task(workspace_id, task_id)
         self.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
         return inputs
 
@@ -6385,7 +6300,7 @@ class ProductionRepository:
         self, workspace_id: str, task_id: str, request_id: str, *, member_id: str,
     ) -> dict[str, object]:
         with self._connect() as conn:
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             self._narration_voice_selection_owner(task, member_id)
             event_id = _assistant_reply_request_event_id("task_narration_voice_selected", workspace_id, request_id)
             row = conn.execute("SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? AND event_type='task_narration_voice_selected'",
@@ -6424,7 +6339,7 @@ class ProductionRepository:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
-            task = self._require_creation_task(conn, workspace_id, task_id)
+            task = require_creation_task(conn, workspace_id, task_id)
             self._narration_voice_selection_owner(task, member_id)
             previous = conn.execute("SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
             if previous is not None:
@@ -6548,7 +6463,7 @@ class ProductionRepository:
             ).fetchone()
             if task_row is None:
                 raise KeyError(artifact.task_id)
-            task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+            task = creation_task_from_payload(json.loads(str(task_row["payload"])))
             expected_statuses = {"not_started", "failed"} if artifact.source_kind == "recorded" else {"running"}
             if (
                 task.stage != "narration"
@@ -6628,7 +6543,7 @@ class ProductionRepository:
     ) -> None:
         with self._connect() as failure_conn:
             failure_conn.execute("BEGIN IMMEDIATE")
-            current_task = self._require_creation_task(failure_conn, workspace_id, task_id)
+            current_task = require_creation_task(failure_conn, workspace_id, task_id)
             # A failed old render must not replace a crop confirmed while it ran.
             if expected_current_version_id is False or current_task.current_timeline_version_id == expected_current_version_id:
                 self.save_creation_task_montage_plan(
@@ -6653,7 +6568,7 @@ class ProductionRepository:
                 conn.execute("BEGIN IMMEDIATE")
                 self.save_creation_task_montage_plan(workspace_id, task_id, plan_id, payload,
                     connection=conn, expected_current_version_id=expected_current_version_id, verify_inputs=verify_inputs)
-            return self.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(workspace_id, task_id)
+            return self.task_records.get_creation_task(workspace_id, task_id), self.get_creation_task_montage_plan(workspace_id, task_id)
         conn = connection
         task_row = conn.execute(
             "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
@@ -6661,7 +6576,7 @@ class ProductionRepository:
         ).fetchone()
         if task_row is None:
             raise KeyError(task_id)
-        task = self._creation_task_from_payload(json.loads(str(task_row["payload"])))
+        task = creation_task_from_payload(json.loads(str(task_row["payload"])))
         if verify_inputs is not None:
             verify_inputs(conn, task)
         if (expected_current_version_id is not False
@@ -6757,14 +6672,14 @@ class ProductionRepository:
                     workspace_id, task_id, stage=stage, reason=reason, impact=impact,
                     repair_action=repair_action, retryable=retryable, connection=conn,
                 )
-            return self.get_creation_task(workspace_id, task_id)
+            return self.task_records.get_creation_task(workspace_id, task_id)
         row = connection.execute(
             "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
             (workspace_id, task_id),
         ).fetchone()
         if row is None:
             raise KeyError(task_id)
-        task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+        task = creation_task_from_payload(json.loads(str(row["payload"])))
         if task.stage != stage:
             raise ValueError("任务当前阶段与失败阶段不一致")
         task.stage_status = "failed"
@@ -6794,7 +6709,7 @@ class ProductionRepository:
             ).fetchone()
             if row is None:
                 raise KeyError(task_id)
-            task = self._creation_task_from_payload(json.loads(str(row["payload"])))
+            task = creation_task_from_payload(json.loads(str(row["payload"])))
             if task.stage != stage or task.stage_status not in {"not_started", "failed"}:
                 raise ValueError("当前创作任务不能开始该阶段")
             task.stage_status = "running"
@@ -6808,7 +6723,7 @@ class ProductionRepository:
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
                 (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
             )
-        return self.get_creation_task(workspace_id, task_id)
+        return self.task_records.get_creation_task(workspace_id, task_id)
 
     def readiness(
         self,
@@ -7154,17 +7069,7 @@ class ProductionRepository:
             data["visibility"] = str(row["visibility"])
         return VideoTemplate(**_with_datetime(data, "created_at"))
 
-    @staticmethod
-    def _task_from_row(row: sqlite3.Row) -> _CreationTask:
-        """任务回读以列为准：存量行的 visibility 只写在列上。"""
-        data = json.loads(str(row["payload"]))
-        if "visibility" in row.keys():
-            data["visibility"] = str(row["visibility"])
-        return ProductionRepository._creation_task_from_payload(data)
 
-    @staticmethod
-    def _creation_task_from_payload(data: dict[str, object]) -> _CreationTask:
-        return creation_task_from_payload(data)
 
     @staticmethod
     def _timeline_version_from_row(row: sqlite3.Row) -> _TimelineVersion:

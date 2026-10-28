@@ -321,7 +321,7 @@ def test_history_list_detail_and_background_use_original_operation_identity(hist
     repo.create_timeline_version(TimelineVersion(
         id=version_id, workspace_id='local', task_id=task_id, parent_version_id='timeline_history_v2',
         sequence=3, snapshot={}, created_by_operation_id=operation_id))
-    before = repo.get_creation_task('local', task_id)
+    before = repo.task_records.get_creation_task('local', task_id)
     owner, actor = _history_owner(repo, tmp_path)
     path = f'/api/creation-tasks/{task_id}/timeline/versions'
     listing, detail = client.get(path), client.get(f'{path}/{version_id}')
@@ -340,4 +340,4 @@ def test_history_list_detail_and_background_use_original_operation_identity(hist
         with pytest.raises(TimelineHistoryConflict) as caught:
             owner.history('local', task_id, actor)
         assert str(caught.value) == detail.json()['detail']
-    assert repo.get_creation_task('local', task_id) == before
+    assert repo.task_records.get_creation_task('local', task_id) == before

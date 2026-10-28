@@ -170,7 +170,7 @@ def test_terminal_conversation_uses_same_resource_history_without_changing_cance
     monkeypatch.setattr(main, '_verify_creation_identity', lambda *args:'ready')
     monkeypatch.setattr(main, '_goal_service', lambda:SimpleNamespace(observe_business_result=lambda *args:False))
     # Fixture ownership belongs to the same synthetic member; no user/app database.
-    task = repo.get_creation_task('local','task')
+    task = repo.task_records.get_creation_task('local','task')
     task.owner_user_id = actor.member_id
     with repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
@@ -274,7 +274,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
         script_title='fixture',status='ready',cues=[],clips=[],duration_seconds=.1,low_confidence_clip_count=0,
         audio_timeline=graph)
     with repo._connect() as conn:
-        task = repo.get_creation_task('local','task')
+        task = repo.task_records.get_creation_task('local','task')
         task.montage_plan_id='montage'
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",

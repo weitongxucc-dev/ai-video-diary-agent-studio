@@ -41,7 +41,7 @@ def test_confirm_queues_once_and_publishes_only_after_real_grant(narration_api):
     state.resources.allowed = True
     assert state.runtime.run_once()
     assert len(state.calls) == 1
-    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == "result"
+    assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == "result"
     assert state.repo.job_records.get_job_run("local", receipt["job_id"]).status == "succeeded"
     assert state.client.post(state.confirm_url, json={}).status_code == 409
 
@@ -108,7 +108,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
     state.proposal = state.repo.create_edit_proposal(replace(state.proposal, id="full-proposal",
         operation={"operation_type": "RegenerateNarrationSegment",
                    "payload": {**state.proposal.operation["payload"], "base_version_id": state.base.id}}))
-    state.task = state.repo.get_creation_task("local", state.task.id)
+    state.task = state.repo.task_records.get_creation_task("local", state.task.id)
     state.confirm_url = f"/api/creation-tasks/{state.task.id}/edits/{state.proposal.id}/confirm"
     state.before_clips = payload["clips"]
     state.original_track = SubtitleTrack("unavailable", "local", state.task.id, state.base.id, "en-US", "zh-CN",
@@ -133,7 +133,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
             raise state.generated_failure
         path = tmp_path / "generated.wav"
         path.write_bytes(b"x" * (context.max_output_bytes+1) if state.generated_oversize else wav_bytes(state.generated_duration))
-        unchanged_task = state.repo.get_creation_task("local", state.task.id)
+        unchanged_task = state.repo.task_records.get_creation_task("local", state.task.id)
         assert unchanged_task.current_timeline_version_id == state.base.id
         assert state.repo.get_narration_artifact("local", "1" * 64) is None
         return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=state.generated_duration,
@@ -184,7 +184,7 @@ def test_draft_narration_preview_does_not_require_a_rendered_video(generator_api
     assert proposal["preview"]["after"]["audio_url"] is None
     assert any("没有视频对比" in effect for effect in proposal["external_effects"])
     assert not state.generated_calls
-    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
 
 
 def test_draft_narration_confirm_retimes_audio_without_confirming_low_confidence_clips(generator_api):
@@ -217,7 +217,7 @@ def test_draft_narration_confirm_retimes_audio_without_confirming_low_confidence
     assert updated["clips"][1]["timeline_start_seconds"] == 3
     assert updated["clips"][0]["needs_confirmation"] is True
     assert updated["low_confidence_clip_count"] == 1 and updated["status"] == "waiting_for_user"
-    current = state.repo.get_creation_task("local", state.task.id)
+    current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id != state.base.id and not current.output_ready
     assert state.repo.get_edit_proposal("local", proposal["id"]).status == "confirmed"
     assert state.runtime.scheduler._get(receipt.json()["request_id"]).state == "done"
@@ -242,7 +242,7 @@ def test_draft_narration_retime_still_rejects_insufficient_source_footage(genera
     state.resources.allowed = True
     assert state.runtime.run_once()
     assert state.repo.job_records.get_job_run("local", queued.json()["job_id"]).status == "failed"
-    current = state.repo.get_creation_task("local", state.task.id)
+    current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id == state.base.id
     assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
@@ -270,7 +270,7 @@ def test_draft_narration_requires_current_version_script_and_persisted_audio(gen
     if mutation == "missing_version":
         import json
         from dataclasses import asdict
-        task = replace(state.repo.get_creation_task("local", state.task.id), current_timeline_version_id=None)
+        task = replace(state.repo.task_records.get_creation_task("local", state.task.id), current_timeline_version_id=None)
         with state.repo._connect() as conn:
             conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                          (json.dumps(asdict(task), default=str), "local", state.task.id))
@@ -304,13 +304,13 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     assert response.status_code == 202, response.text
     assert not state.runtime.run_once()
     assert not state.generated_calls
-    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
     state.resources.allowed = True
     assert state.runtime.run_once()
     assert len(state.generated_calls) == 1
     completed_job = state.repo.job_records.get_job_run("local", response.json()["job_id"])
     assert completed_job.status == "succeeded", completed_job.failure_reason
-    current = state.repo.get_creation_task("local", state.task.id)
+    current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id != state.base.id
     assert current.narration_cache_key == "2" * 64 and not current.output_ready
     assert state.repo.get_narration_artifact("local", "1" * 64) is not None
@@ -341,7 +341,7 @@ def test_actual_callback_failure_keeps_original_audio_and_version(generator_api,
     assert response.status_code == 202, response.text
     state.resources.allowed = True
     assert state.runtime.run_once()
-    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
     assert state.repo.get_narration_artifact("local", "2" * 64) is None
@@ -367,7 +367,7 @@ def test_queue_seals_all_audio_and_montage_consumed_by_combination(generator_api
     state.resources.allowed = True
     assert not state.runtime.run_once()
     assert not state.generated_calls
-    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
 
 
@@ -383,7 +383,7 @@ def test_actual_generator_cancellation_retains_original_facts(generator_api, mon
     state.resources.allowed = True
     assert state.runtime.run_once()
     assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "cancelled"
-    assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
 
 
@@ -396,7 +396,7 @@ def test_actual_callback_unknown_release_does_not_publish(generator_api):
     try:
         with pytest.raises(RecoveryBlocked):
             state.runtime.run_once()
-        assert state.repo.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
+        assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
         assert state.repo.get_narration_artifact("local", "1" * 64) is None
         assert state.repo.get_narration_artifact("local", "2" * 64) is None
         with state.repo._connect() as connection:

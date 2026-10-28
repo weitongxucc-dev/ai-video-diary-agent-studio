@@ -188,7 +188,7 @@ def _seed_confirmed_script(
         "updated_at": now.isoformat(),
         "confirmed_at": now.isoformat(),
     }
-    task = production.get_creation_task(workspace_id, task_id)
+    task = production.task_records.get_creation_task(workspace_id, task_id)
     task.confirmed_script_id = script_id
     task.stage = "narration"
     task.stage_status = "running"
@@ -632,7 +632,7 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
             repo.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
             assert repo.create_subtitle_track(track, connection=conn) == track
             repo.create_cover_asset(replace(cover, title=""), connection=conn)
-    assert repo.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
+    assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
     with pytest.raises(KeyError):
         repo.get_timeline_version("workspace_a", version.id)
     with pytest.raises(KeyError):
@@ -645,10 +645,10 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
         repo.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
         assert repo.create_subtitle_track(track, connection=conn) == track
         assert repo.create_cover_asset(cover, connection=conn) == cover
-        assert repo.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
+        assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
         with pytest.raises(KeyError):
             repo.get_cover_asset("workspace_a", "task-a", cover.id)
-    assert repo.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version.id
+    assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version.id
     assert repo.get_subtitle_track("workspace_a", "task-a", track.id) == track
     assert repo.get_cover_asset("workspace_a", "task-a", cover.id) == cover
     with repo._connect() as conn:
@@ -697,7 +697,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
         "timeline-v2",
     ]
     assert (
-        production.get_creation_task("workspace_a", "task-a").current_timeline_version_id
+        production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id
         == version_two.id
     )
     with pytest.raises(KeyError):
@@ -746,7 +746,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
     )
     assert reloaded.get_timeline_version("workspace_a", version_two.id) == version_two
     assert (
-        reloaded.get_creation_task("workspace_a", "task-a").current_timeline_version_id
+        reloaded.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id
         == version_two.id
     )
 
@@ -1151,7 +1151,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
     assert production.execution_records.append_task_event(event) == event
     assert production.create_timeline_version(version) == version
     assert (
-        production.get_creation_task("workspace_a", "task-a").current_timeline_version_id
+        production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id
         == version.id
     )
 
@@ -1599,7 +1599,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     assert production.list_narration_segments(
         "workspace_a", "task-narration", script_id
     ) == []
-    assert production.get_creation_task(
+    assert production.task_records.get_creation_task(
         "workspace_a", "task-narration"
     ).stage_status == "running"
 
@@ -1842,7 +1842,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     ).status == "proposed"
     with pytest.raises(KeyError):
         production.get_timeline_version("workspace_a", subtitle_version.id)
-    assert production.get_creation_task(
+    assert production.task_records.get_creation_task(
         "workspace_a", "task-narration"
     ).current_timeline_version_id == current_version.id
 
@@ -1907,7 +1907,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     assert reloaded.get_timeline_version(
         "workspace_a", restored_version.id
     ).snapshot["subtitle_cues"] == initial_cues
-    assert reloaded.get_creation_task(
+    assert reloaded.task_records.get_creation_task(
         "workspace_a", "task-narration"
     ).narration_cache_key == initial_artifact.cache_key
 
@@ -1994,7 +1994,7 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
     restarted_runner = VideoJobRunner(reloaded.job_records)
     assert restarted_runner.recover_after_restart("workspace_a") == 1
     assert reloaded.job_records.get_job_run("workspace_a", pending_restart.id).status == "interrupted"
-    assert reloaded.get_creation_task(
+    assert reloaded.task_records.get_creation_task(
         "workspace_a", "task-a"
     ).current_timeline_version_id == version.id
     assert reloaded.execution_records.get_artifact_record(
@@ -2210,7 +2210,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         voice.authorization.id, voice.authorization.version, "zh", voice.model_id,
     )
     plan.owner_user_id = member.member_id
-    task = production.get_creation_task("workspace_a", "task-person")
+    task = production.task_records.get_creation_task("workspace_a", "task-person")
     task.owner_user_id = member.member_id
     with production._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
@@ -2663,7 +2663,7 @@ def test_creation_plan_preview_is_read_only_and_confirm_is_persistent_and_isolat
         item["segment_ref"] for item in structured_materials.json()
     }
     saved_plan = production.plan_records.get_creation_plan("workspace_a", confirmed_body["id"])
-    saved_task = production.get_creation_task(
+    saved_task = production.task_records.get_creation_task(
         "workspace_a", confirmed_body["creation_task"]["id"]
     )
     assert saved_plan.owner_user_id == saved_task.owner_user_id == plan_owner[0].member_id
@@ -2733,10 +2733,31 @@ def test_creation_plan_preflight_reports_missing_authorized_voice_wav(
     ), response.text
 
 
+@pytest.fixture
+def task_record_no_execution(monkeypatch):
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    for name in ("write_synthetic_video", "register_synthetic_profiles", "synthetic_wav_bytes",
+                 "_seed_creation_plan_facts", "_confirm_library_copies"):
+        monkeypatch.setitem(globals(), name, forbidden)
+    from test_creation_requests import entries
+
+    def metadata_preflight(_case, workspace_id, payload, **_dependencies):
+        return replace(entries(count=1)[0][0], workspace_id=workspace_id,
+            goal=payload.goal, name=payload.name or payload.goal,
+            language=payload.language, aspect_ratio=payload.aspect_ratio,
+            duration_target_seconds=payload.duration_target_seconds,
+            duration_mode=payload.duration_mode, duration_range_seconds=payload.duration_range_seconds,
+            presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
+            preflight_fingerprint=hashlib.sha256(b"task-list-metadata").hexdigest())
+
+    monkeypatch.setattr(main_module.CreationPlanPreflightUseCase, "prepare", metadata_preflight)
+
+
 def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     tmp_path,
     monkeypatch,
     plan_owner,
+    task_record_no_execution,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
@@ -2755,37 +2776,6 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     assert empty_list.json() == {"items": [], "total_count": 0}
     assert hashlib.sha256(production.database_path.read_bytes()).hexdigest() == before_empty_list
 
-    _seed_creation_plan_facts(
-        production, sources, workspace_id="workspace_a",
-        verified_owner_user_id=plan_owner[0].member_id,
-    )
-    connector_b = SourceConnector(
-        id="connector-workspace_b",
-        workspace_id="workspace_b",
-        platform="manual",
-        protocol="manual",
-        account_or_rule="operator",
-        frequency="on_demand",
-        permissions=("read",),
-    )
-    sources.upsert_connector(connector_b)
-    source_b = SourceItem(
-        id="source-workspace_b",
-        workspace_id="workspace_b",
-        connector_id=connector_b.id,
-        source_label="manual",
-        source_url="https://example.com/workspace-b",
-        content_type="article",
-        author="operator",
-        published_at=None,
-        body="工作区 B 的真实信息源正文。",
-        subtitles=None,
-        media_references=(),
-        license="authorized",
-        title="工作区 B 信息源条目",
-    )
-    sources.save_source_items("workspace_b", [source_b])
-
     def confirm(goal: str, workspace_id: str) -> dict[str, object]:
         payload = {"goal": goal, "name": goal}
         headers = {"x-test-workspace": workspace_id}
@@ -2799,12 +2789,23 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
             },
             headers=headers,
         )
-        assert created.status_code == 201
+        assert created.status_code == 201, created.text
         return created.json()
 
     first_a = confirm("任务 A-1", "workspace_a")
     second_a = confirm("任务 A-2", "workspace_a")
     only_b = confirm("任务 B-1", "workspace_b")
+    owner = plan_owner[0].member_id
+    task_records = production.task_records
+    expected_ids = [second_a["creation_task"]["id"], first_a["creation_task"]["id"]]
+    assert [task.id for task in task_records.list_creation_tasks("workspace_a", viewer_user_id=None)] == expected_ids
+    assert task_records.list_creation_tasks("workspace_a", viewer_user_id="") == []
+    assert task_records.list_creation_tasks("workspace_a", include_private=False) == []
+    assert [task.id for task in task_records.list_creation_tasks(
+        "workspace_a", viewer_user_id=owner, include_private=False)] == expected_ids
+    assert task_records.list_creation_tasks("workspace_a", local_diagnostic=True, include_private=False) == []
+    assert [task.id for task in task_records.list_creation_tasks(
+        "workspace_a", viewer_user_id="", local_diagnostic=True)] == expected_ids
     before_list = hashlib.sha256(production.database_path.read_bytes()).hexdigest()
 
     list_a = client.get("/api/creation-tasks", headers={"x-test-workspace": "workspace_a"})
@@ -2985,7 +2986,7 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
     for invalid_title in ("  ", "字" * 81):
         with pytest.raises(ValueError, match="1–80"):
             production.topic_records.confirm_topic_candidate("workspace_a", task_id, first_topic_id, title=invalid_title)
-    assert production.get_creation_task("workspace_a", task_id).selected_topic_id is None
+    assert production.task_records.get_creation_task("workspace_a", task_id).selected_topic_id is None
     confirmed = client.post(
         f"/api/creation-tasks/{task_id}/topics/{first_topic_id}/confirm", json={"title": "  用户编辑的真实标题  "}
     )
@@ -3023,7 +3024,7 @@ def test_creation_task_topics_persist_confirm_and_fail_closed_by_workspace(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    saved_task = reloaded.get_creation_task("workspace_a", task_id)
+    saved_task = reloaded.task_records.get_creation_task("workspace_a", task_id)
     assert saved_task.selected_topic_id == first_topic_id
     assert saved_task.stage == "script"
     assert next(item for item in reloaded.topic_records.list_topic_candidates("workspace_a", task_id) if item.id == first_topic_id).title == "用户编辑的真实标题"
@@ -3194,7 +3195,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    saved_task = reloaded.get_creation_task("workspace_a", task_id)
+    saved_task = reloaded.task_records.get_creation_task("workspace_a", task_id)
     saved_script = reloaded.get_creation_task_script(
         "workspace_a", saved_task.confirmed_script_id
     )
@@ -3213,7 +3214,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     )
     failed_workspace = client.get(f"/api/creation-tasks/{task_id}").json()
     assert failed_workspace["task"]["can_revise_script"] is True
-    failed_task = reloaded.get_creation_task("workspace_a", task_id)
+    failed_task = reloaded.task_records.get_creation_task("workspace_a", task_id)
     for protected in (
         replace(failed_task, narration_cache_key="completed-audio"),
         replace(failed_task, current_timeline_version_id="existing-timeline"),
@@ -3229,7 +3230,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         ]},
     )
     assert too_long.status_code == 422
-    assert reloaded.get_creation_task("workspace_a", task_id).stage_status == "failed"
+    assert reloaded.task_records.get_creation_task("workspace_a", task_id).stage_status == "failed"
     assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == saved_script.title
     direct_repair = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
@@ -3397,7 +3398,7 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         json={"voice_profile_id": voice.id, "voice_version": voice.version}).status_code == 422
     assert body["selected_voice"]["profile_id"] == voice.id
     assert body["status"] == "selected" and body["confirmed_script_id"] == "script-confirmed"
-    current_task = production.get_creation_task(workspace_id, task.id)
+    current_task = production.task_records.get_creation_task(workspace_id, task.id)
     assert current_task.stage == "narration" and current_task.stage_status == "not_started"
     assert current_task.stage_reason is None
     assert not any(
@@ -3407,7 +3408,7 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.get_creation_task(workspace_id, task.id).confirmed_script_id == "script-confirmed"
+    assert reloaded.task_records.get_creation_task(workspace_id, task.id).confirmed_script_id == "script-confirmed"
     assert reloaded.plan_records.get_creation_plan(workspace_id, plan.id).selected_voice.profile_id == voice.id
 
 
@@ -3557,7 +3558,7 @@ def test_creation_task_topic_failure_records_capability_license_and_provider_err
         "_creation_task_topic_generator_for",
         lambda _settings: LocalGenerator(),
     )
-    task = production.get_creation_task("workspace_a", license_task)
+    task = production.task_records.get_creation_task("workspace_a", license_task)
     plan = production.plan_records.get_creation_plan("workspace_a", task.plan_id)
     prepared, references, _ = main_module._source_inputs_use_case().prepare(
         "workspace_a", task, plan, cloud_egress=True,
@@ -4464,7 +4465,7 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
                 operation=operation,result_version=version,subtitle_tracks=[track],connection=writer,verify_sources=verify)
         assert writer.in_transaction and checked==['source']
         assert confirmed.status=='confirmed' and applied==operation and adopted==version and current.current_timeline_version_id==version.id
-        assert repo.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
+        assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
         assert repo.list_edit_operations('workspace_a','task-a')==[]
         writer.rollback()
     assert repo.list_edit_proposals('workspace_a','task-a')==[]
@@ -4481,4 +4482,4 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
     assert repo.list_edit_operations('workspace_a','task-a')==[]
     assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
     assert repo.list_timeline_versions('workspace_a','task-a')==[base]
-    assert repo.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
+    assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id

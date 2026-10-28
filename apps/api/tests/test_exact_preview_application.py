@@ -89,7 +89,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     assert case.metadata is case.subtitles.montage_edits is case.linked.montage_edits
     assert case.metadata.audio_service is case.audio_edit.audio is case.visual.audio
     assert case.metadata.picture_renderer is case.visual.renderer
-    task_before = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task_before = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     montage_before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     request_id = str(uuid4())
     graphic = {**state.visual_plan.graphic_overlays[0], 'x': .25}
@@ -145,7 +145,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     assert replay.status_code == 202 and replay.json() == queued.json(), replay.text
     assert not state.runtime.run_once()
     assert state.client.get(queued.json()['result_url']).json() == completed.json()
-    assert state.production.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
+    assert state.production.task_records.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id) == montage_before
     assert not hasattr(main,'_TASK_MEDIA_HANDLERS')
     assert not hasattr(main.preview_creation_task_exact_edit,'__wrapped__')

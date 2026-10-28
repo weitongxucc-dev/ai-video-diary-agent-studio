@@ -57,7 +57,7 @@ def render_case(tmp_path, monkeypatch):
         receipt.write_bytes(b"synthetic render receipt, not media")
         plan = {"id": "fixture_montage", "workspace_id": workspace_id, "task_id": current_task_id,
                 "script_id": script_id, "status": "rendered", "output_path": str(receipt)}
-        task = repo.get_creation_task(workspace_id, current_task_id)
+        task = repo.task_records.get_creation_task(workspace_id, current_task_id)
         previous = repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         version = TimelineVersion(id=f"fixture-output-{state['render_calls']}", workspace_id=workspace_id,
             task_id=current_task_id, parent_version_id=task.current_timeline_version_id,
@@ -132,7 +132,7 @@ def test_post_publication_pressure_keeps_driver_and_reuses_output(render_case):
     with case.repo._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM device_request_events WHERE request_id=? AND event_type='deferred' AND reason='resource_pressure'", (case.request.id,)).fetchone()[0] == 1
     assert permit["state"] == "free" and job.status == "interrupted"
-    output_version = case.repo.get_creation_task("local", case.task_id).current_timeline_version_id
+    output_version = case.repo.task_records.get_creation_task("local", case.task_id).current_timeline_version_id
     case.state["now"] += timedelta(seconds=31)
     case.runtime.wake()
     wait_for(lambda: case.runtime.last_error is not None or case.snapshot()[0]["state"] == "done")
@@ -140,7 +140,7 @@ def test_post_publication_pressure_keeps_driver_and_reuses_output(render_case):
     assert case.runtime.last_error is None and case.runtime.running
     assert request["state"] == "done" and permit["state"] == "free" and job.status == "succeeded"
     assert case.state["render_calls"] == 1 and case.state["validation_calls"] == 2
-    assert case.repo.get_creation_task("local", case.task_id).current_timeline_version_id == output_version
+    assert case.repo.task_records.get_creation_task("local", case.task_id).current_timeline_version_id == output_version
 
 
 @pytest.mark.parametrize("failure", ["unknown", "declaration", "worker_error", "resources_unreleased", "children_unreleased"])

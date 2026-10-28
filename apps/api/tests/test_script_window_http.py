@@ -73,7 +73,7 @@ def test_legacy_confirmation_rechecks_current_input_before_adoption(api_state, m
     assert '原输入已变化' in result.json()['detail']
     assert checks == [('task', turn_id, False), ('task', turn_id, False)]
     assert state.repository.get_creation_task_script('local', script.id) == script
-    assert state.repository.get_creation_task('local', 'task').confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
     assert len(calls) == 2  # The unchanged candidate does not run another review.
 
 
@@ -97,7 +97,7 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
     assert result['total_count'] == 1
     saved = state.repository.get_creation_task_script('local', result['script_id'])
     assert saved.draft_complete is False
-    assert state.repository.get_creation_task('local', 'task').confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
     replay = state.client.post(url, json=body)
     assert replay.status_code == 200 and replay.json() == result
     assert len(calls) == 1
@@ -174,7 +174,7 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
     assert response.status_code == 200, response.text
     assert response.json()['status'] == 'confirmed' and response.json()['total_count'] == 45
     assert len(calls) == 6
-    assert state.repository.get_creation_task('local', 'task').confirmed_script_id == script_id
+    assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id == script_id
     receipt = state.client.get(f"/api/creation-tasks/task/script-window-requests/{confirmation['request_id']}",
                                params={'operation': 'confirm', 'script_id': script_id})
     assert receipt.status_code == 200 and receipt.json() == response.json()

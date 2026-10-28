@@ -105,13 +105,13 @@ class LinkedTimelineEditUseCase:
         elif not command.values.get('clip_id') or command.values.keys() - {
                 'base_version_id', 'clip_id', 'asset_id', 'segment_id', 'source_start_seconds'}:
             raise LinkedEditInputError('插入镜头只接受一个插入位置和一段素材，不混入其他修改')
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         inserted = self._inserted_clip(command) if operation == 'InsertClip' else None
         if operation == 'ChangeLinkedSpeed':
             check_command(task, command)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, command.task_id))
         base = self.montage_edits.ensure_montage_base(command.workspace_id, task, plan, source=command.source)
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         command = replace(command, base_version_id=base.id, values={**command.values, 'base_version_id': base.id})
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=plan)
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
@@ -155,7 +155,7 @@ class LinkedTimelineEditUseCase:
             role='a_roll' if effective_segment_usage_role(asset, segment) == 'a_roll' else 'b_roll', manually_selected=True)
 
     def _binding(self, command: LinkedEditApplyCommand):
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'LinkedTimeline', {}))
         proposal = self.repository.get_edit_proposal(command.workspace_id, command.proposal_id)
@@ -334,7 +334,7 @@ class LinkedTimelineEditUseCase:
                 previews[side] = {'ref': record.logical_ref, 'label': '修改前' if side == 'before' else '缩短停顿后', 'detail': f'{candidate.duration_seconds:.3f} 秒', 'video_url': f'/api/creation-tasks/{task.id}/visual/artifacts/{record.id}'}
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '本地停顿预览失败，请检查音轨、素材和外接盘。') from exc
-        if self.repository.get_creation_task(workspace_id, task.id).current_timeline_version_id != base.id:
+        if self.repository.task_records.get_creation_task(workspace_id, task.id).current_timeline_version_id != base.id:
             raise EditPreviewRejected(status_code=409, detail='预览期间时间线已变化，请重新预览。')
         removed = sum((b - a for a, b in cuts)) / 1000
         detail = '、'.join((f'{a / 1000:.3f}–{b / 1000:.3f}秒' for a, b in cuts))

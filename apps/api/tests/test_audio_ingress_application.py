@@ -70,7 +70,7 @@ def audio_state(tmp_path, monkeypatch):
 
 
 def confirmed_script(repo, *, montage=False, cache_key=None):
-    task = repo.get_creation_task('local','task')
+    task = repo.task_records.get_creation_task('local','task')
     stamp = utc_now()
     script = CreationTaskScript('script','local','task','fixture-script','fixture-topic','输入文案','zh-CN',
         [CreationTaskScriptSection('section','段落','合成配音','合成画面',[])],
@@ -136,8 +136,8 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
     assert artifact.sha256==hashlib.sha256(mp4.read_bytes()).hexdigest()
     verified=repo.execution_records.get_task_event('local','event_'+artifact.producer_job_id+'_verified').payload['outputs']
     assert [v['reference'] for v in verified]==[artifact.logical_ref]
-    assert repo.get_creation_task('local','task').narration_cache_key is None
-    assert repo.get_creation_task('local','task').current_timeline_version_id is None
+    assert repo.task_records.get_creation_task('local','task').narration_cache_key is None
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id is None
     reopened=ProductionRepository(repo.database_path,repo.video_library_path)
     assert reopened.execution_records.get_task_event('local','event_'+artifact.producer_job_id+'_result').payload['result']==result
     assert len(executions)==3 and all(request_id!=job_id for _,job_id,request_id in executions)
@@ -220,6 +220,6 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
     assert waveforms[0]==waveforms[1]
     assert repo.execution_records.list_artifact_records('local','task')==records_before
     assert len(list((tmp_path/'temporary'/'audio-waveforms'/'local').glob('*.json')))==1
-    assert repo.get_creation_task('local','task').current_timeline_version_id==version.id
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id==version.id
     assert errors==[] and len(executions)==3 and TASK_MEDIA_CONTEXT.get() is None
     assert runtime.stop(1)

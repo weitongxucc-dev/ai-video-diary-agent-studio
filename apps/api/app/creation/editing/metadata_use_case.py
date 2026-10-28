@@ -328,7 +328,7 @@ class MetadataEditUseCase:
             return {}
         if connection is None:
             with self.repository.creation_execution_read() as conn:
-                current = self.repository.get_creation_task(workspace_id, task.id, connection=conn)
+                current = self.repository.task_records.get_creation_task(workspace_id, task.id, connection=conn)
                 return self.current_narration_snapshot(workspace_id, current, connection=conn)
         version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id,
             connection=connection) if task.current_timeline_version_id else None
@@ -369,7 +369,7 @@ class MetadataEditUseCase:
             conn.execute('BEGIN IMMEDIATE')
             if self.write_guard is not None:
                 self.write_guard(conn)
-            current_task=self.repository.get_creation_task(workspace_id,task.id,connection=conn)
+            current_task=self.repository.task_records.get_creation_task(workspace_id,task.id,connection=conn)
             if verify_inputs is not None:
                 verify_inputs(conn, current_task)
             expected=source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id
@@ -722,7 +722,7 @@ class MetadataEditUseCase:
         if connection is not None:
             return persisted_operation
         persisted_plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
-        current_task = self.repository.get_creation_task(workspace_id, task.id)
+        current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
         current_narration = self.repository.get_narration_artifact(workspace_id, current_task.narration_cache_key) if current_task.narration_cache_key else None
         return MetadataEditResult(persisted_operation, persisted_plan, current_task, current_narration,execution_readiness=readiness)
 
@@ -753,7 +753,7 @@ class MetadataEditUseCase:
                 records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='graphic_preview', parameters={'graphic_overlays': candidate.graphic_overlays}, execution=execution) for candidate in (plan, edited)]
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, (ValueError, OSError)) else '图文叠加层预览失败，请检查本机渲染器') from exc
-        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+        if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
             raise EditPreviewRejected(status_code=409, detail='预览期间时间线变化，请重新预览图文叠加层')
         summary = {'add': '添加图文叠加层', 'update': '修改图文叠加层', 'delete': '删除图文叠加层'}[action]
         intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=summary, context_stage='montage', selected_object_refs=[f'overlay:{identity}'], playhead_ms=None, intent_type='graphic_overlay', scope={'kind': 'overlay', 'id': identity}, constraints={'preserve_narration': True}, confidence=1, status='interpreted'), source=source)
@@ -786,7 +786,7 @@ class MetadataEditUseCase:
                 records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='transition_preview', parameters={'transition_seconds': candidate.clips[index].transition_in_seconds, 'clip_id': payload.clip_id}, execution=execution) for candidate in (plan, edited)]
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '本地转场预览失败，请检查源素材和FFmpeg') from exc
-        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+        if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
             raise EditPreviewRejected(status_code=409, detail='预览期间时间线变化，请重新预览转场')
         refs = [f'clip:{clip.id}' for clip in targets]
         source_command = metadata_edit_command(task, identity, 'SetClipTransition', {'base_version_id': base.id, 'clip_id': payload.clip_id, 'transition_seconds': payload.transition_seconds}, source=source)
@@ -821,7 +821,7 @@ class MetadataEditUseCase:
                 records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='canvas_preview', parameters={'side': side, 'aspect_ratio': candidate.aspect_ratio}, execution=execution) for side, candidate in (('before', montage), ('after', changed))]
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '画幅预览失败，请检查素材与本机FFmpeg') from exc
-        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
+        if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
             raise EditPreviewRejected(status_code=409, detail='预览期间版本变化，请重新预览')
         now = utc_now()
         intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'画幅改为{payload.aspect_ratio}', context_stage='montage', selected_object_refs=[], playhead_ms=None, intent_type='canvas', scope={'kind': 'timeline'}, constraints={'preserve_narration': True}, confidence=1, status='interpreted', created_at=now), source=source)
@@ -869,7 +869,7 @@ class MetadataEditUseCase:
         if payload.operation_type == 'TrimClip' and task.current_timeline_version_id is None:
             raise edit_preview_failure(status_code=409, error='timeline_version_required', reason='当前故事板还没有可撤销的初始版本。', impact='裁剪预览和有效时间线均未改变。', repair_action='点击“保留当前故事板并建立版本”，再预览裁剪。', retryable=True)
         base_version = self.ensure_montage_base(workspace_id, task, persisted_plan, source=source)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         plan = creation_task_montage_plan_from_payload(creation_task_montage_plan_to_payload(persisted_plan))
         supplied = {'fit_mode': payload.fit_mode, 'crop_x': payload.crop_x, 'crop_y': payload.crop_y, 'asset_id': payload.asset_id, 'segment_id': payload.segment_id, 'source_start_seconds': payload.source_start_seconds, 'split_time_seconds': payload.split_time_seconds, 'playback_rate': payload.playback_rate, 'position': payload.position, 'locked': payload.locked}
         required = EXACT_MONTAGE_REQUIRED_FIELDS[payload.operation_type]
@@ -918,7 +918,7 @@ class MetadataEditUseCase:
                     media_previews[side] = {'video_url': self.trim_clip_source_url(workspace_id, task_id, target, cue)}
             except (KeyError, StopIteration, ValueError, OSError) as exc:
                 raise EditPreviewRejected(status_code=422, detail='裁剪源片段不可播放，请检查素材或人物口型产物') from exc
-            if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
+            if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base_version.id:
                 raise EditPreviewRejected(status_code=409, detail='预览期间时间线已变化，请重新预览')
         before_label = '人物口播' if before_clip.person_render_id else self.repository.get_asset(workspace_id, before_clip.asset_id).file_name
         after_label = '人物口播' if after_clip.person_render_id else self.repository.get_asset(workspace_id, after_clip.asset_id).file_name
@@ -943,7 +943,7 @@ class MetadataEditUseCase:
 
     def apply_clip_update(self, workspace_id, task_id, plan, clip_id, payload, *, reader_identity):
         identity, diagnostic = (reader_identity['member_id'], reader_identity['local_diagnostic'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         try:
             edited, tracks, linkage = apply_clip_patch(plan, clip_id, payload.model_dump(exclude_unset=True), resolve_source=lambda clip, values: self.repository.resolve_edit_clip_source(workspace_id, task_id, clip, values, user_id=identity, local_diagnostic=diagnostic), link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
         except PermissionError as exc:
@@ -1018,7 +1018,7 @@ class MetadataEditUseCase:
 
     def task_or_missing(self, workspace_id, task_id):
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task not found') from exc
 

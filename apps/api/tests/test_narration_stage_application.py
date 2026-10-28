@@ -83,7 +83,7 @@ def narration_preparation(tmp_path):
     repository=SimpleNamespace(
         job_records=SimpleNamespace(get_job_run=lambda _ws,_job:job),execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
         creation_execution_input=lambda *_:start.payload,
-        get_creation_task=read_task,plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),get_creation_task_script=lambda *_:script,
+        task_records=SimpleNamespace(get_creation_task=read_task),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),get_creation_task_script=lambda *_:script,
         effective_creation_script=lambda *_:script,
         resolve_creation_task_narration_inputs=lambda **_:inputs,
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
@@ -352,7 +352,7 @@ def narration_application(tmp_path,monkeypatch):
     plan.selected_voice=CreationPlanVoiceReference(voice.id,voice.version,person.id,person.version,
         person.authorization.id,person.authorization.version,voice.authorization.id,voice.authorization.version,'zh-CN',voice.model_id)
     plan.owner_user_id=member.member_id
-    task=repo.get_creation_task('local',task_id);task.owner_user_id=member.member_id
+    task=repo.task_records.get_creation_task('local',task_id);task.owner_user_id=member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',(json.dumps(asdict(plan),default=str),plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
@@ -410,7 +410,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     while not s.runtime.run_once():
         assert time.monotonic()<deadline,s.runtime.last_error
         time.sleep(.1)
-    task=repo.get_creation_task('local',s.task_id)
+    task=repo.task_records.get_creation_task('local',s.task_id)
     assert task.stage=='montage' and task.narration_cache_key
     sections=repo.list_narration_segments('local',s.task_id,s.script_id)
     assert len(sections)==2 and all(item.status=='ready' for item in sections)
@@ -432,7 +432,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     montage=CreationTaskMontagePlan('normal-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
         narration_audio_path=repo.narration_artifact_reference(combined.cache_key))
     repo.save_creation_task_montage_plan('local',s.task_id,montage.id,creation_task_montage_plan_to_payload(montage))
-    base=main._ensure_montage_base_version('local',repo.get_creation_task('local',s.task_id),montage)
+    base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     caption_ref,caption_transform=s.case.metadata.publish_subtitle_text(workspace_id='local',task_id=s.task_id,
         proposal_id='normal-fixture-caption',kind='subtitle_fixture',input_refs=['timeline:'+base.id],
         content='1\n00:00:00,000 --> 00:00:01,000\n配音 normal\n',engine='fixture-subtitle-text',parameters={'language':'zh-CN'})
@@ -449,7 +449,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     assert s.client.post(confirm_url,json={}).json()==queued.json()
     assert s.runtime.run_once(),s.runtime.last_error
     job=repo.job_records.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
-    current=repo.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
+    current=repo.task_records.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
     updated=repo.list_narration_segments('local',s.task_id,s.script_id)
     changed=next(item for item in updated if item.id==target.id)
     assert changed.audio_reference!=target.audio_reference

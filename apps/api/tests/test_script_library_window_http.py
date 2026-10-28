@@ -14,10 +14,10 @@ def _bind_library_member(library, monkeypatch):
     # The request holder must differ from the source owner: making a task
     # private revokes a shared reader, while its owner remains entitled to read.
     member, token = members.join(members.create_invite_code(), '文案库使用者')
-    assert member.member_id != repo.get_creation_task('local', 'task_original').owner_user_id
+    assert member.member_id != repo.task_records.get_creation_task('local', 'task_original').owner_user_id
     monkeypatch.setattr(main, 'local_members_service', members)
     client.headers['X-Local-Member-Token'] = token
-    repo.set_creation_task_visibility('local', 'task_original', 'shared')
+    repo.task_records.set_creation_task_visibility('local', 'task_original', 'shared')
     sources.set_knowledge_item_visibility('local', 'knowledge_own', 'shared')
     return client, repo, sources
 
@@ -50,7 +50,7 @@ def test_library_write_requests_replay_original_receipts_without_full_bodies(lib
     assert client.post(url, json=reuse_input).json() == result
     assert client.get(f"/api/production/script-library-requests/{reuse_input['request_id']}?operation=reuse").json() == result
     assert client.post(url, json={**reuse_input, 'name': '换要求'}).status_code == 409
-    task = repo.get_creation_task('local', result['task_id'])
+    task = repo.task_records.get_creation_task('local', result['task_id'])
     assert task.confirmed_script_id is None and task.stage == 'script'
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 2
@@ -61,7 +61,7 @@ def test_library_write_requests_replay_original_receipts_without_full_bodies(lib
     assert client.post(url, json=reuse_input).json() == result
     assert client.post(url, json={**reuse_input, 'name': '撤权后换要求'}).status_code == 409
     assert client.post(url, json={**reuse_input, 'request_id': str(uuid4())}).status_code == 409
-    repo.set_creation_task_visibility('local', 'task_original', 'private')
+    repo.task_records.set_creation_task_visibility('local', 'task_original', 'private')
     assert client.post(url, json=reuse_input).json() == result
     assert client.get(f"/api/production/script-library-requests/{reuse_input['request_id']}?operation=reuse").json() == result
     with repo._connect() as conn:
@@ -95,7 +95,7 @@ def test_library_reuse_rechecks_source_permission_at_commit_without_losing_saved
     # Read permission and permission to reuse cited sources are separate.
     query = f"/api/production/script-library-requests/{receipt['request_id']}?operation=save"
     assert client.get(query).json() == receipt
-    repo.set_creation_task_visibility('local', 'task_original', 'private')
+    repo.task_records.set_creation_task_visibility('local', 'task_original', 'private')
     assert client.get(query).status_code == 404
 
 

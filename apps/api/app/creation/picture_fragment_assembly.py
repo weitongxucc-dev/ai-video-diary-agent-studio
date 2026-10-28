@@ -42,7 +42,7 @@ class PictureFragmentAssembly:
 
     def _inputs(self, job, actor, *, connection=None):
         from app.source_policy import knowledge_item_readable as content_readable
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=connection)
+        task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=connection)
         if (actor.workspace_id != job.workspace_id or task.owner_user_id != (actor.user_id or actor.member_id)
                 or not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,
                     visibility=task.visibility, owner_user_id=task.owner_user_id)):
@@ -139,7 +139,7 @@ class PictureFragmentAssembly:
             for source in sources.values():
                 if _identity(source['path']) != source['file_identity']:
                     raise ValueError('画面来源在封存期间已变化')
-            current = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+            current = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             if (current.current_timeline_version_id != payload['head']
                     or self.packet.recipe(job, connection=conn) != payload['picture_recipe']):
                 raise ValueError('原任务画面配方在manifest封存期间已变化')

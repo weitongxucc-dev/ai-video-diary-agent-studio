@@ -110,7 +110,7 @@ class ExactPreviewUseCase:
         # The former self-HTTP read performed a fresh write-access check here,
         # after successor lineage checks. Preserve it for every plain reader too.
         try:
-            task = self.repository.get_creation_task(task.workspace_id, task.id)
+            task = self.repository.task_records.get_creation_task(task.workspace_id, task.id)
         except KeyError as exc:
             raise EditPreviewRejected(404, "creation task not found") from exc
         if not content_readable(user_id=member_id, local_diagnostic=False,
@@ -446,7 +446,7 @@ class ExactPreviewUseCase:
         except KeyError as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task montage plan not found') from exc
         base_version = self.metadata.ensure_montage_base(workspace_id, task, montage, source=source)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         tracks = self.metadata.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
         now = utc_now()
         if payload.operation_type == 'GenerateCoverFromFrame':
@@ -458,7 +458,7 @@ class ExactPreviewUseCase:
         return (intent, proposal)
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')

@@ -46,7 +46,7 @@ def adopted(tmp_path):
             expected_revision=saved["revision"], input_fingerprint=window["input_fingerprint"],
             verified_owner_user_id=OWNER, adoption_kind=adoption_kind)
         pairs = [(repository.plan_records.get_creation_plan(WORKSPACE, item["plan_id"]),
-                  repository.get_creation_task(WORKSPACE, item["task_id"]))
+                  repository.task_records.get_creation_task(WORKSPACE, item["task_id"]))
                  for item in confirmed["current_window"]["entries"]]
         return SimpleNamespace(repository=repository, request=confirmed, pairs=pairs, goal=goal, fixed_body=body)
     return create
@@ -208,9 +208,9 @@ def consumer_state(api_state, monkeypatch):
             expected_revision=saved["revision"], input_fingerprint="http-window",
             verified_owner_user_id=owner, adoption_kind=adoption_kind)
         if failure == "private_request":
-            state.repository.set_creation_task_visibility("local", task.id, "shared")
+            state.repository.task_records.set_creation_task_visibility("local", task.id, "shared")
             state.repository.set_creation_plan_visibility("local", plan.id, "shared")
-        task = state.repository.get_creation_task("local", task.id)
+        task = state.repository.task_records.get_creation_task("local", task.id)
         conversations = ConversationRepository(state.repository.database_path)
         monkeypatch.setattr(main, "conversation_repo", conversations)
         instruction = "正文讲得简洁一些，资料不支持的细节可以删掉。"
@@ -326,7 +326,7 @@ def test_script_context_denies_owner_private_sources_in_shared_task(api_state, m
 
     state = api_state
     reader, token = main.local_members_service.join(main.local_members_service.create_invite_code(), 'Other reader')
-    state.repository.set_creation_task_visibility('local', 'task', 'shared')
+    state.repository.task_records.set_creation_task_visibility('local', 'task', 'shared')
     monkeypatch.setattr(main, '_creation_task_script_generator_for',
         lambda *_: pytest.fail('context reads must not call a model'))
     if entry == 'http':

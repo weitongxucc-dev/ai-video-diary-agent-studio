@@ -209,7 +209,7 @@ class QualityInspectionUseCase:
     def require_actor(self, workspace_id, task_id, actor):
         if self.authorization_verdict(workspace_id, task_id, actor) != "ready":
             raise PermissionError("质检执行身份失效或尚未就绪")
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,
                                 visibility=task.visibility, owner_user_id=task.owner_user_id):
             raise PermissionError("当前成员无权检查此创作任务")
@@ -230,7 +230,7 @@ class QualityInspectionUseCase:
         return quality_stream_resources({"source": source, "budget": asdict(budget)}, "metadata", {})
 
     def projection(self, workspace_id, task_id):
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         try:
             plan = creation_task_montage_plan_from_payload(self.production.get_creation_task_montage_plan(workspace_id, task_id))
         except KeyError:
@@ -334,7 +334,7 @@ class QualityInspectionUseCase:
             actor = CreationExecutionActor.from_event(workspace_id, event.payload)
             return self.start(runtime, actor, workspace_id, task_id)
         except (KeyError, PermissionError, ValueError) as exc:
-            task = self.production.get_creation_task(workspace_id, task_id)
+            task = self.production.task_records.get_creation_task(workspace_id, task_id)
             try:
                 _, _, source = self.source_metadata(workspace_id, task_id)
             except (KeyError, OSError, ValueError):
@@ -385,7 +385,7 @@ class QualityInspectionUseCase:
             if version.task_id != source["task_id"] or source["source_ref"] not in version.snapshot.get("output_refs", []):
                 raise ValueError("质检固定版本与登记产物不一致")
         from app.creation.duration_requirement import DurationRequirement
-        task = self.production.get_creation_task(source['workspace_id'], source['task_id'])
+        task = self.production.task_records.get_creation_task(source['workspace_id'], source['task_id'])
         current_requirement = DurationRequirement.from_plan(
             self.production.plan_records.get_creation_plan(task.workspace_id, task.plan_id))
         if ('duration_requirement' not in source
@@ -397,7 +397,7 @@ class QualityInspectionUseCase:
 
     def start(self, runtime, actor, workspace_id, task_id, *, force=False):
         if self.task_authorizations is not None:
-            self.task_authorizations.ensure(self.production.get_creation_task(workspace_id, task_id), actor)
+            self.task_authorizations.ensure(self.production.task_records.get_creation_task(workspace_id, task_id), actor)
         check_id, job = self._reserve(actor, workspace_id, task_id, force=force)
         if job is None:
             return check_id
@@ -651,7 +651,7 @@ class QualityInspectionUseCase:
             authorization_denied = False
             if self.task_authorizations is not None:
                 try:
-                    self.task_authorizations.ensure(self.production.get_creation_task(job.workspace_id, job.task_id), actor)
+                    self.task_authorizations.ensure(self.production.task_records.get_creation_task(job.workspace_id, job.task_id), actor)
                 except TaskAuthorizationDenied:
                     authorization_denied = True
             result = record["evidence"].get("_worker_result")

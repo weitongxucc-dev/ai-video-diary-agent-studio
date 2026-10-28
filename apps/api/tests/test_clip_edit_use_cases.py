@@ -43,7 +43,7 @@ def test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes(t
         changed = repo.get_creation_task_montage_plan('local', 'task')
         assert changed['audio_timeline'] == original['audio_timeline']
         assert changed['graphic_overlays'] == original['graphic_overlays']
-        current_id = repo.get_creation_task('local', 'task').current_timeline_version_id
+        current_id = repo.task_records.get_creation_task('local', 'task').current_timeline_version_id
         current_tracks = repo.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
         assert [asdict(cue) for cue in current_tracks[0].cues] == [asdict(cue) for cue in track.cues]
         if operation == 'SplitClip':
@@ -106,7 +106,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
             'operation_type':operation,'clip_id':'clip_2','transition_seconds':.1}
         response = client.post('/api/creation-tasks/task/edits/exact',json=values)
         assert response.status_code == (403 if change=='private' else 409),response.text
-        assert repo.get_creation_task('local','task').current_timeline_version_id=='neighbor-base'
+        assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='neighbor-base'
         assert repo.list_edit_intents('local','task')==[] and repo.list_edit_proposals('local','task')==[]
         assert repo.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
         assert repo.get_creation_task_montage_plan('local','task')==seed
@@ -199,7 +199,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         monkeypatch.setattr(repo.edit_adoption, 'confirm',revoke_before_commit)
         response=client.post('/api/creation-tasks/task/edits/'+proposal['id']+'/confirm')
         assert response.status_code==403,response.text
-        assert repo.get_creation_task('local','task').current_timeline_version_id=='transition-base'
+        assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='transition-base'
         assert len(repo.list_edit_intents('local','task'))==1 and len(repo.list_edit_proposals('local','task'))==1
         assert repo.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
     finally:runtime.stop(0)

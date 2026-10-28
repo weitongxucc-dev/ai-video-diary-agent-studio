@@ -19,7 +19,7 @@ class TaskBudgetUseCase:
         return {'policy_kind': 'scope', 'scope_id': reference['scope_id'], 'revision': reference['revision']}
 
     def require_actor(self, workspace_id, task_id, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if actor.workspace_id != workspace_id or task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError('不能读取或确认其他成员的任务预算')
         return task

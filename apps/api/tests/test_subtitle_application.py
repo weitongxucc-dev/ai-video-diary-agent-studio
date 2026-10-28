@@ -72,14 +72,14 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
         state.repo.create_subtitle_track(track)
     if state.cover is not None:
         state.repo.create_cover_asset(state.cover)
-    state.task = state.repo.get_creation_task('ws', state.task.id)
+    state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
     state.application = SubtitleEditUseCase(state.repo, state.case)
     state.voice_bytes = voice.read_bytes()
     return state
 
 
 def subtitle_command(state, operation, **values):
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     return EditCommand('ws', task.id, state.identity, task.current_timeline_version_id, operation,
         {'base_version_id': task.current_timeline_version_id, **values})
 
@@ -90,7 +90,7 @@ def test_style_preparation_keeps_original_ids_and_save_uses_original_base_CAS(tm
     prepared = state.application.prepare_preview(command)
     assert prepared.proposal.operation['payload'] == {'base_version_id': state.base.id, 'style': {'font_size': 64}}
     assert next(track for track in prepared.style_change.changed_tracks if track.language == 'en-US').style['enabled'] is False
-    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
     later_zh = clone_subtitle_track(state.zh, timeline_version_id='later-head', track_id='later-zh')
     later_en = clone_subtitle_track(state.en, timeline_version_id='later-head', track_id='later-en')
     state.repo.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=3,

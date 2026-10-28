@@ -24,7 +24,7 @@ class QualityApplication:
     def _task(self, workspace_id, task_id, reader_id):
         if reader_id is None:
             raise PermissionError('请使用可信成员身份检查成片')
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(user_id=reader_id, local_diagnostic=False,
                 visibility=task.visibility, owner_user_id=task.owner_user_id):
             raise KeyError(task_id)

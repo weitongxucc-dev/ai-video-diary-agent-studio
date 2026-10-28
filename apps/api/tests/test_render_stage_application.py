@@ -49,7 +49,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version, 'zh-CN', voice.model_id)
     plan.owner_user_id = member.member_id
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     task.owner_user_id = member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
@@ -98,7 +98,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     montage.audio_timeline.tracks[0].clips[0].timeline_start_ms = 500
     voice_hash = hashlib.sha256(audio.read_bytes()).hexdigest()
     repo.save_creation_task_montage_plan('local', task_id, montage.id, creation_task_montage_plan_to_payload(montage))
-    base = case.metadata.ensure_montage_base('local', repo.get_creation_task('local', task_id), montage)
+    base = case.metadata.ensure_montage_base('local', repo.task_records.get_creation_task('local', task_id), montage)
     caption_ref, caption_transform = case.metadata.publish_subtitle_text(workspace_id='local', task_id=task_id,
         proposal_id='declared-render-caption', kind='subtitle_fixture', input_refs=['timeline:' + base.id],
         content='1\n00:00:00,500 --> 00:00:02,500\n' + segment.text + '\n', engine='fixture-subtitle-text', parameters={'language': 'zh-CN'})
@@ -176,7 +176,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         assert runtime.run_once(),runtime.last_error
         outer=repo.job_records.get_job_run('local',queued.json()['job']['id'])
         assert outer.status=='succeeded',asdict(outer)
-        task=repo.get_creation_task('local',task_id)
+        task=repo.task_records.get_creation_task('local',task_id)
         rendered=repo.get_creation_task_montage_plan('local',task_id)
         version=repo.get_timeline_version('local',task.current_timeline_version_id)
         child=next(j for j in repo.job_records.list_job_runs('local',task_id) if j.kind=='creation_task_montage_render')

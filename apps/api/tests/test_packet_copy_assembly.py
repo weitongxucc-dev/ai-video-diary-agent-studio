@@ -24,7 +24,7 @@ def _packet_case(tmp_path, monkeypatch, *, before_prepare=None, montage_adjust=N
     from app.creation_execution import submit_creation_stage
     original_next = execution_module.next_creation_intent
     def stop_after_audio(repository, scheduler, job, **kwargs):
-        if repository.get_creation_task(job.workspace_id, job.task_id).narration_cache_key is not None:
+        if repository.task_records.get_creation_task(job.workspace_id, job.task_id).narration_cache_key is not None:
             return None
         return original_next(repository, scheduler, job, **kwargs)
     with monkeypatch.context() as setup:

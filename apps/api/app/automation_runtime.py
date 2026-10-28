@@ -209,13 +209,13 @@ class AutomationRuntime:
         return self.bound_result(actor,self.service.get_run(actor,run_id))
 
     def bound_result(self, actor, run):
-        return self.plan_response(self.production.plan_records.get_creation_plan(actor.workspace_id,run["plan_id"]),self.production.get_creation_task(actor.workspace_id,run["task_id"]))
+        return self.plan_response(self.production.plan_records.get_creation_plan(actor.workspace_id,run["plan_id"]),self.production.task_records.get_creation_task(actor.workspace_id,run["task_id"]))
 
     def project_run(self, actor, run):
         projection = self.project_state(actor, run)
         events = self.production.execution_records.list_task_events(actor.workspace_id,run["task_id"])
         confirmation = dict(run["confirmation"])
-        task = self.production.get_creation_task(actor.workspace_id,run["task_id"])
+        task = self.production.task_records.get_creation_task(actor.workspace_id,run["task_id"])
         if task.selected_topic_id:
             confirmation["topic"] = {"topic_id":task.selected_topic_id}
         if task.confirmed_script_id:
@@ -233,7 +233,7 @@ class AutomationRuntime:
         return projection
 
     def project_state(self, actor, run):
-        task = self.production.get_creation_task(actor.workspace_id,run["task_id"])
+        task = self.production.task_records.get_creation_task(actor.workspace_id,run["task_id"])
         if task.owner_user_id != self.reader(actor):
             raise AutomationBlocked("task_permission_lost","本次任务当前归属无法核验","恢复原成员许可后重试")
         status = self.execution_status(actor.workspace_id,task.id)

@@ -209,8 +209,8 @@ def test_member_sees_only_shared_creation_tasks(tmp_path, monkeypatch):
     }
     # Single-task fetch keeps the same switch at the repository layer.
     with pytest.raises(KeyError):
-        repo.get_creation_task(workspace_id, "task-private", include_private=False)
-    assert repo.get_creation_task(workspace_id, "task-private").id == "task-private"
+        repo.task_records.get_creation_task(workspace_id, "task-private", include_private=False)
+    assert repo.task_records.get_creation_task(workspace_id, "task-private").id == "task-private"
 
 
 def test_member_sees_only_shared_materials(tmp_path, monkeypatch):

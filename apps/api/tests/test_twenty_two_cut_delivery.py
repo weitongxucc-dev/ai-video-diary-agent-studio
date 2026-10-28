@@ -40,7 +40,7 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
     montage.clips, montage.cues, montage.duration_seconds = clips, cues, 2
     payload = creation_task_montage_plan_to_payload(montage)
     case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, payload)
-    previous = case.repo.get_creation_task('local', case.task_id).current_timeline_version_id
+    previous = case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id
     with case.repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         case.repo.create_timeline_version(TimelineVersion(id='approved-twenty-two-cuts', workspace_id='local',
@@ -78,7 +78,7 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
             permit = reader.execute('SELECT state,request_id FROM device_permit WHERE id=1').fetchone()
             assert row['status'] == 'succeeded' and len(json.loads(row['output_refs_json'])) == 2
             assert permit['state'] == 'free' and permit['request_id'] is None
-        task = case.repo.get_creation_task(workspace_id, task_id)
+        task = case.repo.task_records.get_creation_task(workspace_id, task_id)
         version = case.repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         assert version.snapshot['audio_delivery']['job_id'] == job_id
         downloaded = outputs.download(workspace_id, task_id, expected_version_id=version.id, subtitle=False)

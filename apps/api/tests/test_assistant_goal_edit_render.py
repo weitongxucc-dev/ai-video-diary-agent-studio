@@ -79,7 +79,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     op = state.repo.get_edit_operation("ws", operation["id"])
     proposal = state.repo.get_edit_proposal("ws", operation["proposal_id"])
     typed_source = state.repo.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
-    current_task = state.repo.get_creation_task("ws", state.task.id)
+    current_task = state.repo.task_records.get_creation_task("ws", state.task.id)
     projection = owner.business_projection(SimpleNamespace(
         candidate={"kind": "proposal", "event_id": "proposal-applied", "workspace_id": "ws", "task_id": state.task.id, "status": "confirmed"},
         source=typed_source, binding={"status": "completed"}, task=current_task, proposal=proposal, job=None, start=None), media=None, outputs=None)
@@ -101,7 +101,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         assert ctx["expected_timeline_version_id"] == "render-version"
         assert ctx["target_snapshot"]["selected_references"][0]["version"] == "render-version"
         assert "subtitle-track:"+state.track.id not in ctx["selected_object_refs"]
-        task = state.repo.get_creation_task("ws", state.task.id)
+        task = state.repo.task_records.get_creation_task("ws", state.task.id)
         payload = main.CreationTaskAssistantTurnRequest(conversation_id=chat["id"], message="回读真实结果", client_request_id=uuid4(), expected_draft_version=0,
             context_stage=ctx["stage"], selected_object_refs=ctx["selected_object_refs"])
         main._assistant_turn_scope("ws", task, payload)

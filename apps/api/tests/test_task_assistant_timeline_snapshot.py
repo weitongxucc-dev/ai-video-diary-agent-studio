@@ -117,7 +117,7 @@ def test_unavailable_or_unrelated_persisted_timeline_is_rejected(task_client, ta
             sequence=1, snapshot={}, created_by_operation_id=None,
         ))
     # A corrupt persisted pointer must not authorize a different task's timeline.
-    task = production.get_creation_task("qa", "task")
+    task = production.task_records.get_creation_task("qa", "task")
     task.current_timeline_version_id = target
     with production._connect() as connection:
         connection.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",

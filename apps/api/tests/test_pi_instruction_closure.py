@@ -59,7 +59,7 @@ def bound_turn(task_client):
                                                         str(uuid4()), 2, request_context=context)
     assert created
     req = Request({"type":"http", "headers":[(key.lower().encode(), value.encode()) for key,value in headers.items()]})
-    task = production.get_creation_task("qa", "task")
+    task = production.task_records.get_creation_task("qa", "task")
     payload = CreationTaskEditPreviewRequest(assistant_turn_id=turn["id"], raw_command="水平裁剪到0%",
                                             context_stage="montage", selected_object_refs=["clip:clip-1"], playhead_ms=12)
     return req, task, payload, production, conversations
@@ -93,7 +93,7 @@ def test_server_rechecks_running_owner_and_timeline(bound_turn, monkeypatch):
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "qa")
     production.create_timeline_version(TimelineVersion(id="changed", workspace_id="qa", task_id="task", parent_version_id=None,
                                                      sequence=1, snapshot={}, created_by_operation_id=None))
-    task = production.get_creation_task("qa", "task")
+    task = production.task_records.get_creation_task("qa", "task")
     with pytest.raises(HTTPException, match="版本已变化"):
         main._bind_assistant_edit_instruction(req, task, payload)
     conversations.finish_turn(str(payload.assistant_turn_id), status="failed", result={"reason":"controlled"})

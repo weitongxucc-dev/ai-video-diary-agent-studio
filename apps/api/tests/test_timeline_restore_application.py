@@ -31,7 +31,7 @@ def restore_state(tmp_path, *, empty=False):
         'fixture-voice', 'fixture-v1', 'zh', 'fixture-pronunciation', 'ready',
         created_at=stamp, updated_at=stamp)
     state.segments = [segment]
-    task = replace(state.repo.get_creation_task('ws', state.task.id), confirmed_script_id='fixed-script')
+    task = replace(state.repo.task_records.get_creation_task('ws', state.task.id), confirmed_script_id='fixed-script')
     script = CreationTaskScript('fixed-script', 'ws', task.id, 'fixture-script-input', 'fixture-topic',
         '固定文案', 'zh-CN', [CreationTaskScriptSection('section', '段落', '原配音', '素材画面', [])],
         selection_status='confirmed', created_at=stamp, updated_at=stamp, confirmed_at=stamp)
@@ -58,7 +58,7 @@ def restore_state(tmp_path, *, empty=False):
         state.repo.create_subtitle_track(track)
     if not empty:
         state.repo.create_cover_asset(state.cover)
-    state.task = state.repo.get_creation_task('ws', task.id)
+    state.task = state.repo.task_records.get_creation_task('ws', task.id)
     state.application = TimelineRestoreUseCase(state.repo, state.case)
     state.production, state.workspace_id = state.repo, 'ws'
     state.base_url = '/api/creation-tasks/' + state.task.id
@@ -80,7 +80,7 @@ def restore_http_state(tmp_path, monkeypatch, *, empty=False):
 
 
 def crop_save(state, x):
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     return state.case.save(task, metadata_edit_command(task, state.identity, 'ChangeCrop',
         {'base_version_id': task.current_timeline_version_id, 'clip_id': 'clip',
          'fit_mode': 'fit', 'crop_x': x, 'crop_y': .7}))
@@ -88,7 +88,7 @@ def crop_save(state, x):
 
 def restore(state, monkeypatch, *, redo=False):
     from app import main
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     prepared = state.application.prepare_restore(TimelineRestoreCommand('ws', task, redo))
     # This is the original full qualification owner; ready input exits False.
     valid = main._creation_render_is_valid('ws', task.id, verify_media=False,
@@ -100,7 +100,7 @@ def restore(state, monkeypatch, *, redo=False):
 def test_empty_restore_body_requires_task_write_access(tmp_path, monkeypatch):
     state = restore_http_state(tmp_path, monkeypatch)
     crop_save(state, .3)
-    state.repo.set_creation_task_visibility('ws', state.task.id, 'shared')
+    state.repo.task_records.set_creation_task_visibility('ws', state.task.id, 'shared')
     _reader, reader_token = state.members.join(state.members.create_invite_code(), 'reader')
     for action in ('undo', 'redo'):
         url = f'/api/creation-tasks/{state.task.id}/timeline/{action}'
@@ -129,7 +129,7 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
         sequence=second_version.sequence + 1, created_by_operation_id=None)
     state.repo.create_timeline_version(render_only)
     prepared = state.application.prepare_restore(TimelineRestoreCommand('ws',
-        state.repo.get_creation_task('ws', state.task.id), False))
+        state.repo.task_records.get_creation_task('ws', state.task.id), False))
     before = editorial_rows(state.repo)
     with pytest.raises(EditConflict, match='不属于本次恢复准备'):
         state.application.apply_restore(prepared, TimelineOutputQualification(replace(prepared), False))
@@ -165,7 +165,7 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
     assert len(segments) == 1
     assert replace(segments[0], updated_at=state.segments[0].updated_at) == state.segments[0]
     assert segments[0].updated_at > state.segments[0].updated_at
-    assert state.repo.get_creation_task('ws', state.task.id).narration_cache_key == state.narration.cache_key
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).narration_cache_key == state.narration.cache_key
     assert state.narration.audio_path and state.case.output_root.joinpath('artifacts/task/fixed-narration.wav').stat().st_size > 0
     for version_id, version in original_versions.items():
         assert state.repo.get_timeline_version('ws', version_id) == version

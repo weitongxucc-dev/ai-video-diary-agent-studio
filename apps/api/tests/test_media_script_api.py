@@ -97,7 +97,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     monkeypatch.setattr(scripts, "prepare_media_script", prepare)
     monkeypatch.setattr(scripts, "run_media_script", run)
     state.runtime, state.root, state.descriptor = runtime, root, descriptor
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     state.payload = {"request_id": str(uuid4()), "expected_timeline_version_id": version.id,
         "expected_timeline_sequence": version.sequence, "script_source": "from PIL import Image\n# fixture reviewed source",
@@ -115,7 +115,7 @@ def test_script_job_publishes_editable_png_and_actual_definition_only_after_succ
     capabilities = state.client.get(state.base_url + "/assistant/media-script-capabilities")
     assert capabilities.status_code == 200 and capabilities.json()["available"]
     assert str(state.root) not in capabilities.text
-    before = state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id
+    before = state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id
     queued = submit(state)
     assert queued.status_code == 202, queued.text
     assert queued.json()["result_kind"] == "graphic_source" and queued.json()["result"] is None
@@ -141,7 +141,7 @@ def test_script_job_publishes_editable_png_and_actual_definition_only_after_succ
     transform = next(item for item in state.production.lineage_records.list_transform_runs(state.workspace_id, state.task.id) if item.transform_type == "media_script")
     assert transform.parameters["definition_ref"] == definition.logical_ref
     assert transform.parameters["owner_member_id"] == state.member.member_id
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
     assert submit(state).json()["job_id"] == queued.json()["job_id"]
     assert len(state.calls) == 1
     query = state.client.get(state.base_url + f"/assistant/edit-requests/{state.payload['request_id']}?phase=script")
@@ -363,7 +363,7 @@ def test_script_success_continuation_is_source_ready_without_applying_a_version(
     assert updated["result"]["response"]["media_job"]["result"]["applied"] is False
     assert "图片来源已生成" in updated["assistant_text"]
     assert updated["result"]["edit_preview"] is False
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.payload["expected_timeline_version_id"]
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.payload["expected_timeline_version_id"]
 
 
 @pytest.mark.parametrize("boundary", ["definition_record", "transform_record"])

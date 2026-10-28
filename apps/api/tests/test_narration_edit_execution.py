@@ -304,7 +304,7 @@ def fixture(tmp_path):
             [],
         )
     )
-    task = repo.get_creation_task("local", task.id)
+    task = repo.task_records.get_creation_task("local", task.id)
     plan = repo.plan_records.get_creation_plan("local", plan.id)
     budget = NarrationBudget(
         1000, 1, 1000000, 10, 1000000, 1, 60, 1000000, 2, 0.1, 1000000, 1000000
@@ -440,7 +440,7 @@ def submit(f):
 
 def unchanged(f):
     assert (
-        f.repo.get_creation_task("local", f.task.id).current_timeline_version_id
+        f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
         == f.base.id
     )
     assert f.repo.list_narration_segments("local", f.task.id, "script") == f.segments
@@ -457,7 +457,7 @@ def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
     assert f.runtime.run_once()
     assert len(f.calls) == 1 and f.calls[0].request_id == request.id
     assert (
-        f.repo.get_creation_task("local", f.task.id).current_timeline_version_id
+        f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
         == "result"
     )
     assert f.repo.job_records.get_job_run("local", f.job.id).status == "succeeded"
@@ -497,7 +497,7 @@ def test_waiting_stale_or_unauthorized_never_calls_provider(fixture, mutation):
     f = fixture
     request = submit(f)
     if mutation == "version":
-        task = f.repo.get_creation_task("local", f.task.id)
+        task = f.repo.task_records.get_creation_task("local", f.task.id)
         task.current_timeline_version_id = "different"
         with f.repo._connect() as conn:
             conn.execute(
@@ -601,7 +601,7 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
     f.resources.allowed = True
     assert f.runtime.run_once()
     assert (
-        f.repo.get_creation_task("local", f.task.id).current_timeline_version_id
+        f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
         == f.base.id
     )
     assert f.repo.get_edit_proposal("local", f.proposal.id).status == "proposed"

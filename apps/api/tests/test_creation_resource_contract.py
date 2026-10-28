@@ -138,7 +138,7 @@ def _render_ready_state(tmp_path, *, aspect_ratio: str = "9:16", clips: int = 1,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
         audio_path=str(audio), duration_seconds=1, sample_rate=44100, model_id="test",
     ))
-    task = repo.get_creation_task("workspace_a", task_id)
+    task = repo.task_records.get_creation_task("workspace_a", task_id)
     task.narration_cache_key = "cache_1"
     task.montage_plan_id = "montage_1"
     task.stage = "montage"

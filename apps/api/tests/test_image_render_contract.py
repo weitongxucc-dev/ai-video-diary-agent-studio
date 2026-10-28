@@ -40,7 +40,7 @@ def state(tmp_path):
     montage.graphic_overlays = [ImageOverlay(id=f'image-{index}', name='qa.png', source_ref=source['source_ref'],
         start_seconds=0, end_seconds=1).model_dump() for index in (1, 2)]
     repo.save_creation_task_montage_plan(task.workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage))
-    return SimpleNamespace(repo=repo, task=repo.get_creation_task(task.workspace_id, task.id), plan=plan, limits=limits,
+    return SimpleNamespace(repo=repo, task=repo.task_records.get_creation_task(task.workspace_id, task.id), plan=plan, limits=limits,
         store=store, source=source, actor=actor, resolver=resolver, montage=montage)
 
 

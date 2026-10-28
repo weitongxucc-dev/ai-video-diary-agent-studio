@@ -105,7 +105,7 @@ class TaskBusiness:
         scope=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(goal)).payload
         if scope['authorization_id']!=authorization.id or scope['identity']!=authorization.identity:
             raise TaskBusinessRejected('原目标封存范围与任务授权不一致')
-        task=self.production.get_creation_task(ws,task_id)
+        task=self.production.task_records.get_creation_task(ws,task_id)
         return actor,task,scope
 
     def check(self, binding, cancelled, deadline, *, connection=None, check_version=True):
@@ -130,7 +130,7 @@ class TaskBusiness:
             if ((actor.user_id or actor.member_id)!=binding['member_id']
                     or self.authorizations.verdict(actor,task_id,'task_goal',connection=conn,check_scope=False)!='ready'):
                 raise TaskBusinessRejected('原任务授权已到期或撤销')
-            task=self.production.get_creation_task(ws,task_id,connection=conn)
+            task=self.production.task_records.get_creation_task(ws,task_id,connection=conn)
             version=conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
                 (ws,task_id,task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
             snapshot=binding.get('task_version')
@@ -170,7 +170,7 @@ class TaskBusiness:
             actor=CreationExecutionActor.from_event(ws,facts['actor'])
             if (actor.user_id or actor.member_id)!=member:
                 raise TaskBusinessRejected('原生成动作成员与真实身份不一致')
-            task=self.production.get_creation_task(ws,task_id,connection=conn)
+            task=self.production.task_records.get_creation_task(ws,task_id,connection=conn)
         origin={**source,'intent_kind':'script_generation','generation_request_id':facts['request_id'],
                 'requested_effect':'draft','raw_command':''}
         return actor,task,facts,origin,None

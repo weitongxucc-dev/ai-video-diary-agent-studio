@@ -104,7 +104,7 @@ class VisualPreviewUseCase:
                     for side, (candidate, scoped_tracks) in zip(("before", "after"), projected, strict=True)]
         except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
             raise PicturePreviewRejected(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
-        if self.repository.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
+        if self.repository.task_records.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
             raise PicturePreviewRejected(status_code=409,detail="预览期间时间线发生变化，请重新预览")
         base=self.metadata.ensure_montage_base(workspace_id,task,plan,source=source)
         refs=[f"clip:{clip.id}" for clip in clips]
@@ -132,7 +132,7 @@ class VisualPreviewUseCase:
             kind=kind,parameters=parameters,execution=execution)
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
@@ -215,7 +215,7 @@ class VisualPreviewUseCase:
 
     def execute(self, job, event, actor, context):
         try:
-            task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
         except KeyError as exc:
             raise PicturePreviewRejected(status_code=404, detail='制作任务不存在') from exc
         payload = VisualEditRequest.model_validate(event['arguments']['payload'])

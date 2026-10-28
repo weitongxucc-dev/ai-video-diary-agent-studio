@@ -147,7 +147,7 @@ def seed_source(repository, store, version="v1"):
         publication.sha256, publication.size_bytes, producer, []))
     payload = creation_task_montage_plan_to_payload(fixture_montage(ref))
     repository.save_creation_task_montage_plan("local", "task", "montage", payload)
-    parent = repository.get_creation_task("local", "task").current_timeline_version_id
+    parent = repository.task_records.get_creation_task("local", "task").current_timeline_version_id
     sequence = repository.get_timeline_version("local", parent).sequence + 1 if parent else 1
     repository.create_timeline_version(TimelineVersion(id=version, workspace_id="local", task_id="task",
         parent_version_id=parent, sequence=sequence,
@@ -198,7 +198,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
     repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
-    repository.set_creation_task_visibility("local", "task", "shared")
+    repository.task_records.set_creation_task_visibility("local", "task", "shared")
     actor = CreationExecutionActor("local", "shared-reader")
     store = ArtifactStore(tmp_path / "artifacts")
     checks = QualityCheckRepository(repository.database_path)

@@ -224,7 +224,7 @@ def test_current_member_can_read_own_private_or_explicitly_shared_task(linked, t
     task = CreationTask(id='readable', workspace_id=WORKSPACE, plan_id=plan.id, name='可读任务', scenario='read')
     repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
     if owner == OTHER:
-        repository.set_creation_task_visibility(WORKSPACE, task.id, 'shared')
+        repository.task_records.set_creation_task_visibility(WORKSPACE, task.id, 'shared')
     monkeypatch.setattr(main, 'production_repo', repository)
     response = linked.client.get('/api/creation-tasks/readable/job-runs')
     assert response.status_code == 200 and response.json()['task_id'] == task.id

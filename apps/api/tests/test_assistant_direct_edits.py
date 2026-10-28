@@ -228,7 +228,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     replies = []
     try:
         for message in ("把当前字幕改为：第一轮文字", "再把这句改为：第二轮文字", "撤销上一步修改", "画布改成横屏16:9", "撤销上一步修改"):
-            current = state.repo.get_creation_task("ws", state.task.id)
+            current = state.repo.task_records.get_creation_task("ws", state.task.id)
             version = state.repo.get_timeline_version("ws", current.current_timeline_version_id)
             saved = conversations.get(chat["id"], "ws", state.member.member_id)
             draft = conversations.save_draft(chat["id"], "ws", state.member.member_id, message, saved["draft_version"])
@@ -251,7 +251,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 candidate={"workspace_id":"ws","task_id":task.id,"event_id":f"recovered-{len(replies)}",
                     "request":{"locator":locator}}
                 context=GoalCandidate(candidate,saved_source,{"status":"completed"},None,
-                    state.repo.get_creation_task("ws",task.id),False)
+                    state.repo.task_records.get_creation_task("ws",task.id),False)
                 owner=GoalResultProjection(state.repo,conversations)
                 observed=owner.request_result(context,{"status_code":200,"response":locator["result"]},runtime_available=False)
                 projection=owner.request_projection(context,observed,{"edit_request":locator})
@@ -277,8 +277,8 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         reopened = ConversationRepository(conversations.database_path)
         assert [turn["status"] for turn in reopened.list_turns(chat["id"])] == ["completed"] * 5
         assert state.repo.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
-        assert state.repo.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
-        current=state.repo.get_creation_task("ws",state.task.id)
+        assert state.repo.task_records.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
+        current=state.repo.task_records.get_creation_task("ws",state.task.id)
         version=state.repo.get_timeline_version("ws",current.current_timeline_version_id)
         saved=conversations.get(chat["id"],"ws",state.member.member_id)
         message="先改成旧输入文字，然后继续生成视频"
@@ -318,7 +318,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert conversations.list_turns(chat["id"])[-1]["user_message"] == ""
         assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 5
         monkeypatch.setattr(main,"run_task_turn",run_sdk)
-        version=state.repo.get_timeline_version("ws",state.repo.get_creation_task("ws",state.task.id).current_timeline_version_id)
+        version=state.repo.get_timeline_version("ws",state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id)
         saved=conversations.get(chat["id"],"ws",state.member.member_id)
         message="先修改，追加输入只作澄清"
         draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
@@ -358,7 +358,7 @@ def test_rejected_direct_request_replays_original_error_without_business_writes(
         assert receipt.status_code == 200, receipt.text
         assert receipt.json()["result_status_code"] == expected
         assert receipt.json()["submitted_input"]["cue_id"] == payload["cue_id"]
-    assert state.repo.get_creation_task("ws",state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.list_edit_operations("ws",state.task.id) == []
 
 
@@ -374,19 +374,19 @@ def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_s
     origin={**conversations.task_turn_source(turn['id'],'ws',s.member.member_id,s.task.id),'assistant_turn_id':turn['id']}
     business=main._task_business()
     def invoke(operation,action):
-        task=s.repo.get_creation_task('ws',s.task.id)
+        task=s.repo.task_records.get_creation_task('ws',s.task.id)
         version=s.repo.get_timeline_version('ws',task.current_timeline_version_id)
         payload={**action,'request_id':str(uuid4()),'expected_timeline_version_id':version.id,
                  'expected_timeline_sequence':version.sequence}
         return business.execute(operation,{'payload':payload,'draft_only':True},actor,task,{},origin,{},lambda conn:None)
     preview=invoke('preview_task_edit',{'operation_type':'ChangeCanvas','aspect_ratio':'1:1'})
     assert preview['proposal']['operation']['operation_type']=='ChangeCanvas'
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
     canvas=invoke('apply_task_edit',{'operation_type':'ChangeCanvas','aspect_ratio':'1:1'})
     assert canvas['montage']['aspect_ratio']=='1:1'
     linked=invoke('apply_task_edit',{'operation_type':'DuplicateClip','clip_id':'clip'})
     assert len(linked['montage']['clips'])==2
-    task=s.repo.get_creation_task('ws',s.task.id)
+    task=s.repo.task_records.get_creation_task('ws',s.task.id)
     track=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=task.current_timeline_version_id)[0]
     result=invoke('apply_task_edit',{'operation_type':'ReplaceSubtitleText','track_id':track.id,
         'find_text':track.cues[0].text,'replacement_text':'共同入口字幕'})
@@ -425,7 +425,7 @@ def test_common_exact_rechecks_guard_in_real_commit(metadata_http_state,monkeypa
     with pytest.raises(EditPreviewRejected) as error:
         case.apply(s.task,actor,payload,identity=s.identity)
     assert error.value.status_code==403
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
     assert s.repo.list_edit_operations('ws',s.task.id)==[]
 
 
@@ -465,7 +465,7 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
     saved=call('apply_task_edit',{'payload':{'operation_type':'ChangeCrop','clip_id':'clip','fit_mode':'fit','crop_x':0.3,'crop_y':0.7,
         'request_id':request_id,'expected_timeline_version_id':s.base.id,'expected_timeline_sequence':s.base.sequence}})
     assert saved['ok'],saved
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id!=s.base.id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id!=s.base.id
     read=call('read_task_edit_request',{'request_id':request_id,'phase':'apply'})
     assert read['ok'] and read['value']['result']==saved['value'],read
     assert not call('read_task_edit_request',{'task_id':'other-task','request_id':request_id,'phase':'apply'})['ok']
@@ -545,7 +545,7 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
         case.apply(s.task,actor,CreationTaskExactEditRequest(operation_type='ChangeCrop',clip_id='clip',
             fit_mode='fit',crop_x=.3,crop_y=.7,request_id=uuid4(),expected_timeline_version_id=s.base.id,
             expected_timeline_sequence=s.base.sequence),identity=s.identity)
-    current=s.repo.get_creation_task('ws',s.task.id)
+    current=s.repo.task_records.get_creation_task('ws',s.task.id)
     assert current.current_timeline_version_id!=s.base.id
     if phase == 'apply':
         from copy import deepcopy
@@ -596,7 +596,7 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     assert foreign_input.status_code==403,foreign_input.text
     replay=s.client.post(endpoint,json=payload)
     assert replay.status_code==200 and replay.json()==submitted.json(),replay.text
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==current.current_timeline_version_id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==current.current_timeline_version_id
 
 
 def _bootstrap_input(s, bootstrap):
@@ -615,7 +615,7 @@ def _bootstrap_input(s, bootstrap):
         s.repo.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
             parent_version_id=None,created_by_operation_id=None,snapshot={}),
             expected_current_version_id=None)
-    task=s.repo.get_creation_task('ws',seeded_task.id)
+    task=s.repo.task_records.get_creation_task('ws',seeded_task.id)
     return task,montage
 
 
@@ -660,7 +660,7 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
         s.repo.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
             sequence=expected_sequence+1,parent_version_id=task.current_timeline_version_id,created_by_operation_id=None,snapshot={}),
             expected_current_version_id=task.current_timeline_version_id)
-    before_head=s.repo.get_creation_task('ws',task.id).current_timeline_version_id
+    before_head=s.repo.task_records.get_creation_task('ws',task.id).current_timeline_version_id
     with s.repo._connect() as conn:
         before=[tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]
         montage_before=[tuple(row) for row in conn.execute('SELECT * FROM creation_task_montage_plans ORDER BY id')]
@@ -669,7 +669,7 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
     with s.repo._connect() as conn:
         assert [tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]==before
         assert [tuple(row) for row in conn.execute('SELECT * FROM creation_task_montage_plans ORDER BY id')]==montage_before
-    assert s.repo.get_creation_task('ws',task.id).current_timeline_version_id==before_head
+    assert s.repo.task_records.get_creation_task('ws',task.id).current_timeline_version_id==before_head
 
 
 @pytest.mark.parametrize('authorization_state',['revoked','expired','wrong_identity','unverified','missing_assistant','manual'])
@@ -715,7 +715,7 @@ def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_h
     response=s.client.post(f'/api/creation-tasks/{task.id}/edits/exact/preview?draft=true',json={
         'operation_type':'ChangeCanvas','aspect_ratio':'1:1','request_id':str(uuid4()),
         'expected_timeline_version_id':None,'expected_timeline_sequence':0,**assistant})
-    current=s.repo.get_creation_task('ws',task.id)
+    current=s.repo.task_records.get_creation_task('ws',task.id)
     if authorization_state=='manual':
         assert response.status_code==200,response.text
         assert current.current_timeline_version_id is not None

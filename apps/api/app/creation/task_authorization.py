@@ -36,7 +36,7 @@ class TaskAuthorizationUseCase:
         return {"workspace_id": actor.workspace_id, **actor.identity_payload()}
 
     def _requirements(self, workspace_id, task_id, *, connection=None):
-        task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
         with (self.repository._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id,task.plan_id)).fetchone()
             plan = json.loads(row["payload"])
@@ -293,7 +293,7 @@ class TaskAuthorizationUseCase:
             return "outside_scope"
         if operation is not None and operation not in authorization.allowed_operations:
             return "outside_scope"
-        task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
         reader = authorization.identity.get("user_id") or authorization.identity["member_id"]
         if (task.owner_user_id is not None and task.owner_user_id != reader
                 or task.owner_user_id is None and (workspace_id != "local" or authorization.identity.get("device_id"))):
@@ -407,7 +407,7 @@ class TaskAuthorizationUseCase:
         if not references:
             return "ready"
         authorization = self.repository.get_task_authorization(actor.workspace_id, task_id, connection=connection)
-        task = self.repository.get_creation_task(actor.workspace_id, task_id, connection=connection)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id, connection=connection)
         with (self.repository._connect() if connection is None else nullcontext(connection)) as conn:
             return "ready" if all(self._derived_reference(conn, authorization, task, ref, set()) for ref in references) else "unauthorized"
 

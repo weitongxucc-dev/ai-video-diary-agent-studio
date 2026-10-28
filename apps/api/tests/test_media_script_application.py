@@ -63,7 +63,7 @@ def script_application(legacy_state, monkeypatch):
 
 def test_raw_source_recipe_and_replay_use_explicit_owner(script_application):
     state = script_application
-    before = state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id
+    before = state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id
     inputs = []
     for color in ('blue', 'green'):
         buffer = io.BytesIO()
@@ -134,7 +134,7 @@ def test_raw_source_recipe_and_replay_use_explicit_owner(script_application):
                        'path': str(main.artifact_store.resolve_file(r.logical_ref))} for r in records]})
     assert len(state.port_calls) == len(state.prepared_calls) == 2
     assert not state.runtime.run_once()
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
     assert not scripts.MEDIA_SCRIPT_ACTIONS.intersection(main._TASK_MEDIA_HANDLERS)
     assert not hasattr(main.preview_media_script, '__wrapped__')
     assert not hasattr(main.preview_media_script_tool, '__wrapped__')

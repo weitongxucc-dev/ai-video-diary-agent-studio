@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.creation.task_input_reads import creation_task_from_payload
 import json
 import logging
 import sqlite3
@@ -88,7 +89,7 @@ class PlatformPublishOwnerVerifier:
                                 (job.workspace_id, job.task_id)).fetchone()
         if task_row is None:
             return "stale"
-        task = self.repository._creation_task_from_payload(json.loads(task_row["payload"]))
+        task = creation_task_from_payload(json.loads(task_row["payload"]))
         if task.current_timeline_version_id != event.get("timeline_version_id") or not task.output_ready:
             return "stale"
         try:

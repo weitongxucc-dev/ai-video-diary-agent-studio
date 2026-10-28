@@ -56,7 +56,7 @@ class MediaScriptPreviewUseCase:
         return expanded, ref
 
     def prepare_source(self, workspace_id, task_id, operation, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
@@ -98,7 +98,7 @@ class MediaScriptPreviewUseCase:
             payload, ref = self.expand_recipe(actor, arguments['tool_id'], payload)
             if ref != arguments['_recipe_ref']:
                 raise MediaScriptPreviewRejected("当前配方与原封存版本不一致")
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+        task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
         descriptor = dict(arguments['_script_toolchain'])
         toolchain = ScriptToolchain(**{key: Path(value) if key in {"python", "stdlib", "python_library", "pillow"} else value
                                     for key, value in descriptor.items()})

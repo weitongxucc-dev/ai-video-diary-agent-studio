@@ -243,7 +243,7 @@ class RenderStageUseCase:
                         workspace_id, task.id, plan.id, rendered_payload
                     )
                     versions = self.repository.list_timeline_versions(workspace_id, task.id)
-                    current_task = self.repository.get_creation_task(workspace_id, task.id)
+                    current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
                     version_id = f"timeline_{uuid4().hex}"
                     inherited_cover = (
                         _clone_cover_asset(active_cover, timeline_version_id=version_id)
@@ -475,7 +475,7 @@ class RenderStageUseCase:
                     )
                 except KeyError:
                     versions = self.repository.list_timeline_versions(workspace_id, task.id)
-                    current_task = self.repository.get_creation_task(workspace_id, task.id)
+                    current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
                     parent_version_id = current_task.current_timeline_version_id
                     if (render_context is not None
                             and parent_version_id != plan_input["timeline_version_id"]):
@@ -636,7 +636,7 @@ class RenderStageUseCase:
         timeline_version: TimelineVersion | None = None,
     ) -> bool:
         try:
-            task = self.repository.get_creation_task(workspace_id, task_id)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id)
             if not task.current_timeline_version_id:
                 return False
             version = timeline_version or self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
@@ -773,7 +773,7 @@ class RenderStageUseCase:
     def valid_with_grant(self, workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
         valid = self.valid(workspace_id, task_id, render_context=grant)
         if valid:
-            task = self.repository.get_creation_task(workspace_id, task_id)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id)
             version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
             if 'audio_delivery' not in version.snapshot:
                 plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
@@ -794,7 +794,7 @@ class RenderStageUseCase:
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise RenderRejected(status_code=404, detail="creation task not found") from exc
 
@@ -818,7 +818,7 @@ class RenderStageUseCase:
 
     def render_montage(self, workspace_id, plan, narration_audio_path, *, job_staging_path=None, subtitle_tracks=None, render_context=None):
         original_requirement = plan.duration_requirement
-        task = self.repository.get_creation_task(workspace_id, plan.task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, plan.task_id)
         plan.duration_requirement = DurationRequirement.from_plan(
             self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)).payload()
         try:

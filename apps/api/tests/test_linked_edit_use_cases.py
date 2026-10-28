@@ -44,7 +44,7 @@ def linked_state(tmp_path, monkeypatch):
         {"montage": seeded, "subtitle_track_ids": [captions.id]}, None,
     ))
     repo.create_subtitle_track(captions)
-    task = repo.get_creation_task("local", "task")
+    task = repo.task_records.get_creation_task("local", "task")
     identity = {"member_id": actor.member_id, "local_diagnostic": False}
     verifier = EditSourceVerifier(repo, identity=identity)
     monkeypatch.setattr(main, "_content_reader", lambda *_: (actor.member_id, False))
@@ -126,7 +126,7 @@ def test_linked_use_case_prepares_without_writes_then_jointly_commits_all_lanes(
     _, operation_record, version, _ = commit_change_set(
         repo, change, verify_sources=lambda conn: verifier.verify(prepared.command, conn)
     )
-    assert version.id == repo.get_creation_task("local", "task").current_timeline_version_id == "linked-result"
+    assert version.id == repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-result"
     assert version.sequence == 3 and operation_record.result_version_id == version.id
     actual = repo.get_creation_task_montage_plan("local", "task")
     assert actual["audio_timeline"] == prepared.plan.audio_timeline.model_dump()
@@ -143,7 +143,7 @@ def test_linked_commit_rechecks_moved_neighbour_inside_same_transaction(linked_s
     repo._save_asset(replace(neighbour, owner_user_id="another-member", visibility="private"))
     with pytest.raises(PermissionError):
         commit_change_set(repo, change, verify_sources=lambda conn: verifier.verify(prepared.command, conn))
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
     assert repo.get_edit_proposal("local", prepared.proposal.id).status == "proposed"
     assert repo.list_edit_operations("local", "task") == []
     assert len(repo.list_timeline_versions("local", "task")) == 2
@@ -183,7 +183,7 @@ def test_actual_linked_http_adoption_rechecks_neighbour_revoked_at_commit(linked
     monkeypatch.setattr(repo.edit_adoption, "confirm", revoke_before_commit)
     result = client.post(f"/api/creation-tasks/task/edits/{proposal['id']}/confirm")
     assert result.status_code == 403, result.text
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
     assert repo.get_edit_proposal("local", proposal["id"]).status == "proposed"
     assert repo.list_edit_operations("local", "task") == []
     assert len(repo.list_timeline_versions("local", "task")) == 2
@@ -210,7 +210,7 @@ def test_linked_preview_sql_refusal_rolls_back_intent_and_proposal_together(link
     with repo._connect() as conn:
         assert tuple(conn.iterdump()) == before
     assert repo.list_edit_intents("local", "task") == repo.list_edit_proposals("local", "task") == []
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
 
 
 def test_linked_preview_cas_refuses_version_advanced_at_repository_save(linked_state, monkeypatch):
@@ -233,7 +233,7 @@ def test_linked_preview_cas_refuses_version_advanced_at_repository_save(linked_s
     })
     assert response.status_code == 409, response.text
     assert repo.list_edit_intents("local", "task") == repo.list_edit_proposals("local", "task") == []
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "concurrent-version"
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "concurrent-version"
 
 
 def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
@@ -256,7 +256,7 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
         {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['silence-zh']}, None)
     state.repo.create_timeline_version(base)
     state.repo.create_subtitle_track(replace(state.track, id='silence-zh', timeline_version_id=base.id))
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     values = {'base_version_id': base.id, 'removed_ranges_ms': [[1000, 1500]]}
     command = metadata_edit_command(task, state.identity, 'RemoveSilence', values)
     intent, proposal = make_metadata_proposal(command, ['clip:clip'], '采用既有固定停顿范围', values)
@@ -267,7 +267,7 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     case = LinkedTimelineEditUseCase(state.repo, state.case)
     result = case.confirm_remove_silence(task, proposal)
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
-    current = fresh.get_creation_task('ws', task.id)
+    current = fresh.task_records.get_creation_task('ws', task.id)
     version = fresh.get_timeline_version('ws', current.current_timeline_version_id)
     operations = fresh.list_edit_operations('ws', task.id)
     tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)

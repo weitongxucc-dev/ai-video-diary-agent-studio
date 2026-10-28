@@ -214,7 +214,7 @@ class CommandPreviewUseCase:
     def facts(self, workspace_id, task_id, arguments, actor):
         operation = 'command_edit_preview'
         from app.canvas import canvas_size
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')

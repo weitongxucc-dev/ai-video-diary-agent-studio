@@ -44,7 +44,7 @@ class ScriptLibraryUseCase:
         self.draft_use_case = draft_use_case
 
     def _read_task(self, workspace_id: str, task_id: str):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         user_id, local_diagnostic = self.reader(workspace_id)
         if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
                                 visibility=task.visibility, owner_user_id=task.owner_user_id):
@@ -110,7 +110,7 @@ class ScriptLibraryUseCase:
     def _resolve_sources(
         self, workspace_id: str, entry: dict,
     ) -> tuple[list[ScriptLibrarySource], list[CreationPlanKnowledgeReference], list[CreationPlanSourceReference]]:
-        task = self.repository.get_creation_task(workspace_id, entry['source_task_id'])
+        task = self.repository.task_records.get_creation_task(workspace_id, entry['source_task_id'])
         user_id, local_diagnostic = self.reader(workspace_id)
         if not content_readable(user_id=user_id, local_diagnostic=local_diagnostic,
                                 visibility=task.visibility, owner_user_id=task.owner_user_id):

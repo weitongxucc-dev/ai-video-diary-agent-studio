@@ -84,7 +84,7 @@ def test_generation_request_is_unique_and_failed_owner_write_rolls_back_all_fact
         assert conn.execute("SELECT COUNT(*) FROM assistant_conversation_turns").fetchone()[0] == 1
         guarded = case.read_generation_request(conn, "local", "task", request_id, actor.member_id)
     assert guarded["can_continue"] and guarded["requested_effect"] == "draft"
-    assert state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
 
 
 def test_early_stop_is_durable_replay_does_not_dispatch_and_original_run_is_settled(generation):
@@ -143,7 +143,7 @@ def test_ready_result_is_bound_atomically_and_later_edits_do_not_replace_origina
     ready = case.public_projection(case.read("local", "task", request_id, actor.member_id))
     assert ready["status"] == "draft_ready" and ready["script_id"] == script.id and not ready["result_stale"]
     assert "actor" not in ready and "frozen_input" not in ready
-    assert state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
     receipt = conversations.get_request_receipt(request_id, accepted["conversation_id"], "local", actor.member_id)
     assert receipt["request_context"]["generation_result"]["updated_at"] == ready["script_updated_at"]
     with state.repository._connect() as conn:
@@ -212,7 +212,7 @@ def test_execute_finishes_actual_reviewed_window_without_adopting_or_saving_mode
     result = case.execute("local", "task", request_id, actor.member_id, run_agent=run_agent, script_case=script_case)
     assert result["status"] == "draft_ready", result
     assert result["run_status"] == "succeeded" and result["turn_status"] == "completed"
-    assert state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
     turn = conversations.get_turn(accepted["turn_id"])
     assert turn["user_message"] == turn["assistant_text"] == ""
     assert turn["result"]["response"]["script_id"] == result["script_id"]
@@ -260,7 +260,7 @@ def test_restart_reconciles_original_run_and_preserves_saved_or_unknown_writes(g
         assert conn.execute("SELECT COUNT(*) FROM script_generation_runs").fetchone()[0] == 1
         with pytest.raises(PermissionError):
             case.read_generation_request(conn, "local", "task", request_id, actor.member_id)
-    assert state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
     if checkpoint in {"pending_claim", "unknown"}:
         assert result["status"] == "unknown" and result["run_status"] == "running"
         with pytest.raises(ConversationTurnAlreadyRunning):
@@ -295,5 +295,5 @@ def test_restart_owner_failure_rolls_back_turn_run_and_task_together(generation,
         conversations.fail_interrupted_turns(recover_user_action=case.recover_interrupted)
     result = case.read("local", "task", request_id, actor.member_id)
     assert result["run_status"] == result["turn_status"] == "running"
-    assert state.repository.get_creation_task("local", "task").stage_status == "running"
+    assert state.repository.task_records.get_creation_task("local", "task").stage_status == "running"
     assert result["run_id"] == accepted["run_id"]

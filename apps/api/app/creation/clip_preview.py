@@ -26,7 +26,7 @@ class ClipPreviewUseCase:
         self.budget = budget
 
     def prepare(self, actor, command):
-        task = self.repository.get_creation_task(actor.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, command.task_id)
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("当前成员不能修改此任务")
         if task.current_timeline_version_id != command.base_version_id:
@@ -72,7 +72,7 @@ class ClipPreviewUseCase:
         """Read-only retirement boundary. An old declaration never authorizes new execution."""
         if job.status != "succeeded":
             return False
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+        task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
         facts = event["input_facts"]
         if task.current_timeline_version_id != facts["base_version_id"]:
             return False

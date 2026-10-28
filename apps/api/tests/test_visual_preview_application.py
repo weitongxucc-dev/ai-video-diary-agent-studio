@@ -59,7 +59,7 @@ def visual_application(permitted_media_state, monkeypatch):
         audio_timeline=None, graphic_overlays=[], output_path=None, subtitle_path=None)
     state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     base = main._ensure_montage_base_version(state.workspace_id, task, plan)
     state.base_url = '/api/creation-tasks/' + task.id
     buffer = io.BytesIO()
@@ -116,7 +116,7 @@ def _inspect(context, path, directory, label):
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='native media tools unavailable')
 def test_short_and_full_tail_visual_preview_use_real_native_media(visual_application, granted_media, tmp_path):
     state = visual_application
-    task_before = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task_before = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     montage_before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     outcomes = []
     for label,effects in [('short',{'exposure':-.5}),('full',{'fade_out_seconds':.4})]:
@@ -157,7 +157,7 @@ def test_short_and_full_tail_visual_preview_use_real_native_media(visual_applica
             assert all(v['frames']['middle']['white_pixels']>5 for v in visuals.values())
             assert visuals['before']['frames']['last']['corner_rgb'][2] > 150
             assert max(visuals['after']['frames']['last']['corner_rgb']) < 20
-        assert state.production.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
+        assert state.production.task_records.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
         assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id) == montage_before
         replay = state.client.post(state.base_url+'/visual/preview',json=payload)
         assert replay.status_code==202 and replay.json()['job_id']==job_id

@@ -23,6 +23,8 @@ LOCAL = "local"
 
 @pytest.fixture(autouse=True)
 def no_read_identity_execution(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
     import subprocess
     import _media_preview_test_fixtures as media_fixtures
     from app.material_ingestion import MaterialHashUnitExecutor, MaterialIngestionService
@@ -91,7 +93,7 @@ def test_task_and_plan_owner_binds_to_verified_identity_and_is_not_self_reported
     assert plan.owner_user_id == ALICE
     assert task.owner_user_id == ALICE
     assert production.plan_records.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == ALICE
-    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == ALICE
+    assert production.task_records.get_creation_task(WORKSPACE, "task-1").owner_user_id == ALICE
 
     # 私有只对上传者：另一位成员读不到。
     assert content_readable(
@@ -102,13 +104,13 @@ def test_task_and_plan_owner_binds_to_verified_identity_and_is_not_self_reported
     ) is True
     # 显式共享后对成员可读；收回共享立即对他人失效。
     production.set_creation_plan_visibility(WORKSPACE, "plan-1", "shared")
-    production.set_creation_task_visibility(WORKSPACE, "task-1", "shared")
-    shared = production.get_creation_task(WORKSPACE, "task-1")
+    production.task_records.set_creation_task_visibility(WORKSPACE, "task-1", "shared")
+    shared = production.task_records.get_creation_task(WORKSPACE, "task-1")
     assert content_readable(
         user_id=BOB, local_diagnostic=False, visibility=shared.visibility, owner_user_id=shared.owner_user_id
     ) is True
-    production.set_creation_task_visibility(WORKSPACE, "task-1", "private")
-    revoked = production.get_creation_task(WORKSPACE, "task-1")
+    production.task_records.set_creation_task_visibility(WORKSPACE, "task-1", "private")
+    revoked = production.task_records.get_creation_task(WORKSPACE, "task-1")
     assert content_readable(
         user_id=BOB, local_diagnostic=False, visibility=revoked.visibility, owner_user_id=revoked.owner_user_id
     ) is False
@@ -135,7 +137,7 @@ def test_local_members_in_one_workspace_are_isolated_by_member_id(production: Pr
         plan_for(LOCAL), task_for(LOCAL, "plan-1"),
         verified_owner_user_id="member-owner",
     )
-    task = production.get_creation_task(LOCAL, "task-1")
+    task = production.task_records.get_creation_task(LOCAL, "task-1")
     assert content_readable(
         user_id="member-other", local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id
     ) is False
@@ -153,7 +155,7 @@ def test_confirm_without_verified_identity_keeps_legacy_ownerless_row(production
     plan, task = production.plan_confirmation.confirm_creation_plan(plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"))
     assert plan.owner_user_id is None
     assert task.owner_user_id is None
-    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id is None
+    assert production.task_records.get_creation_task(WORKSPACE, "task-1").owner_user_id is None
 
 
 def test_content_readable_matches_the_knowledge_domain_rule() -> None:
@@ -189,7 +191,7 @@ def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
     assert plan.owner_user_id == BOB
     assert task.owner_user_id == BOB
     assert production.plan_records.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == BOB
-    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == BOB
+    assert production.task_records.get_creation_task(WORKSPACE, "task-1").owner_user_id == BOB
 
     # 没有可验证身份时，自填的归属也不算数：不算任何成员的私有内容。
     other = replace(plan_for("ws-2", plan_id="plan-unowned"), owner_user_id=ALICE)

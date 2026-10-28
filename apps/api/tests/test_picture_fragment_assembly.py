@@ -24,7 +24,7 @@ def _leaf_case(tmp_path, monkeypatch):
     import app.creation_execution as execution_module
     original_next = execution_module.next_creation_intent
     def audio_setup(repository, scheduler, job, **kwargs):
-        if repository.get_creation_task(job.workspace_id, job.task_id).narration_cache_key:
+        if repository.task_records.get_creation_task(job.workspace_id, job.task_id).narration_cache_key:
             return None
         return original_next(repository, scheduler, job, **kwargs)
     with monkeypatch.context() as setup:
@@ -52,7 +52,7 @@ def _leaf_case(tmp_path, monkeypatch):
             segment_id='segment', source_path=reference, source_start_seconds=0, source_end_seconds=1,
             timeline_start_seconds=0, timeline_end_seconds=2, match_score=1, match_reasons=['explicit slow picture'],
             needs_confirmation=False)], duration_seconds=2, low_confidence_clip_count=0, aspect_ratio='16:9',
-        narration_audio_path=case.repo.narration_artifact_reference(case.repo.get_creation_task('local', case.task_id).narration_cache_key))
+        narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key))
     montage.graphic_overlays = [{'kind': 'text', 'id': 'title', 'text': '原图层', 'start_seconds': .4,
         'end_seconds': 1.8, 'x': .5, 'y': .15, 'width': .8}]
     case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))

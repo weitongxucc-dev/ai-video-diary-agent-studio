@@ -39,7 +39,7 @@ class ScriptDraftUseCase:
         self.route_snapshot,self.record_adoption=route_snapshot,record_adoption
 
     def confirm(self, workspace_id, task_id, script_id, payload, *, member_id, origin=None, write_guard=None, reread_origin=None):
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
         script=self.scripts.get_creation_task_script(workspace_id,script_id)
         if script.task_id!=task.id:
@@ -94,7 +94,7 @@ class ScriptDraftUseCase:
     def _confirmation_inputs(self, workspace_id, task_id, script):
         if not script.reused_from_entry_id:
             return (*self.read_inputs(workspace_id, task_id), None)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         entry = self.scripts.get_script_library_entry(workspace_id, script.reused_from_entry_id)
         if entry.language != script.language or plan.language != entry.language:
@@ -114,7 +114,7 @@ class ScriptDraftUseCase:
             return (*self.read_inputs(workspace_id,task_id),None)
         if self.read_library_header is None:
             raise ScriptDraftRejected(status_code=409,detail="未装配真实文案库来源授权读取端口")
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
         entry=self.read_library_header(workspace_id,metadata['reused_from_entry_id'])
         if entry['language']!=metadata['language'] or plan.language!=entry['language']:
@@ -202,7 +202,7 @@ class ScriptDraftUseCase:
             request_id=request_id,member_id=member_id,request_digest=digest,write_guard=guard)
 
     def _read_reuse_task(self, workspace_id, task_id, member_id):
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         if task.owner_user_id!=member_id:
             raise PermissionError("原复用结果不属于当前可读成员")
         return task
@@ -448,7 +448,7 @@ class ScriptDraftUseCase:
 
     def _record_confirmed_origin(self, workspace_id, task_id, script_id, result, payload, member_id, instruction_origin):
         if instruction_origin is None: return
-        actual_task=self.repository.get_creation_task(workspace_id,task_id)
+        actual_task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         actual_plan=self.repository.plan_records.get_creation_plan(workspace_id,actual_task.plan_id)
         facts=self.scripts.confirmed_script_adoption_facts(workspace_id,task_id,script_id,result['updated_at'])
         self.record_adoption(str(payload.assistant_turn_id),workspace_id,member_id,actual_task,actual_plan,facts,instruction_origin,

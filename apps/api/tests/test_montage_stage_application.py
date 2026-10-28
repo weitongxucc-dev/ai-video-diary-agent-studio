@@ -43,7 +43,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     plan.owner_user_id = member.member_id
     plan.aspect_ratio = '16:9'
     plan.template_settings = {'fit_mode': 'fit', 'color_style': {'exposure': 0.1}, 'subtitle_style': {'font_size': 42}}
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     task.owner_user_id = member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
@@ -132,7 +132,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         while not runtime.run_once():
             assert time.monotonic() < deadline, runtime.last_error
             time.sleep(.1)
-        task = repo.get_creation_task('local', task_id)
+        task = repo.task_records.get_creation_task('local', task_id)
         montage = repo.get_creation_task_montage_plan('local', task_id)
         versions = repo.list_timeline_versions('local', task_id)
         assert montage['status'] == task.stage_status == task.status == 'waiting_for_user'
@@ -196,7 +196,7 @@ def _montage_stream_case(tmp_path, monkeypatch):
     from app.artifact_store import ArtifactStore
     from test_device_scheduler import Resources, Processes
     repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=4)
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     script = repo.get_creation_task_script('local', script_id)
     script.sections = [replace(script.sections[0], content='中文 "quoted" café 😺。'),
         CreationTaskScriptSection('second', '尾段', '实际尾段。', '素材画面', [])]
@@ -278,7 +278,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
             monkeypatch.setattr(case.stage.metadata, 'ensure_montage_base', interrupted)
             with pytest.raises(KeyboardInterrupt):
                 case.executor.execute(grant, case.scheduler)
-            assert case.repo.get_creation_task('local', case.task.id).montage_plan_id
+            assert case.repo.task_records.get_creation_task('local', case.task.id).montage_plan_id
             assert not case.repo.list_timeline_versions('local', case.task.id)
             monkeypatch.setattr(case.stage.metadata, 'ensure_montage_base', original)
             if outcome == 'save_base_gap_changed_audio':
@@ -310,7 +310,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
                 return result
             monkeypatch.setattr(case.scheduler, '_released_for_commit', revoked)
         case.executor.execute(grant, case.scheduler)
-        current = case.repo.get_creation_task('local', case.task.id)
+        current = case.repo.task_records.get_creation_task('local', case.task.id)
         assert len(builds) == 1
         if outcome in {'tail', 'revoked'}:
             assert injected

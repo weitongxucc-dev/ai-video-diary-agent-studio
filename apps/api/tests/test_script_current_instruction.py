@@ -103,7 +103,7 @@ def test_actual_script_adoption_triggers_one_existing_continuation(api_state, mo
     assert response.status_code == 200, response.text
     actual = state.repository.get_creation_task_script('local', script['id'])
     source = conversations.task_turn_source(turn['id'], 'local', state.owner.member_id, 'task')
-    current = state.repository.get_creation_task('local', 'task')
+    current = state.repository.task_records.get_creation_task('local', 'task')
     plan = state.repository.plan_records.get_creation_plan('local', current.plan_id)
     service = main._goal_service()
     # Same real receipt is replayed; no second event or adoption is invented.
@@ -188,7 +188,7 @@ def test_same_task_adopted_text_changes_only_after_review_and_old_revision_is_re
     assert response.json()['adoption']['kind'] == ('delegated_system' if through_agent else 'manual')
     actual = state.repository.get_creation_task_script('local', old.id)
     assert actual.sections[0].content == revised_content and actual.updated_at != old.updated_at
-    assert state.repository.get_creation_task('local', 'task').stage == 'narration'
+    assert state.repository.task_records.get_creation_task('local', 'task').stage == 'narration'
     stale = state.client.post('/api/creation-tasks/task/assistant/script-draft', json=body)
     assert stale.status_code == 409 and len(calls) == 1
 

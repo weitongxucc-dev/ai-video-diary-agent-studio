@@ -123,7 +123,7 @@ def test_other_or_unbound_contracts_keep_original_identity_check(media_case, ope
 def test_original_request_fences_precede_fast_version_read(media_case, monkeypatch, changes, expected):
     case = media_case()
     advance(case)
-    monkeypatch.setattr(case.repo, "get_creation_task", lambda *args, **kwargs: pytest.fail("Fence bypassed"))
+    monkeypatch.setattr(case.repo.task_records, "get_creation_task", lambda *args, **kwargs: pytest.fail("Fence bypassed"))
     with case.repo._connect() as conn:
         assert case.media.check_current(replace(case.request, **changes), conn) == expected
     assert case.state["identity_calls"] == 0
@@ -136,7 +136,7 @@ def test_full_sealed_digest_is_checked_before_fast_version_read(media_case, monk
         event["input_facts"]["base_version_id"] = "forged-version"
         conn.execute("UPDATE task_events SET payload_json=? WHERE id=?",
             (json.dumps(event), "event_" + case.job.id + "_start"))
-        monkeypatch.setattr(case.repo, "get_creation_task", lambda *args, **kwargs: pytest.fail("Corrupt seal bypassed"))
+        monkeypatch.setattr(case.repo.task_records, "get_creation_task", lambda *args, **kwargs: pytest.fail("Corrupt seal bypassed"))
         assert case.media.check_current(case.request, conn) == "stale"
     assert case.state["identity_calls"] == 0
 
@@ -146,19 +146,19 @@ def test_same_connection_sees_uncommitted_version_without_opening_another_connec
     with case.repo._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         next_version = advance(case, conn)
-        assert case.repo.get_creation_task("local", "task").current_timeline_version_id == case.base.id
+        assert case.repo.task_records.get_creation_task("local", "task").current_timeline_version_id == case.base.id
         with monkeypatch.context() as patch:
             patch.setattr(case.repo, "_connect", lambda: pytest.fail("Unexpected extra connection"))
-            assert case.repo.get_creation_task("local", "task", connection=conn).current_timeline_version_id == next_version.id
+            assert case.repo.task_records.get_creation_task("local", "task", connection=conn).current_timeline_version_id == next_version.id
             with pytest.raises(KeyError):
-                case.repo.get_creation_task("other-workspace", "task", connection=conn)
+                case.repo.task_records.get_creation_task("other-workspace", "task", connection=conn)
             with pytest.raises(KeyError):
-                case.repo.get_creation_task("local", "task", include_private=False, connection=conn)
+                case.repo.task_records.get_creation_task("local", "task", include_private=False, connection=conn)
             assert case.media.check_current(case.request, conn) == "stale"
         conn.rollback()
-    assert case.repo.get_creation_task("local", "task").current_timeline_version_id == case.base.id
+    assert case.repo.task_records.get_creation_task("local", "task").current_timeline_version_id == case.base.id
     with pytest.raises(KeyError):
-        case.repo.get_creation_task("local", "task", include_private=False)
+        case.repo.task_records.get_creation_task("local", "task", include_private=False)
     assert case.state["identity_calls"] == 0
 
 

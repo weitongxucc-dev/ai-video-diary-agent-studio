@@ -152,7 +152,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
         parent_version_id=None, sequence=1, created_by_operation_id=None,
         snapshot={"montage": {"clips": [asdict(clip)]}, "narration_segments": [
             {"id": "segment-current", "workspace_id": task.workspace_id, "task_id": task.id}]}))
-    task = material_repo.get_creation_task("local", task.id)
+    task = material_repo.task_records.get_creation_task("local", task.id)
     monkeypatch.setattr(material_repo, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
             task_id=task.id, script_id=task.confirmed_script_id,
         ))
@@ -351,7 +351,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert first.status_code == 200
     script_id = first.json()["id"]
     assert first.json()["selection_status"] == "draft"
-    assert repo.get_creation_task("local", "task-one").confirmed_script_id is None
+    assert repo.task_records.get_creation_task("local", "task-one").confirmed_script_id is None
     second = client.post(base + "/script-draft", json={
         **body, "edit_mode": "replace_all", "sections": [{**body["sections"][0], "content": "把开头缩短。"}],
         "expected_updated_at": first.json()["updated_at"],
@@ -423,4 +423,4 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     history = client.get(base + "/history")
     assert history.status_code == 200
     assert history.json()["items"] == []
-    assert repo.get_creation_task("local", "task-one").confirmed_script_id == script_id
+    assert repo.task_records.get_creation_task("local", "task-one").confirmed_script_id == script_id

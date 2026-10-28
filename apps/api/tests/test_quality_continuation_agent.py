@@ -52,7 +52,7 @@ def failed_quality(system, monkeypatch):
     goal = conversations.register_task_goal(turn['id'])
     authorizations = TaskAuthorizationUseCase(repo, lambda _: 'ready')
     conversations.task_goal_input_authorized = authorizations.adopted_goal_input_valid
-    authorizations.bind_business_context(repo.get_creation_task('local', 'task'), actor, goal, memory={})
+    authorizations.bind_business_context(repo.task_records.get_creation_task('local', 'task'), actor, goal, memory={})
     conversations.project_business_result(turn['id'], 'local', member,
         {'type': 'business_result', 'event_id': str(uuid4()), 'task_id': 'task', 'status': 'succeeded',
          'phase': 'preview', 'result_kind': 'graphic_source'}, response_patch={}, message='声明式回合触发')

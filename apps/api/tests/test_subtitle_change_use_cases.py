@@ -221,7 +221,7 @@ def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_pat
     before = len(state.repo.list_timeline_versions('ws', state.task.id))
     result = case.confirm_legacy(state.task, proposal, settings=None)
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
-    task = fresh.get_creation_task('ws', state.task.id)
+    task = fresh.task_records.get_creation_task('ws', state.task.id)
     version = fresh.get_timeline_version('ws', task.current_timeline_version_id)
     tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
     operations = fresh.list_edit_operations('ws', task.id)

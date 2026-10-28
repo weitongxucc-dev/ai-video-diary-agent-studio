@@ -60,7 +60,7 @@ def header(repository, request):
 
 
 def test_large_goal_is_scalar_then_two_bounded_windows_replay_and_rebuild(repository, monkeypatch):
-    monkeypatch.setattr(repository, "list_creation_tasks", lambda *_a, **_kw: pytest.fail("header must aggregate with SQL"))
+    monkeypatch.setattr(repository.task_records, "list_creation_tasks", lambda *_a, **_kw: pytest.fail("header must aggregate with SQL"))
     request = create(repository)
     assert request["target_count"] == 10000 and request["expanded_count"] == request["confirmed_count"] == 0
     assert request["current_window"] is None and len(json.dumps(request)) < 2000
@@ -148,7 +148,7 @@ def test_incremental_request_migration_preserves_old_multi_count_plan_without_ex
         assert conn.execute("SELECT COUNT(*) FROM creation_requests").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM production_schema_migrations WHERE version=17").fetchone()[0] == 1
     reopened = ProductionRepository(database,tmp_path / "library")
-    assert reopened.get_creation_task(WORKSPACE,task.id).owner_user_id == OWNER
+    assert reopened.task_records.get_creation_task(WORKSPACE,task.id).owner_user_id == OWNER
 
 
 def test_owner_scope_request_identity_and_revision_conflicts(repository):

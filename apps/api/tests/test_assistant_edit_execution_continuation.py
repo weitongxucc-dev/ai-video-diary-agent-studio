@@ -39,7 +39,7 @@ def test_execution_accepts_only_this_inputs_committed_successor(metadata_http_st
         "cue_id": "cue", "text": "已保存的新字幕", "request_id": str(uuid4()), "assistant_turn_id": writer["id"],
         "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
     assert response.status_code == 200, response.text
-    edited = state.repo.get_creation_task("ws", state.task.id)
+    edited = state.repo.task_records.get_creation_task("ws", state.task.id)
     if case == "unknown":
         original = main.get_exact_edit_request_result
         monkeypatch.setattr(main, "get_exact_edit_request_result", lambda *args: {**original(*args), "status": "unknown"})
@@ -175,7 +175,7 @@ def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_
     def bound(*_args):
         if kind in {"refused", "read_refused"}:
             raise main.HTTPException(status_code=409, detail="制作来源不一致")
-        assert state.repo.get_creation_task("ws", state.task.id).current_timeline_version_id == "rendered-v4"
+        assert state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id == "rendered-v4"
         return status
     monkeypatch.setattr(main, "_bind_assistant_execution_result", bound)
     monkeypatch.setattr(main, "_read_bound_execution_result", bound)

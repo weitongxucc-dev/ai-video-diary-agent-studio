@@ -161,7 +161,7 @@ def test_real_compound_adoption_rechecks_all_original_sources_at_commit(linked_s
     monkeypatch.setattr(repo.edit_adoption, "confirm", revoke)
     rejected = client.post(f"/api/creation-tasks/task/edits/{proposal['id']}/confirm")
     assert rejected.status_code == 403, rejected.text
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
     assert repo.get_edit_proposal("local", proposal["id"]).status == "proposed"
     assert repo.list_edit_operations("local", "task") == []
     assert repo.get_creation_task_montage_plan("local", "task")["audio_timeline"] == plan.audio_timeline.model_dump()
@@ -207,7 +207,7 @@ def test_injected_wrong_empty_source_scope_cannot_adopt_actual_picture_change(li
     rejected = client.post(f"/api/creation-tasks/task/edits/{bad_proposal.id}/confirm")
     assert rejected.status_code == 409, rejected.text
     assert "实际影响的镜头不一致" in rejected.text
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
     assert repo.get_edit_proposal("local", bad_proposal.id).status == "proposed"
     assert repo.list_edit_operations("local", "task") == []
     assert repo.get_creation_task_montage_plan("local", "task")["clips"] == [asdict(clip) for clip in plan.clips]

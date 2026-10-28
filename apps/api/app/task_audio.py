@@ -276,7 +276,7 @@ class TaskAudio:
         return facts
 
     def assembly_unit_facts(self, workspace_id, task_id, manifest, unit_id, *, actor, budget, job_id, connection=None):
-        task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
         job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=connection)
         manifest.validate_scope(workspace_id, task_id, job_id)
         if (actor.workspace_id != workspace_id or task.owner_user_id != (actor.user_id or actor.member_id)
@@ -374,7 +374,7 @@ class TaskAudio:
         return self.repository.record_task_media_publication(record, transform, edges)
 
     def source(self, workspace_id: str, task_id: str, reference: str, *, actor=None) -> Path:
-        self.repository.get_creation_task(workspace_id, task_id)
+        self.repository.task_records.get_creation_task(workspace_id, task_id)
         active = TASK_MEDIA_CONTEXT.get()
         actor = actor or (active[3] if active is not None else None)
         if actor is not None:
@@ -429,7 +429,7 @@ class TaskAudio:
         job = self.repository.job_records.get_job_run(workspace_id, record.producer_job_id)
         transform = self._transform_for(workspace_id, task_id, record)
         duration_ms = transform.parameters.get("duration_ms")
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         saved_script_id = transform.parameters.get("script_id")
         saved_script_digest = transform.parameters.get("script_digest")
         current_script_digest = self.repository.confirmed_creation_task_script_digest(
@@ -832,7 +832,7 @@ class TaskMediaJobs:
         from app.creation_execution import CreationExecutionActor
         if not 1 <= limit <= 40:
             raise ValueError('媒体作业分页大小须为 1–40')
-        self.repository.get_creation_task(workspace_id, task_id)
+        self.repository.task_records.get_creation_task(workspace_id, task_id)
         parameters = [workspace_id, task_id, TASK_MEDIA_KIND, actor.member_id]
         before = ''
         if cursor is not None:
@@ -897,7 +897,7 @@ class TaskMediaJobs:
         if identity != "ready":
             return identity
         try:
-            task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
         except KeyError:
             return "stale"
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
@@ -1040,7 +1040,7 @@ class TaskMediaJobs:
 
     def submit(self, runtime, actor, task_id, operation, arguments, result_kind, *, write_guard=None):
         from app.device_scheduler import SchedulePolicy, SubmissionIntent
-        task = self.repository.get_creation_task(actor.workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("当前成员不能安排此任务的媒体处理")
         if self.task_authorizations is not None:
@@ -1080,7 +1080,7 @@ class TaskMediaJobs:
         from app.device_scheduler import VerifiedWork
         job, event = self.read(intent.workspace_id, intent.owner_id)
         if self.task_authorizations is not None:
-            self.task_authorizations.ensure(self.repository.get_creation_task(job.workspace_id, job.task_id), actor)
+            self.task_authorizations.ensure(self.repository.task_records.get_creation_task(job.workspace_id, job.task_id), actor)
         if (intent.owner_type != "creation_job" or intent.input_digest != job.input_digest
                 or intent.unit_key != f"task_media:{job.input_digest}"
                 or job.status not in {"queued", "interrupted", "running"}
@@ -1111,7 +1111,7 @@ class TaskMediaJobs:
             version = facts.get("base_version_id")
             if isinstance(version, str) and version.strip():
                 try:
-                    task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+                    task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
                 except KeyError:
                     return self.check(job, event, actor, check_scope=False)
                 if version != task.current_timeline_version_id:

@@ -22,7 +22,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert case.picture_renderer.audio is case.montage_edits.audio_service
     assert case.picture_renderer.metadata is case.montage_edits
     assert case.montage_edits.audio_service.picture_renderer.__self__ is case.picture_renderer
-    before_task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    before_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     before_montage = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     original = state.client.post(state.base_url + '/edits/preview?draft=true', json={
         'raw_command': '当前镜头亮一点，同时配音片段1音量降低3分贝，字幕字号改为64',
@@ -70,7 +70,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
         assert visual['frames']['middle']['white_pixels'] > 5
         assert proposal['preview'][side]['ref'] == side_records[side].logical_ref
     assert visuals['after']['frames']['middle']['white_pixels'] > visuals['before']['frames']['middle']['white_pixels']
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before_task.current_timeline_version_id
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before_task.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == before_montage
     assert state.production.get_edit_proposal(state.workspace_id, original_proposal['id']).status == 'proposed'
     assert state.client.get(queued.json()['result_url']).json() == completed.json()

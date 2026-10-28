@@ -189,7 +189,7 @@ class MediaScriptTools:
     def _definition(self, actor, job_id):
         owner = self._identity(actor)
         job = self.repository.job_records.get_job_run(actor.workspace_id, job_id)
-        task = self.repository.get_creation_task(actor.workspace_id, job.task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, job.task_id)
         if self.authorize_task_write(actor, task) is False:
             raise PermissionError("current creator cannot write the producer task")
         if job.kind != TASK_MEDIA_KIND or job.status != "succeeded":

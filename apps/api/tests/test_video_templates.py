@@ -359,4 +359,4 @@ def test_explicit_knowledge_pin_preserves_history_and_rechecks_current_access(st
     sources.set_knowledge_item_use_state("workspace_a", item.id, "excluded")
     blocked = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": preview["preflight_fingerprint"]})
     assert blocked.status_code == 404, blocked.text
-    assert len(production.list_creation_tasks("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+    assert len(production.task_records.list_creation_tasks("workspace_a", viewer_user_id=template.owner_user_id)) == 1

@@ -233,7 +233,7 @@ def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, 
     monkeypatch.setattr(main, "_read_bound_execution_result", lambda *_: receipt)
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "local")
     monkeypatch.setattr(main, "_assistant_member_id", lambda *_: owner.member_id)
-    monkeypatch.setattr(repository, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
+    monkeypatch.setattr(repository.task_records, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
     monkeypatch.setattr(main, "_goal_projection", lambda: SimpleNamespace(
         execution_source_current=lambda *_: True))
     monkeypatch.setattr(main, "conversation_repo", SimpleNamespace(

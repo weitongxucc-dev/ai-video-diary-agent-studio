@@ -147,7 +147,7 @@ def test_unknown_submission_does_not_invent_failed_state(tmp_path, monkeypatch):
 def test_composite_missing_specs_or_purpose_cannot_borrow_render_budget(tmp_path, monkeypatch):
     repo, task_id, _, _, actor, _, owner, scheduler, _, _, _, _ = case(tmp_path)
     try:
-        task = repo.get_creation_task('local', task_id)
+        task = repo.task_records.get_creation_task('local', task_id)
         plan = repo.plan_records.get_creation_plan('local', task.plan_id)
         with repo._connect() as conn:
             _, resources = owner.render_facts(conn, task, plan, actor=actor)
@@ -280,7 +280,7 @@ def test_long_fade_preview_seals_scoped_audio_and_whole_source_linkage(tmp_path,
         payload['audio_timeline'] = graph
         repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
         payload = repo.get_creation_task_montage_plan('local', task_id)
-        task = repo.get_creation_task('local', task_id)
+        task = repo.task_records.get_creation_task('local', task_id)
         facts, resources = main._task_media_facts('local', task_id, 'exact_edit_preview',
             {'payload':{'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'fade_out_seconds':0},
                 'expected_timeline_version_id':task.current_timeline_version_id, 'expected_timeline_sequence':2},
@@ -333,7 +333,7 @@ def test_compound_music_and_subtitle_previews_seal_before_and_after_audio(tmp_pa
         configure_synthetic_media_budgets(monkeypatch, main)
         selected_budget = main._device_host_budget()
         monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, cpu_audio=audio_budget()))
-        task = repo.get_creation_task('local', task_id)
+        task = repo.task_records.get_creation_task('local', task_id)
         command = '音乐小一点，同时字幕字号改成64'
         args = {'payload':{'raw_command':command, 'context_stage':'montage', 'selected_object_refs':[],
                          'playhead_ms':None}, '_media_kind':'picture_preview'}

@@ -67,10 +67,10 @@ class SubtitleEditUseCase:
     def prepare_preview(self, command: EditCommand) -> PreparedSubtitleEdit:
         if not is_subtitle_edit(command.operation_type, command.values):
             raise ValueError('提案不是纯字幕编辑')
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, task.id))
         base = self.montage_edits.ensure_montage_base(command.workspace_id, task, montage, source=command.source)
-        task = self.repository.get_creation_task(command.workspace_id, task.id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, task.id)
         command_base = command.base_version_id if command.base_version_id is not None else base.id
         command = replace(command, base_version_id=command_base, values={**command.values, 'base_version_id': command_base})
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=montage)
@@ -104,7 +104,7 @@ class SubtitleEditUseCase:
             expected_version_id=prepared.base.id)
 
     def _binding(self, command, proposal_id):
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'Subtitle', {}))
         proposal = self.repository.get_edit_proposal(command.workspace_id, proposal_id)
@@ -555,7 +555,7 @@ class SubtitleEditUseCase:
         if new_text == cue.text:
             raise edit_preview_failure(status_code=409, error='edit_no_change', reason='新字幕与当前字幕相同。', impact='没有创建新的时间线版本。', repair_action='输入不同的字幕文字后再试。', retryable=True)
         base_version = self.montage_edits.ensure_montage_base(workspace_id, task, montage, source=request_source)
-        task = self.repository.get_creation_task(workspace_id, task.id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task.id)
         subtitle_track = next((track for track in self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage) if any((track_cue.id == cue.id for track_cue in track.cues))), None)
         now = utc_now()
         intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type='update_subtitle_cue', scope={'kind': 'subtitle_cue', 'cue_id': cue.id}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=0.99, status='interpreted', created_at=now), source=request_source)

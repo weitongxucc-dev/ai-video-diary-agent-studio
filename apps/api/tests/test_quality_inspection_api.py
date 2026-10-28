@@ -74,7 +74,7 @@ def seed_render(system, content=b"fake video", *, register=True, ref="artifacts/
                                                    "fixture-job-" + version, []))
     payload = creation_task_montage_plan_to_payload(montage(ref))
     repo.save_creation_task_montage_plan("local", "task", "montage", payload)
-    current = repo.get_creation_task("local", "task").current_timeline_version_id
+    current = repo.task_records.get_creation_task("local", "task").current_timeline_version_id
     repo.create_timeline_version(TimelineVersion(id=version, workspace_id="local", task_id="task",
                                                  parent_version_id=current, sequence=1 if current is None else 2,
                                                  snapshot={"montage": payload, "output_refs": [ref]},

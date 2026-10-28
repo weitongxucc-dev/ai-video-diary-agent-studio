@@ -95,7 +95,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
     state.production.save_creation_task_montage_plan(
         state.workspace_id, state.task.id, linked.id, creation_task_montage_plan_to_payload(linked))
     version = main_module._ensure_montage_base_version(
-        state.workspace_id, state.production.get_creation_task(state.workspace_id, state.task.id), linked)
+        state.workspace_id, state.production.task_records.get_creation_task(state.workspace_id, state.task.id), linked)
     start_of = {"a": a_start, "b": 4 - a_start}
     text_of = {"a": "第一句。", "b": "第二句。"}
     state.production.create_subtitle_track(SubtitleTrack(

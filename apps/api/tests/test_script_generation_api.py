@@ -68,7 +68,7 @@ def test_generation_http_acceptance_query_and_early_stop_keep_one_original_run(a
     settled = intent.execute(*dispatched[0], run_agent=forbidden_model, script_case=None)
     assert settled["status"] == "stopped" and settled["run_status"] == "failed"
     assert client.get(query).json()["turn_id"] == original["turn_id"]
-    assert api_state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert api_state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
 
 
 def test_generation_main_host_uses_request_scope_without_constructing_media_execution(api_state, monkeypatch):
@@ -126,7 +126,7 @@ def test_generation_main_host_uses_request_scope_without_constructing_media_exec
     assert len(api_state.repository.job_records.list_job_runs("local", "task")) == 1
     rejected = host("confirm_saved_script", {"script_id": "unrelated", "payload": {}}, **options)
     assert not rejected["ok"] and rejected["failure"]["status_code"] == 403
-    assert api_state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert api_state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
 
 
 def test_button_application_host_windows_finish_one_run_as_draft(api_state, monkeypatch):
@@ -179,4 +179,4 @@ def test_button_application_host_windows_finish_one_run_as_draft(api_state, monk
         assert conn.execute("SELECT COUNT(*) FROM creation_task_script_sections").fetchone()[0] == 21
     header = api_state.repository.script_records.read_creation_task_script_header("local", result["script_id"])
     assert header["draft_complete"] and header["selection_status"] == "draft"
-    assert api_state.repository.get_creation_task("local", "task").confirmed_script_id is None
+    assert api_state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None

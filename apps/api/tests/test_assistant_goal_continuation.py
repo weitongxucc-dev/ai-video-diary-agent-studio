@@ -72,7 +72,7 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     assert len(rows) == 1
     context = owner.execution_candidate(rows[0])
     actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.job_records.get_job_run("workspace", job.id)),
-              "video_ready": production.get_creation_task("workspace", task.id).output_ready})
+              "video_ready": production.task_records.get_creation_task("workspace", task.id).output_ready})
     event = owner.project_execution(context, actual)
     assert event["status"] == "stale" and event["actionable"] is False and event["result_version_id"] is None
     assert not production.assistant_execution_projection_rows()
@@ -873,7 +873,7 @@ def _adopted_groups_for_resume(tmp_path, *, groups=1):
         assert len(roots)==2
         for root_id in roots:
             goal=conversations.get_task_goal(root_id)
-            authorizations.bind_business_context(production.get_creation_task('workspace',goal['task_id']),
+            authorizations.bind_business_context(production.task_records.get_creation_task('workspace',goal['task_id']),
                 CreationExecutionActor('workspace','member'),goal,memory={'revision':1})
         adopted.append((saved,roots))
     return SimpleNamespace(production=production,conversations=conversations,authorizations=authorizations,
@@ -926,7 +926,7 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
             case.conversations.finish_turn(claim['turn_id'],'completed','已读取当前任务')
     assert {claim['goal']['task_id'] for claim in claims}=={goal['task_id'] for goal in original}
     assert all(case.production.get_task_authorization('workspace',task).expires_at==expiry for task,expiry in expires.items())
-    assert len(case.production.list_creation_tasks('workspace',viewer_user_id='member'))==2
+    assert len(case.production.task_records.list_creation_tasks('workspace',viewer_user_id='member'))==2
 
 
 def test_home_resume_selection_and_original_authorization_are_required(tmp_path):
@@ -984,7 +984,7 @@ def test_home_resume_reconciles_unknown_original_request_before_any_new_business
     from app.creation_execution import CreationExecutionActor
     case=_adopted_groups_for_resume(tmp_path)
     saved,roots=case.adopted[0];root=roots[0]
-    goal=case.conversations.get_task_goal(root);task=case.production.get_creation_task('workspace',goal['task_id'])
+    goal=case.conversations.get_task_goal(root);task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
     request_id=str(uuid4())
     case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
@@ -1033,7 +1033,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     from app.task_audio import TASK_MEDIA_KIND
     case=_adopted_groups_for_resume(tmp_path)
     saved,roots=case.adopted[0];root=roots[0]
-    goal=case.conversations.get_task_goal(root);task=case.production.get_creation_task('workspace',goal['task_id'])
+    goal=case.conversations.get_task_goal(root);task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
     actor=CreationExecutionActor('workspace','member');owner=GoalResultProjection(case.production,case.conversations)
     request_id=str(uuid4())
     event_id,_=case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})

@@ -124,7 +124,7 @@ class PicturePreviewRenderer:
         scope = resources.get("silence_analysis_scope")
         if not isinstance(scope, dict):
             raise ValueError("画面预览音轨与本次封存候选输入不一致")
-        task = self.repository.get_creation_task(workspace_id, plan.task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, plan.task_id)
         job = self.repository.job_records.get_job_run(workspace_id, context.grant.owner_id)
         start = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
         arguments = start.payload.get("arguments", {}).get("payload", {})

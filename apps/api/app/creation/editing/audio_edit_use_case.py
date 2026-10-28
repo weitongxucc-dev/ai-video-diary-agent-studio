@@ -64,7 +64,7 @@ class AudioEditUseCase:
         return {'member_id':actor.user_id or actor.member_id,'user_id':actor.user_id,'local_diagnostic':False}
 
     def preview(self, workspace_id, task_id, payload, actor, *, draft_only, context=None, job=None, event=None, source=None):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.current_timeline_version_id != payload.base_version_id:
             raise AudioEditRejected(status_code=409, detail='时间线已经变化，请刷新后重新预览音频修改')
         try:
@@ -114,7 +114,7 @@ class AudioEditUseCase:
                 raise
             detail = str(exc) if isinstance(exc, ValueError) else '本地音频预览失败，请检查源文件、FFmpeg 与外接盘'
             raise AudioEditRejected(status_code=422, detail=detail) from exc
-        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
+        if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
             raise AudioEditRejected(status_code=409, detail='试听生成期间时间线发生变化，请重新预览')
         base = self.montage_edits.ensure_montage_base(workspace_id, task, plan, source=source)
         intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=payload.raw_command, context_stage='montage', selected_object_refs=[f'audio:{payload.target_id}'], playhead_ms=round(start * 1000), intent_type='edit_audio', scope={'kind': 'audio', 'target_id': payload.target_id}, constraints={'preserve_video': True, 'audio_source_facts': self.source_facts(task, before, after, actor)}, confidence=1, status='interpreted'), source=source)
@@ -187,7 +187,7 @@ class AudioEditUseCase:
             raise ValueError('录音或旁白替换提案已变化，请重新预览')
 
     def original_clip(self, workspace_id, task_id, payload, actor, *, draft_only, context=None, job=None, event=None, source=None):
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         plan,clip,track,start,end,reference=self.original_inputs(task,payload)
         if context is None:
             raise TaskMediaRequired('audio_stretch')
@@ -236,7 +236,7 @@ class AudioEditUseCase:
             result=self.original_clip(job.workspace_id,job.task_id,arguments['payload'],actor,draft_only=draft,
                 context=context,job=job,event=event,source=source)
         else:
-            task=self.repository.get_creation_task(job.workspace_id,job.task_id)
+            task=self.repository.task_records.get_creation_task(job.workspace_id,job.task_id)
             edit=self.edit_from_arguments(task,operation,arguments)
             result=self.preview(job.workspace_id,job.task_id,edit,actor,draft_only=draft,context=context,job=job,event=event,source=source)
         return {'intent':asdict(result.intent),'proposal':asdict(result.proposal)}
@@ -247,7 +247,7 @@ class AudioEditUseCase:
         return owner.validate_result(job,event,result,context)
 
     def seal(self, workspace_id, task_id, operation, arguments, actor, budget):
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         source=arguments.get('_typed_source')
         version=self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
         if source is not None and (source['workspace_id'],source['task_id'],source['member_id'],source['expected_timeline_version_id'],source['expected_timeline_sequence']) != (

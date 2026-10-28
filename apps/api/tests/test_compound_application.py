@@ -33,7 +33,7 @@ def compound_state(tmp_path):
     state.repo.create_timeline_version(state.base)
     for track in tracks:
         state.repo.create_subtitle_track(track)
-    state.task = state.repo.get_creation_task('ws', state.task.id)
+    state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
     state.application = CompoundEditUseCase(state.repo, state.case)
     return state
 

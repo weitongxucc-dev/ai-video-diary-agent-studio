@@ -145,7 +145,7 @@ def person_application(tmp_path,monkeypatch):
     plan.selected_voice=CreationPlanVoiceReference(voice.id,voice.version,person.id,person.version,person.authorization.id,
         person.authorization.version,voice.authorization.id,voice.authorization.version,'zh-CN',voice.model_id)
     plan.owner_user_id=member.member_id
-    task=repo.get_creation_task('local',task_id);task.owner_user_id=member.member_id
+    task=repo.task_records.get_creation_task('local',task_id);task.owner_user_id=member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',(json.dumps(asdict(plan),default=str),plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
@@ -239,14 +239,14 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     montage=CreationTaskMontagePlan('normal-person-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
         narration_audio_path=repo.narration_artifact_reference(s.combined.cache_key))
     payload=creation_task_montage_plan_to_payload(montage);repo.save_creation_task_montage_plan('local',s.task_id,montage.id,payload)
-    base=main._ensure_montage_base_version('local',repo.get_creation_task('local',s.task_id),montage)
+    base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     # Actual queued render is the existing rendered-only preview prerequisite, not a fixture status rewrite.
     render_queued=s.client.post(url+'/execution/resume');assert render_queued.status_code==202,render_queued.text
     assert render_queued.json()['current_stage']=='render',render_queued.text
     assert s.runtime.run_once(),s.runtime.last_error
     rendered_job=repo.job_records.get_job_run('local',render_queued.json()['job']['id'])
     assert rendered_job.status=='succeeded',asdict(rendered_job)
-    rendered_task=repo.get_creation_task('local',s.task_id)
+    rendered_task=repo.task_records.get_creation_task('local',s.task_id)
     payload=repo.get_creation_task_montage_plan('local',s.task_id)
     assert payload['status']=='rendered' and payload['output_path']
     rendered_file=_file_fact(main.artifact_store.resolve_file(payload['output_path']))
@@ -260,7 +260,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     assert s.client.post(confirm_url,json={}).json()==queued.json()
     assert s.runtime.run_once(),s.runtime.last_error
     job=repo.job_records.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
-    current=repo.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
+    current=repo.task_records.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
     changed=repo.get_creation_task_montage_plan('local',s.task_id)
     assert changed['clips'][0]['person_render_id']!=clips[0].person_render_id
     assert changed['clips'][1]==payload['clips'][1] and changed['cues']==payload['cues']

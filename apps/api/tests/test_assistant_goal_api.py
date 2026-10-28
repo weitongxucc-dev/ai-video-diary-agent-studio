@@ -196,7 +196,7 @@ def test_sibling_observation_cannot_advance_goal_past_pending_real_preview_or_ad
         assert state.conversations.get_turn(root_id)["result"]["response"]["edit_preview"]["proposal"]["id"] == preview["proposal"]["id"]
     proposal = state.production.get_edit_proposal(state.workspace_id, preview["proposal"]["id"])
     assert proposal.status == "proposed" and len(calls) == 1
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.version.id
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.version.id
     adopted = state.raw_post(state.base_url + f"/edits/{proposal.id}/confirm", json={"request_id": str(uuid4())})
     assert adopted.status_code == 200, adopted.text
     wait_until(lambda: len(calls) == 2)
@@ -290,7 +290,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         chat = state.conversations.get(chat["id"], state.workspace_id, state.member.member_id)
         new_instruction = "新的独立指令：重新生成同名图片"
         chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, new_instruction, chat["draft_version"])
-        task = state.production.get_creation_task(state.workspace_id, state.task.id)
+        task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
         version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
         new = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": new_instruction,
             "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "montage",
@@ -327,7 +327,7 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
             if operation == "DeleteClip":
                 assert kwargs["task_version"]["removed_selected_refs"] == [f"clip:{state.clip.id}"]
                 if len(calls) == 2:
-                    current = state.production.get_creation_task(state.workspace_id, state.task.id)
+                    current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
                     script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
                     plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
                     actor = main._require_permit_actor(state.request, state.workspace_id)
@@ -420,7 +420,7 @@ def test_original_request_correction_requires_actual_422_no_side_effect(edit_res
         "status": "not_submitted", "assistant_turn_id": state.turn["id"], "tool_call_id": "validation"})
     # The host derives the deterministic request id; use that exact receipt.
     request_id = locator.request_id
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     event_id, fresh = main._claim_edit_request(task, state.member.member_id, request_id, "preview", {"fixture": "validation"})
     assert fresh
     main._save_edit_request_result(task, event_id, main.JSONResponse(status_code=code, content={"detail": "actual validation"}))
@@ -452,7 +452,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
             assert kwargs["continuation_context"]["business_event"]["phase"] == "execution"
             assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["status"] == "succeeded"
             return "已读取原作业与实际登记输出。", None
-        current = state.production.get_creation_task(state.workspace_id, state.task.id)
+        current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
         script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
         plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         actor = main._require_permit_actor(state.request, state.workspace_id)
@@ -791,7 +791,7 @@ def execution_http_state(tmp_path, monkeypatch):
     repo, task_id, script_id, _ = _seed(root, workspace_id='local')
     members = LocalMemberService(repo.database_path)
     member, token = members.join(members.create_invite_code(), 'HTTP来源隔离成员')
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     task.owner_user_id = member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
@@ -840,7 +840,7 @@ def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction
             str(uuid4()),chat['draft_version'],request_context={'kind':'task','task_id':state.task.id})
     if rejection=='stopped':
         state.conversations.finish_turn(turn['id'],'stopped',result={'reason':'user_stopped'})
-    current=state.production.get_creation_task(state.workspace_id,state.task.id)
+    current=state.production.task_records.get_creation_task(state.workspace_id,state.task.id)
     script=state.production.get_creation_task_script(state.workspace_id,current.confirmed_script_id)
     plan=state.production.plan_records.get_creation_plan(state.workspace_id,current.plan_id)
     preview={'script_id':script.id,'input_digest':revision_digest(script,plan)}
@@ -892,9 +892,9 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
     monkeypatch.setattr(main,'_creation_execution_control',lambda:control)
     case=main._exact_preview_use_case()
-    task=repo.get_creation_task('local',s.task.id)
+    task=repo.task_records.get_creation_task('local',s.task.id)
     base=case.metadata.ensure_montage_base('local',task,s.montage)
-    task=repo.get_creation_task('local',s.task.id)
+    task=repo.task_records.get_creation_task('local',s.task.id)
     action=({'narration_segment_id':s.montage.cues[0].narration_segment_id}
         if operation=='RegenerateNarrationSegment' else {'clip_id':s.montage.clips[0].id})
     assistant={}
@@ -940,7 +940,7 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
             assert repo.execution_records.get_task_event('local',f'event_{job.id}_start').payload==event
 
         assert s.provider.output_cache_keys==calls
-        assert repo.get_creation_task('local',task.id).current_timeline_version_id==base.id
+        assert repo.task_records.get_creation_task('local',task.id).current_timeline_version_id==base.id
     finally:
         assert runtime.stop(1)
 
@@ -972,7 +972,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
     runtime=SimpleNamespace(scheduler=case.scheduler,wake=lambda:None,
         registrations={'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)})
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
-    monkeypatch.setattr(main,'_readable_creation_task',lambda request,task_id:case.repo.get_creation_task('local',task_id))
+    monkeypatch.setattr(main,'_readable_creation_task',lambda request,task_id:case.repo.task_records.get_creation_task('local',task_id))
     monkeypatch.setattr(main,'_request_permit_actor',lambda request,workspace:case.actor)
     monkeypatch.setattr(main,'_verify_creation_identity',case.owner.verify_identity)
     def current_actor(request,workspace):
@@ -1002,7 +1002,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
         business.execution=control
         business.visual_job_belongs_to_goal=lambda goal,actor,job_id:job_id==job.id
         read=business.execute('read_segment_visual_decision',{'job_id':job.id,'section_id':'section_1'},
-            case.actor,case.repo.get_creation_task('local',case.task_id),{}, {},{},None)
+            case.actor,case.repo.task_records.get_creation_task('local',case.task_id),{}, {},{},None)
         assert read==decision
         with pytest.raises(PermissionError):
             control.read_visual_decision('local',case.task_id,job.id,'section_1',replace(case.actor,member_id='other-member'))
@@ -1066,7 +1066,7 @@ def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_b
     source={'assistant_turn_id':turn['id'],'input_id':turn['id'],'conversation_id':chat['id']}
     case.repo.execution_records.append_task_event(TaskEvent('visual-review','local',case.task_id,None,'narration_semantic_review',{'source':source}))
     job=case.repo.job_records.create_job_run(JobRun('visual-revision','local',case.task_id,'creation_task_segment_revision','visual-revision','original-digest'))
-    task=case.repo.get_creation_task('local',case.task_id)
+    task=case.repo.task_records.get_creation_task('local',case.task_id)
     case.repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start','local',case.task_id,job.id,'segment_revision_requested',
         {**case.actor.identity_payload(),'input_digest':job.input_digest,'script_id':case.script_id,'plan_id':task.plan_id,
             'command':{'input_id':turn['id'],'semantic_review_ref':'visual-review'}}))
@@ -1248,7 +1248,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     from fastapi import HTTPException
     from app.creation.contracts import EditIntent, EditProposal, EditOperation, TimelineVersion
     state = execution_binding_state
-    repo, task = state.production, state.production.get_creation_task(state.workspace_id, state.task.id)
+    repo, task = state.production, state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     request_id = str(uuid4())
     origin = state.conversations.task_turn_source(state.turn_id, state.workspace_id, state.member.member_id, task.id)
     snapshot = origin['context']['target_snapshot']
@@ -1267,7 +1267,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     applied_at = utc_now()
     operation = repo.create_edit_operation(EditOperation('binding-edit-operation', state.workspace_id, task.id,
         'binding-edit-proposal', 'ChangeCrop', {'clip_id':'declared-clip'}, state.version.id, version.id, 'applied', created_at=applied_at, applied_at=applied_at))
-    task = repo.get_creation_task(state.workspace_id, task.id)
+    task = repo.task_records.get_creation_task(state.workspace_id, task.id)
     inputs = {'operation_type':'ChangeCrop', 'assistant_turn_id':state.turn_id,
         'expected_timeline_version_id':state.version.id, 'expected_timeline_sequence':state.version.sequence,
         'clip_id':'declared-clip', 'ignored_private_field':'x'*100000}
@@ -1301,7 +1301,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=?,visibility=? WHERE id=?',
             (json.dumps({**saved_task, 'owner_user_id':other.member_id}, default=str), 'shared', task.id))
-    assert repo.get_creation_task(state.workspace_id, task.id).visibility == 'shared'
+    assert repo.task_records.get_creation_task(state.workspace_id, task.id).visibility == 'shared'
     try:
         with pytest.raises(HTTPException) as changed_owner:
             main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
@@ -1358,12 +1358,12 @@ def edit_result_state(tmp_path, monkeypatch):
             'kind':'task_turn', 'edit_preview':False, 'response':response})
         goal = main._goal_service().register_turn(turn['id'])
         assert goal is not None
-        authorization = authority.ensure(state.repo.get_creation_task('ws', state.task.id), actor, interactive=True)
+        authorization = authority.ensure(state.repo.task_records.get_creation_task('ws', state.task.id), actor, interactive=True)
         required = authority._requirements('ws', state.task.id)[1]
         state.repo.save_task_authorization(replace(authorization, revision=authorization.revision+1,
             resource_scope={**authorization.resource_scope, 'references':required['references']}),
             expected_revision=authorization.revision)
-        authority.bind_business_context(state.repo.get_creation_task('ws', state.task.id), actor, goal, memory={})
+        authority.bind_business_context(state.repo.task_records.get_creation_task('ws', state.task.id), actor, goal, memory={})
     state.production, state.workspace_id, state.version = state.repo, 'ws', state.base
     state.conversations, state.conversation, state.turn = conversations, chat, turn
     state.request = Request({'type':'http', 'headers':[(b'x-local-member-token', state.token.encode())]})
@@ -1447,7 +1447,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
     repo, actor, conversations = state.production, state.actor, state.conversations
     resources = _render_resources()
     media = TaskMediaJobs(repo, facts=lambda *args: ({'base_version_id':
-        repo.get_creation_task('local', state.task.id).current_timeline_version_id}, resources),
+        repo.task_records.get_creation_task('local', state.task.id).current_timeline_version_id}, resources),
         verify_identity=main._verify_creation_identity)
     runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path/'read-only-device.lock',
         device_access=MemberDeviceAccess(state.members), registrations={'creation_job': OwnerRegistration(
@@ -1496,7 +1496,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
     candidate = next(item for item in conversations.goal_event_candidates() if item['event']['event_id']==event['event_id'])
     claim = conversations.claim_goal_event(candidate,{'timeline_version_id':version.id,'timeline_sequence':version.sequence},max_rounds=3)
     assert claim is not None
-    state.task = repo.get_creation_task('local',state.task.id)
+    state.task = repo.task_records.get_creation_task('local',state.task.id)
     state.original_job, state.media, state.runtime = job, media, runtime
     state.slot, state.contract, state.child_id, state.version = slot, contract, claim['turn_id'], version
     yield state
@@ -1528,7 +1528,7 @@ def test_media_result_completed_slot_keeps_adopted_chain_and_rechecks_file(media
         # A real task version change without updating the original goal is refused.
         from dataclasses import replace
         state.production.create_timeline_version(replace(state.version,id='unbound-later-version',parent_version_id=state.version.id,sequence=2))
-        task = state.production.get_creation_task('local',state.task.id)
+        task = state.production.task_records.get_creation_task('local',state.task.id)
         with pytest.raises(main.HTTPException) as stale:
             main._completed_media_result(task,state.request,state.child_id,state.slot,contract=state.contract,input_refs=[])
         assert stale.value.status_code==409

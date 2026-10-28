@@ -26,7 +26,7 @@ class DeliveryAdoptionRecovery:
         event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
         if actor != CreationExecutionActor.from_event(job.workspace_id, event.payload):
             raise PermissionError('仅原作业成员可接续采用已知成片')
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+        task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
         if task.owner_user_id != (actor.user_id or actor.member_id) or owner.authorization_verdict(task, actor, 'render', connection=conn) != 'ready':
             raise PermissionError('原Job采用权限已失效，保留媒体与原消耗')
 
@@ -124,7 +124,7 @@ class DeliveryAdoptionRecovery:
             plan = self.read_plan(job, predecessor['unit_key'].removeprefix(PREFIX), conn)
             if plan['original_request_id'] != original['id']:
                 raise ValueError('原采用尝试不属于同一最终媒体来源')
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+        task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
         payload = {'version': 1, 'job_id': job.id, 'input_digest': job.input_digest, 'head': task.current_timeline_version_id,
             'manifest_digest': manifest['digest'], 'original_request_id': original['id'],
             'original_generation': original['last_grant_generation'], 'original_receipt_id': origin_receipt,

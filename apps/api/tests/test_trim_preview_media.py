@@ -116,12 +116,12 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     }, headers=member_headers)
     assert initial.status_code == 409
     assert initial.json()["detail"]["error"] == "timeline_version_required"
-    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
+    assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
     assert repository.list_edit_proposals(workspace_id, task_id) == []
     assert repository.job_records.list_job_runs(workspace_id, task_id) == []
     initialized = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize", headers=member_headers)
     assert initialized.status_code == 200, initialized.text
-    assert initialized.json()["version_id"] == repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
+    assert initialized.json()["version_id"] == repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert repository.get_creation_task_montage_plan(workspace_id, task_id)["clips"][0]["source_start_seconds"] == 0
     assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
 
@@ -154,7 +154,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         }, headers=member_headers)
     assert preview.status_code == 200, preview.text
     assert "原视频画面和原声" in preview.json()["proposal"]["external_effects"][0]
-    version_after_preview = repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
+    version_after_preview = repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert version_after_preview is not None
     for side, dominant, start, end in (("before", "red", 0, 1), ("after", "blue", 1.2, 2.2)):
         url = preview.json()["proposal"]["preview"][side]["video_url"]
@@ -179,7 +179,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
             red, _, blue = image.convert("RGB").getpixel((image.width // 2, image.height // 2))
         assert (red > blue) if dominant == "red" else (blue > red)
 
-    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
+    assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
     assert repository.list_edit_operations(workspace_id, task_id) == []
     assert repository.job_records.list_job_runs(workspace_id, task_id) == []
     assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
@@ -204,6 +204,6 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     conflict = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize")
     assert conflict.status_code == 409, conflict.text
     assert conflict.json()["detail"]["error"] == "timeline_version_conflict"
-    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
+    assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
     assert repository.get_creation_task_montage_plan(workspace_id, task_id) == saved_payload
     assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1

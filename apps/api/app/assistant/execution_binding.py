@@ -237,7 +237,7 @@ class AssistantExecutionBinding:
         else:
             if previous.job_id != result['job']['id']:
                 raise ExecutionBindingRejected('本轮制作来源已绑定原作业，不能改绑')
-        current_task = self.production.get_creation_task(workspace_id, task_id)
+        current_task = self.production.task_records.get_creation_task(workspace_id, task_id)
         current = self.projection.execution_source_current(
             current_task, source, result['job']['id'], result['job']['status'])
         self.conversations.record_task_execution(
@@ -258,7 +258,7 @@ class AssistantExecutionBinding:
         if (current.get('input_id'), current.get('input_turn_id')) != (
                 origin.get('input_id'), origin.get('input_turn_id')):
             return None
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         snapshot = origin['context']['target_snapshot']
         source = {'workspace_id': workspace_id, 'task_id': task_id, 'member_id': member_id,
             'conversation_id': origin['conversation_id'], 'assistant_turn_id': turn_id,

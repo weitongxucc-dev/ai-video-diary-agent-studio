@@ -36,7 +36,7 @@ def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragmen
             picture_fragments=picture_fragments, manifest=manifest, completed=completed)
     else:
         candidate = instantiate_adoption_candidate(recovery_plan, grant)
-        if candidate['head'] != repo.get_creation_task(job.workspace_id, job.task_id, connection=conn).current_timeline_version_id:
+        if candidate['head'] != repo.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn).current_timeline_version_id:
             raise ValueError('原采用候选HEAD已变化')
     return apply_delivery_adoption(repo, conn, job, candidate)
 
@@ -46,7 +46,7 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
     from app.creation.duration_requirement import DurationRequirement
     from app.subtitle_schedule import subtitle_schedule, narration_schedule
     repo = delivery.repository
-    task = repo.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+    task = repo.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
     leaf_manifest = picture_fragments.manifest(job, actor=actor, connection=conn)
     if leaf_manifest is None or task.current_timeline_version_id != leaf_manifest['head']:
         raise ValueError('最终采用期间当前HEAD已变化，原产物保留')

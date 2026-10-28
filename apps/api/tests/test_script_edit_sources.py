@@ -7,7 +7,7 @@ def test_library_draft_sources_use_current_permissions_without_topic_or_body(lib
     client, repo, sources = library
     created = reuse(client, save(client, repo)['id']).json()
     task_id, script_id = created['task_id'], created['script_id']
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     assert task.selected_topic_id is None
     before = repo.script_records.read_creation_task_script_header('local', script_id)
     before_events = repo.execution_records.list_task_events('local', task_id)

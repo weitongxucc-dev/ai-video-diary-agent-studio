@@ -246,7 +246,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
         sequence=1, snapshot={"montage": {"output_path": ref}, "output_refs": [ref]},
         created_by_operation_id=None,
     ))
-    current = repository.get_creation_task(workspace, task_id)
+    current = repository.task_records.get_creation_task(workspace, task_id)
     from dataclasses import replace
     current = replace(current, output_ready=True)
     with repository._connect() as conn:
@@ -261,7 +261,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     auth.verify_current(workspace, member, "douyin")
 
     def output_for(ws, current_task_id, user_id):
-        persisted_task = repository.get_creation_task(ws, current_task_id)
+        persisted_task = repository.task_records.get_creation_task(ws, current_task_id)
         persisted_version = repository.get_timeline_version(ws, version_id)
         assert user_id == member and persisted_task.output_ready
         assert persisted_task.current_timeline_version_id == version_id
@@ -290,7 +290,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
         actor_for=lambda _request, current_workspace: CreationExecutionActor(
             current_workspace, member,
         ), auth_service=auth,
-        task_for_user=lambda ws, current_task_id, user_id: repository.get_creation_task(ws, current_task_id),
+        task_for_user=lambda ws, current_task_id, user_id: repository.task_records.get_creation_task(ws, current_task_id),
         publishable_output_for=output_for, runtime_for=lambda: runtime,
     ))
     return TestClient(app), repository, runtime, driver, auth

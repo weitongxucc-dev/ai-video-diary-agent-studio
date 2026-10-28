@@ -56,4 +56,4 @@ def test_input_ending_during_preflight_cannot_save_or_adopt(client_state, monkey
             "adoption_kind": "delegated_system", "assistant_turn_id": turn["id"]})
     assert response.status_code == 409, response.text
     assert c.client.get(base, headers=c.alice).json()["revision"] == data["revision"]
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []

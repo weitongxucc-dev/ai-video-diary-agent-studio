@@ -34,7 +34,7 @@ def fine_state(material_edit_state, monkeypatch):
     plan.clips[1].visual_effects = VisualEffects(zoom=1.4, exposure=.6, fade_out_seconds=.3).model_dump()
     state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     original = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     state.production.create_timeline_version(replace(original, id="fine-original-version", parent_version_id=original.id,
         sequence=original.sequence + 1, snapshot={**original.snapshot, "montage": creation_task_montage_plan_to_payload(plan)}))
@@ -44,7 +44,7 @@ def fine_state(material_edit_state, monkeypatch):
 
 
 def bound(state, **action):
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     return {"request_id": str(uuid4()), "expected_timeline_version_id": version.id,
         "expected_timeline_sequence": version.sequence, **action}
@@ -143,7 +143,7 @@ def test_fine_edits_reject_invalid_request_without_version_or_media_effect(fine_
             creation_task_montage_plan_to_payload(state.plan))
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=payload)
     assert response.status_code in {409, 422}, response.text
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id == payload["expected_timeline_version_id"] or failure == "old_version"
     assert state.production.list_edit_operations(state.workspace_id, task.id) == []
     assert state.production.job_records.list_job_runs(state.workspace_id, task.id) == []

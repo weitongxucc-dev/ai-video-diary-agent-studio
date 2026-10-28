@@ -1,6 +1,7 @@
 """One explicit, queued storyboard replacement over unchanged narration."""
 from __future__ import annotations
 
+from app.creation.task_input_reads import require_creation_task
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 import hashlib
@@ -155,7 +156,7 @@ def material_signature(repository, task, *, connection=None) -> str:
 def request_current(repository, task, event, *, connection=None) -> bool:
     if connection is None:
         with repository.creation_execution_read() as conn:
-            current = repository.get_creation_task(task.workspace_id, task.id, connection=conn)
+            current = repository.task_records.get_creation_task(task.workspace_id, task.id, connection=conn)
             return request_current(repository, current, event, connection=conn)
     inputs = event["request_inputs"]
     if (task.current_timeline_version_id != inputs["expected_timeline_version_id"]
@@ -231,7 +232,7 @@ class StoryboardRegeneration:
 
     def prepare(self, job, event, context):
         with self.repository.creation_execution_read() as conn:
-            task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             if not request_current(self.repository, task, event, connection=conn):
                 raise ValueError('故事板原请求的时间线、文案或配音已变化')
             base = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=conn)
@@ -282,7 +283,7 @@ class StoryboardRegeneration:
             operation_payload=values, result_version_id=version_id, montage_plan_id=candidate.id,
             montage_payload=creation_task_montage_plan_to_payload(candidate), subtitle_tracks=tracks, cover_asset=cover,
             absent_cover_value=True)
-        if not request_current(self.repository, self.repository.get_creation_task(job.workspace_id, job.task_id), event):
+        if not request_current(self.repository, self.repository.task_records.get_creation_task(job.workspace_id, job.task_id), event):
             raise ValueError("故事板生成期间时间线、文案或配音已变化")
         return PreparedStoryboard(command, intent, proposal, change)
 
@@ -291,7 +292,7 @@ class StoryboardRegeneration:
             row = connection.execute("SELECT status FROM job_runs WHERE workspace_id=? AND id=?", (job.workspace_id, job.id)).fetchone()
             if row is None or row["status"] != "running":
                 raise ValueError("故事板原作业已停止，不能提交新版本")
-            task = self.repository._require_creation_task(connection, job.workspace_id, job.task_id)
+            task = require_creation_task(connection, job.workspace_id, job.task_id)
             if not request_current(self.repository, task, event, connection=connection):
                 raise ValueError("故事板生成期间时间线、文案或配音已变化")
             self.montage_stage.metadata.picture_renderer.validate_material_use(job.workspace_id,

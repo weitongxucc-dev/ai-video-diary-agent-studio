@@ -6,7 +6,7 @@
 三条规矩：
 1. 可见性不重写。素材、知识、任务一律走既有读过滤入口
    （``production_repo.list_assets``、``source_repository.list_knowledge_items_readable_by``、
-   ``production_repo.list_creation_tasks``），本模块只是它们的调用方——
+   ``production_repo.task_records.list_creation_tasks``），本模块只是它们的调用方——
    聚合本身如果另写一套判据，就会泄露别人的私有内容。
 2. 每个数字都带 scope/source/as_of。没有真实载体的项如实进 ``unknown``，
    不猜趋势口径、不把素材文件大小冒充整机用量、不造行业分布。
@@ -277,7 +277,7 @@ def aggregate_home(
         viewer_user_id=viewer_user_id,
         local_diagnostic=local_diagnostic,
     )
-    tasks = repository.list_creation_tasks(
+    tasks = repository.task_records.list_creation_tasks(
         workspace_id,
         include_private=include_private,
         viewer_user_id=viewer_user_id,

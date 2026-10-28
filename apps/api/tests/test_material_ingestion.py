@@ -878,8 +878,8 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
     )
     assert (revised.id, revised.run_id, revised.topic_id, revised.selection_status) == (initial.id, run.id, "topic-one", "draft")
     assert revised.sections == revised_sections
-    assert repo.get_creation_task("one", "task-one").confirmed_script_id is None
-    assert repo.get_creation_task("one", "task-one").stage_status == "waiting_for_user"
+    assert repo.task_records.get_creation_task("one", "task-one").confirmed_script_id is None
+    assert repo.task_records.get_creation_task("one", "task-one").stage_status == "waiting_for_user"
     restarted = ProductionRepository(tmp_path / "production.sqlite", repo.video_library_path)
     assert restarted.get_creation_task_script("one", initial.id).title == "新版草稿"
     with pytest.raises(KeyError):

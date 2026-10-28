@@ -115,7 +115,7 @@ def test_new_content_is_private_in_both_column_and_read_back(tmp_path):
     assert _stored_visibility(production, "creation_plans", plan.id, WORKSPACE) == "private"
     assert _stored_visibility(production, "creation_tasks", task.id, WORKSPACE) == "private"
     assert production.plan_records.get_creation_plan(WORKSPACE, plan.id).visibility == "private"
-    assert production.get_creation_task(WORKSPACE, task.id).visibility == "private"
+    assert production.task_records.get_creation_task(WORKSPACE, task.id).visibility == "private"
 
 
 def test_new_material_is_private_and_reads_back_private(tmp_path):
@@ -133,11 +133,11 @@ def test_explicit_share_and_revoke_are_visible_to_readers(tmp_path):
     _confirm(production, plan, task)
     production._save_asset(_asset(WORKSPACE))
 
-    production.set_creation_task_visibility(WORKSPACE, task.id, "shared")
+    production.task_records.set_creation_task_visibility(WORKSPACE, task.id, "shared")
     production.set_creation_plan_visibility(WORKSPACE, plan.id, "shared")
     production.set_asset_visibility(WORKSPACE, "asset-1", "shared")
 
-    assert production.get_creation_task(WORKSPACE, task.id).visibility == "shared"
+    assert production.task_records.get_creation_task(WORKSPACE, task.id).visibility == "shared"
     assert production.plan_records.get_creation_plan(WORKSPACE, plan.id).visibility == "shared"
     assert production.get_asset(WORKSPACE, "asset-1").visibility == "shared"
 
@@ -222,7 +222,7 @@ def test_legacy_rows_without_the_column_are_shared_after_migration(tmp_path):
 
     assert _stored_visibility(production, "creation_tasks", "legacy-task", WORKSPACE) == "shared"
     assert _stored_visibility(production, "creation_plans", "legacy-plan", WORKSPACE) == "shared"
-    assert production.get_creation_task(WORKSPACE, "legacy-task").visibility == "shared"
+    assert production.task_records.get_creation_task(WORKSPACE, "legacy-task").visibility == "shared"
 
 
 def _repository_with_database(tmp_path: Path, database: Path) -> ProductionRepository:

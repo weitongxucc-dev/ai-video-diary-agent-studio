@@ -66,7 +66,7 @@ def speed_state(tmp_path):
         {'montage': payload, 'subtitle_track_ids': [state.track.id], 'narration_cache_key': state.narration.cache_key}, None)
     repo.create_timeline_version(state.base)
     repo.create_subtitle_track(state.track)
-    state.task = repo.get_creation_task('ws', state.task.id)
+    state.task = repo.task_records.get_creation_task('ws', state.task.id)
     state.neighbour = neighbour
     state.application = LinkedTimelineEditUseCase(repo, state.case)
     return state
@@ -78,7 +78,7 @@ def state(tmp_path):
 
 
 def speed_command(state, rate=2):
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     return EditCommand('ws', task.id, state.identity, task.current_timeline_version_id, 'ChangeLinkedSpeed',
         {'base_version_id': task.current_timeline_version_id, 'clip_id': 'clip', 'playback_rate': rate})
 
@@ -109,7 +109,7 @@ def test_public_preview_confirm_replay_recovers_fixed_version_after_lost_project
     replay = state.application.confirm(control)
     assert not replay.newly_applied and not replay.record_projection
     state.application.apply(speed_command(state))
-    assert state.repo.get_creation_task('ws', state.task.id).current_timeline_version_id != original_version.id
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id != original_version.id
     with state.repo._connect() as conn:
         conn.execute('DELETE FROM task_events WHERE id=?', (accepted.event_id + '_result',))
     recovered = state.application.confirm(control)

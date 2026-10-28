@@ -591,7 +591,7 @@ def _complete_presenter_fixture(case, context=None):
     from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
     from app.production import PersonRender
     from app.task_runtime import TaskRuntime, JobResult
-    task = case.repo.get_creation_task(WORKSPACE, case.task.id)
+    task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
     script = case.repo.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
     plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     segment, request = presenter_inputs(case.repo, task, script, plan, {"fast": "fixture-avatar"})[0]
@@ -637,7 +637,7 @@ def test_presenter_unit_executes_with_registered_child_and_queues_metadata_after
         scheduler.assert_released(grant)
         assert scheduler._get(request_id).state == "done"
         assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == "queued"
-        task = case.repo.get_creation_task(WORKSPACE, case.task.id)
+        task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
         assert task.narration_cache_key == "narration" and task.confirmed_script_id == "script"
         with case.repo._connect() as conn:
             rows = conn.execute("SELECT unit_key,state FROM device_work_requests ORDER BY created_at").fetchall()
@@ -700,7 +700,7 @@ def _presenter_montage_fixture(case, render):
     from dataclasses import asdict
     from datetime import datetime, timezone
     from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-    task = case.repo.get_creation_task(WORKSPACE, case.task.id)
+    task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
     task.montage_plan_id = "montage"
     cue = NarrationCue("cue", "section", "合成文案", 1, narration_segment_id="segment")
     clip = MontageClip("clip", "cue", f"person:{render.id}", "segment", f"person-render://{render.id}",
@@ -784,7 +784,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
     namespace = dict(asdict=asdict, datetime=datetime, Path=Path, hashlib=hashlib, json=json, uuid4=uuid4, utc_now=utc_now,
         HTTPException=HTTPException, production_repo=case.repo, artifact_store=store,
         settings=SimpleNamespace(video_output_path=case.tmp_path / "output"),
-        _creation_task_or_404=lambda workspace, task: case.repo.get_creation_task(workspace, task),
+        _creation_task_or_404=lambda workspace, task: case.repo.task_records.get_creation_task(workspace, task),
         _lipsync_provider=lambda quality: SimpleNamespace(ready=True, model_id="fixture-avatar"),
         _capability_unavailable=unexpected, _topic_failure_response=unexpected,
         CreationStageGrantContext=CreationStageGrantContext, CreationTaskPersonRenderRequest=CreationTaskPersonRenderRequest,

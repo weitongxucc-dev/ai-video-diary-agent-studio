@@ -382,7 +382,7 @@ class NarrationStageUseCase:
 
     def prepare_edit_adoption(self, workspace_id, task_id, proposal_id, candidate, resources, receipt):
         with self.repository.creation_execution_read() as conn:
-            task = self.repository.get_creation_task(workspace_id, task_id, connection=conn)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
             proposal = self.repository.get_edit_proposal(workspace_id, proposal_id, connection=conn)
             payload = proposal.operation['payload']
             if candidate is None or candidate['segment_id'] != payload['narration_segment_id']:
@@ -406,7 +406,7 @@ class NarrationStageUseCase:
             self.repository.narration_artifact_reference(combined.cache_key))
 
         def commit(connection):
-            current = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
+            current = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
             if current.current_timeline_version_id != payload['base_version_id']:
                 raise ValueError('当前时间线已变化，未提交局部配音')
             base = self.repository.get_timeline_version(workspace_id, payload['base_version_id'], connection=connection)
@@ -425,7 +425,7 @@ class NarrationStageUseCase:
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise NarrationStageRejected(status_code=404, detail='creation task not found') from exc
 

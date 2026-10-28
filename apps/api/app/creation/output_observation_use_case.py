@@ -89,7 +89,7 @@ class OutputObservationUseCase:
 
     def _task_or_404(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise OutputObservationRejected(status_code=404, detail='creation task not found') from exc
 
@@ -187,7 +187,7 @@ class OutputObservationUseCase:
         return True
 
     def registered_output(self, workspace_id, task_id, target, actor, *, context=None):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if target.kind == 'final':
             _task, plan, path, record = self.quality_source_metadata(workspace_id, task_id)
             binding = {'kind': 'composed_output', 'montage': creation_task_montage_plan_to_payload(plan)}
@@ -230,14 +230,14 @@ class OutputObservationUseCase:
         return (path, output, binding)
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         source = arguments.get('_typed_source')
         if source is not None:
             version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         payload = CreationTaskObservationRequest.model_validate(arguments['payload'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         version = self.version(task, payload)
         path, output, binding = self.registered_output(workspace_id, task_id, payload.target, actor)
         return ObservationSource(task, version, payload, path, output, binding)

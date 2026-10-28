@@ -150,7 +150,7 @@ class CoverUseCase:
         return self.budget
 
     def _access(self, actor: CreationExecutionActor, task_id: str):
-        task = self.repository.get_creation_task(actor.workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
         if self.task_authorizations is not None:
             verdict = self.task_authorizations.verdict(actor, task_id, "cover", check_scope=False)
         else:
@@ -520,7 +520,7 @@ class CoverUseCase:
     def submit(self, runtime, actor: CreationExecutionActor, task_id: str, proposal_id: str,
                *, request_id: str | None):
         if self.task_authorizations is not None:
-            self.task_authorizations.ensure(self.repository.get_creation_task(actor.workspace_id, task_id), actor)
+            self.task_authorizations.ensure(self.repository.task_records.get_creation_task(actor.workspace_id, task_id), actor)
         from app.device_scheduler import SchedulePolicy, SubmissionIntent
         result = self.original_result(actor, task_id, proposal_id)
         if result is not None:

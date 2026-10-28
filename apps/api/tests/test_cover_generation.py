@@ -409,7 +409,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         again = owner.submit(runtime, actor, task.id, proposal.id, request_id="original-request")
         assert result.operation.id == again.operation.id
         assert result.version.id == again.version.id
-        assert repo.get_creation_task("workspace", task.id).current_timeline_version_id == result.version.id
+        assert repo.task_records.get_creation_task("workspace", task.id).current_timeline_version_id == result.version.id
         assert result.job.status == "succeeded" and len(calls) == 1
         assert result.job.idempotency_key == "cover:proposal"
         assert result.job.input_digest == hashlib.sha256(json.dumps(operation, ensure_ascii=False, sort_keys=True).encode()).hexdigest()

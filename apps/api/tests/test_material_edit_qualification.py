@@ -42,7 +42,7 @@ def _preview(state, operation):
 
 
 def _current(state):
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     montage = creation_task_montage_plan_from_payload(
         state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     )

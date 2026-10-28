@@ -65,7 +65,7 @@ class NativeTaskOperations:
             'node':node_path or shutil.which('node'),'ffmpeg':shutil.which('ffmpeg'),'ffprobe':shutil.which('ffprobe')}
 
     def require_actor(self,actor,task_id):
-        task = self.repository.get_creation_task(actor.workspace_id,task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id,task_id)
         if task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError('原生操作不属于当前成员的原任务')
         return task
@@ -455,7 +455,7 @@ class NativeTaskOperations:
                 (request.workspace_id,request.owner_id)).fetchone()
             if row is None or row['status'] not in {'queued','running','interrupted'} or row['input_digest']!=request.input_digest:
                 return 'stale'
-            task = self.repository.get_creation_task(request.workspace_id,job.task_id,connection=current)
+            task = self.repository.task_records.get_creation_task(request.workspace_id,job.task_id,connection=current)
             return owner.authorization_verdict(task,actor,'task_goal',connection=current,check_scope=False)
         return check
 

@@ -64,7 +64,7 @@ def test_exposure_preview_uses_explicit_grant_then_atomic_adoption_and_undo(tmp_
         assert current['clips'][1]['visual_effects']['exposure'] == .15
         assert current['clips'][0] == original['clips'][0] and current['clips'][2:] == original['clips'][2:]
         assert current['audio_timeline'] == original['audio_timeline']
-        current_id = repo.get_creation_task('local', 'task').current_timeline_version_id
+        current_id = repo.task_records.get_creation_task('local', 'task').current_timeline_version_id
         assert current_id != 'timeline'
         kept = repo.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
         assert [(item.text, item.start_seconds, item.end_seconds) for item in kept[0].cues] == [
@@ -130,7 +130,7 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
         assert refused.status_code == 503 and '尚未标定' in refused.text
         assert len(repo.job_records.list_job_runs('local', 'task')) == count
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        task = repo.get_creation_task('local', 'task')
+        task = repo.task_records.get_creation_task('local', 'task')
         task.current_timeline_version_id = None
         with repo._connect() as conn:
             conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
@@ -138,7 +138,7 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
         payload['base_version_id'] = None
         missing = client.post('/api/creation-tasks/task/visual/preview', json=payload)
         assert missing.status_code == 409 and '基础版本' in missing.text
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id is None
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id is None
         assert len(repo.list_timeline_versions('local', 'task')) == 1
     finally:
         runtime.stop(0)
@@ -272,7 +272,7 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
             path += '?draft=true'
         response = client.post(path, json=payload)
         assert response.status_code == 409, response.text
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'next'
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'next'
         assert len(repo.job_records.list_job_runs('local', 'task')) == job_count
         assert len(repo.list_edit_intents('local', 'task')) == intent_count
         assert len(repo.list_edit_proposals('local', 'task')) == proposal_count
@@ -305,7 +305,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
         status='ready',cues=[NarrationCue('cue','section','first',6),NarrationCue('othercue','section2','other',21)],
         clips=clips,duration_seconds=27,low_confidence_clip_count=0)
     with repo._connect() as conn:
-        task=repo.get_creation_task('local','task')
+        task=repo.task_records.get_creation_task('local','task')
         task.montage_plan_id='montage'
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",

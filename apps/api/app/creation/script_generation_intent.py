@@ -55,7 +55,7 @@ class ScriptGenerationIntent:
 
     def _require_actor(self, conn, workspace_id, task_id, actor, *, verify=True):
         member_id = actor.user_id or actor.member_id
-        task = self.repository.get_creation_task(workspace_id, task_id, connection=conn)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
         if (actor.workspace_id != workspace_id or task.owner_user_id != member_id
                 or verify and self.verify_identity(actor) != "ready"):
             raise PermissionError("生成请求的原成员或任务归属已失效")
@@ -171,7 +171,7 @@ class ScriptGenerationIntent:
         if require_owner:
             task, actual_member = self._require_actor(conn, workspace_id, task_id, actor, verify=authorize)
         else:
-            task = self.repository.get_creation_task(workspace_id, task_id, connection=conn)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
             actual_member = actor.user_id or actor.member_id
         if actual_member != member_id:
             raise PermissionError("原生成请求成员不匹配")
@@ -242,7 +242,7 @@ class ScriptGenerationIntent:
             raise PermissionError("文案结果不属于原生成请求的活动回合")
         receipt = self.conversations.read_user_action_request(conn, workspace_id, task_id, request_id, member_id)
         event = self.repository.execution_records.get_task_event(workspace_id, self._event_id(workspace_id, task_id, request_id), connection=conn)
-        task = self.repository.get_creation_task(workspace_id, task_id, connection=conn)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
         self._require_current_input(conn, task, member_id, receipt, event.payload)
         script = facts["script"]
         if script["selection_status"] != "draft" or script.get("confirmed_at") or script.get("adoption"):

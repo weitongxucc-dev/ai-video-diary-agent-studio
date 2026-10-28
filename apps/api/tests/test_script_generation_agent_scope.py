@@ -40,7 +40,7 @@ def fixture():
         return deepcopy(state.facts)
     task=SimpleNamespace(workspace_id='workspace',id='task')
     business=object.__new__(domain.TaskBusiness)
-    business.production=SimpleNamespace(_connect=lambda:nullcontext(object()),get_creation_task=lambda *args,**kwargs:task)
+    business.production=SimpleNamespace(_connect=lambda:nullcontext(object()),task_records=SimpleNamespace(get_creation_task=lambda *args,**kwargs:task))
     business.conversations=SimpleNamespace(_goal_root=forbidden,_task_turn_source=forbidden)
     business.authorizations=SimpleNamespace(verdict=forbidden)
     business.generation_case=SimpleNamespace(read_generation_request=read)

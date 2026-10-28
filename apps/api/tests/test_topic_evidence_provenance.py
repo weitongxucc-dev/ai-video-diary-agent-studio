@@ -212,7 +212,7 @@ def test_topic_record_owner_rolls_back_event_refusal_and_guards_confirmed_reentr
         )
     assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
     assert str(refused.value.__cause__) == "isolated topic event refusal"
-    assert production.get_creation_task("qa", task.id).selected_topic_id is None
+    assert production.task_records.get_creation_task("qa", task.id).selected_topic_id is None
     assert production.topic_records.get_topic_candidate("qa", task.id, candidate.id).selection_status == "unselected"
     assert not [event for event in production.execution_records.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]
     with production._connect() as connection:

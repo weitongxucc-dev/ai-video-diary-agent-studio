@@ -166,7 +166,7 @@ class AudioIngressUseCase:
         raise ValueError('不是本音频输入用例的动作')
 
     def check_public_input(self, workspace_id, task_id, action, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if action == 'audio_listen':
             if task.current_timeline_version_id != arguments['payload'].get('base_version_id'):
                 raise AudioIngressRejected(409, '时间线已经变化，请刷新后试听')
@@ -191,7 +191,7 @@ class AudioIngressUseCase:
         workspace_id, task_id = (job.workspace_id, job.task_id)
         raw = event['arguments']['audio']
         audio = StagedAudioInput(raw['staged_input'], raw['filename'], raw['size_bytes'], raw['sha256'])
-        self.repository.get_creation_task(workspace_id, task_id)
+        self.repository.task_records.get_creation_task(workspace_id, task_id)
         suffix = Path(audio.filename or '').suffix.lower()
         if suffix not in {'.wav', '.mp3', '.m4a', '.aac', '.flac'}:
             raise AudioIngressRejected(status_code=422, detail='请选择 WAV、MP3、M4A、AAC 或 FLAC 音频')
@@ -206,7 +206,7 @@ class AudioIngressUseCase:
         workspace_id, task_id = (job.workspace_id, job.task_id)
         raw = event['arguments']['audio']
         audio = StagedAudioInput(raw['staged_input'], raw['filename'], raw['size_bytes'], raw['sha256'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.stage not in {'narration', 'montage', 'review'} or not task.confirmed_script_id:
             raise AudioIngressRejected(status_code=409, detail='请先确认当前任务文案，再保存电脑录音')
         script_digest = self.repository.confirmed_creation_task_script_digest(workspace_id, task.id, task.confirmed_script_id)
@@ -228,7 +228,7 @@ class AudioIngressUseCase:
     def audio_waveform(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
         clip_id = event['arguments']['clip_id']
-        self.repository.get_creation_task(workspace_id, task_id)
+        self.repository.task_records.get_creation_task(workspace_id, task_id)
         try:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
             clip = next((clip for track in effective_audio_timeline(plan).tracks for clip in track.clips if clip.id == clip_id))
@@ -240,7 +240,7 @@ class AudioIngressUseCase:
     def listen(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
         payload = AudioListenRequest.model_validate(event['arguments']['payload'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.current_timeline_version_id != payload.base_version_id:
             raise AudioIngressRejected(status_code=409, detail='时间线已经变化，请刷新后试听')
         try:
@@ -254,7 +254,7 @@ class AudioIngressUseCase:
 
     def narration_waveform(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         artifact = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
         if artifact is None or artifact.task_id != task.id:
             raise AudioIngressRejected(status_code=404, detail='当前任务还没有可读取的配音。')
@@ -264,7 +264,7 @@ class AudioIngressUseCase:
             raise AudioIngressRejected(status_code=422, detail=str(exc)) from exc
 
     def seal(self, workspace_id, task_id, operation, arguments, actor, budget):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
         plan = creation_task_montage_plan_from_payload(plan_payload) if plan_payload else None
         transient = {'status', 'message', 'output_path', 'subtitle_path', 'updated_at'}

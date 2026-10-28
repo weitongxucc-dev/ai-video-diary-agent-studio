@@ -263,7 +263,7 @@ class PersonStageUseCase:
             raise PersonStageRejected(status_code=409, detail=str(exc)) from exc
 
     def prepare_edit(self, workspace_id, task_id, context, proposal_id):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         proposal = self.repository.get_edit_proposal(workspace_id, proposal_id)
         generated = self.apply_segment_edit(workspace_id, task, proposal, grant_context=context)
 
@@ -271,13 +271,13 @@ class PersonStageUseCase:
             # complete_unit owns grant observation and the final local authority
             # check; its write transaction must not repeat network/resource probes.
             context.check_execution_limits()
-            current = self.repository.get_creation_task(workspace_id, task_id)
+            current = self.repository.task_records.get_creation_task(workspace_id, task_id)
             return self.apply_segment_edit(workspace_id, current, proposal, generated_render=generated, connection=connection)
         return commit
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise PersonStageRejected(status_code=404, detail='creation task not found') from exc
 

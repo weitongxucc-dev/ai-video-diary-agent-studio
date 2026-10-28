@@ -59,7 +59,7 @@ def chat(state, tmp_path, monkeypatch):
 def send(state, message="只重新生成故事板，保留配音，不生成视频"):
     current = state.conversations.get(state.chat["id"], "ws", state.member.member_id)
     draft = state.conversations.save_draft(current["id"], "ws", state.member.member_id, message, current["draft_version"])
-    task = state.repo.get_creation_task("ws", state.task.id)
+    task = state.repo.task_records.get_creation_task("ws", state.task.id)
     version = state.repo.get_timeline_version("ws", task.current_timeline_version_id)
     payload = {"conversation_id": current["id"], "message": message, "context_stage": "montage",
         "client_request_id": str(uuid4()), "expected_draft_version": draft["draft_version"],
@@ -74,7 +74,7 @@ def test_task_send_stale_timeline_returns_machine_code_before_creating_turn(chat
     current = state.conversations.get(state.chat["id"], "ws", state.member.member_id)
     message = "保留这条尚未发送的修改要求"
     draft = state.conversations.save_draft(current["id"], "ws", state.member.member_id, message, current["draft_version"])
-    version = state.repo.get_timeline_version("ws", state.repo.get_creation_task("ws", state.task.id).current_timeline_version_id)
+    version = state.repo.get_timeline_version("ws", state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id)
     monkeypatch.setattr(main, "run_task_turn", lambda *_a, **_k: pytest.fail("stale task must not invoke the assistant"))
     payload = {"conversation_id": current["id"], "message": message, "context_stage": "montage",
         "client_request_id": str(uuid4()), "expected_draft_version": draft["draft_version"],
@@ -187,14 +187,14 @@ def test_query_after_undo_returns_original_version_without_adopting_it_again(cha
     assert state.client.post(state.base_url + "/timeline/undo", json={
         "expected_timeline_version_id": version["timeline_version_id"],
         "expected_timeline_sequence": version["timeline_sequence"]}).status_code == 200
-    before = state.repo.get_creation_task("ws", state.task.id).current_timeline_version_id
+    before = state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id
     monkeypatch.setattr(main, "run_task_turn", lambda *args, **kwargs: project_business_result(completion(
         {"kind": "storyboard_regeneration_receipt", "receipt": original}, query=True)))
     response, _ = send(state, "查询刚才故事板重算的原结果")
     assert response.status_code == 200, response.text
     value = response.json()["storyboard_regeneration"]
     assert value["action"] == "query" and value["receipt"] == original
-    assert state.repo.get_creation_task("ws", state.task.id).current_timeline_version_id == before
+    assert state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id == before
     assert len(state.builds) == 1
 
 

@@ -81,13 +81,13 @@ def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_p
     assert latest['input_digest'] == revision_digest(repo.get_creation_task_script('workspace_a', script_id), old_plan)
     assert latest['script_updated_at'] == '2026-10-27T01:02:03+00:00'
     with pytest.raises(ValueError, match='文案或制作要求已变化'):
-        execution.validate_input('workspace_a', repo.get_creation_task('workspace_a', task_id), script_id, expected)
+        execution.validate_input('workspace_a', repo.task_records.get_creation_task('workspace_a', task_id), script_id, expected)
 
 
 def test_bounded_execution_preview_replays_the_original_job_and_keeps_full_validation(tmp_path):
     from app.creation_execution import revision_digest
     repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
-    task = repo.get_creation_task('workspace_a', task_id)
+    task = repo.task_records.get_creation_task('workspace_a', task_id)
     old_digest = revision_digest(repo.get_creation_task_script('workspace_a', script_id), repo.plan_records.get_creation_plan('workspace_a', task.plan_id))
     original = execution.start('workspace_a', task_id, script_id, old_digest)
     original_event = repo.execution_records.get_task_event('workspace_a', f'event_{original.id}_start')
@@ -183,7 +183,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version, 'zh-CN', voice.model_id)
     plan.owner_user_id = member.member_id
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     task.owner_user_id = member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
@@ -255,7 +255,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         # Keep the current original Job and immutable start receipt. A new trusted
         # task owner may read the task, but cannot adopt the former actor's Job.
         other_member, other_token = members.join(members.create_invite_code(), '后续任务成员')
-        original_task = repo.get_creation_task('local', task_id)
+        original_task = repo.task_records.get_creation_task('local', task_id)
         changed_owner = asdict(original_task)
         changed_owner['owner_user_id'] = other_member.member_id
         with repo._connect() as conn:

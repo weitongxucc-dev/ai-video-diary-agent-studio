@@ -138,7 +138,7 @@ def ready_task_for_transfer(tmp_path: Path, *, from_reply: bool = True):
     repo.topic_records.complete_topic_generation(run.id, [topic], [evidence])
     repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
     plan = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
-    task = repo.get_creation_task(WORKSPACE, task.id)
+    task = repo.task_records.get_creation_task(WORKSPACE, task.id)
     return repo, plan, task
 
 
@@ -253,7 +253,7 @@ def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path
             replace(script.sections[0], content="只移交一部分")
         ])
     with pytest.raises(ValueError, match="固定版本不一致"):
-        current_task = repo.get_creation_task(WORKSPACE, task.id)
+        current_task = repo.task_records.get_creation_task(WORKSPACE, task.id)
         current_script = repo.list_creation_task_scripts(WORKSPACE, task.id)[0]
         transfer(
             repo, plan, current_task, request_id="changed-source-request",
@@ -314,7 +314,7 @@ def test_existing_task_transfer_does_not_require_plan_created_from_reply(tmp_pat
 def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_version(tmp_path: Path) -> None:
     repo, plan, task = ready_task_for_transfer(tmp_path)
     _, _, original = transfer(repo, plan, task)
-    current_task = repo.get_creation_task(WORKSPACE, task.id)
+    current_task = repo.task_records.get_creation_task(WORKSPACE, task.id)
     with pytest.raises(ValueError, match="明确选择替换"):
         transfer(repo, plan, current_task, request_id="second-transfer")
     with pytest.raises(ValueError, match="草稿已变化"):
@@ -338,7 +338,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
             replace_existing_script_id=original.id,
             expected_script_updated_at=revised.updated_at,
         )
-    replaced_task = repo.get_creation_task(WORKSPACE, task.id)
+    replaced_task = repo.task_records.get_creation_task(WORKSPACE, task.id)
     _, _, replacement = transfer(
         repo, plan, replaced_task,
         request_id="explicit-replacement",
@@ -409,7 +409,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
             title="不能覆盖的迟到回复", sections=[replace(before.sections[0], content="迟到覆盖")],
             expected_updated_at=before.updated_at,
         )
-    assert repo.get_creation_task(WORKSPACE, task.id).confirmed_script_id == replacement.id
+    assert repo.task_records.get_creation_task(WORKSPACE, task.id).confirmed_script_id == replacement.id
     assert repo.get_creation_task_script(WORKSPACE, replacement.id) == confirmed
     # A current CAS plus an explicit manual edit is a new revision. This
     # endpoint has no request identity that would make it a replay.
@@ -468,7 +468,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
         get_turn=lambda _turn_id: turn,
     ))
     monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", lambda _case, _workspace, _task_id: (
-        repo.get_creation_task(WORKSPACE, task.id), plan,
+        repo.task_records.get_creation_task(WORKSPACE, task.id), plan,
         SimpleNamespace(id=task.selected_topic_id, title="核心功能是什么"), (), INPUT_REFERENCES,
     ))
     readable = SimpleNamespace(
@@ -562,7 +562,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     assert REPLY_TEXT not in str(events[0].payload)
 
     plan = repo.plan_records.get_creation_plan(WORKSPACE, first["plan_id"])
-    task = repo.get_creation_task(WORKSPACE, first["task_id"])
+    task = repo.task_records.get_creation_task(WORKSPACE, first["task_id"])
     topic_run = TopicGenerationRun(
         id="http-topic-run", workspace_id=WORKSPACE, task_id=task.id, plan_id=plan.id,
         status="running", route_snapshot={"provider": "test-double"},
@@ -582,7 +582,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     )])
     repo.topic_records.confirm_topic_candidate(WORKSPACE, task.id, topic.id)
     plan = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
-    task = repo.get_creation_task(WORKSPACE, task.id)
+    task = repo.task_records.get_creation_task(WORKSPACE, task.id)
     topic = repo.topic_records.list_topic_candidates(WORKSPACE, task.id)[0]
     readable = SimpleNamespace(
         version="v3", title="当前知识资料", use_state="available",
@@ -607,7 +607,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
     ))
     monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", lambda _case, _workspace, _task_id: (
-        repo.get_creation_task(WORKSPACE, task.id), repo.plan_records.get_creation_plan(WORKSPACE, plan.id),
+        repo.task_records.get_creation_task(WORKSPACE, task.id), repo.plan_records.get_creation_plan(WORKSPACE, plan.id),
         topic, (bounded_source,), INPUT_REFERENCES,
     ))
     transfer_payload = AssistantReplyScriptTransferRequest(

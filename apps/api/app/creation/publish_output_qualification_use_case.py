@@ -14,7 +14,7 @@ class PublishOutputQualificationUseCase:
         self.production = production
 
     def task_for_user(self, workspace_id: str, task_id: str, user_id: str) -> CreationTask:
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(
             user_id=user_id, local_diagnostic=False,
             visibility=task.visibility, owner_user_id=task.owner_user_id,
@@ -23,7 +23,7 @@ class PublishOutputQualificationUseCase:
         return task
 
     def source_version(self, workspace_id: str, task_id: str, user_id: str) -> tuple[CreationTask, TimelineVersion]:
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(
             user_id=user_id, local_diagnostic=False,
             visibility=task.visibility, owner_user_id=task.owner_user_id,

@@ -290,7 +290,7 @@ class GoalContinuationService:
                         for key in ('profile_reference','knowledge_reference','selection'))):
                 return {'status':'blocked','reason':'当前输入带入原任务范围外的资料或版本，未扩大后台授权'}
             production=authorizations.repository
-            task=production.get_creation_task(workspace_id,goal['task_id'],connection=conn)
+            task=production.task_records.get_creation_task(workspace_id,goal['task_id'],connection=conn)
             plan=json.loads(conn.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?',
                 (workspace_id,task.plan_id)).fetchone()[0])
             adoption=plan.get('adoption') or {};original=goal['creation_adoption']
@@ -856,7 +856,7 @@ class GoalResultProjection:
         job_id = context.job_id
         if self.production.goal_unreleased_job_request(workspace_id, job_id) is not None:
             return None
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         current = self.execution_source_current(task, source, job_id, row["status"])
         event_id = f"event_assistant_execution_{row['id']}_{row['status']}"
         status = "stopped" if binding["status"] == "stopped" else row["status"] if current else "stale"
@@ -959,7 +959,7 @@ class GoalResultProjection:
                 self.mark(candidate)
                 return True
             actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if (actor.user_id or actor.member_id) != member_id:
             self.mark(candidate)
             return True
@@ -1048,7 +1048,7 @@ class GoalResultProjection:
         if binding["status"] == "running":
             return False
         actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if (actor.user_id or actor.member_id) != member_id:
             self.mark(candidate)
             return True
@@ -1151,7 +1151,7 @@ class GoalResultProjection:
             return False
         snapshot = binding["context"].get("target_snapshot", {})
         actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if ((source["workspace_id"], source["task_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
                 workspace_id, task_id, snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence"))
                 or (actor.user_id or actor.member_id) != member_id):

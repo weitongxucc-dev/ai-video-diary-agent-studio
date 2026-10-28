@@ -130,7 +130,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     assert client.get(receipt['result_url']).json()['result']==measured and calls==[receipt['job_id']]
     assert len(repo.job_records.list_job_runs('local','task'))==2 and len(repo.execution_records.list_artifact_records('local','task'))==1
     assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
-    assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id==base.id
     assert main._creation_task_output_path('local','task',subtitle=False)==store.resolve_file(publication.logical_ref)
     assert main._quality_check_source('local','task')[3].sha256==publication.sha256
     assert not list((tmp_path/'temporary').glob('task-observation-*'))

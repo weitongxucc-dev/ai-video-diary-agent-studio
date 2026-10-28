@@ -12,7 +12,7 @@ from test_montage_pipeline import person_render_edit_state  # noqa: F401
 def control(state, monkeypatch, command):
     conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     chat = conversations.create(state.workspace_id, state.member.member_id, "home", "home", "编辑控制")
     conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, command, 0)

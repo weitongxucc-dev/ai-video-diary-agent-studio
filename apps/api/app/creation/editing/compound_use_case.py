@@ -89,7 +89,7 @@ class CompoundEditUseCase:
     def prepare_preview(self, control: CompoundPreviewCommand):
         if not self.applicable(control.raw_command):
             return None
-        task = self.repository.get_creation_task(control.workspace_id, control.task_id)
+        task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(control.workspace_id, task.id))
         current = self.repository.get_timeline_version(control.workspace_id, control.base_version_id) if control.base_version_id else None
         tracks = self.montage_edits.current_subtitle_tracks(control.workspace_id, task, current_version=current, montage=plan)
@@ -102,7 +102,7 @@ class CompoundEditUseCase:
         service = self.montage_edits.audio_service
         service.validate(control.workspace_id, task.id, calculated.plan.audio_timeline, calculated.plan.duration_seconds, draft_only=True)
         base = current if current is not None else self.montage_edits.ensure_montage_base(control.workspace_id, task, plan)
-        task = self.repository.get_creation_task(control.workspace_id, task.id)
+        task = self.repository.task_records.get_creation_task(control.workspace_id, task.id)
         command = EditCommand(control.workspace_id, task.id, control.actor_identity, base.id,
             'EditCompoundTimeline', {'base_version_id': base.id}, control.source)
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity,
@@ -118,7 +118,7 @@ class CompoundEditUseCase:
             expected_version_id=prepared.base.id)
 
     def prepare_selection(self, control: CompoundSelectionCommand):
-        task = self.repository.get_creation_task(control.workspace_id, control.task_id)
+        task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
         try:
             proposal = self.repository.get_edit_proposal(control.workspace_id, control.proposal_id)
         except KeyError as exc:
@@ -142,7 +142,7 @@ class CompoundEditUseCase:
             intent.playhead_ms, included, control.raw_command, control.source))
 
     def _binding(self, command: EditCommand, proposal_id):
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'Compound', {}))
         proposal = self.repository.get_edit_proposal(command.workspace_id, proposal_id)
@@ -238,7 +238,7 @@ class CompoundEditUseCase:
             raise PicturePreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "复合修改预览失败，请检查来源后重试") from exc
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')

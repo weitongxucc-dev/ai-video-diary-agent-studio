@@ -142,7 +142,7 @@ def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_
     def concurrent(*args):
         original(*args)
         if len(crop_previews) == 1:
-            task = state.production.get_creation_task(state.workspace_id, state.task.id)
+            task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
             advance_version(state, task.current_timeline_version_id)
     service.picture_renderer = concurrent
     monkeypatch.setattr(main_module, "_task_audio", lambda: service)
@@ -153,7 +153,7 @@ def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_
     assert receipt['status'] == 'stale' and receipt['result'] is None
     assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
     assert len(crop_previews) == 1
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
 
 
 def test_crop_preview_cannot_confirm_after_version_changes(person_render_edit_state, crop_previews):
@@ -164,5 +164,5 @@ def test_crop_preview_cannot_confirm_after_version_changes(person_render_edit_st
     newer = advance_version(state, before["task"]["current_timeline_version_id"])
     response = state.client.post(base + f"/edits/{proposal['id']}/confirm", json={})
     assert response.status_code == 409
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == newer.id
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == newer.id
     assert len(crop_previews) == 2

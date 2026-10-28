@@ -42,7 +42,7 @@ def test_request_locator_reads_original_identity_and_current_real_turn_status(cl
     other = c.conversations.create("request-test", c.member.member_id, "home", "home", "其他对话")
     assert c.client.get(request_url(other, request_id), headers=c.alice).status_code == 404
     assert restarted.get_request_receipt(request_id, chat["id"], "foreign-workspace", c.member.member_id) is None
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 
 def test_recovered_request_is_reported_without_guessing_a_turn(client_state):

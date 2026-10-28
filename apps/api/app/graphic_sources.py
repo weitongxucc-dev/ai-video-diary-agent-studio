@@ -110,7 +110,7 @@ def graphic_source_facts(repository, store, workspace_id, task_id, reference, *,
     from app.task_audio import TASK_MEDIA_KIND
     if not isinstance(actor, CreationExecutionActor) or actor.workspace_id != workspace_id:
         raise PermissionError('图片来源缺少当前工作区成员身份')
-    task = repository.get_creation_task(workspace_id, task_id)
+    task = repository.task_records.get_creation_task(workspace_id, task_id)
     principal = actor.user_id or actor.member_id
     if ((task.owner_user_id is not None and task.owner_user_id != principal)
             or not content_readable(user_id=principal, local_diagnostic=False,

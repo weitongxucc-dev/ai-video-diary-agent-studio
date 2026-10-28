@@ -197,7 +197,7 @@ def test_saved_program_uses_new_task_without_inheriting_old_timeline_or_input_au
     assert result.json()["status"] == "succeeded", result.text
     record = state.production.execution_records.get_artifact_record(state.workspace_id, result.json()["result"]["artifact_id"])
     assert record.task_id == task.id and record.input_refs == []
-    assert state.production.get_creation_task(state.workspace_id, task.id).current_timeline_version_id is None
+    assert state.production.task_records.get_creation_task(state.workspace_id, task.id).current_timeline_version_id is None
 
 
 def test_same_invocation_request_cannot_be_rebound_to_another_tool_path(state):
@@ -257,7 +257,7 @@ def test_assistant_tool_creation_receipt_reads_original_v1_not_reported_body_or_
     assert receipt["tool"]["name"] == state.tool["name"] and "definition" not in receipt["tool"]
     assert result["edit_preview"] is None and result["media_job"] is None
     assert "原v1" in result["reply"] or "实际v1" in result["reply"]
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.payload["expected_timeline_version_id"]
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.payload["expected_timeline_version_id"]
     assert len(state.calls) == 1
 
 
@@ -477,7 +477,7 @@ def receipt_state(tmp_path, monkeypatch):
         [],[],None,[],0,0,'',[],[],[],'declared-producer')
     task = CreationTask('receipt-task','local',plan.id,'declared metadata','knowledge_explanation',owner_user_id=member.member_id)
     repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
-    task = repo.get_creation_task('local',task.id)
+    task = repo.task_records.get_creation_task('local',task.id)
     store = ArtifactStore(tmp_path/'blobs')
     # Succeeded is a seed fact, not a claim that a script/model was executed.
     digest = hashlib.sha256(b'declared receipt producer').hexdigest()

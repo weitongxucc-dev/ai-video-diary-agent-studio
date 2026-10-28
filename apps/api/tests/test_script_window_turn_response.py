@@ -139,7 +139,7 @@ def test_tool_receipt_survives_model_end_before_final_response(api_state, monkey
     assert window['request_id'] == str(request_id) and window['status'] == 'saved'
     assert len([event for event in turn['events'] if event['type'] == 'script_window_request_recorded']) == 1
     assert not turn['result'].get('goal_business_actions')
-    assert state.repository.get_creation_task('local', 'task').confirmed_script_id is None
+    assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
     if terminal == 'stopped':
         assert response.json()['script_window_request'] == window
     assert conversations.record_script_window_request(seen[0], 'local', member, 'task', window) is False

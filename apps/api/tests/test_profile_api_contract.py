@@ -1584,7 +1584,7 @@ def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeyp
         parameters={"language": "zh", "presenter_input_facts": facts},
     )
     monkeypatch.setattr(
-        repo,
+        repo.task_records,
         "get_creation_task",
         lambda ws, task: SimpleNamespace(owner_user_id="member"),
     )

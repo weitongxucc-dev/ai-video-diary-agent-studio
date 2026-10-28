@@ -77,7 +77,7 @@ def command_application(person_render_edit_state,monkeypatch):
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None,reason='native media tools unavailable')
 def test_command_subtitle_font_preview_has_real_media_and_replays_without_render(command_application,granted_media,tmp_path):
     state=command_application;case=state.media.command_preview
-    before_task=state.production.get_creation_task(state.workspace_id,state.task.id)
+    before_task=state.production.task_records.get_creation_task(state.workspace_id,state.task.id)
     before_montage=state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)
     payload={'raw_command':'字幕字号改为64','context_stage':'montage','selected_object_refs':[]}
     queued=state.client.post(state.base_url+'/edits/preview',json=payload)
@@ -113,7 +113,7 @@ def test_command_subtitle_font_preview_has_real_media_and_replays_without_render
     assert not state.runtime.run_once()
     assert state.client.get(queued.json()['result_url']).json()==completed.json()
     assert physical_before=={side:(hashlib.sha256(path.read_bytes()).hexdigest(),path.stat().st_size,path.stat().st_mtime_ns,path.stat().st_ctime_ns) for side,path in files.items()}
-    assert state.production.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id==before_task.current_timeline_version_id
+    assert state.production.task_records.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id==before_task.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)==before_montage
     assert not hasattr(main,'_TASK_MEDIA_HANDLERS') and not hasattr(main.preview_creation_task_edit,'__wrapped__')
     assert not hasattr(main,'_execute_task_media_operation') and not hasattr(main,'_validate_task_media_result')

@@ -44,7 +44,7 @@ class SegmentProductionUseCase:
         self.narration_runtime_facts = narration_runtime_facts
 
     def require_actor(self, workspace_id, task_id, actor, *, connection=None):
-        task = self.repository.get_creation_task(workspace_id, task_id, connection=connection)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
         if actor.workspace_id != workspace_id or task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError('当前成员不能访问此作品段落')
         return task
@@ -223,7 +223,7 @@ class SegmentProductionUseCase:
                 raise ValueError('同一修改请求身份已绑定其他内容')
             return self.read_request(workspace_id, task_id, command.request_id, actor)
         _current, rules = self.verify_revision(workspace_id, task_id, actor, command)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         def submit_guard(conn):
             if write_guard is not None:
                 write_guard(conn)
@@ -245,7 +245,7 @@ class SegmentProductionUseCase:
         job = self.repository.job_records.get_job_run(workspace_id, event.job_id)
         requests = self.repository.list_creation_job_request_states(workspace_id, job.id)
         result = self.repository.segment_revision_result(workspace_id, job.id)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if self.repository.unsettled_segment_units(workspace_id, job.id):
             action, reason = 'query_original', 'original_unit_usage_unknown'
         elif job.status == 'queued' and not requests or (job.status in {'failed', 'cancelled'}
@@ -673,7 +673,7 @@ class SegmentProductionUseCase:
 
     def capture_local(self, request, conn, owner):
         job = self.repository.job_records.get_job_run(request.workspace_id,request.owner_id,connection=conn)
-        task = self.repository.get_creation_task(request.workspace_id,job.task_id,connection=conn)
+        task = self.repository.task_records.get_creation_task(request.workspace_id,job.task_id,connection=conn)
         event = self.repository.execution_records.get_task_event(request.workspace_id,f'event_{job.id}_start',connection=conn).payload
         actor = self.actor_from_event(request.workspace_id,event)
         selected_assets = []
@@ -840,7 +840,7 @@ class SegmentProductionUseCase:
                 prepared = replace(prepared, payload={**prepared.payload, 'request_id': conflict.payload['request_id']})
             def verify_preparation(conn):
                 current_job = self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn)
-                current_task = self.repository.get_creation_task(job.workspace_id, task.id, connection=conn)
+                current_task = self.repository.task_records.get_creation_task(job.workspace_id, task.id, connection=conn)
                 self._validate_visual_decision(current_job, current_task,
                     self.actor_from_event(job.workspace_id, event), owner, prepared.payload, connection=conn)
             self.repository.save_segment_video_preparation(prepared, write_guard=verify_preparation)

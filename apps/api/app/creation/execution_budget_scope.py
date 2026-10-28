@@ -1,6 +1,7 @@
 """Shared authorization scopes reference original execution receipts, never copy usage."""
 from __future__ import annotations
 
+from app.creation.task_input_reads import require_creation_task
 import hashlib
 import json
 import math
@@ -34,7 +35,7 @@ class ExecutionBudgetScopes:
             raise ValueError('预算授权、绑定和预留必须在所属写事务中执行')
 
     def _owner(self, connection, workspace_id, task_id, actor):
-        task = self.repository._require_creation_task(connection, workspace_id, task_id)
+        task = require_creation_task(connection, workspace_id, task_id)
         if actor.workspace_id != workspace_id or task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError('累计授权范围不属于当前成员')
         return task

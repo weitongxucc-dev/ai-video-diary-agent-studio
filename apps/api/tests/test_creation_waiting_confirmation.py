@@ -26,7 +26,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
     state.base = state.repo.create_timeline_version(TimelineVersion("waiting-base", "local", state.task.id,
         "full-base", 3, {"montage": montage}, None))
     with state.repo._connect() as connection:
-        task = state.repo.get_creation_task("local", state.task.id)
+        task = state.repo.task_records.get_creation_task("local", state.task.id)
         from dataclasses import asdict
         task.narration_cache_key = "old"
         task.montage_plan_id = None
@@ -35,7 +35,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
         asset = state.repo.get_asset("local", "asset_1")
         state.repo._claim_workspace_media_reference(connection, workspace_id="local",
             reference=state.repo.workspace_media_reference_for_asset("local", asset.id))
-    state.task = state.repo.get_creation_task("local", state.task.id)
+    state.task = state.repo.task_records.get_creation_task("local", state.task.id)
     state.execution = CreationExecution(state.repo, run_narration=lambda *_: pytest.fail("不应重配音"),
         run_montage_plan=lambda *_: None, run_render=lambda *_: pytest.fail("未确认不应渲染"),
         render_is_valid=lambda *_: False)
@@ -65,7 +65,7 @@ def test_montage_waits_without_failure_or_render_then_confirm_and_continue_once(
     assert state.runtime.scheduler._get(state.request.id).state == "done"
     assert state.repo.get_creation_task_montage_plan("local", state.task.id) == state.produced_plan
     assert state.produced_plan["clips"] == before["clips"]
-    task = state.repo.get_creation_task("local", state.task.id)
+    task = state.repo.task_records.get_creation_task("local", state.task.id)
     assert task.stage_status == "waiting_for_user" and task.narration_cache_key == "old"
     assert task.current_timeline_version_id == state.base.id
     assert submit_creation_stage(state.execution, state.runtime.scheduler,
@@ -116,7 +116,7 @@ def test_waiting_handoff_preserves_cancel_revocation_and_unknown_gate(waiting_st
         finally:
             state.resources.release = True
             state.resources.allowed = False
-    task = state.repo.get_creation_task("local", state.task.id)
+    task = state.repo.task_records.get_creation_task("local", state.task.id)
     assert task.current_timeline_version_id == state.base.id and task.narration_cache_key == "old"
     with state.repo._connect() as connection:
         assert connection.execute("SELECT count(*) FROM device_work_requests WHERE owner_id=? AND unit_key LIKE 'render:%'", (state.normal_job.id,)).fetchone()[0] == 0

@@ -37,7 +37,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     render = RenderStageUseCase(case.repo, metadata, None, None, SimpleNamespace())
     job = case.repo.job_records.get_job_run('local', case.job.id)
     original_audio_calls = list(case.generated)
-    parent_head = case.repo.get_creation_task('local', case.task_id).current_timeline_version_id
+    parent_head = case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id
     baseline = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['generated_bytes']
     if rollback:
         create_track = case.repo.create_subtitle_track
@@ -61,7 +61,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
         case.executor.execute(grant, case.scheduler)
         if rollback and request.unit_key.startswith('render:final-mux:v1:'):
             assert case.scheduler._get(grant.request_id).state == 'failed'
-            current = case.repo.get_creation_task('local', case.task_id)
+            current = case.repo.task_records.get_creation_task('local', case.task_id)
             assert current.current_timeline_version_id == parent_head
             failed = case.repo.job_records.get_job_run('local', job.id)
             assert failed.status == 'failed' and not failed.output_refs
@@ -87,7 +87,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     assert families == ['picture-fragment', 'picture-fragment', 'packet-copy', 'audio-assembly',
         'audio-assembly', 'audio-encode', 'final-mux']
     assert case.generated == original_audio_calls
-    current = case.repo.get_creation_task('local', case.task_id)
+    current = case.repo.task_records.get_creation_task('local', case.task_id)
     assert current.current_timeline_version_id != parent_head
     version = case.repo.get_timeline_version('local', current.current_timeline_version_id)
     assert version.parent_version_id == parent_head and version.snapshot['audio_delivery']['job_id'] == job.id

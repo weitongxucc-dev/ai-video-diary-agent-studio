@@ -407,7 +407,7 @@ class CreationExecutionControl:
             try:
                 start=self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
                 original=CreationExecutionActor.from_event(job.workspace_id,start)
-                task=self.repository.get_creation_task(job.workspace_id,job.task_id)
+                task=self.repository.task_records.get_creation_task(job.workspace_id,job.task_id)
                 if owner.task_authorizations is not None:
                     owner.task_authorizations.ensure(task,original)
                 elif self.verify_identity(original)!='ready':
@@ -436,7 +436,7 @@ class CreationExecutionControl:
                     continue
                 if media.task_authorizations is not None:
                     try:
-                        media.task_authorizations.ensure(self.repository.get_creation_task(job.workspace_id, job.task_id), original)
+                        media.task_authorizations.ensure(self.repository.task_records.get_creation_task(job.workspace_id, job.task_id), original)
                     except TaskAuthorizationDenied as exc:
                         logger.warning("任务媒体作业 %s 的原任务授权不可用，保留待处理：%s",job.id,exc)
                         continue
@@ -477,7 +477,7 @@ class CreationExecutionControl:
                     logger.warning('原PCM作业 %s 结果尚不可核实，保留原请求：%s',job.id,exc)
                     continue
             if job.status == "interrupted":
-                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+                task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
                 request = self.repository.creation_execution_wait_row(
                     job.workspace_id, original.member_id, job.id, job.input_digest)
                 stage = request["unit_key"].split(":", 1)[0] if request is not None else task.stage
@@ -494,7 +494,7 @@ class CreationExecutionControl:
                     expected_free_permit_generation=generation)
             owner = runtime.registrations["creation_job"].owner
             if owner.task_authorizations is not None:
-                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+                task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
                 try:
                     owner.task_authorizations.ensure(task, original)
                 except TaskAuthorizationDenied as exc:
@@ -767,7 +767,7 @@ class CreationExecutionControl:
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="creation task not found") from exc
 

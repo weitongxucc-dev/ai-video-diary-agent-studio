@@ -79,7 +79,7 @@ def test_original_delivery_runs_complete_quality_worker(tmp_path, monkeypatch):
     def completed(workspace_id, task_id, job_id):
         assert job_id == case.job.id
         assert case.repo.job_records.get_job_run(workspace_id, job_id).status == 'succeeded'
-        task = case.repo.get_creation_task(workspace_id, task_id)
+        task = case.repo.task_records.get_creation_task(workspace_id, task_id)
         version = case.repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
         assert version.snapshot['audio_delivery']['job_id'] == job_id
         downloaded = outputs.download(workspace_id, task_id, expected_version_id=version.id, subtitle=False)
@@ -173,7 +173,7 @@ def test_original_delivery_runs_complete_quality_worker(tmp_path, monkeypatch):
         assert evidence['_phases']['clipping']['decoded_pcm']['frame_sample_mapping_matches'] is True
         assert all(item['execution']['process_released'] and item['complete'] for item in measurements)
         assert case.generated == original_tts
-        assert case.repo.get_creation_task('local', case.task_id).current_timeline_version_id == version_id
+        assert case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id == version_id
         assert case.scheduler.pick_and_grant() is None
         print(json.dumps({'render_job_id': job.id, 'quality_job_id': quality_job_id, 'check_id': check_id,
             'artifact_id': artifact.id, 'sha256': artifact.sha256, 'phases': phases,

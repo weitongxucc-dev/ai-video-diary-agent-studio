@@ -190,7 +190,7 @@ def test_original_generation_run_20_20_5_becomes_ready_without_adopting(
         and current["script"]["selection_status"] == "draft"
         and not current["script"]["adoption"]
     )
-    task = state.repository.get_creation_task("local", "task")
+    task = state.repository.task_records.get_creation_task("local", "task")
     assert (
         task.stage == "script"
         and task.stage_status == "waiting_for_user"
@@ -439,7 +439,7 @@ def test_ready_binding_failure_keeps_original_run_partial_and_reuses_completed_r
         and record["script"]["updated_at"] == first["updated_at"]
     )
     assert not record["script"]["draft_complete"] and record["status"] != "draft_ready"
-    task = state.repository.get_creation_task("local", "task")
+    task = state.repository.task_records.get_creation_task("local", "task")
     assert task.stage_status == "running" and task.confirmed_script_id is None
     assert len(calls) == 6
     case.bind_generation_result = bind

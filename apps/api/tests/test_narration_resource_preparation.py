@@ -201,7 +201,7 @@ def test_bilingual_preparation_uses_original_pronunciation_versions_in_digest_an
     monkeypatch.setattr(repository, 'get_versioned_voice_profile', lambda *args: voice)
     entry = PronunciationEntry('term', actor.workspace_id, '曜核', 'zh', 'yao he', 'task', 'task', 'v1')
     repository.save_pronunciation_entry(entry)
-    monkeypatch.setattr(repository, 'get_creation_task', lambda workspace, task: SimpleNamespace(
+    monkeypatch.setattr(repository.task_records, 'get_creation_task', lambda workspace, task: SimpleNamespace(
         visibility='private', owner_user_id=actor.user_id or actor.member_id))
     shape = NarrationPreparationShape('voice', 'v1', '曜核样本', 'zh', 2,
         pronunciation_references=({'id': 'term', 'version': 'v1'},), task_id='task')
@@ -249,11 +249,11 @@ def test_preparation_pronunciation_scope_visibility_and_provider_contract_are_en
         pronunciation_references=({'id': entry.id, 'version': entry.version},))
     with pytest.raises(PermissionError, match='范围'):
         service.prepare(shape, actor, request_id='missing-task')
-    monkeypatch.setattr(repository, 'get_creation_task', lambda *args: SimpleNamespace(
+    monkeypatch.setattr(repository.task_records, 'get_creation_task', lambda *args: SimpleNamespace(
         visibility='private', owner_user_id='someone-else'))
     with pytest.raises(PermissionError, match='当前成员'):
         service.prepare(replace(shape, task_id='task'), actor, request_id='private-task')
-    monkeypatch.setattr(repository, 'get_creation_task', lambda *args: SimpleNamespace(
+    monkeypatch.setattr(repository.task_records, 'get_creation_task', lambda *args: SimpleNamespace(
         visibility='private', owner_user_id=actor.user_id or actor.member_id))
     with pytest.raises(PermissionError, match='范围'):
         service.prepare(replace(shape, task_id='other-task'), actor, request_id='wrong-task')

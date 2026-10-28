@@ -49,7 +49,7 @@ def seed_task(repo: ProductionRepository, workspace_id: str, task_id: str, *, ow
         scenario="knowledge_explanation", stage="montage", owner_user_id=owner_user_id,
     )
     repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
-    assert repo.get_creation_task(workspace_id, task_id).owner_user_id == owner_user_id
+    assert repo.task_records.get_creation_task(workspace_id, task_id).owner_user_id == owner_user_id
 
 
 @pytest.fixture

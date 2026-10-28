@@ -39,7 +39,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
     artifact = repository.execution_records.create_artifact_record(ArtifactRecord(id="artifact-metadata", workspace_id=workspace,
         task_id=task.id, kind="rendered_video", logical_ref=logical_ref, sha256=publication.sha256,
         size_bytes=publication.size_bytes, producer_job_id=producer.id, input_refs=[]))
-    source_task = repository.get_creation_task(workspace, task.id)
+    source_task = repository.task_records.get_creation_task(workspace, task.id)
     assert source_task.owner_user_id == owner and source_task.visibility == "private"
     assert source_task.output_ready and source_task.current_timeline_version_id == version.id
     source_snapshot = asdict(source_task)
@@ -53,7 +53,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
 
     before = counts()
     trace, task_reads, version_reads = [], [], []
-    get_task, get_version, list_artifacts = repository.get_creation_task, repository.get_timeline_version, repository.execution_records.list_artifact_records
+    get_task, get_version, list_artifacts = repository.task_records.get_creation_task, repository.get_timeline_version, repository.execution_records.list_artifact_records
 
     def observe_task(ws, identifier):
         trace.append("task")
@@ -95,7 +95,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
         return ObservedPath(store.resolve_file(logical_ref))
 
     monkeypatch.setattr(main, "production_repo", repository)
-    monkeypatch.setattr(repository, "get_creation_task", observe_task)
+    monkeypatch.setattr(repository.task_records, "get_creation_task", observe_task)
     monkeypatch.setattr(repository, "get_timeline_version", observe_version)
     monkeypatch.setattr(repository.execution_records, "list_artifact_records", observe_artifacts)
     monkeypatch.setattr(main, "_creation_render_is_valid", declared_render)
@@ -113,7 +113,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
         "file.is_file", "file.stat", "file.stat"]
     assert len(task_reads) == 2 and len(version_reads) == 1
     fresh = ProductionRepository(database, tmp_path / "unused-library")
-    assert asdict(fresh.get_creation_task(workspace, task.id)) == source_snapshot
+    assert asdict(fresh.task_records.get_creation_task(workspace, task.id)) == source_snapshot
     assert fresh.get_timeline_version(workspace, version.id) == version
     assert fresh.execution_records.get_artifact_record(workspace, artifact.id) == artifact
     fresh_producer = fresh.job_records.get_job_run(workspace, producer.id)

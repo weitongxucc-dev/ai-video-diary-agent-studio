@@ -169,7 +169,7 @@ class NarrationResourcePreparation(DeviceResourcePreparation):
                 or (voice.workspace_id, voice.id, voice.version) != (actor.workspace_id, shape.voice_profile_id, shape.voice_version)):
             raise PermissionError('声音版本、授权或参考文字不可用于本次模型准备')
         if shape.task_id is not None:
-            task = self.repository.get_creation_task(actor.workspace_id, shape.task_id)
+            task = self.repository.task_records.get_creation_task(actor.workspace_id, shape.task_id)
             if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,
                                     visibility=task.visibility, owner_user_id=task.owner_user_id):
                 raise PermissionError('当前成员不能使用该任务范围的发音词典')

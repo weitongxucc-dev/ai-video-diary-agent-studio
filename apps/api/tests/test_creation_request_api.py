@@ -98,7 +98,7 @@ def test_unknown_relationship_and_today_range_stay_waiting_without_tasks(client_
     revised = c.client.patch(base, headers=c.alice, json={"expected_revision": saved["revision"],
         "output_relation": "series", "material_scope": "workspace_library"})
     assert revised.status_code == 200 and revised.json()["clarification_questions"] == []
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 
 def test_model_cannot_change_original_count_or_turn_identity(client_state):
@@ -132,7 +132,7 @@ def test_original_creation_request_can_be_read_by_trusted_input_without_server_i
     assert c.client.get(lookup, headers=c.bob).status_code == 404
     c.conversations.finish_turn(turn["id"], "completed", "原输入已结束")
     assert c.client.get(lookup, headers=c.alice).status_code == 409
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
     assert create(c, assistant_turn_id=turn["id"]).status_code == 409
 
 
@@ -159,7 +159,7 @@ def test_stale_external_preflight_cannot_partially_confirm_window(client_state):
     assert rejected.json()["detail"]["expected_input_fingerprint"] == "a" * 64
     assert rejected.json()["detail"]["current_input_fingerprint"] == "b" * 64
     assert c.client.get(base, headers=c.alice).json()["confirmed_count"] == 0
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
     replacement = c.client.post(base + "/windows/" + window["id"] + "/replan", headers=c.alice,
         json={"expected_revision": planned["revision"]})
     assert replacement.status_code == 200, replacement.text
@@ -177,7 +177,7 @@ def test_ninth_window_item_and_duplicate_goal_are_rejected(client_state):
     base = "/api/creation-requests/" + saved["id"] + "/windows"
     for goals in [[{"goal": str(i)} for i in range(9)], [{"goal": "相同"}, {"goal": "相同"}]]:
         assert c.client.post(base, headers=c.alice, json={"expected_revision": saved["revision"], "goals": goals}).status_code == 422
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 
 def test_replan_applies_new_goals_and_rejects_old_window_and_revision(client_state):
@@ -219,7 +219,7 @@ def test_replan_applies_new_goals_and_rejects_old_window_and_revision(client_sta
     for _ in range(2):
         response = c.client.post(base + "/windows/" + window["id"] + "/confirm", headers=c.alice, json=confirmation)
         assert response.status_code == 200 and response.json()["confirmed_count"] == 2
-    assert len(c.repository.list_creation_tasks("request-test")) == 2
+    assert len(c.repository.task_records.list_creation_tasks("request-test")) == 2
 
 
 def test_confirm_checks_live_blocking_condition_even_when_digest_is_unchanged(client_state, monkeypatch):
@@ -235,7 +235,7 @@ def test_confirm_checks_live_blocking_condition_even_when_digest_is_unchanged(cl
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "creation_window_blocked"
     assert response.json()["detail"]["reason"] == "content_sources_missing"
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
     assert c.client.get(base, headers=c.alice).json()["current_window"]["id"] == data["current_window"]["id"]
 
 
@@ -254,7 +254,7 @@ def test_stale_assistant_input_cannot_replan_or_revise_request(client_state):
     response = c.client.patch(base + suffix, headers=c.alice, json={"expected_revision": data["revision"]})
     assert response.status_code == 409
     assert c.client.get(base, headers=c.alice).json()["revision"] == data["revision"]
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 
 def test_resource_change_at_adoption_is_safe_and_does_not_create_tasks(client_state, monkeypatch):
@@ -267,7 +267,7 @@ def test_resource_change_at_adoption_is_safe_and_does_not_create_tasks(client_st
     assert response.status_code == 409
     assert response.json()["detail"]["error"] == "creation_window_resource_unavailable"
     assert "private" not in response.text
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 
 def test_language_variants_keep_individual_requirements_through_replan_and_adoption(client_state):
@@ -311,7 +311,7 @@ def test_language_variants_keep_individual_requirements_through_replan_and_adopt
         ("zh-CN", 60, "9:16"), ("en-US", 30, "16:9")]
     assert [(plan["duration_mode"], plan["duration_range_seconds"]) for plan in plans] == agreements
     assert plans[1]["presenter_share_target"] == 0 and plans[1]["lipsync_quality"] == "fast"
-    assert len(c.repository.list_creation_tasks("request-test")) == 2
+    assert len(c.repository.task_records.list_creation_tasks("request-test")) == 2
 
 
 def test_explicit_default_override_is_duplicate_of_inherited_delivery(client_state):
@@ -321,7 +321,7 @@ def test_explicit_default_override_is_duplicate_of_inherited_delivery(client_sta
         json={"expected_revision": saved["revision"], "goals": [{"goal": "同主题"},
             {"goal": "同主题", "name": "另一个名字", "requirements": {"language": "en-US"}}]})
     assert response.status_code == 422
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
 
 
 def prepare_one(c, intent):
@@ -343,7 +343,7 @@ def test_discussion_cannot_be_adopted_or_start_a_task(client_state):
     for kind in ("manual", "delegated_system"):
         rejected = c.client.post(url, headers=c.alice, json={**confirmation, "adoption_kind": kind})
         assert rejected.status_code == 409 and "讨论" in rejected.text
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
     assert c.client.get(base, headers=c.alice).json()["intent"]["kind"] == "discussion"
 
 
@@ -355,7 +355,7 @@ def test_delegated_existing_topic_is_adopted_without_topic_generation(client_sta
     entry = adopted.json()["current_window"]["entries"][0]
     assert entry["plan"]["adoption"]["kind"] == "delegated_system"
     assert entry["plan"]["adoption"]["operator"] == "system"
-    task = c.repository.get_creation_task("request-test", entry["task_id"])
+    task = c.repository.task_records.get_creation_task("request-test", entry["task_id"])
     assert task.stage == "script" and task.selected_topic_id
     topics = c.repository.topic_records.list_topic_candidates("request-test", task.id)
     assert len(topics) == 1 and topics[0].title == "用户已有主题"
@@ -387,7 +387,7 @@ def test_exact_final_copy_is_adopted_atomically_locked_and_replayed(client_state
     assert second.status_code == 200
     entry = first.json()["current_window"]["entries"][0]
     assert second.json()["current_window"]["entries"][0]["task_id"] == entry["task_id"]
-    task = c.repository.get_creation_task("request-test", entry["task_id"])
+    task = c.repository.task_records.get_creation_task("request-test", entry["task_id"])
     assert task.stage == "narration" and task.confirmed_script_id
     script = c.repository.get_creation_task_script("request-test", task.confirmed_script_id)
     assert script.sections[0].content == text
@@ -411,7 +411,7 @@ def test_final_copy_failure_rolls_back_entire_window(client_state):
             "BEGIN SELECT RAISE(ABORT,'copy write failed'); END")
     with pytest.raises(sqlite3.IntegrityError, match="copy write failed"):
         c.client.post(url, headers=c.alice, json=confirmation)
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
     saved = c.client.get(base, headers=c.alice).json()
     assert saved["confirmed_count"] == 0 and saved["current_window"]["status"] == "proposed"
     with c.repository._connect() as conn:
@@ -426,7 +426,7 @@ def test_final_copy_failure_rolls_back_entire_window(client_state):
     assert current["id"] == saved["id"] and current["confirmed_count"] == 1
     assert current["current_window"]["id"] == saved["current_window"]["id"]
     entry = current["current_window"]["entries"][0]
-    task = c.repository.get_creation_task("request-test", entry["task_id"])
+    task = c.repository.task_records.get_creation_task("request-test", entry["task_id"])
     script = c.repository.get_creation_task_script("request-test", task.confirmed_script_id)
     assert task.stage == "narration" and task.selected_topic_id
     assert script.sections[0].content == "用户准确正文" and script.locked_body_digest
@@ -443,7 +443,7 @@ def test_delegated_script_adoption_records_real_version_without_fake_human_actio
     c = client_state
     _base, _data, url, confirmation = prepare_one(c, {"kind": "goal_delegation", "topic_title": "明确主题"})
     adopted = c.client.post(url, headers=c.alice, json=confirmation).json()
-    task = c.repository.get_creation_task("request-test", adopted["current_window"]["entries"][0]["task_id"])
+    task = c.repository.task_records.get_creation_task("request-test", adopted["current_window"]["entries"][0]["task_id"])
     run = ScriptGenerationRun("declared-fixture-run", "request-test", task.id, task.plan_id, task.selected_topic_id,
         "running", {"provider": "declared_fixture"}, "fixture/v1", [{"reference_id": "declared-fixture-source"}])
     c.repository.start_script_generation(run)
@@ -468,7 +468,7 @@ def test_fixed_copy_duration_conflict_keeps_text_and_creates_no_task(client_stat
     response = c.client.post(base + "/windows", headers=c.alice,
         json={"expected_revision": saved["revision"], "goals": [{"goal": "原稿制作"}]})
     assert response.status_code == 409 and "不会自动删词" in response.text
-    assert c.repository.list_creation_tasks("request-test") == []
+    assert c.repository.task_records.list_creation_tasks("request-test") == []
     assert c.client.get(base, headers=c.alice).json()["intent"]["final_script"]["text"] == text
 
 

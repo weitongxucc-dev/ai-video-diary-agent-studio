@@ -159,7 +159,7 @@ def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original
     assert result.status_code == 200, result.text
     body = result.json()
     draft=jsonable_encoder(asdict(repo.get_creation_task_script("local",body["script_id"])))
-    task = repo.get_creation_task("local", body["task_id"])
+    task = repo.task_records.get_creation_task("local", body["task_id"])
     assert task.id != "task_original" and task.confirmed_script_id is None
     assert task.stage == "script" and task.stage_status == "waiting_for_user"
     assert task.current_timeline_version_id is None and task.narration_cache_key is None and task.montage_plan_id is None
@@ -173,12 +173,12 @@ def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original
         "expected_updated_at": "2000-01-01T00:00:00+00:00",
     })
     assert stale_confirm.status_code == 409
-    assert repo.get_creation_task(task.workspace_id, task.id).confirmed_script_id is None
+    assert repo.task_records.get_creation_task(task.workspace_id, task.id).confirmed_script_id is None
     confirm = client.post(f"/api/creation-tasks/{task.id}/scripts/{draft['id']}/confirm", json={
         "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     })
     assert confirm.status_code == 200, confirm.text
-    assert repo.get_creation_task("local", task.id).confirmed_script_id == draft["id"]
+    assert repo.task_records.get_creation_task("local", task.id).confirmed_script_id == draft["id"]
     with repo._connect() as conn:
         assert tuple(conn.execute("SELECT payload,updated_at FROM creation_tasks WHERE id='task_original'").fetchone()) == before_task
         assert tuple(conn.execute("SELECT payload,updated_at FROM creation_task_scripts WHERE id='script_original'").fetchone()) == before_script
@@ -202,7 +202,7 @@ def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(l
     assert client.post(f"/api/creation-tasks/{created['task_id']}/scripts/{draft['id']}/confirm", json={
         "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     }).status_code == 409
-    assert repo.get_creation_task("local", created["task_id"]).confirmed_script_id is None
+    assert repo.task_records.get_creation_task("local", created["task_id"]).confirmed_script_id is None
     with sources._connect() as conn:
         conn.execute("UPDATE knowledge_items SET workspace_id='other' WHERE id='knowledge_own'")
     states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
@@ -267,7 +267,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
         sections=parsed.sections, parameters=parsed.parameters,
     )
     sources.save_source_items("local", [first])
-    sources.save_source_item_to_knowledge("local", first.id, ownership="本人", authorization="本人允许引用",verified_owner_user_id=repo.get_creation_task("local","task_original").owner_user_id)
+    sources.save_source_item_to_knowledge("local", first.id, ownership="本人", authorization="本人允许引用",verified_owner_user_id=repo.task_records.get_creation_task("local","task_original").owner_user_id)
     with sources._connect() as conn:
         conn.execute("UPDATE knowledge_item_versions SET source_url='https://example.test/v1' "
                      "WHERE knowledge_item_id IN (SELECT id FROM knowledge_items WHERE file_reference='manual.md')")
@@ -282,7 +282,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     )
     sources.save_source_items("local", [second])
     versioned = sources.save_source_item_to_knowledge(
-        "local", second.id, ownership="本人", authorization="本人允许引用",verified_owner_user_id=repo.get_creation_task("local","task_original").owner_user_id
+        "local", second.id, ownership="本人", authorization="本人允许引用",verified_owner_user_id=repo.task_records.get_creation_task("local","task_original").owner_user_id
     )
     assert versioned.version == "2"
     # 让已确认文案的引用指向这条真正有版本快照的资料，并同步方案的引用版本。
@@ -317,7 +317,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     # 引用只记到条目与版本，没有段落定位：不猜第一段。
     assert states[0]["locator"] is None
     # A shared task does not disclose a privately owned source's old snapshot.
-    repo.set_creation_task_visibility("local", "task_original", "shared")
+    repo.task_records.set_creation_task_visibility("local", "task_original", "shared")
     sources.set_knowledge_item_visibility("local", versioned.id, "private")
     monkeypatch.setattr(main, "_content_reader", lambda *_: ("another-member", False))
     hidden = client.get(f"/api/production/script-library/{entry['id']}/sources")
@@ -362,7 +362,7 @@ def test_library_use_case_reuse_rolls_back_receipt_failure_and_retries_original_
     from app.schemas import ScriptLibrarySaveRequest, ScriptLibraryReuseRequest
 
     _, repo, sources = library
-    member_id = repo.get_creation_task('local', 'task_original').owner_user_id
+    member_id = repo.task_records.get_creation_task('local', 'task_original').owner_user_id
     draft = ScriptDraftUseCase(repo, read_inputs=None, validate_inputs=None,
         script_goal=None, topic_origin=None, check_draft=None, record_service=None,
         route_snapshot=None, record_adoption=None)
@@ -393,4 +393,4 @@ def test_library_use_case_reuse_rolls_back_receipt_failure_and_retries_original_
     result = case.reuse_entry('local', saved['entry_id'], payload)
     assert case.reuse_entry('local', saved['entry_id'], payload) == result
     assert case.read_request('local', str(payload.request_id), 'reuse') == result
-    assert repo.get_creation_task('local', result['task_id']).confirmed_script_id is None
+    assert repo.task_records.get_creation_task('local', result['task_id']).confirmed_script_id is None

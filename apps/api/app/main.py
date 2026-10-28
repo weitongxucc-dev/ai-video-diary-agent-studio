@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation.task_input_reads import creation_task_from_payload
 from app.creation.media_result_use_case import MediaResultUseCase, MediaResultRejected
 from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
@@ -5687,7 +5688,7 @@ def _creation_request_response(data: dict) -> CreationRequestResponse:
 def _creation_request_item_response(item: dict) -> dict:
     plan = item.get("plan")
     task_payload = item.get("task")
-    task = production_repo._creation_task_from_payload(task_payload) if task_payload else None
+    task = creation_task_from_payload(task_payload) if task_payload else None
     return {**item, "plan": _creation_plan_preview_response(
         production_repo.plan_records.creation_plan_from_payload(plan)
     ).model_dump(mode="json") if plan else None,
@@ -6027,7 +6028,7 @@ def set_creation_plan_visibility_route(
     plan = production_repo.plan_records.get_creation_plan(workspace_id, plan_id)
     if plan.creation_task_id is None:
         raise HTTPException(status_code=404, detail="creation plan not found")
-    task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
+    task = production_repo.task_records.get_creation_task(workspace_id, plan.creation_task_id)
     return _creation_plan_response(plan, task)
 
 
@@ -6041,7 +6042,7 @@ def get_creation_plan(plan_id: str, request: Request) -> CreationPlanResponse:
         plan = production_repo.plan_records.get_creation_plan(workspace_id, plan_id)
         if plan.creation_task_id is None:
             raise KeyError(plan_id)
-        task = production_repo.get_creation_task(workspace_id, plan.creation_task_id)
+        task = production_repo.task_records.get_creation_task(workspace_id, plan.creation_task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation plan not found") from exc
     return _creation_plan_response(plan, task)
@@ -6073,7 +6074,7 @@ app.include_router(build_script_library_router(
 def list_creation_tasks(request: Request) -> CreationTasksResponse:
     workspace_id = current_workspace_id(request)
     viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    tasks = production_repo.list_creation_tasks(
+    tasks = production_repo.task_records.list_creation_tasks(
         workspace_id,
         include_private=_content_include_private(request),
         viewer_user_id=viewer_user_id,
@@ -6087,7 +6088,7 @@ def list_creation_tasks(request: Request) -> CreationTasksResponse:
 
 def _creation_task_or_404(workspace_id: str, task_id: str) -> CreationTask:
     try:
-        return production_repo.get_creation_task(workspace_id, task_id)
+        return production_repo.task_records.get_creation_task(workspace_id, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task not found") from exc
 
@@ -6256,7 +6257,7 @@ def set_creation_task_visibility_route(
         return denied
     workspace_id = current_workspace_id(request)
     try:
-        production_repo.set_creation_task_visibility(workspace_id, task_id, payload.visibility)
+        production_repo.task_records.set_creation_task_visibility(workspace_id, task_id, payload.visibility)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task not found") from exc
     except ValueError as exc:
@@ -7084,7 +7085,7 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
         snapshot = origin["context"]["target_snapshot"]
         base = (actual["base_timeline_version_id"], actual["base_timeline_sequence"])
         if base != (snapshot["timeline_version_id"], snapshot["timeline_sequence"]):
-            task = production_repo.get_creation_task(workspace_id, task_id)
+            task = production_repo.task_records.get_creation_task(workspace_id, task_id)
             version = production_repo.get_timeline_version(workspace_id, base[0])
             successor = _assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request)
             if successor is None or base != (successor["timeline_version_id"], successor["timeline_sequence"]):
@@ -7192,7 +7193,7 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         except KeyError as exc:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不存在。") from exc
         adopted = (candidate.selection_status == "confirmed" and candidate.adoption
-            and production_repo.get_creation_task(workspace_id, task_id).confirmed_script_id == candidate.id)
+            and production_repo.task_records.get_creation_task(workspace_id, task_id).confirmed_script_id == candidate.id)
         if candidate.task_id != task_id or candidate.selection_status != "draft" and not adopted:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不属于当前任务。")
         script_draft = CreationTaskScriptResponse.model_validate(asdict(candidate))
@@ -7881,7 +7882,7 @@ def _ordinary_native_handler(actor,binding):
             raise PermissionError('原生工具不是当前已消费输入与实际SDK会话')
         authorization = case.authorizations
         if conn is None and not initialized:
-            task = production_repo.get_creation_task(source['workspace_id'],source['task_id'])
+            task = production_repo.task_records.get_creation_task(source['workspace_id'],source['task_id'])
             authorization.ensure(task,actor,interactive=True)
             initialized = True
         if authorization.status(source['workspace_id'],source['task_id'],identity=authorization.identity(actor),
@@ -7950,7 +7951,7 @@ def creation_task_input_understanding(task_id: str, request: Request, payload: d
 def creation_task_narration_semantic_review(task_id: str, request: Request, payload: dict):
     from app.assistant.task_business import record_narration_semantic_review
     actor,origin = _local_revision_origin(task_id,request,payload)
-    task = production_repo.get_creation_task(actor.workspace_id,task_id)
+    task = production_repo.task_records.get_creation_task(actor.workspace_id,task_id)
     def guard(conn):
         current = conversation_repo._task_turn_source(conn,origin['assistant_turn_id'],actor.workspace_id,actor.member_id,task_id)
         if (current.get('input_id') or origin['assistant_turn_id']) != origin['input_id']:
@@ -13281,7 +13282,7 @@ def _task_authorizations_for_goal(repository=None):
 def _bind_goal_business_scope(request,goal):
     authorizations=_task_authorizations_for_goal()
     actor=_require_permit_actor(request,goal['workspace_id'])
-    task=production_repo.get_creation_task(goal['workspace_id'],goal['task_id'])
+    task=production_repo.task_records.get_creation_task(goal['workspace_id'],goal['task_id'])
     profile=get_creator_profile(settings.database_path,workspace_id=task.workspace_id,owner_user_id=goal['member_id'])
     memory=(_creator_profile_response(profile).model_dump(mode='json') if profile is not None else
         {'id':'','revision':0,'common_expressions':[],'banned_words':[],'style_preferences':{}})

@@ -96,11 +96,11 @@ class TimelineRestoreUseCase:
             raise PermissionError('当前成员不能读取或恢复此作品的修改')
 
     def history(self, workspace_id, task_id, actor, *, limit=20, before_sequence=None):
-        self.require_actor(self.repository.get_creation_task(workspace_id, task_id), actor)
+        self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
         return self.repository.timeline_history_page(workspace_id, task_id, limit=limit, before_sequence=before_sequence)
 
     def read_request(self, workspace_id, task_id, request_id, actor):
-        self.require_actor(self.repository.get_creation_task(workspace_id, task_id), actor)
+        self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
         return self.repository.restore_requests.receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
 
     def replay(self, workspace_id, task_id, receipt):
@@ -110,14 +110,14 @@ class TimelineRestoreUseCase:
         plan = creation_task_montage_plan_from_payload(payload) if payload else None
         key = version.snapshot.get('narration_cache_key')
         narration = self.repository.get_narration_artifact(workspace_id, key) if key else None
-        return MetadataEditResult(operation, plan, self.repository.get_creation_task(workspace_id, task_id), narration, receipt,
+        return MetadataEditResult(operation, plan, self.repository.task_records.get_creation_task(workspace_id, task_id), narration, receipt,
             receipt.get('execution_readiness'))
 
     def execute(self, command, *, actor, request_id, target_operation_id=None,
                 expected_timeline_version_id=None, expected_timeline_sequence=None, write_guard=None, source=None):
         from app.device_scheduler import RecoveryBlocked
         workspace_id, task_id = command.workspace_id, command.task.id
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         self.require_actor(task, actor)
         member_id = actor.user_id or actor.member_id
         if not request_id or len(request_id) > 128:
@@ -136,7 +136,7 @@ class TimelineRestoreUseCase:
                 raise PermissionError('恢复动作不属于原已消费输入')
             CreationIntentUseCase.reject_discussion_only_input(source_input['raw_command'])
         def guarded(connection):
-            self.require_actor(self.repository.get_creation_task(workspace_id, task_id, connection=connection), actor)
+            self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection), actor)
             if source_input is not None:
                 current_source = self.conversations._task_turn_source(connection, source['assistant_turn_id'], workspace_id, member_id, task_id)
                 if current_source != source_input:
@@ -426,7 +426,7 @@ class TimelineRestoreUseCase:
                     change.prepare_current(workspace_id,task_id,history['section_id'],publication.payload['montage'],segment,job,
                         desired_version=desired_version)
                     with self.repository.creation_execution_read() as reader:
-                        latest=self.repository.get_creation_task(workspace_id,task_id,connection=reader)
+                        latest=self.repository.task_records.get_creation_task(workspace_id,task_id,connection=reader)
                         baseline=self.repository.get_timeline_version(workspace_id,latest.current_timeline_version_id,connection=reader)
                         prospective,_,_=change.compute(latest,baseline.snapshot,history['section_id'],
                             publication.payload['montage'],segment,'restore-permission-preparation',reader,desired_version=desired_version)

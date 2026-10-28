@@ -95,7 +95,7 @@ def history_task(tmp_path, monkeypatch):
     task = CreationTask(id="task_history", workspace_id=WORKSPACE_ID, plan_id=plan.id,
                         name="历史版本测试", scenario="knowledge_explanation")
     repo.plan_confirmation.confirm_creation_plan(plan, task)
-    task = repo.get_creation_task(WORKSPACE_ID, task.id)
+    task = repo.task_records.get_creation_task(WORKSPACE_ID, task.id)
     task.confirmed_script_id = "script_history"
     task.montage_plan_id = "montage_history"
     task.stage = "montage"
@@ -142,7 +142,7 @@ def history_task(tmp_path, monkeypatch):
     other_task = CreationTask(id="task_other", workspace_id=WORKSPACE_ID, plan_id=other_plan.id,
                               name="另一个任务", scenario="knowledge_explanation")
     repo.plan_confirmation.confirm_creation_plan(other_plan, other_task)
-    other_task = repo.get_creation_task(WORKSPACE_ID, other_task.id)
+    other_task = repo.task_records.get_creation_task(WORKSPACE_ID, other_task.id)
     other_task.confirmed_script_id = "script_other"
     other_task.montage_plan_id = "montage_other"
     other_montage = montage_for(other_task.id, "script_other", "montage_other",
@@ -195,10 +195,10 @@ def test_old_version_detail_reads_its_own_snapshot_without_touching_current(hist
     assert [cue["text"] for cue in body["subtitle_tracks"][0]["cues"]] == ["旧版本文案"]
 
     # 当前版本与指针都不得因为查看旧版本而变化。
-    assert repo.get_creation_task(WORKSPACE_ID, task_id).current_timeline_version_id == "timeline_history_v2"
+    assert repo.task_records.get_creation_task(WORKSPACE_ID, task_id).current_timeline_version_id == "timeline_history_v2"
     listed = client.get(f"/api/creation-tasks/{task_id}/timeline/versions").json()
     assert listed["current_version_id"] == "timeline_history_v2"
-    assert repo.get_creation_task(WORKSPACE_ID, task_id).montage_plan_id == "montage_history"
+    assert repo.task_records.get_creation_task(WORKSPACE_ID, task_id).montage_plan_id == "montage_history"
     assert repo.get_creation_task_montage_plan(WORKSPACE_ID, task_id)["cues"][0]["text"] == "当前版本文案"
     assert repo.get_creation_task_montage_plan(WORKSPACE_ID, task_id)["output_path"] == "artifacts/task_history/v2.mp4"
 
@@ -272,7 +272,7 @@ def test_history_detail_preserves_original_operation_from_list(history_task):
     summary=next(item for item in listed.json()['items'] if item['id']==version.id)
     for key,expected in [('operation_id',operation.id),('operation_type','EditGraphicOverlay')]:
         assert detail.json()['version'][key]==summary[key]==expected
-    assert repo.get_creation_task(WORKSPACE_ID,task_id).current_timeline_version_id==later.id
+    assert repo.task_records.get_creation_task(WORKSPACE_ID,task_id).current_timeline_version_id==later.id
 
 
 def test_history_detail_without_source_operation_keeps_null(history_task):

@@ -30,7 +30,7 @@ class PacketCopyAssembly:
 
     def recipe(self, job, *, connection=None):
         with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-            task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn)
             plan = dict(plan)
             for transient in ('status', 'message', 'output_path', 'subtitle_path', 'updated_at'):

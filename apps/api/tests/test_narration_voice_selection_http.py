@@ -19,7 +19,7 @@ def http_state(state, monkeypatch):
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'workspace')
     monkeypatch.setattr(main, '_content_reader', lambda request, workspace: ('owner', False))
     monkeypatch.setattr(main, '_exact_edit_access', lambda task_id, request, **kwargs:
-        (state.repo.get_creation_task('workspace', task_id), request.headers.get('X-Test-Member', 'owner')))
+        (state.repo.task_records.get_creation_task('workspace', task_id), request.headers.get('X-Test-Member', 'owner')))
     conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, 'conversation_repo', conversations)
     app = FastAPI()

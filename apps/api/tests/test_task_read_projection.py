@@ -77,7 +77,7 @@ def test_all_nested_task_responses_agree_after_edit_undo_and_redo(person_render_
             response = state.client.get(url)
             assert response.status_code == 200, response.text
             nested.append(response.json()[field])
-        current = state.production.get_creation_task(state.workspace_id, state.task.id)
+        current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
         plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         item = CreationRequestItemResponse.model_validate(main._creation_request_item_response({
             "ordinal": 1, "plan_id": plan.id, "task_id": current.id,
@@ -118,7 +118,7 @@ def test_no_history_and_script_revision_rule_are_real_entity_facts(tmp_path,monk
     item=client.get('/api/creation-tasks').json()['items'][0]
     assert item['timeline_sequence']==0 and not item['can_undo'] and not item['can_redo']
     from app.creation.projection import project_task_summary
-    task=repo.get_creation_task('local','task')
+    task=repo.task_records.get_creation_task('local','task')
     script=replace(task,confirmed_script_id='script',stage='script',stage_status='failed')
     assert script.can_revise_script
     assert project_task_summary(repo,script).summary['can_revise_script'] is True

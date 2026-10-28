@@ -27,7 +27,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     conversation = conversations.create(state.workspace_id, state.member.member_id, "task", state.task.id)
     raw = "把当前镜头裁剪到左边，保留旁白"
     conversation = conversations.save_draft(conversation["id"], state.workspace_id, state.member.member_id, raw, conversation["draft_version"])
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     turn, _ = conversations.create_turn_idempotent(conversation["id"], state.workspace_id, state.member.member_id,
         raw, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": task.id,
@@ -97,7 +97,7 @@ def test_lifecycle_driver_completes_preview_and_projects_user_decision_once(stat
             "expected_timeline_sequence": state.version.sequence})
         assert result.status_code == 200, result.text
         outcome = await_projection(state, lambda item: item["result"].get("continuation", {}).get("status") == "rejected")
-        assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.version.id
+        assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.version.id
     assert outcome["result"]["edit_preview"] is False
     events = outcome["events"]
     assert main._reconcile_assistant_business_results() == 0
@@ -173,7 +173,7 @@ def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state
     state.finish(edit_request=located.model_dump(mode="json"))
     main.start_assistant_continuation_driver()
     assert current(state)["result"]["response"]["edit_request"]["status"] == "unknown"
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     event_id, fresh = main._claim_edit_request(task, state.member.member_id, request_id, "preview", {"fixture": "late rejection"})
     assert fresh
     main._save_edit_request_result(task, event_id, main.JSONResponse(status_code=409, content={"detail": "original turn ended"}))

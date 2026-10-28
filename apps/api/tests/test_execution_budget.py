@@ -18,7 +18,7 @@ def scope_case(tmp_path):
     actor = CreationExecutionActor('local', 'scope-owner')
     with repo._connect() as conn:
         for task_id in (first, second):
-            task = repo.get_creation_task('local', task_id)
+            task = repo.task_records.get_creation_task('local', task_id)
             task.owner_user_id = actor.member_id
             conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
                 (json.dumps(asdict(task), default=str), 'local', task_id))

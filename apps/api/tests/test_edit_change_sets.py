@@ -59,7 +59,7 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
         else:
             assert saved['clips'] == original['clips']
         if action == 'subtitle':
-            tracks = repo.list_subtitle_tracks('local', 'task', timeline_version_id=repo.get_creation_task('local', 'task').current_timeline_version_id)
+            tracks = repo.list_subtitle_tracks('local', 'task', timeline_version_id=repo.task_records.get_creation_task('local', 'task').current_timeline_version_id)
             assert tracks[0].style['enabled'] is False
         if action == 'picture':
             assert saved['clips'][1]['visual_effects']['exposure'] == .15
@@ -100,7 +100,7 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
         response = client.post('/api/creation-tasks/task/edits/exact', json={
             'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}})
         assert response.status_code == 409, response.text
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == ('next' if failure == 'version' else 'timeline')
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == ('next' if failure == 'version' else 'timeline')
         assert repo.list_edit_operations('local', 'task') == []
         assert repo.list_edit_intents('local', 'task') == []
         assert repo.list_edit_proposals('local', 'task') == []
@@ -192,7 +192,7 @@ def test_source_change_after_binding_before_direct_transaction_creates_no_lineag
         response = client.post('/api/creation-tasks/task/edits/exact', json=payload)
         assert called
         assert response.status_code == (403 if change == 'owner' else 409), response.text
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
         assert repo.list_edit_intents('local', 'task') == []
         assert repo.list_edit_proposals('local', 'task') == []
         assert repo.list_edit_operations('local', 'task') == []
@@ -243,7 +243,7 @@ def test_direct_adoption_tail_failure_preserves_verify_order_and_rolls_back_line
     assert repo.list_edit_proposals('workspace_a','task-a')==[]
     assert repo.list_edit_operations('workspace_a','task-a')==[]
     assert repo.list_timeline_versions('workspace_a','task-a')==[base]
-    assert repo.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
+    assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
     confirmed, applied, saved, task = repo.confirm_direct_edit(command,intent,proposal,change,verify_sources=verify)
     assert sources==['before-lineage','before-lineage']
     assert confirmed.status=='confirmed' and applied==operation and saved==version and task.current_timeline_version_id==version.id

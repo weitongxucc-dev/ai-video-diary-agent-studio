@@ -544,7 +544,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
                           {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10}])
     payload = creation_task_montage_plan_to_payload(plan)
     with repo._connect() as conn:
-        task = repo.get_creation_task('local', 'task')
+        task = repo.task_records.get_creation_task('local', 'task')
         task.montage_plan_id = plan.id
         task.stage = 'montage'
         task.owner_user_id = actor.member_id
@@ -631,7 +631,7 @@ def test_color_preview_on_21_shots_renders_only_representative_silent_window(tmp
             assert float(metadata['format']['duration']) == pytest.approx(5, abs=.05)
             assert [stream['codec_type'] for stream in metadata['streams']] == ['video']
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
         locked = client.post(path, json={**payload, 'clip_ids':['clip_0']})
         assert locked.status_code == 409 and '锁定' in locked.text
         asset = repo.get_asset('local', 'asset')
@@ -707,7 +707,7 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
             has_fade = event_input.payload['media_input']['plan']['clips'][0]['visual_effects'].get('fade_out_seconds', 0) > 0
             assert (max(raw[-3:]) < 8) if has_fade else (raw[-1] > 240)
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
     finally:
         runtime.stop(0)
 

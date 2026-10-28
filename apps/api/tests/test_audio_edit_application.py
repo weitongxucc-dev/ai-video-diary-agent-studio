@@ -49,7 +49,7 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     draft=client.post(url+'?draft=true',json=edit)
     assert draft.status_code==200,draft.text
     assert repo.job_records.list_job_runs('local','task')==before_jobs and repo.execution_records.list_artifact_records('local','task')==before_artifacts
-    assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id==base.id
     submitted=client.post(url,json=edit)
     assert submitted.status_code==202,submitted.text
     receipt=submitted.json();result=settled(client,runtime,receipt)
@@ -59,7 +59,7 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     for side in ('before','after'):
         audio=client.get(proposal['preview'][side]['audio_url']);assert audio.status_code==200
         with wave.open(io.BytesIO(audio.content)) as stream:assert stream.getframerate()==48000
-    assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id==base.id
     confirms=[];original=repo.edit_adoption.confirm
     def observed_confirm(*args,**kwargs):
         if kwargs.get('operation').operation_type=='EditAudioTimeline':
@@ -71,7 +71,7 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     endpoint='/api/creation-tasks/task/edits/'+proposal['id']+'/confirm'
     applied=client.post(endpoint,json=request);assert applied.status_code==200,applied.text
     first=applied.json();assert len(confirms)==1
-    current=repo.get_creation_task('local','task');assert current.current_timeline_version_id!=base.id
+    current=repo.task_records.get_creation_task('local','task');assert current.current_timeline_version_id!=base.id
     replay=client.post(endpoint,json=request);assert replay.status_code==200 and replay.json()['operation']==first['operation']
     assert len(confirms)==1 and len(repo.list_edit_operations('local','task'))==1
     fixed=client.get('/api/creation-tasks/task/edits/'+proposal['id']+'/result');assert fixed.status_code==200
@@ -120,7 +120,7 @@ def test_exact_command_and_original_audio_share_original_job_and_recording_block
     published=[row for row in repo.execution_records.list_artifact_records('local','task') if row.producer_job_id==raw.json()['job_id']]
     assert len(published)==3 and next(row for row in published if row.logical_ref==new_ref).kind=='audio_source'
     assert calls[-1][1]==raw.json()['job_id'] and len(calls)==3
-    assert repo.get_creation_task('local','task').current_timeline_version_id==next_base.id
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id==next_base.id
     monkeypatch.setattr(main,'creation_execution_mode','scheduled')
     blocked=client.post('/api/creation-tasks/task/audio/preview',json={'base_version_id':next_base.id,'action':'replace_narration',
         'target_id':graph.tracks[0].clips[0].id,'values':{'source_ref':'artifacts/task/fixture-voice.wav'}})

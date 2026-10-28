@@ -98,7 +98,7 @@ def recording_task(tmp_path, monkeypatch):
         id="narration_old", workspace_id=workspace_id, task_id=task_id, script_id=script_id,
         voice_profile_id="voice_1", cache_key="old_voice", audio_path=str(old_audio),
         duration_seconds=1, sample_rate=16_000, model_id="test"))
-    task = repo.get_creation_task(workspace_id, task_id)
+    task = repo.task_records.get_creation_task(workspace_id, task_id)
     task.confirmed_script_id = script_id
     task.narration_cache_key = "old_voice"
     task.montage_plan_id = "montage_recording"
@@ -148,7 +148,7 @@ def recording_task(tmp_path, monkeypatch):
 
 
 def _prepare_first_recording_adoption(repo: ProductionRepository, task_id: str) -> None:
-    task = repo.get_creation_task("local", task_id)
+    task = repo.task_records.get_creation_task("local", task_id)
     task.stage = "narration"
     task.stage_status = "not_started"
     task.status = "running"
@@ -184,8 +184,8 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     assert saved_response.status_code == 200, saved_response.text
     saved = saved_response.json()
     assert saved["applied"] is False
-    assert repo.get_creation_task("local", task_id).narration_cache_key is None
-    assert repo.get_creation_task("local", task_id).stage == "narration"
+    assert repo.task_records.get_creation_task("local", task_id).narration_cache_key is None
+    assert repo.task_records.get_creation_task("local", task_id).stage == "narration"
     assert client.get(route).json()["items"][0]["applied"] is False
 
     adopted = client.post(route + "/adopt", json={
@@ -198,7 +198,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     assert body["source_kind"] == "recorded"
     assert body["model_id"] is None and body["voice_profile_id"] is None
     assert body["task"]["stage"] == "montage"
-    task = repo.get_creation_task("local", task_id)
+    task = repo.task_records.get_creation_task("local", task_id)
     assert task.narration_cache_key == body["audio_reference"].removeprefix("narration://artifact/")
     assert task.montage_plan_id is None and task.current_timeline_version_id is None
     saved_artifact = repo.get_narration_artifact("local", task.narration_cache_key)
@@ -298,7 +298,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     )
     with restarted._connect() as conn:
         digest, resources = cpu_render_facts(
-            restarted, conn, restarted.get_creation_task("local", task_id),
+            restarted, conn, restarted.task_records.get_creation_task("local", task_id),
             current_plan, CpuRenderLimits(1024 * 1024, 1, 30),
         )
     assert digest.startswith("render:")
@@ -343,8 +343,8 @@ def test_initial_recording_adoption_rejects_ambiguous_or_stale_script(recording_
         "source_section_id": "section_1",
     })
     assert response.status_code == 409
-    assert repo.get_creation_task("local", task_id).narration_cache_key is None
-    assert repo.get_creation_task("local", task_id).stage == "narration"
+    assert repo.task_records.get_creation_task("local", task_id).narration_cache_key is None
+    assert repo.task_records.get_creation_task("local", task_id).stage == "narration"
 
 
 def test_initial_recording_rejects_script_content_changed_after_save(recording_task):
@@ -369,8 +369,8 @@ def test_initial_recording_rejects_script_content_changed_after_save(recording_t
     })
     assert response.status_code == 409
     assert "确认文案已变化" in response.text
-    assert repo.get_creation_task("local", task_id).narration_cache_key is None
-    assert repo.get_creation_task("local", task_id).stage == "narration"
+    assert repo.task_records.get_creation_task("local", task_id).narration_cache_key is None
+    assert repo.task_records.get_creation_task("local", task_id).stage == "narration"
 
 
 def test_recording_upload_preview_and_confirm_replace_one_narration_track(recording_task, tmp_path):
@@ -384,7 +384,7 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
     assert client.get(saved["audio_url"]).content == wav_bytes()
     assert client.get(route + "/audio/recordings").json()["items"][0]["source_ref"] == saved["source_ref"]
     assert client.get(route + "/audio/recordings").json()["items"][0]["applied"] is False
-    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
+    assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == version_id
     assert repo.get_creation_task_montage_plan("local", task_id)["audio_timeline"] is None
 
     preview = client.post(route + "/audio/preview", json={
@@ -395,16 +395,16 @@ def test_recording_upload_preview_and_confirm_replace_one_narration_track(record
     proposal = preview.json()["proposal"]
     assert proposal["preview"]["after"]["audio_url"] == saved["audio_url"]
     assert proposal["invalidated_refs"] == ["artifacts/task_recording/old.mp4", "artifacts/task_recording/old.srt"]
-    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
+    assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == version_id
     confirmed = client.post(route + f"/edits/{proposal['id']}/confirm", json={})
     assert confirmed.status_code == 200, confirmed.text
-    current = repo.get_creation_task("local", task_id)
+    current = repo.task_records.get_creation_task("local", task_id)
     assert current.current_timeline_version_id != version_id
     montage = repo.get_creation_task_montage_plan("local", task_id)
     assert montage["audio_timeline"]["tracks"][0]["clips"][0]["source_ref"] == saved["source_ref"]
     assert montage["audio_timeline"]["tracks"][0]["clips"] == [montage["audio_timeline"]["tracks"][0]["clips"][0]]
     assert montage["output_path"] is None and montage["status"] == "ready"
-    assert repo.get_creation_task("local", task_id).narration_cache_key == "old_voice"
+    assert repo.task_records.get_creation_task("local", task_id).narration_cache_key == "old_voice"
     assert client.get(route + "/audio/recordings").json()["items"][0]["applied"] is True
     assert (tmp_path / "old.wav").read_bytes() == wav_bytes()
     assert client.get(saved["audio_url"]).content == wav_bytes()
@@ -451,7 +451,7 @@ def test_recording_stays_blocked_in_scheduled_mode(recording_task, monkeypatch):
         "target_id": "audio-narration-main", "values": {"source_ref": saved["source_ref"]}}).status_code == 503
     assert client.post(f"/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm",
                        json={}).status_code == 503
-    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
+    assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == version_id
 
 
 @pytest.mark.parametrize("change", ["track_locked", "clip_locked", "split", "moved", "same_source"])
@@ -491,7 +491,7 @@ def test_recording_preview_rejects_person_render_and_unowned_source(recording_ta
         conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE workspace_id=? AND task_id=?",
                      (json.dumps(montage), "local", task_id))
     assert client.post(route + "/audio/preview", json=payload).status_code == 422
-    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
+    assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == version_id
 
 
 def test_recording_proposal_cannot_apply_after_version_changes(recording_task):
@@ -551,7 +551,7 @@ def test_equal_size_recording_change_rejects_old_proposal(recording_task):
     assert changed_preview.status_code == 202
     assert client.media_runtime.run_once()
     assert repo.job_records.get_job_run("local", changed_preview.json()["job_id"]).status == "failed"
-    assert repo.get_creation_task("local", task_id).current_timeline_version_id == version_id
+    assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == version_id
     assert repo.get_creation_task_montage_plan("local", task_id)["output_path"] == "artifacts/task_recording/old.mp4"
 
 
@@ -574,7 +574,7 @@ def test_replacing_narration_preserves_subtitle_text_but_requires_review(recordi
     assert preview.status_code == 200, preview.text
     confirmed = client.post(route + f"/edits/{preview.json()['proposal']['id']}/confirm", json={})
     assert confirmed.status_code == 200, confirmed.text
-    current_version = repo.get_creation_task("local", task_id).current_timeline_version_id
+    current_version = repo.task_records.get_creation_task("local", task_id).current_timeline_version_id
     tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
     assert len(tracks) == 1
     assert tracks[0].status == "unavailable"
@@ -602,7 +602,7 @@ def test_volume_edit_keeps_subtitle_track_valid(recording_task):
     confirmed = client.post(f"/api/creation-tasks/{task_id}/edits/{preview.json()['proposal']['id']}/confirm",
                             json={})
     assert confirmed.status_code == 200, confirmed.text
-    current_version = repo.get_creation_task("local", task_id).current_timeline_version_id
+    current_version = repo.task_records.get_creation_task("local", task_id).current_timeline_version_id
     tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
     assert len(tracks) == 1
     assert tracks[0].status == "valid"
@@ -665,7 +665,7 @@ def recording_metadata(tmp_path, monkeypatch):
         material_rule_summary='',model_snapshot=[],confirmation_points=[],blockers=[],preflight_fingerprint='declared')
     task = CreationTask('task_metadata','local',plan.id,'metadata recording','knowledge_explanation',owner_user_id=member.member_id)
     repo.plan_confirmation.confirm_creation_plan(plan,task,verified_owner_user_id=member.member_id)
-    task = repo.get_creation_task('local',task.id)
+    task = repo.task_records.get_creation_task('local',task.id)
     now = utc_now().isoformat()
     script = {'id':'script_metadata','workspace_id':'local','task_id':task.id,'run_id':'declared-run','topic_id':'declared-topic',
         'title':'declared script','language':'zh-CN','sections':[{'id':'section_1','title':'正文','content':'真实待制作文案',
@@ -724,7 +724,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     assert body['source_kind']=='recorded' and body['model_id'] is None and body['voice_profile_id'] is None
     assert body['task']['stage']=='montage' and body['source_artifact_ref']==state.source.logical_ref
     assert client.get(state.route).json()['items'][0]['applied'] is True
-    current = repo.get_creation_task('local',task.id)
+    current = repo.task_records.get_creation_task('local',task.id)
     artifact = repo.get_narration_artifact('local',current.narration_cache_key)
     segment, = repo.list_narration_segments('local',task.id)
     assert (segment.source_kind,segment.source_section_id,segment.text)==('recorded','section_1','真实待制作文案')
@@ -753,7 +753,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     repo.save_creation_task_montage_plan('local',task.id,montage.id,creation_task_montage_plan_to_payload(montage))
     assert client.get(state.route).json()['items'][0]['applied'] is True
     with repo._connect() as conn:
-        current = repo.get_creation_task('local',task.id)
+        current = repo.task_records.get_creation_task('local',task.id)
         current.narration_cache_key = None
         conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
             (json.dumps(asdict(current),default=str),'local',task.id))
@@ -780,7 +780,7 @@ def test_recording_metadata_rejects_ambiguous_then_changed_script_without_partia
     write_script({**state.script,'sections':[{**state.script['sections'][0],'content':'已修改的文案正文'}]})
     changed = client.post(state.route+'/adopt',json=state.payload)
     assert changed.status_code==409
-    current = repo.get_creation_task('local',task.id)
+    current = repo.task_records.get_creation_task('local',task.id)
     assert current.stage=='narration' and current.narration_cache_key is None
     assert repo.list_narration_segments('local',task.id)==[]
     with repo._connect() as conn:

@@ -59,7 +59,7 @@ class ScriptGenerationUseCase:
         self, workspace_id: str, task_id: str, *, viewer_user_id: str | None,
     ) -> CreationTask:
         try:
-            task = self.repository.get_creation_task(workspace_id, task_id)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id)
             plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise ScriptGenerationRejected(

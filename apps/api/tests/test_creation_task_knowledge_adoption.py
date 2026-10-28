@@ -35,7 +35,7 @@ def knowledge(state, identity='additional', *, owner=None, workspace='local'):
 
 def command(state, item, *, request_id=None):
     plan = state.repository.plan_records.get_creation_plan('local', 'plan')
-    task = state.repository.get_creation_task('local', 'task')
+    task = state.repository.task_records.get_creation_task('local', 'task')
     return {'request_id': request_id or str(uuid4()),
         'expected_plan_updated_at': plan.updated_at.isoformat(),
         'expected_task_updated_at': task.updated_at.isoformat(),
@@ -64,7 +64,7 @@ def test_append_is_atomic_replayable_and_preserves_old_script_and_run(state, mon
     assert receipt['next_step'] == 'generate_new_script'
     assert receipt['added_references'][0]['id'] == item.id
     assert receipt['previous_references'][0]['id'] == 'fixture'
-    task = state.repository.get_creation_task('local', 'task')
+    task = state.repository.task_records.get_creation_task('local', 'task')
     assert task.id == old.task_id and task.selected_topic_id == old.topic_id
     assert task.stage == 'script' and task.stage_status == 'not_started'
     assert rows(state, historical) == historical
@@ -240,7 +240,7 @@ def test_exact_historical_version_survives_head_update_and_does_not_replace_exis
     assert response.status_code == 200, response.text
     assert response.json()['added_references'][0]['version'] == '1'
     plan = state.repository.plan_records.get_creation_plan('local', 'plan')
-    task = state.repository.get_creation_task('local', 'task')
+    task = state.repository.task_records.get_creation_task('local', 'task')
     sources, refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     assert any(ref['object_id'] == first.id and ref['version_or_identity'] == '1' for ref in refs)
     assert any('1200' in source.text and '1600' not in source.text for source in sources)
@@ -276,7 +276,7 @@ def test_reply_transfer_after_adoption_keeps_historical_script_immutable(state, 
     old = saved_agent_draft(state)
     assert adopt(state, command(state, knowledge(state))).status_code == 200
     plan = state.repository.plan_records.get_creation_plan('local', 'plan')
-    task = state.repository.get_creation_task('local', 'task')
+    task = state.repository.task_records.get_creation_task('local', 'task')
     _, refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
     text = '基于新增资料的明确回复。'
     kwargs = dict(request_id=str(uuid4()), reply_text=text,

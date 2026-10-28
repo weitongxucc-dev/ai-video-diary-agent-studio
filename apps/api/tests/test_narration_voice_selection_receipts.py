@@ -39,7 +39,7 @@ def state(tmp_path):
 
 def command(state, **changes):
     plan = state.repo.plan_records.get_creation_plan("workspace", "plan")
-    task = state.repo.get_creation_task("workspace", "task")
+    task = state.repo.task_records.get_creation_task("workspace", "task")
     return dict(workspace_id="workspace", task_id="task", member_id="owner", request_id=str(uuid4()),
         voice_profile_id="voice-1", voice_version="v1", expected_plan_updated_at=plan.updated_at,
         expected_task_updated_at=task.updated_at) | changes
@@ -57,7 +57,7 @@ def test_selection_replay_and_query_preserve_the_original_receipt_after_another_
     CreationTaskNarrationVoiceSelectionResponse.model_validate(first)
     assert first["selected_voice"]["profile_id"] == "voice-1" and first["previous_voice"] is None
     assert first["member_id"] == "owner" and first["confirmed_script_id"] == "confirmed-script"
-    current = state.repo.get_creation_task("workspace", "task")
+    current = state.repo.task_records.get_creation_task("workspace", "task")
     assert current.stage == "narration" and current.stage_status == "not_started"
     assert current.selected_topic_id == "original-topic" and current.confirmed_script_id == "confirmed-script"
     assert not state.repo.plan_records.get_creation_plan("workspace", "plan").blockers
@@ -178,7 +178,7 @@ def test_request_and_receipt_cannot_be_reused_for_another_owned_task(state):
     body = command(state)
     state.repo.select_creation_task_narration_voice(**body)
     plan = state.repo.plan_records.get_creation_plan("workspace", "plan")
-    task = state.repo.get_creation_task("workspace", "task")
+    task = state.repo.task_records.get_creation_task("workspace", "task")
     second_plan, second_task = state.repo.plan_confirmation.confirm_creation_plan(
         replace(plan, id="plan-2", creation_task_id=None), replace(task, id="task-2", plan_id="plan-2"),
         verified_owner_user_id="owner")

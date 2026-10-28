@@ -120,7 +120,7 @@ def case(tmp_path, monkeypatch):
 
     def write(actor, task):
         # Trusted owner callback re-reads canonical task ownership, no caller flag.
-        current = repository.get_creation_task(actor.workspace_id, task.id)
+        current = repository.task_records.get_creation_task(actor.workspace_id, task.id)
         if current.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("current task is not writable")
 

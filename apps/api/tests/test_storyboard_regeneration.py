@@ -58,7 +58,7 @@ def state(tmp_path, monkeypatch):
     for track in tracks:
         state.repo.create_subtitle_track(track)
     state.repo.create_cover_asset(cover)
-    state.task = state.repo.get_creation_task("ws", state.task.id)
+    state.task = state.repo.task_records.get_creation_task("ws", state.task.id)
     state.actor = CreationExecutionActor("ws", state.member.member_id)
     def forbidden(*args, **kwargs):
         pytest.fail("storyboard-only work must not execute narration, rendering or a synchronous job")
@@ -91,7 +91,7 @@ def state(tmp_path, monkeypatch):
 
 
 def inputs(state):
-    task = state.repo.get_creation_task("ws", state.task.id)
+    task = state.repo.task_records.get_creation_task("ws", state.task.id)
     script = state.repo.get_creation_task_script("ws", task.confirmed_script_id)
     plan = state.repo.plan_records.get_creation_plan("ws", task.plan_id)
     version = state.repo.get_timeline_version("ws", task.current_timeline_version_id)
@@ -108,7 +108,7 @@ def run(state):
 
 def test_http_queue_original_receipt_granted_commit_and_undo(state):
     payload = inputs(state)
-    task = state.repo.get_creation_task("ws", state.task.id)
+    task = state.repo.task_records.get_creation_task("ws", state.task.id)
     script, plan = state.execution.validate_input("ws", task, payload["script_id"], payload["input_digest"])
     assert state.repo.get_narration_artifact("ws", task.narration_cache_key).script_id == script.id
     state.owner.stage_facts(task, script, plan, "montage_plan")
@@ -161,7 +161,7 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
 
 
 def adopted(state):
-    return (state.repo.get_creation_task("ws", state.task.id),
+    return (state.repo.task_records.get_creation_task("ws", state.task.id),
         state.repo.get_creation_task_montage_plan("ws", state.task.id),
         state.repo.list_timeline_versions("ws", state.task.id),
         state.repo.list_narration_segments("ws", state.task.id, "fixed-script"))
@@ -351,7 +351,7 @@ def test_original_ready_audio_replans_30_through_existing_storyboard_request(sta
     asset = state.repo.get_asset('ws', state.asset.id)
     state.repo._save_asset(replace(asset, duration_seconds=40,
         segments=[replace(asset.segments[0], end_seconds=40)]))
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     plan = state.repo.plan_records.get_creation_plan('ws', task.plan_id)
     plan.duration_target_seconds = 30
     with state.repo._connect() as conn:
@@ -434,7 +434,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     assert completed['status'] == 'succeeded'
     job = state.repo.job_records.get_job_run('ws', receipt['job_id'])
     start = state.repo.execution_records.get_task_event('ws', f'event_{job.id}_start')
-    task = state.repo.get_creation_task('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('ws', state.task.id)
     base = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
     confirmed = replace(base, id='confirmed-storyboard-head', parent_version_id=base.id, sequence=base.sequence+1,
         created_by_operation_id=None)
@@ -550,7 +550,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
         first = case.scheduler.pick_and_grant(); assert first is not None
         case.executor.execute(first, case.scheduler)
         case.control.cancel('local', case.task.id, case.actor, case.runtime, verify_media=False)
-        task = repo.get_creation_task('local', case.task.id)
+        task = repo.task_records.get_creation_task('local', case.task.id)
         base = repo.get_timeline_version('local', task.current_timeline_version_id)
         before = repo.get_creation_task_montage_plan('local', task.id)
         payload = StoryboardRegenerationRequest.model_validate({'request_id': str(uuid4()),
@@ -599,7 +599,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
         else:
             case.executor.execute(grant, case.scheduler)
         assert len(observed) == 1
-        current = repo.get_creation_task('local', task.id)
+        current = repo.task_records.get_creation_task('local', task.id)
         if outcome in {'normal', 'unknown_commit'}:
             assert current.current_timeline_version_id != base.id, repo.job_records.get_job_run('local', receipt['job_id']).failure_reason
             result = case.control.regenerate_storyboard('local', task.id, payload, case.actor, case.runtime)
