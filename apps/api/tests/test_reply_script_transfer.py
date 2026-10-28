@@ -311,7 +311,10 @@ def test_existing_task_transfer_does_not_require_plan_created_from_reply(tmp_pat
     assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
 
 
-def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_version(tmp_path: Path) -> None:
+def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_version(tmp_path: Path, monkeypatch) -> None:
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_for", forbidden)
     repo, plan, task = ready_task_for_transfer(tmp_path)
     _, _, original = transfer(repo, plan, task)
     current_task = repo.task_records.get_creation_task(WORKSPACE, task.id)
@@ -394,11 +397,11 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
     )
     assert confirmed.selection_status == "confirmed"
     assert confirmed_task.confirmed_script_id == replacement.id
-    library_entry = repo.save_script_library_entry(
+    library_entry = repo.script_records.save_script_library_entry(
         WORKSPACE, source_script_id=replacement.id,
         name="明确保存的回复稿", category="品牌介绍",
     )
-    read_back = repo.get_script_library_entry(WORKSPACE, library_entry.id)
+    read_back = repo.script_records.get_script_library_entry(WORKSPACE, library_entry.id)
     assert read_back.source_task_id == task.id
     assert read_back.source_script_id == replacement.id
     assert read_back.source_run_id == replacement.run_id
@@ -430,7 +433,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
     assert revised_script.adoption["member_id"] == OWNER
     assert revised_script.adoption["version"] == revised_script.updated_at.isoformat()
     assert revised_script.adoption["body_digest"] == hashlib.sha256(manual_section.content.encode()).hexdigest()
-    saved_library = repo.get_script_library_entry(WORKSPACE, library_entry.id)
+    saved_library = repo.script_records.get_script_library_entry(WORKSPACE, library_entry.id)
     assert saved_library == read_back
     assert saved_library.sections[0].content == REPLY_TEXT != revised_script.sections[0].content
     with pytest.raises(ValueError, match="已确认文案不能"):
@@ -445,7 +448,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
             run_id="reply-run-three",
         )
     assert repo.script_records.get_creation_task_script(WORKSPACE, replacement.id) == revised_script
-    assert repo.get_script_library_entry(WORKSPACE, library_entry.id) == read_back
+    assert repo.script_records.get_script_library_entry(WORKSPACE, library_entry.id) == read_back
 
 
 def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_replays_same_result(tmp_path, monkeypatch):
@@ -651,7 +654,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
             expected_source_updated_at=repo.script_records.read_creation_task_script_header(WORKSPACE, draft.id)['updated_at'],
             source_script_id=draft.id, name="已确认的对话回复文案", category="产品介绍",
         ))
-    read_back = repo.get_script_library_entry(WORKSPACE, entry['entry_id'])
+    read_back = repo.script_records.get_script_library_entry(WORKSPACE, entry['entry_id'])
     assert read_back.source_task_id == task.id and read_back.source_script_id == draft.id
     assert read_back.version == entry['version']
 

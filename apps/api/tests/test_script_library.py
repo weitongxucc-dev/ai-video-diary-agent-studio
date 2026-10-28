@@ -20,7 +20,16 @@ from app.sources import KnowledgeItem, SourceConnector, SourceItem
 
 
 @pytest.fixture
-def library(tmp_path, monkeypatch):
+def library(tmp_path, monkeypatch, request):
+    if request.node.originalname == "test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original":
+        from test_production_foundation import edit_adoption_no_execution
+        from app.local_portrait import LocalPortrait
+        from app.subtitle_tracks import OpenAICompatibleSubtitleTranslationProvider, UnavailableSubtitleTranslationProvider
+        forbidden = edit_adoption_no_execution(monkeypatch)
+        monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
+        monkeypatch.setattr(LocalPortrait, "process", forbidden)
+        monkeypatch.setattr(OpenAICompatibleSubtitleTranslationProvider, "translate", forbidden)
+        monkeypatch.setattr(UnavailableSubtitleTranslationProvider, "translate", forbidden)
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     repo = ProductionRepository(tmp_path / "studio.sqlite3", inbox)
@@ -184,7 +193,7 @@ def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original
         assert tuple(conn.execute("SELECT payload,updated_at FROM creation_task_scripts WHERE id='script_original'").fetchone()) == before_script
         assert conn.execute("SELECT COUNT(*) FROM script_generation_runs").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM job_runs").fetchone()[0] == 0
-    assert repo.get_script_library_entry("local", one["id"]).version == 1
+    assert repo.script_records.get_script_library_entry("local", one["id"]).version == 1
 
 
 def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(library):

@@ -12,7 +12,7 @@ from app.creation.plan_confirmation_use_case import CreationPlanConfirmationUseC
 
 from app.creation.script_contracts import (
     ScriptGenerationRunStatus as _ScriptGenerationRunStatus, ScriptSelectionStatus as _ScriptSelectionStatus, ScriptGenerationRun as _ScriptGenerationRun,
-    CreationTaskScriptSection as _CreationTaskScriptSection, CreationTaskScript as _CreationTaskScript, ScriptLibrarySection as _ScriptLibrarySection, ScriptLibraryEntry as _ScriptLibraryEntry,
+    CreationTaskScriptSection as _CreationTaskScriptSection, CreationTaskScript as _CreationTaskScript, ScriptLibrarySection as _ScriptLibrarySection,
     _validated_assistant_reply_reference as _validated_assistant_reply_reference, _assistant_reply_input_references as _assistant_reply_input_references, _assistant_reply_request_event_id as _assistant_reply_request_event_id,
 )
 from app.creation.request_records import CreationRequestRecordStore
@@ -5265,21 +5265,6 @@ class ProductionRepository:
         conn.execute("INSERT INTO creation_tasks (id,workspace_id,plan_id,payload,visibility,updated_at) VALUES (?,?,?,?,?,?)",
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
-
-    def save_script_library_entry(self, workspace_id: str, *, source_script_id: str, name: str, category: str) -> _ScriptLibraryEntry:
-        return self.script_records.save_script_library_entry(workspace_id, source_script_id=source_script_id, name=name, category=category)
-
-    def _script_library_entry_from_payload(self, data, *, connection=None):
-        return self.script_records._script_library_entry_from_payload(data,connection=connection)
-
-    def get_script_library_entry(self, workspace_id: str, entry_id: str) -> _ScriptLibraryEntry:
-        return self.script_records.get_script_library_entry(workspace_id, entry_id)
-
-    def list_script_library_entries(self, workspace_id: str, *, query: str='', category: str='') -> list[_ScriptLibraryEntry]:
-        return self.script_records.list_script_library_entries(workspace_id, query=query, category=category)
-
-    def reuse_script_library_entry(self, workspace_id: str, entry_id: str, *, plan: _CreationPlan) -> tuple[_CreationTask, _CreationTaskScript]:
-        return self.script_records.reuse_script_library_entry(workspace_id, entry_id, plan=plan)
 
     def _demote_other_confirmed_scripts(self, conn: sqlite3.Connection, *, workspace_id: str, task_id: str, confirmed_script_id: str, updated_at: datetime) -> None:
         return self.script_records._demote_other_confirmed_scripts(conn, workspace_id=workspace_id, task_id=task_id, confirmed_script_id=confirmed_script_id, updated_at=updated_at)
