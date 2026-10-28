@@ -5472,7 +5472,9 @@ def _workspace_assistant_plan_turn(
                         model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
                         draft_version=payload.expected_draft_version + 1,
                         creation_request=CreationRequestResponse.model_validate(stage.saved_goal) if stage.saved_goal else None)
-                    answer = home_plan.RenderedResponse(response, response.model_dump(mode="json"))
+                    answer = response
+                elif isinstance(stage, home_plan.SerializeStoppedResponse):
+                    answer = home_plan.RenderedResponse(stage.response, stage.response.model_dump(mode="json"))
                 elif isinstance(stage, home_plan.NormalizeMaterial):
                     material = MaterialAssistantResultResponse.model_validate(stage.value)
                     answer = home_plan.MaterialResult(material.scope, material.asset_ref, material.segment_ref, material)

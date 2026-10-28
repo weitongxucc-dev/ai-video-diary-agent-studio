@@ -63,6 +63,11 @@ class BuildStoppedResponse:
 
 
 @dataclass(frozen=True)
+class SerializeStoppedResponse:
+    response: object
+
+
+@dataclass(frozen=True)
 class NormalizeMaterial:
     value: object
 
@@ -143,8 +148,9 @@ class HomePlanTurnUseCase:
         except AssistantStopped:
             saved = self.get_turn(turn_id)
             saved_goal = preview.get("request") if isinstance(preview, dict) and preview.get("kind") == "creation_request" else None
-            rendered = yield BuildStoppedResponse(saved["assistant_text"] if saved else "", saved_goal)
+            response = yield BuildStoppedResponse(saved["assistant_text"] if saved else "", saved_goal)
             yield ForgetTurnControl()
+            rendered = yield SerializeStoppedResponse(response)
             self.finish_turn(turn_id, "stopped", result={
                 "kind": "creation_request" if saved_goal else "conversation",
                 "creation_request_id": saved_goal["id"] if saved_goal else None,
