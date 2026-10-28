@@ -278,3 +278,25 @@ class ExecutionRecordStore:
             (workspace_id, task_id, *references),
         ).fetchall()
         return {str(row["logical_ref"]): str(row["producer_job_id"]) for row in rows}
+
+
+    @staticmethod
+    def knowledge_adoption_request(connection, event_id):
+        return connection.execute(
+            "SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,),
+        ).fetchone()
+
+    @staticmethod
+    def knowledge_adoption_receipt(connection, workspace_id, event_id):
+        return connection.execute(
+            "SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? AND event_type='task_knowledge_adopted'",
+            (workspace_id, event_id),
+        ).fetchone()
+
+    @staticmethod
+    def task_knowledge_was_adopted(connection, workspace_id, task_id):
+        return connection.execute(
+            "SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? AND event_type='task_knowledge_adopted' "
+            "AND json_extract(payload_json,'$.receipt.status')='adopted' LIMIT 1",
+            (workspace_id, task_id),
+        ).fetchone() is not None

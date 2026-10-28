@@ -9,6 +9,7 @@ from app.creation.plan_contracts import (
 )
 from app.creation.plan_records import CreationPlanRecordStore
 from app.creation.plan_confirmation_use_case import CreationPlanConfirmationUseCase
+from app.creation.knowledge_adoption_use_case import TaskKnowledgeAdoptionUseCase
 
 from app.creation.script_contracts import (
     ScriptGenerationRunStatus as _ScriptGenerationRunStatus, ScriptSelectionStatus as _ScriptSelectionStatus, ScriptGenerationRun as _ScriptGenerationRun,
@@ -595,11 +596,15 @@ class ProductionRepository:
             read_asset=self._material_assets._asset_payload_row_by_id, decode_asset=self._asset_from_payload)
         self.plan_confirmation = CreationPlanConfirmationUseCase(self._connect,
             records=self.plan_records, read_task=self.task_records.get_creation_task, execution_records=self.execution_records)
+        self.knowledge_adoption = TaskKnowledgeAdoptionUseCase(self._connect,
+            require_task=require_creation_task, plans=self.plan_records, tasks=self.task_records,
+            events=self.execution_records, has_open_job=self.job_records.has_open_task_job,
+            count_scripts=ScriptRecordStore.count_task_scripts, revision_value=_revision_value)
         self.script_records = ScriptRecordStore(self._connect,
             read_task=self.task_records.get_creation_task, require_task=require_creation_task,
             decode_plan=self.plan_records.creation_plan_from_payload, read_topic=self.topic_records.get_topic_candidate,
             transition_task=self._script_task_transition, create_library_task=self._create_script_library_task,
-            knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.execution_records.append_task_event,
+            knowledge_inputs_current=self.knowledge_adoption.inputs_current, append_event=self.execution_records.append_task_event,
             get_event=self.execution_records.get_task_event, decode_event=self.execution_records.task_event_from_row)
         self.narration_records = NarrationSegmentRecordStore(self._connect,
             decode_script=self.script_records._creation_task_script_from_payload,
@@ -2789,120 +2794,6 @@ class ProductionRepository:
                 "SELECT section_id,json_extract(section_json,'$.title') AS title FROM creation_task_script_sections "
                 'WHERE workspace_id=? AND script_id=? AND section_id IN (SELECT value FROM json_each(?))',
                 (workspace_id, task.confirmed_script_id, json.dumps(section_ids)))}
-
-    @staticmethod
-    def _knowledge_adoption_event_id(workspace_id: str, member_id: str, request_id: str) -> str:
-        return "event_knowledge_adoption_" + hashlib.sha256(
-            json.dumps([workspace_id, member_id, request_id]).encode()).hexdigest()
-
-    @staticmethod
-    def _knowledge_adoption_owner(task: _CreationTask, member_id: str) -> None:
-        if not member_id or not _content_readable(user_id=member_id, local_diagnostic=False,
-                visibility=task.visibility, owner_user_id=task.owner_user_id):
-            raise KeyError(task.id)
-        if task.owner_user_id and task.owner_user_id != member_id:
-            raise PermissionError("当前成员不能更改此任务的资料。")
-
-    def get_task_knowledge_adoption(
-        self, workspace_id: str, task_id: str, request_id: str, *, member_id: str,
-    ) -> dict[str, object]:
-        with self._connect() as conn:
-            task = require_creation_task(conn, workspace_id, task_id)
-            self._knowledge_adoption_owner(task, member_id)
-            row = conn.execute("SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? AND event_type='task_knowledge_adopted'",
-                (workspace_id, self._knowledge_adoption_event_id(workspace_id, member_id, request_id))).fetchone()
-            if row is None or row["task_id"] != task_id:
-                raise KeyError(request_id)
-            return json.loads(row["payload_json"])["receipt"]
-
-    def adopt_task_knowledge(
-        self, workspace_id: str, task_id: str, *, member_id: str, request_id: str,
-        expected_plan_updated_at: datetime | str, expected_task_updated_at: datetime | str,
-        requested_references: tuple[tuple[str, str], ...],
-        resolve_references: Callable[[], list[_CreationPlanKnowledgeReference]],
-    ) -> dict[str, object]:
-        """Append fixed inputs and their immutable receipt under one write lock."""
-        if not request_id.strip():
-            raise ValueError("采用资料需要稳定请求身份。")
-        fingerprint = hashlib.sha256(json.dumps({"task_id": task_id, "member_id": member_id,
-            "references": requested_references}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        event_id = self._knowledge_adoption_event_id(workspace_id, member_id, request_id)
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            task = require_creation_task(conn, workspace_id, task_id)
-            self._knowledge_adoption_owner(task, member_id)
-            previous = conn.execute("SELECT task_id,payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
-            if previous:
-                payload = json.loads(previous["payload_json"])
-                if previous["task_id"] != task_id or payload["fingerprint"] != fingerprint:
-                    raise ValueError("此资料采用请求已用于不同任务或资料，未重复采用。")
-                return payload["receipt"]
-            row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, task.plan_id)).fetchone()
-            if row is None:
-                raise KeyError(task.plan_id)
-            plan = self.plan_records.creation_plan_from_payload(json.loads(row["payload"]))
-            if (_revision_value(plan.updated_at) != _revision_value(expected_plan_updated_at)
-                    or _revision_value(task.updated_at) != _revision_value(expected_task_updated_at)):
-                raise ValueError("方案或任务版本已变化，请读取当前版本后重新采用资料。")
-            resolved = resolve_references()
-            existing = {item.id: item for item in plan.knowledge_references}
-            added = []
-            for item in resolved:
-                if item.id in existing:
-                    if existing[item.id] != item:
-                        raise ValueError("任务已固定了此资料的另一版本或授权；本入口只追加，不覆盖旧引用。")
-                else:
-                    existing[item.id] = item
-                    added.append(item)
-            if added:
-                if task.stage_status == "running" or conn.execute(
-                    "SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
-                    (workspace_id, task_id)).fetchone():
-                    raise ValueError("此任务仍有未结束的制作或生成作业；先等作业结算或取消，再采用资料。")
-                if (task.stage not in {"topic", "script"} or task.confirmed_script_id or task.narration_cache_key
-                        or task.montage_plan_id or task.current_timeline_version_id or task.output_ready):
-                    raise ValueError("此任务已有采用稿或下游结果，需要明确文案修订及影响范围；本次未追加或改动原结果。")
-                if len(existing) + len(plan.source_references) > 64:
-                    raise ValueError("文案输入最多64份资料，请只采用本次需要的固定资料。")
-            before = [asdict(item) for item in plan.knowledge_references]
-            previous_status = task.stage_status
-            now = utc_now()
-            if added:
-                plan.knowledge_references.extend(added)
-                plan.updated_at = task.updated_at = now
-                if task.stage == "script":
-                    task.stage_status, task.status, task.recovery_point = "not_started", "running", "script"
-                    task.stage_reason = task.stage_impact = task.stage_repair_action = task.stage_retryable = None
-                conn.execute("UPDATE creation_plans SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
-                    (_json_payload(plan), now.isoformat(), workspace_id, plan.id))
-                conn.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
-                    (_json_payload(task), now.isoformat(), workspace_id, task.id))
-            retained = conn.execute("SELECT COUNT(*) FROM creation_task_scripts WHERE workspace_id=? AND task_id=?",
-                (workspace_id, task_id)).fetchone()[0]
-            receipt = {"request_id": request_id, "task_id": task_id, "plan_id": plan.id,
-                "status": "adopted" if added else "unchanged", "recorded_at": now.isoformat(),
-                "added_references": [asdict(item) for item in added], "previous_references": before,
-                "knowledge_references": [asdict(item) for item in plan.knowledge_references],
-                "plan_updated_at": _revision_value(plan.updated_at), "task_updated_at": _revision_value(task.updated_at),
-                "retained_script_count": retained, "previous_stage_status": previous_status,
-                "next_step": "generate_new_script" if added and task.stage == "script" else "unchanged" if not added else "continue_topic"}
-            self.execution_records.append_task_event(_TaskEvent(event_id, workspace_id, task_id, None, "task_knowledge_adopted",
-                {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
-            return receipt
-
-    @staticmethod
-    def _knowledge_inputs_current(
-        conn: sqlite3.Connection, workspace_id: str, task_id: str, plan_id: str,
-        input_references: list[dict[str, object]],
-    ) -> bool:
-        adopted = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? AND event_type='task_knowledge_adopted' "
-            "AND json_extract(payload_json,'$.receipt.status')='adopted' LIMIT 1", (workspace_id, task_id)).fetchone()
-        if not adopted:
-            return True
-        row = conn.execute("SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id, plan_id)).fetchone()
-        planned = {(item["id"], item["version"]) for item in json.loads(row["payload"])["knowledge_references"]}
-        bound = {(item["object_id"], item["version_or_identity"]) for item in input_references if item.get("kind") == "knowledge"}
-        return planned.issubset(bound)
 
 
 

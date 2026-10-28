@@ -373,3 +373,11 @@ class JobRunRecordStore:
             ),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
+
+
+    @staticmethod
+    def has_open_task_job(connection, workspace_id, task_id):
+        return connection.execute(
+            "SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? AND status IN ('queued','running','interrupted') LIMIT 1",
+            (workspace_id, task_id),
+        ).fetchone() is not None

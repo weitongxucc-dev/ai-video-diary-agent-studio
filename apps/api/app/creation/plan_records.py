@@ -121,3 +121,28 @@ class CreationPlanRecordStore:
                 if isinstance(item, dict)
             ],
         )
+
+
+    def read_knowledge_adoption_plan(self, connection, workspace_id, plan_id):
+        row = connection.execute(
+            "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
+            (workspace_id, plan_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(plan_id)
+        return self.creation_plan_from_payload(json.loads(row["payload"]))
+
+    def write_knowledge_adopted_plan(self, connection, workspace_id, plan):
+        connection.execute(
+            "UPDATE creation_plans SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(plan), plan.updated_at.isoformat(), workspace_id, plan.id),
+        )
+
+    @staticmethod
+    def knowledge_reference_keys(connection, workspace_id, plan_id):
+        row = connection.execute(
+            "SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?",
+            (workspace_id, plan_id),
+        ).fetchone()
+        return {(item["id"], item["version"])
+                for item in json.loads(row["payload"])["knowledge_references"]}

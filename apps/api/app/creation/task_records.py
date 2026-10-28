@@ -112,3 +112,10 @@ class TaskRecordStore:
         if "visibility" in row.keys():
             data["visibility"] = str(row["visibility"])
         return creation_task_from_payload(data)
+
+
+    def write_knowledge_adopted_task(self, connection, workspace_id, task):
+        connection.execute(
+            "UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(task), task.updated_at.isoformat(), workspace_id, task.id),
+        )

@@ -6211,14 +6211,15 @@ def get_creation_task_workspace(
 def adopt_creation_task_knowledge(
     task_id: str, request: Request, payload: TaskKnowledgeAdoptionRequest,
 ) -> TaskKnowledgeAdoptionResponse:
-    from app.creation.knowledge_adoption_use_case import KnowledgeAdoptionCommand, TaskKnowledgeAdoptionUseCase
+    from app.creation.knowledge_adoption_use_case import KnowledgeAdoptionCommand
     task, member_id = _exact_edit_access(task_id, request, write=True)
     if payload.assistant_turn_id is not None:
         _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
     command = KnowledgeAdoptionCommand(str(payload.request_id), payload.expected_plan_updated_at,
         payload.expected_task_updated_at, tuple((item.knowledge_item_id, item.version) for item in payload.knowledge_references))
     try:
-        receipt = TaskKnowledgeAdoptionUseCase(production_repo, source_repository).adopt(task.workspace_id, task_id, member_id, command)
+        receipt = production_repo.knowledge_adoption.adopt(task.workspace_id, task_id, member_id, command,
+            read_reference=source_repository.get_knowledge_reference_readable_by)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到可引用的固定资料版本或当前任务。") from exc
     except PermissionError as exc:
@@ -6234,7 +6235,7 @@ def get_creation_task_knowledge_adoption(
 ) -> TaskKnowledgeAdoptionResponse:
     task, member_id = _exact_edit_access(task_id, request)
     try:
-        receipt = production_repo.get_task_knowledge_adoption(task.workspace_id, task_id, str(request_id), member_id=member_id)
+        receipt = production_repo.knowledge_adoption.read_receipt(task.workspace_id, task_id, str(request_id), member_id=member_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到此成员在当前任务中的原资料采用回执。") from exc
     except PermissionError as exc:

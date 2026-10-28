@@ -128,6 +128,18 @@ def test_in_flight_old_input_snapshot_cannot_start_after_adoption(state):
         state.repository.script_records.start_script_generation(delayed)
     assert rows(state) == before
 
+    from dataclasses import replace
+    task = state.repository.task_records.get_creation_task('local', 'task')
+    plan = state.repository.plan_records.get_creation_plan('local', task.plan_id)
+    _, current_refs, _ = main._source_inputs_use_case().prepare('local', task, plan, cloud_egress=True)
+    current = replace(delayed, id='current-inputs', input_references=current_refs)
+    task, run = state.repository.script_records.start_script_generation(current)
+    planned = {(item.id, item.version) for item in plan.knowledge_references}
+    bound = {(item['object_id'], item['version_or_identity']) for item in run.input_references
+             if item.get('kind') == 'knowledge'}
+    assert planned.issubset(bound) and len(planned) == 2
+    assert task.stage_status == 'running' and run.id == current.id
+
 
 @pytest.mark.parametrize('field', ['expected_plan_updated_at', 'expected_task_updated_at'])
 def test_stale_plan_or_task_revision_rejects_without_writes(state, field):

@@ -3001,3 +3001,11 @@ class ScriptRecordStore:
                     for row in section_rows
                 ],
             )
+
+
+    @staticmethod
+    def count_task_scripts(connection, workspace_id, task_id):
+        return connection.execute(
+            "SELECT COUNT(*) FROM creation_task_scripts WHERE workspace_id=? AND task_id=?",
+            (workspace_id, task_id),
+        ).fetchone()[0]
