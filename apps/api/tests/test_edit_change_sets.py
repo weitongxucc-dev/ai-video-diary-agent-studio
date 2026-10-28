@@ -45,7 +45,7 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
             base = repo.timeline_records.get_timeline_version('local', 'timeline')
             repo.timeline_records.create_timeline_version(TimelineVersion('audio-input', 'local', 'task', 'timeline', 2,
                 {**base.snapshot, 'montage':original, 'subtitle_track_ids':[copied.id]}, None))
-            repo.create_subtitle_track(copied)
+            repo.subtitle_records.create_subtitle_track(copied)
         response = client.post('/api/creation-tasks/task/edits/exact', json=payloads[action])
         assert response.status_code == 200, response.text
         assert response.json()['operation']['operation_type'] == payloads[action]['operation_type']
@@ -59,7 +59,7 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
         else:
             assert saved['clips'] == original['clips']
         if action == 'subtitle':
-            tracks = repo.list_subtitle_tracks('local', 'task', timeline_version_id=repo.task_records.get_creation_task('local', 'task').current_timeline_version_id)
+            tracks = repo.subtitle_records.list_subtitle_tracks('local', 'task', timeline_version_id=repo.task_records.get_creation_task('local', 'task').current_timeline_version_id)
             assert tracks[0].style['enabled'] is False
         if action == 'picture':
             assert saved['clips'][1]['visual_effects']['exposure'] == .15
@@ -106,7 +106,7 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
         assert repo.edit_records.list_edit_proposals('local', 'task') == []
         assert repo.get_creation_task_montage_plan('local', 'task') == original
         assert len(repo.job_records.list_job_runs('local', 'task')) == jobs
-        assert len(repo.list_subtitle_tracks('local', 'task')) == 1
+        assert len(repo.subtitle_records.list_subtitle_tracks('local', 'task')) == 1
     finally:
         runtime.stop(0)
 

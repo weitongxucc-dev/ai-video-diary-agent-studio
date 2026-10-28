@@ -640,7 +640,7 @@ def test_other_workspace_and_task_do_not_resolve_original_request(material_edit_
 def test_typed_subtitle_update_and_apply_share_the_current_version(material_edit_state):
     state = _build_linked_state(material_edit_state)
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    track = next(item for item in state.production.list_subtitle_tracks(state.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if item.language == "zh-CN")
+    track = next(item for item in state.production.subtitle_records.list_subtitle_tracks(state.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if item.language == "zh-CN")
     payload = bound(state, operation_type="UpdateSubtitleCue", track_id=track.id,
                     cue_id=track.cues[0].id, text="这是修改后的第一句。")
     preview = state.client.post(state.base_url + "/edits/exact/preview", json=payload)
@@ -649,7 +649,7 @@ def test_typed_subtitle_update_and_apply_share_the_current_version(material_edit
     apply = state.client.post(state.base_url + f"/edits/{proposal_id}/confirm", json={"request_id": str(uuid4())})
     assert apply.status_code == 200, apply.text
     updated = state.production.task_records.get_creation_task(state.workspace_id, task.id)
-    result_track = next(item for item in state.production.list_subtitle_tracks(state.workspace_id, task.id, timeline_version_id=updated.current_timeline_version_id) if item.language == "zh-CN")
+    result_track = next(item for item in state.production.subtitle_records.list_subtitle_tracks(state.workspace_id, task.id, timeline_version_id=updated.current_timeline_version_id) if item.language == "zh-CN")
     assert result_track.cues[0].text == payload["text"]
     assert result_track.cues[0].start_seconds == track.cues[0].start_seconds
     assert result_track.cues[0].end_seconds == track.cues[0].end_seconds
@@ -978,9 +978,9 @@ def test_subtitle_family_public_preview_confirm_fixed_read_preserves_other_facts
     assert after_plan['clips'] == before_plan['clips'] and after_plan['audio_timeline'] == before_plan['audio_timeline']
     assert current.narration_cache_key == state.narration.cache_key
     assert (state.case.output_root / state.narration.audio_path).read_bytes() == state.voice_bytes
-    cover = state.repo.get_cover_asset('ws', state.task.id, version.snapshot['cover_asset_id'])
+    cover = state.repo.cover_records.get_cover_asset('ws', state.task.id, version.snapshot['cover_asset_id'])
     assert cover.title == state.cover.title and cover.artifact_ref == state.cover.artifact_ref
-    tracks = state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
     if operation == 'ReplaceSubtitleText':
         assert len(tracks) == 1 and tracks[0].cues[0].text == '新字幕'
     elif operation == 'ConfigureSubtitleTrack':
@@ -1002,12 +1002,12 @@ def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snaps
     cover = clone_cover_asset(state.cover, timeline_version_id='structure-start')
     state.repo.timeline_records.create_timeline_version(TimelineVersion('structure-start', 'ws', state.task.id, state.base.id, 3,
         {**state.base.snapshot, 'subtitle_track_ids': [zh.id, en.id], 'cover_asset_id': cover.id}, None))
-    state.repo.create_subtitle_track(zh)
-    state.repo.create_subtitle_track(en)
-    state.repo.create_cover_asset(cover)
+    state.repo.subtitle_records.create_subtitle_track(zh)
+    state.repo.subtitle_records.create_subtitle_track(en)
+    state.repo.cover_records.create_cover_asset(cover)
     def preview_confirm(operation, **values):
         task = state.repo.task_records.get_creation_task('ws', state.task.id)
-        track = next(item for item in state.repo.list_subtitle_tracks('ws', task.id,
+        track = next(item for item in state.repo.subtitle_records.list_subtitle_tracks('ws', task.id,
             timeline_version_id=task.current_timeline_version_id) if item.language == 'en-US')
         preview = state.client.post(state.url + '/edits/exact/preview', json={
             'operation_type': operation, 'track_id': track.id, 'cue_id': track.cues[0].id, **values})
@@ -1022,14 +1022,14 @@ def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snaps
     preview_confirm('DeleteSubtitleCue')
     preview_confirm('DeleteSubtitleCue')
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
-    tracks = state.repo.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)
     assert len(tracks) == 1 and tracks[0].language == 'zh-CN'
     preview = state.client.post(state.url + '/edits/exact/preview', json={
         'operation_type': 'DeleteSubtitleCue', 'track_id': tracks[0].id, 'cue_id': tracks[0].cues[0].id})
     assert preview.status_code == 200, preview.text
     assert state.client.post(state.url + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 200
     task = state.repo.task_records.get_creation_task('ws', task.id)
-    remaining = state.repo.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)[0]
+    remaining = state.repo.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)[0]
     direct = state.client.post(state.url + '/edits/exact', json={
         'operation_type': 'DeleteSubtitleCue', 'track_id': remaining.id, 'cue_id': remaining.cues[0].id})
     assert direct.status_code == 200, direct.text
@@ -1150,7 +1150,7 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
     after = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     assert after['clips'][0]['visual_effects']['exposure'] == .25 and after['clips'][1] == before['clips'][1]
     assert after['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
-    tracks = state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
     assert len(tracks) == 2 and all(track.style['font_size'] == 64 for track in tracks)
     assert next(track for track in tracks if track.language == 'en-US').style['enabled'] is False
     assert {track.language: [cue.text for cue in track.cues] for track in tracks} == {

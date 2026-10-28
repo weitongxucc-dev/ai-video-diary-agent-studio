@@ -157,9 +157,9 @@ def apply_delivery_adoption(repo, conn, job, candidate):
         connection=conn, expected_current_version_id=candidate['head'])
     repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=candidate['head'])
     for track in candidate['tracks']:
-        repo.create_subtitle_track(track, connection=conn)
+        repo.subtitle_records.create_subtitle_track(track, connection=conn)
     if candidate['cover'] is not None:
-        repo.create_cover_asset(candidate['cover'], connection=conn)
+        repo.cover_records.create_cover_asset(candidate['cover'], connection=conn)
     repo.execution_records.append_task_event(candidate['event'], connection=conn)
     return version
 

@@ -256,7 +256,7 @@ class CreationExecutionControl:
                 else '段落配音已保存，画面候选需要用户明确确认。')
             result['current_stage']='segment_video'
         covers = (
-            self.repository.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
+            self.repository.cover_records.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
             if task.current_timeline_version_id else []
         )
         result.update({

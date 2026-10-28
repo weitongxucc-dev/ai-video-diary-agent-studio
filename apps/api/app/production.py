@@ -77,6 +77,8 @@ from app.creation.contracts import (
 from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
 from app.creation.task_records import TaskRecordStore
 from app.creation.timeline_records import TimelineRecordStore, validate_timeline_version
+from app.creation.subtitle_records import SubtitleTrackRecordStore, validate_subtitle_track
+from app.creation.cover_records import CoverAssetRecordStore, validate_cover_asset
 from app.creation.editing.records import EditRecordStore, validate_edit_operation
 from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload, narration_segment_from_row,
@@ -526,6 +528,10 @@ class ProductionRepository:
         self.task_records = TaskRecordStore(self._connect)
         self.timeline_records = TimelineRecordStore(self._connect, decode_snapshot=_json_object_from_text)
         self.timeline_history = TimelineHistoryReadRepository(self._connect)
+        self.subtitle_records = SubtitleTrackRecordStore(self._connect,
+            decode_payload=_json_object_from_text, timeline_belongs=self.timeline_records.timeline_belongs)
+        self.cover_records = CoverAssetRecordStore(self._connect,
+            decode_payload=_json_object_from_text, timeline_belongs=self.timeline_records.timeline_belongs)
         self.edit_records = EditRecordStore(self._connect,
             current_source=EXACT_EDIT_SOURCE.get, decode_reference_list=_string_list_from_text,
             decode_object=_json_object_from_text, decode_timeline_version=self.timeline_records.timeline_version_from_row)
@@ -538,7 +544,7 @@ class ProductionRepository:
             replace_adopted_narration_segment=self.replace_adopted_narration_segment,
             upsert_narration_segments=self._upsert_narration_segments,
             validate_operation=validate_edit_operation, validate_version=validate_timeline_version,
-            validate_track=_validate_subtitle_track, validate_cover=_validate_cover_asset)
+            validate_track=validate_subtitle_track, validate_cover=validate_cover_asset)
         self.preview_records = PreviewRecordStore(self._connect)
         self._media_authorizations = MediaAuthorizationStore(self._connect)
         self._profile_records = ProfileRecordStore(self._connect, self._media_authorizations)
@@ -3777,7 +3783,7 @@ class ProductionRepository:
             snapshot['narration_segments'] = [{key:value for key,value in row.items()
                 if key not in {'created_at','updated_at'}} for row in snapshot['narration_segments']]
         record_fields = {'id','workspace_id','task_id','timeline_version_id','created_at','updated_at'}
-        tracks = self.list_subtitle_tracks(version.workspace_id,version.task_id,timeline_version_id=version.id,connection=connection)
+        tracks = self.subtitle_records.list_subtitle_tracks(version.workspace_id,version.task_id,timeline_version_id=version.id,connection=connection)
         track_facts = [{key:value for key,value in asdict(track).items() if key not in record_fields} for track in tracks]
         declared_tracks = snapshot.pop('subtitle_track_ids',None)
         snapshot['subtitles'] = {'items':sorted(track_facts,key=lambda item:json.dumps(item,sort_keys=True)),
@@ -4901,171 +4907,11 @@ class ProductionRepository:
     def interrupt_running_person_renders(self, workspace_id: str | None = None) -> int:
         return self._person_renders.interrupt_running_person_renders(workspace_id)
 
-    def create_subtitle_track(
-        self, track: _SubtitleTrack, *, connection: sqlite3.Connection | None = None,
-    ) -> _SubtitleTrack:
-        _validate_subtitle_track(track)
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            require_creation_task(conn, track.workspace_id, track.task_id)
-            timeline = conn.execute(
-                """
-                SELECT 1 FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (track.workspace_id, track.task_id, track.timeline_version_id),
-            ).fetchone()
-            if timeline is None:
-                raise ValueError("字幕轨必须关联当前任务的时间线版本")
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO subtitle_tracks
-                        (id, workspace_id, task_id, timeline_version_id, language,
-                         payload_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        track.id,
-                        track.workspace_id,
-                        track.task_id,
-                        track.timeline_version_id,
-                        track.language,
-                        _json_payload(track),
-                        track.created_at.isoformat(),
-                        track.updated_at.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("同一时间线版本的字幕轨已存在") from exc
-        return self.get_subtitle_track(track.workspace_id, track.task_id, track.id, connection=connection)
 
-    def get_subtitle_track(
-        self, workspace_id: str, task_id: str, track_id: str, *, connection: sqlite3.Connection | None = None,
-    ) -> _SubtitleTrack:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                """
-                SELECT * FROM subtitle_tracks
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (workspace_id, task_id, track_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(track_id)
-        return self._subtitle_track_from_row(row)
 
-    def list_subtitle_tracks(
-        self,
-        workspace_id: str,
-        task_id: str,
-        *,
-        timeline_version_id: str | None = None,
-        connection: sqlite3.Connection | None = None,
-    ) -> list[_SubtitleTrack]:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            if timeline_version_id is None:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM subtitle_tracks
-                    WHERE workspace_id = ? AND task_id = ?
-                    ORDER BY created_at ASC, id ASC
-                    """,
-                    (workspace_id, task_id),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM subtitle_tracks
-                    WHERE workspace_id = ? AND task_id = ? AND timeline_version_id = ?
-                    ORDER BY created_at ASC, id ASC
-                    """,
-                    (workspace_id, task_id, timeline_version_id),
-                ).fetchall()
-        return [self._subtitle_track_from_row(row) for row in rows]
 
-    def create_cover_asset(
-        self, cover: _CoverAsset, *, connection: sqlite3.Connection | None = None,
-    ) -> _CoverAsset:
-        _validate_cover_asset(cover)
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            require_creation_task(conn, cover.workspace_id, cover.task_id)
-            timeline = conn.execute(
-                """
-                SELECT 1 FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (cover.workspace_id, cover.task_id, cover.timeline_version_id),
-            ).fetchone()
-            if timeline is None:
-                raise ValueError("封面必须关联当前任务的时间线版本")
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO cover_assets
-                        (id, workspace_id, task_id, timeline_version_id,
-                         payload_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        cover.id,
-                        cover.workspace_id,
-                        cover.task_id,
-                        cover.timeline_version_id,
-                        _json_payload(cover),
-                        cover.created_at.isoformat(),
-                        cover.updated_at.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("同一时间线版本的封面已存在") from exc
-        return self.get_cover_asset(cover.workspace_id, cover.task_id, cover.id, connection=connection)
 
-    def get_cover_asset(
-        self, workspace_id: str, task_id: str, cover_id: str, *, connection: sqlite3.Connection | None = None,
-    ) -> _CoverAsset:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                """
-                SELECT * FROM cover_assets
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (workspace_id, task_id, cover_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(cover_id)
-        return self._cover_asset_from_row(row)
 
-    def list_cover_assets(
-        self,
-        workspace_id: str,
-        task_id: str,
-        *,
-        timeline_version_id: str | None = None,
-    ) -> list[_CoverAsset]:
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            if timeline_version_id is None:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM cover_assets
-                    WHERE workspace_id = ? AND task_id = ?
-                    ORDER BY created_at ASC, id ASC
-                    """,
-                    (workspace_id, task_id),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM cover_assets
-                    WHERE workspace_id = ? AND task_id = ? AND timeline_version_id = ?
-                    ORDER BY created_at ASC, id ASC
-                    """,
-                    (workspace_id, task_id, timeline_version_id),
-                ).fetchall()
-        return [self._cover_asset_from_row(row) for row in rows]
 
     def save_clip_preview_proposal(self, intent: _EditIntent, proposal: _EditProposal, *, expected_version_id: str):
         with self._connect() as conn:
@@ -6553,23 +6399,7 @@ class ProductionRepository:
         return narration_segment_from_row(row)
 
 
-    @staticmethod
-    def _subtitle_track_from_row(row: sqlite3.Row) -> _SubtitleTrack:
-        payload = _json_object_from_text(str(row["payload_json"]))
-        raw_cues = payload.pop("cues", [])
-        return _SubtitleTrack(
-            **_with_datetime(payload, "created_at", "updated_at"),
-            cues=[
-                _SubtitleCue(**cue)
-                for cue in raw_cues
-                if isinstance(cue, dict)
-            ],
-        )
 
-    @staticmethod
-    def _cover_asset_from_row(row: sqlite3.Row) -> _CoverAsset:
-        payload = _json_object_from_text(str(row["payload_json"]))
-        return _CoverAsset(**_with_datetime(payload, "created_at", "updated_at"))
 
 
 
@@ -6919,105 +6749,8 @@ def _validate_narration_segment(segment: _NarrationSegment) -> None:
 
 
 
-def _validate_subtitle_track(track: _SubtitleTrack) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            track.id,
-            track.workspace_id,
-            track.task_id,
-            track.timeline_version_id,
-            track.language,
-            track.generation_method,
-        )
-    ):
-        raise ValueError("字幕轨缺少任务、时间线、语言或生成方式")
-    if track.language not in {"zh-CN", "en-US"}:
-        raise ValueError("字幕轨语言无效")
-    if track.generation_method not in {"timeline", "translation"}:
-        raise ValueError("字幕轨生成方式无效")
-    if track.source_language is not None and track.source_language not in {
-        "zh-CN",
-        "en-US",
-    }:
-        raise ValueError("字幕轨源语言无效")
-    if track.updated_at < track.created_at:
-        raise ValueError("字幕轨更新时间不能早于创建时间")
-    cue_ids: set[str] = set()
-    previous_end = 0.0
-    for cue in track.cues:
-        if not cue.id.strip() or not cue.text.strip():
-            raise ValueError("字幕条目缺少稳定标识或文字")
-        if cue.id in cue_ids:
-            raise ValueError("字幕轨包含重复条目标识")
-        cue_ids.add(cue.id)
-        if (
-            not math.isfinite(cue.start_seconds)
-            or not math.isfinite(cue.end_seconds)
-            or cue.start_seconds < 0
-            or cue.end_seconds <= cue.start_seconds
-            or cue.start_seconds < previous_end - 0.001
-        ):
-            raise ValueError("字幕条目时间无效或相互重叠")
-        if any(index <= 0 or index >= len(cue.text) for index in cue.line_breaks):
-            raise ValueError("字幕断行位置超出文字范围")
-        previous_end = cue.end_seconds
-    if track.status == "valid":
-        if not track.cues or not track.artifact_ref or not track.transform_id:
-            raise ValueError("valid 字幕轨必须有条目、产物和变换证据")
-        _validate_logical_reference(track.artifact_ref, "字幕产物引用")
-        if track.failure_reason or track.impact or track.repair_action:
-            raise ValueError("valid 字幕轨不能包含失败终态")
-    elif track.status in {"failed", "unavailable"}:
-        if not all(
-            (value or "").strip()
-            for value in (track.failure_reason, track.impact, track.repair_action)
-        ):
-            raise ValueError("失败或不可用字幕轨必须记录原因、影响和修复动作")
-        if track.artifact_ref is not None or track.transform_id is not None:
-            raise ValueError("失败或不可用字幕轨不能登记成功证据")
-    elif track.status != "superseded":
-        raise ValueError("字幕轨状态无效")
 
 
-def _validate_cover_asset(cover: _CoverAsset) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            cover.id,
-            cover.workspace_id,
-            cover.task_id,
-            cover.timeline_version_id,
-            cover.source_video_ref,
-            cover.title,
-            cover.generation_method,
-            cover.model_or_engine,
-        )
-    ):
-        raise ValueError("封面缺少任务、时间线、源画面、标题或执行器")
-    if not math.isfinite(cover.frame_time_seconds) or cover.frame_time_seconds < 0:
-        raise ValueError("封面选帧时间无效")
-    _validate_logical_reference(cover.source_video_ref, "封面源视频引用")
-    if cover.generation_method not in {"video_frame", "image_model"}:
-        raise ValueError("封面生成方式无效")
-    if cover.updated_at < cover.created_at:
-        raise ValueError("封面更新时间不能早于创建时间")
-    if cover.status == "valid":
-        if not cover.artifact_ref or not cover.transform_id:
-            raise ValueError("valid 封面必须有产物和变换证据")
-        _validate_logical_reference(cover.artifact_ref, "封面产物引用")
-        if cover.failure_reason or cover.impact or cover.repair_action:
-            raise ValueError("valid 封面不能包含失败终态")
-    elif cover.status in {"failed", "unavailable"}:
-        if not all(
-            (value or "").strip()
-            for value in (cover.failure_reason, cover.impact, cover.repair_action)
-        ):
-            raise ValueError("失败或不可用封面必须记录原因、影响和修复动作")
-        if cover.artifact_ref is not None or cover.transform_id is not None:
-            raise ValueError("失败或不可用封面不能登记成功证据")
-    elif cover.status != "superseded":
-        raise ValueError("封面状态无效")
 
 
 

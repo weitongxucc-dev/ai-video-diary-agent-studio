@@ -65,7 +65,7 @@ def speed_state(tmp_path):
     state.base = TimelineVersion('linked-base', 'ws', state.task.id, state.base.id, 2,
         {'montage': payload, 'subtitle_track_ids': [state.track.id], 'narration_cache_key': state.narration.cache_key}, None)
     repo.timeline_records.create_timeline_version(state.base)
-    repo.create_subtitle_track(state.track)
+    repo.subtitle_records.create_subtitle_track(state.track)
     state.task = repo.task_records.get_creation_task('ws', state.task.id)
     state.neighbour = neighbour
     state.application = LinkedTimelineEditUseCase(repo, state.case)

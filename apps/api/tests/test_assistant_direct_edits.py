@@ -118,7 +118,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         snapshot={**state.base.snapshot,"subtitle_track_ids":["confirmed-zh"],
                   "narration_segments":[json.loads(json.dumps(asdict(segment),default=str))]})
     state.repo.timeline_records.create_timeline_version(state.base)
-    state.repo.create_subtitle_track(replace(state.track,id="confirmed-zh",timeline_version_id=state.base.id))
+    state.repo.subtitle_records.create_subtitle_track(replace(state.track,id="confirmed-zh",timeline_version_id=state.base.id))
     conversations = ConversationRepository(tmp_path / "assistant.sqlite")
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "creation_execution", main._new_creation_execution(state.repo))
@@ -387,10 +387,10 @@ def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_s
     linked=invoke('apply_task_edit',{'operation_type':'DuplicateClip','clip_id':'clip'})
     assert len(linked['montage']['clips'])==2
     task=s.repo.task_records.get_creation_task('ws',s.task.id)
-    track=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=task.current_timeline_version_id)[0]
+    track=s.repo.subtitle_records.list_subtitle_tracks('ws',task.id,timeline_version_id=task.current_timeline_version_id)[0]
     result=invoke('apply_task_edit',{'operation_type':'ReplaceSubtitleText','track_id':track.id,
         'find_text':track.cues[0].text,'replacement_text':'共同入口字幕'})
-    current=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=result['operation']['result_version_id'])
+    current=s.repo.subtitle_records.list_subtitle_tracks('ws',task.id,timeline_version_id=result['operation']['result_version_id'])
     assert current[0].cues[0].text=='共同入口字幕'
 
 

@@ -40,14 +40,14 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     parent_head = case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id
     baseline = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['generated_bytes']
     if rollback:
-        create_track = case.repo.create_subtitle_track
+        create_track = case.repo.subtitle_records.create_subtitle_track
         def fail_after_child_write(track, **kwargs):
             result = create_track(track, **kwargs)
             if track.timeline_version_id.startswith('timeline_delivery_'):
                 assert kwargs['connection'].in_transaction
                 raise ValueError('controlled failure after transactional subtitle child insert')
             return result
-        monkeypatch.setattr(case.repo, 'create_subtitle_track', fail_after_child_write)
+        monkeypatch.setattr(case.repo.subtitle_records, 'create_subtitle_track', fail_after_child_write)
     intent = next_creation_intent(case.repo, case.scheduler, job)
     assert intent.unit_key.startswith('render:picture-fragment:v1:')
     case.scheduler.submit(intent, case.actor)
@@ -105,7 +105,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     monkeypatch.setattr('app.device_resource_configuration._hash_file', no_full_sha_outside_grant)
     assert render.valid('local', case.task_id, verify_media=False)
     assert render.valid('local', case.task_id)
-    assert case.repo.list_subtitle_tracks('local', case.task_id, timeline_version_id=version.id)
+    assert case.repo.subtitle_records.list_subtitle_tracks('local', case.task_id, timeline_version_id=version.id)
     with case.repo._connect() as conn:
         receipts = [json.loads(row[0]) for row in conn.execute("SELECT payload_json FROM task_events WHERE job_id=? AND event_type='task_execution_unit_settled'", (job.id,))]
     usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
@@ -202,7 +202,7 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
         assert request.resources['write_allocations'] == {'database': request.resources['metadata_bytes']}
         recovery_ids.append(grant.request_id)
         if attempt:
-            monkeypatch.setattr(case.repo, 'create_subtitle_track', create_track)
+            monkeypatch.setattr(case.repo.subtitle_records, 'create_subtitle_track', create_track)
         case.executor.execute(grant, case.scheduler)
         current = case.repo.job_records.get_job_run('local', case.job.id)
         if not attempt:

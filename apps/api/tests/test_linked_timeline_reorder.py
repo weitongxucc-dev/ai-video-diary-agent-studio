@@ -98,7 +98,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
         state.workspace_id, state.production.task_records.get_creation_task(state.workspace_id, state.task.id), linked)
     start_of = {"a": a_start, "b": 4 - a_start}
     text_of = {"a": "第一句。", "b": "第二句。"}
-    state.production.create_subtitle_track(SubtitleTrack(
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="link-zh", workspace_id=state.workspace_id, task_id=state.task.id,
         timeline_version_id=version.id, language="zh-CN", source_language=None,
         style={"font_size": 40},
@@ -108,7 +108,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
         generation_method="timeline", model_id=None,
         artifact_ref="artifacts/link-zh.srt", transform_id="link-zh-transform", status="valid"))
     english = {"a": "First.", "b": "Second."}
-    state.production.create_subtitle_track(SubtitleTrack(
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="link-en", workspace_id=state.workspace_id, task_id=state.task.id,
         timeline_version_id=version.id, language="en-US", source_language="zh-CN",
         style={"font_size": 40},

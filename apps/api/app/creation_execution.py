@@ -699,7 +699,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         "subtitle_tracks": [
             {"id": track.id, "language": track.language, "status": track.status,
              "style": track.style, "cues": [asdict(cue) for cue in track.cues]}
-            for track in repository.list_subtitle_tracks(
+            for track in repository.subtitle_records.list_subtitle_tracks(
                 task.workspace_id, task.id, timeline_version_id=version.id)
         ] if version is not None else [],
         "plan": {key: value for key, value in payload.items()

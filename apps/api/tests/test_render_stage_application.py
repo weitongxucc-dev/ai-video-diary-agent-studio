@@ -102,7 +102,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     caption_ref, caption_transform = case.metadata.publish_subtitle_text(workspace_id='local', task_id=task_id,
         proposal_id='declared-render-caption', kind='subtitle_fixture', input_refs=['timeline:' + base.id],
         content='1\n00:00:00,500 --> 00:00:02,500\n' + segment.text + '\n', engine='fixture-subtitle-text', parameters={'language': 'zh-CN'})
-    repo.create_subtitle_track(SubtitleTrack('declared-render-caption', 'local', task_id, base.id, 'zh-CN', None, {},
+    repo.subtitle_records.create_subtitle_track(SubtitleTrack('declared-render-caption', 'local', task_id, base.id, 'zh-CN', None, {},
         [SubtitleCue('declared-caption-cue', cue.id, segment.text, .5, 2.5)], 'timeline', None, caption_ref, caption_transform, 'valid'))
     gib=1024**3
     # Exact values from the accepted person normal's actual queued render prerequisite.

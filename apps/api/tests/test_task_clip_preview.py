@@ -66,7 +66,7 @@ def test_exposure_preview_uses_explicit_grant_then_atomic_adoption_and_undo(tmp_
         assert current['audio_timeline'] == original['audio_timeline']
         current_id = repo.task_records.get_creation_task('local', 'task').current_timeline_version_id
         assert current_id != 'timeline'
-        kept = repo.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
+        kept = repo.subtitle_records.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
         assert [(item.text, item.start_seconds, item.end_seconds) for item in kept[0].cues] == [
             (item.text, item.start_seconds, item.end_seconds) for item in track.cues]
         undo = client.post('/api/creation-tasks/task/timeline/undo', json={'request_id':str(uuid4())})

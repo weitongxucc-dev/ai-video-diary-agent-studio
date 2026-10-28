@@ -168,7 +168,7 @@ def test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts(perso
     track = SubtitleTrack("actual-style", state.workspace_id, state.task.id, version.id, "en-US", None,
         {"enabled": False, "font_size": 40}, [SubtitleCue("caption", None, "Existing caption", 0, 4)],
         "timeline", None, "artifacts/existing.srt", "existing-transform", "valid")
-    state.production.create_subtitle_track(track)
+    state.production.subtitle_records.create_subtitle_track(track)
     before = state.client.get(base).json()
     def forbidden(*args, **kwargs):
         raise AssertionError("draft style proposal must not invoke media or runtime")
@@ -223,7 +223,7 @@ def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_pat
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
     task = fresh.task_records.get_creation_task('ws', state.task.id)
     version = fresh.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
-    tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
+    tracks = fresh.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
     operations = fresh.edit_records.list_edit_operations('ws', task.id)
     assert len(fresh.timeline_records.list_timeline_versions('ws', task.id)) == before + 1
     assert len(operations) == 1 and operations[0].proposal_id == proposal.id

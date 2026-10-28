@@ -55,9 +55,9 @@ def restore_state(tmp_path, *, empty=False):
     state.base = TimelineVersion('restore-base', 'ws', task.id, state.base.id, 3, snapshot, None)
     state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
-        state.repo.create_subtitle_track(track)
+        state.repo.subtitle_records.create_subtitle_track(track)
     if not empty:
-        state.repo.create_cover_asset(state.cover)
+        state.repo.cover_records.create_cover_asset(state.cover)
     state.task = state.repo.task_records.get_creation_task('ws', task.id)
     state.application = TimelineRestoreUseCase(state.repo, state.case)
     state.production, state.workspace_id = state.repo, 'ws'
@@ -195,16 +195,16 @@ def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_p
     version = state.repo.timeline_records.get_timeline_version('ws', undone.operation.result_version_id)
     assert version.snapshot['subtitle_track_ids'] == [] and 'cover_asset_id' not in version.snapshot
     assert [row['id'] for row in version.snapshot['narration_segments']] == ['fixed-segment']
-    assert state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id) == []
+    assert state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id) == []
     assert len(state.repo.list_narration_segments('ws', state.task.id, 'fixed-script')) == 1
     assert undone.montage.message == '草稿已恢复；原成片依赖或产物已失效，请明确重新生成。'
     assert set(state.repo.edit_records.get_edit_proposal('ws', undone.operation.proposal_id).invalidated_refs) == {
         tracks[0].artifact_ref, cover.artifact_ref}
     _prepared, redone = restore(state, monkeypatch, redo=True)
     restored = state.repo.timeline_records.get_timeline_version('ws', redone.operation.result_version_id)
-    rows = state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=restored.id)
+    rows = state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=restored.id)
     assert len(rows) == 1 and rows[0].id != tracks[0].id and rows[0].cues == tracks[0].cues
-    restored_cover = state.repo.get_cover_asset('ws', state.task.id, restored.snapshot['cover_asset_id'])
+    restored_cover = state.repo.cover_records.get_cover_asset('ws', state.task.id, restored.snapshot['cover_asset_id'])
     assert restored_cover.id != cover.id and restored_cover.artifact_ref == cover.artifact_ref
     assert [row['id'] for row in restored.snapshot['narration_segments']] == ['fixed-segment']
     assert state.repo.timeline_records.get_timeline_version('ws', state.base.id) == state.base

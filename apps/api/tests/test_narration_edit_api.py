@@ -113,7 +113,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
     state.before_clips = payload["clips"]
     state.original_track = SubtitleTrack("unavailable", "local", state.task.id, state.base.id, "en-US", "zh-CN",
         {}, [], "translation", None, None, None, "unavailable", "未翻译", "无英文输出", "选择模型后翻译")
-    state.repo.create_subtitle_track(state.original_track)
+    state.repo.subtitle_records.create_subtitle_track(state.original_track)
     state.executor.stage_actions["narration_edit"] = main_module._narration_edit_stage_with_grant
     state.generated_calls = []
     state.generated_failure = None
@@ -320,7 +320,7 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     assert segments[1] == state.segments[1]
     montage = state.repo.get_creation_task_montage_plan("local", state.task.id)
     assert montage["clips"][1] == state.before_clips[1]
-    tracks = state.repo.list_subtitle_tracks("local", state.task.id, timeline_version_id=current.current_timeline_version_id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks("local", state.task.id, timeline_version_id=current.current_timeline_version_id)
     assert len(tracks) == 1
     assert (tracks[0].status, tracks[0].failure_reason, tracks[0].impact, tracks[0].repair_action) == (
         "unavailable", "未翻译", "无英文输出", "选择模型后翻译")

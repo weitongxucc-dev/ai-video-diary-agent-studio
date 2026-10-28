@@ -86,7 +86,7 @@ def test_exact_chinese_text_change_preserves_all_english_invalidation(
     english = replace(translation, source_language=english_source_language,
                       generation_method="translation" if english_source_language else "timeline")
     for track in (source, english):
-        state.production.create_subtitle_track(replace(
+        state.production.subtitle_records.create_subtitle_track(replace(
             track, workspace_id=state.workspace_id, task_id=state.task.id,
             timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
@@ -122,7 +122,7 @@ def test_preview_reports_new_gaps_without_writing(person_render_edit_state, monk
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
     source, translation = tracks()
     for track in (source, translation):
-        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+        state.production.subtitle_records.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
@@ -148,7 +148,7 @@ def test_compound_preview_reports_only_final_gaps(person_render_edit_state, monk
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
     source, translation = tracks()
     for track in (source, translation):
-        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+        state.production.subtitle_records.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
@@ -174,8 +174,8 @@ def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
                      timeline_version_id=version.id, style={"enabled": True})
     translation = replace(translation, workspace_id=state.workspace_id, task_id=state.task.id,
                           timeline_version_id=version.id, style={"enabled": True})
-    state.production.create_subtitle_track(source)
-    state.production.create_subtitle_track(translation)
+    state.production.subtitle_records.create_subtitle_track(source)
+    state.production.subtitle_records.create_subtitle_track(translation)
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
     monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
@@ -224,7 +224,7 @@ def test_broken_link_rejects_preview_without_persisting_any_track(
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
     source, translation = tracks(references=references)
     for track in (source, translation):
-        state.production.create_subtitle_track(replace(
+        state.production.subtitle_records.create_subtitle_track(replace(
             track, workspace_id=state.workspace_id, task_id=state.task.id,
             timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
@@ -247,7 +247,7 @@ def test_bilingual_merge_publishes_both_tracks_exports_and_undoes(person_render_
     base = f"/api/creation-tasks/{state.task.id}"
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
     for track in tracks():
-        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+        state.production.subtitle_records.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/exact/preview", json={
@@ -292,7 +292,7 @@ def test_bilingual_merge_rejects_missing_mapping_without_writing(person_render_e
     base = f"/api/creation-tasks/{state.task.id}"
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
     for track in tracks(references=(None, "zh-2")):
-        state.production.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
+        state.production.subtitle_records.create_subtitle_track(replace(track, workspace_id=state.workspace_id,
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     preview = state.client.post(base + "/edits/exact/preview", json={

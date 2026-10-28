@@ -78,7 +78,7 @@ def visual_application(permitted_media_state, monkeypatch):
         kind='subtitle_fixture', input_refs=['timeline:'+base.id],
         content='1\n00:00:00,200 --> 00:00:01,500\nTAIL DEMO\n', engine='fixture-subtitle-text',
         parameters={'language':'en-US'})
-    track = state.production.create_subtitle_track(SubtitleTrack(id='visual-fixture-caption',
+    track = state.production.subtitle_records.create_subtitle_track(SubtitleTrack(id='visual-fixture-caption',
         workspace_id=state.workspace_id, task_id=task.id, timeline_version_id=base.id,
         language='en-US', source_language=None, style={**main.metadata_default_subtitle_style(), 'enabled':True},
         cues=[SubtitleCue('visual-caption-one', None, 'TAIL DEMO', .2, 1.5)],

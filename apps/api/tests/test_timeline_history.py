@@ -121,7 +121,7 @@ def history_task(tmp_path, monkeypatch):
                   "narration_segments": [{"id": "segment_1", "text": "旧版本文案",
                                           "duration_seconds": 1.0, "status": "ready"}]},
         created_by_operation_id=None))
-    repo.create_subtitle_track(SubtitleTrack(
+    repo.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="subtitle_history_v1", workspace_id=WORKSPACE_ID, task_id=task.id,
         timeline_version_id="timeline_history_v1", language="zh-CN", source_language="zh-CN",
         style={}, cues=[SubtitleCue("subtitle_cue_1", "cue_1", "旧版本文案", 0, 1)],

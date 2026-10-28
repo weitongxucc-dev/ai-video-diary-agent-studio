@@ -78,7 +78,7 @@ def metadata_state(tmp_path):
     subtitle_file.write_text('1\n00:00:00,000 --> 00:00:04,000\n原字幕\n', encoding='utf-8')
     track = SubtitleTrack('base-zh', 'ws', task.id, base.id, 'zh-CN', None, default_subtitle_style(),
         [SubtitleCue('cue', None, '原字幕', 0, 4)], 'timeline', None, subtitle_ref, 'fixed-track-input', 'valid')
-    repo.create_subtitle_track(track)
+    repo.subtitle_records.create_subtitle_track(track)
     store = ArtifactStore(tmp_path / 'outputs')
     audio = TaskAudio(repo, store, tmp_path / 'temporary')
     case = MetadataEditUseCase(repo, store, output_root=tmp_path / 'outputs', audio_service=audio)
@@ -234,7 +234,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
         conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
             ('fixed-script','ws',s.task.id,'fixture-run',json.dumps(script),now.isoformat()))
     s.repo.timeline_records.create_timeline_version(s.base)
-    s.repo.create_subtitle_track(replace(s.track,id='complete-zh',timeline_version_id=s.base.id))
+    s.repo.subtitle_records.create_subtitle_track(replace(s.track,id='complete-zh',timeline_version_id=s.base.id))
     s.repo.save_narration_segments('ws',s.task.id,'fixed-script',[segment])
     path=tmp_path/'library'/'inserted.mp4';path.write_bytes(b'opaque inserted source')
     info=path.stat()
@@ -312,7 +312,7 @@ def test_named_subtitle_restore_keeps_later_user_crop_and_rejects_changed_text(s
             request_id='subtitle-redo' if redo else 'subtitle-undo',target_operation_id=a.operation.id,
             expected_timeline_version_id=version.id,expected_timeline_sequence=version.sequence)
         assert outcome.montage.clips[0].crop_x==.3 and outcome.montage.clips[0].crop_y==.7
-        tracks = state.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=outcome.task.current_timeline_version_id)
+        tracks = state.repo.subtitle_records.list_subtitle_tracks('ws',task.id,timeline_version_id=outcome.task.current_timeline_version_id)
         assert tracks[0].cues[0].text==text
         assert state.store.resolve_file(tracks[0].artifact_ref).is_file()
         assert outcome.execution_readiness==outcome.restore_request['execution_readiness']
@@ -435,7 +435,7 @@ def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):
     base = TimelineVersion('two-clips-base', 'ws', state.task.id, state.base.id, 2,
         {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['two-clips-zh']}, None)
     state.repo.timeline_records.create_timeline_version(base)
-    state.repo.create_subtitle_track(replace(state.track, id='two-clips-zh', timeline_version_id=base.id))
+    state.repo.subtitle_records.create_subtitle_track(replace(state.track, id='two-clips-zh', timeline_version_id=base.id))
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
     preview = CreationTaskEditPreviewRequest(raw_command='交换第1和第2个镜头', context_stage='montage',
         selected_object_refs=['clip:clip', 'clip:clip-second'])

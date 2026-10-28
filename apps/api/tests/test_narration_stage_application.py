@@ -436,7 +436,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     caption_ref,caption_transform=s.case.metadata.publish_subtitle_text(workspace_id='local',task_id=s.task_id,
         proposal_id='normal-fixture-caption',kind='subtitle_fixture',input_refs=['timeline:'+base.id],
         content='1\n00:00:00,000 --> 00:00:01,000\n配音 normal\n',engine='fixture-subtitle-text',parameters={'language':'zh-CN'})
-    repo.create_subtitle_track(SubtitleTrack('normal-caption','local',s.task_id,base.id,'zh-CN',None,{},
+    repo.subtitle_records.create_subtitle_track(SubtitleTrack('normal-caption','local',s.task_id,base.id,'zh-CN',None,{},
         [SubtitleCue('subtitle-'+item.id,item.id,item.text,float(i),float(i+1)) for i,item in enumerate(sections)],
         'timeline',None,caption_ref,caption_transform,'valid'))
     target=sections[0];untouched=sections[1]
@@ -460,7 +460,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     assert current.narration_cache_key!=combined.cache_key
     changed_montage=repo.get_creation_task_montage_plan('local',s.task_id)
     assert changed_montage['narration_audio_path']==repo.narration_artifact_reference(new_combined.cache_key)
-    tracks=repo.list_subtitle_tracks('local',s.task_id,timeline_version_id=current.current_timeline_version_id)
+    tracks=repo.subtitle_records.list_subtitle_tracks('local',s.task_id,timeline_version_id=current.current_timeline_version_id)
     assert len(tracks)==1 and tracks[0].status=='unavailable' and tracks[0].artifact_ref is None
     final_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in updated}
     replay_started=time.monotonic()

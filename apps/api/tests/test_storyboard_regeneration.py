@@ -47,7 +47,7 @@ def state(tmp_path, monkeypatch):
     old.audio_timeline.tracks[0].clips[0].fade_out_ms = 200
     old_payload = creation_task_montage_plan_to_payload(old)
     state.repo.save_creation_task_montage_plan("ws", state.task.id, old.id, old_payload)
-    tracks = [clone_subtitle_track(state.repo.get_subtitle_track("ws", state.task.id, track_id),
+    tracks = [clone_subtitle_track(state.repo.subtitle_records.get_subtitle_track("ws", state.task.id, track_id),
         timeline_version_id="regeneration-base") for track_id in state.base.snapshot["subtitle_track_ids"]]
     cover = clone_cover_asset(state.cover, timeline_version_id="regeneration-base")
     state.base = replace(state.base, id="regeneration-base", parent_version_id=state.base.id,
@@ -56,8 +56,8 @@ def state(tmp_path, monkeypatch):
             "narration_segments": [asdict(item) for item in state.segments]})
     state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
-        state.repo.create_subtitle_track(track)
-    state.repo.create_cover_asset(cover)
+        state.repo.subtitle_records.create_subtitle_track(track)
+    state.repo.cover_records.create_cover_asset(cover)
     state.task = state.repo.task_records.get_creation_task("ws", state.task.id)
     state.actor = CreationExecutionActor("ws", state.member.member_id)
     def forbidden(*args, **kwargs):
@@ -135,11 +135,11 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     assert version.parent_version_id == payload["expected_timeline_version_id"]
     old_version = state.repo.timeline_records.get_timeline_version("ws", payload["expected_timeline_version_id"])
     for old_id, new_id in zip(old_version.snapshot["subtitle_track_ids"], version.snapshot["subtitle_track_ids"]):
-        old_track, new_track = (state.repo.get_subtitle_track("ws", state.task.id, key) for key in (old_id, new_id))
+        old_track, new_track = (state.repo.subtitle_records.get_subtitle_track("ws", state.task.id, key) for key in (old_id, new_id))
         assert old_track.cues == new_track.cues and old_track.style == new_track.style
         assert (old_track.artifact_ref, old_track.transform_id) == (new_track.artifact_ref, new_track.transform_id)
-    old_cover = state.repo.get_cover_asset("ws", state.task.id, old_version.snapshot["cover_asset_id"])
-    new_cover = state.repo.get_cover_asset("ws", state.task.id, version.snapshot["cover_asset_id"])
+    old_cover = state.repo.cover_records.get_cover_asset("ws", state.task.id, old_version.snapshot["cover_asset_id"])
+    new_cover = state.repo.cover_records.get_cover_asset("ws", state.task.id, version.snapshot["cover_asset_id"])
     assert replace(new_cover, id=old_cover.id, timeline_version_id=old_cover.timeline_version_id,
         created_at=old_cover.created_at, updated_at=old_cover.updated_at) == old_cover
     assert state.repo.list_narration_segments("ws", state.task.id, "fixed-script") == state.segments

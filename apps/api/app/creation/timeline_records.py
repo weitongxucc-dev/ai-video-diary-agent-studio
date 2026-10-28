@@ -216,3 +216,15 @@ class TimelineRecordStore:
             ),
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
+
+    @staticmethod
+    def timeline_belongs(
+        connection: sqlite3.Connection, workspace_id: str, task_id: str, version_id: str,
+    ) -> bool:
+        return connection.execute(
+                """
+                SELECT 1 FROM timeline_versions
+                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                """,
+                (workspace_id, task_id, version_id),
+            ).fetchone() is not None

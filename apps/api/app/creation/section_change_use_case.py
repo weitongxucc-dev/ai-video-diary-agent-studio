@@ -69,12 +69,12 @@ class SectionTimelineChange:
         audio = inputs['audio']
         if any(row['status']!='ready' or not row['audio_reference'] or not row['duration_seconds'] for row in audio):
             raise ValueError('完整时间线的分段配音尚未就绪，原成果保留')
-        tracks = self.repository.list_subtitle_tracks(task.workspace_id,task.id,
+        tracks = self.repository.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,
             timeline_version_id=task.current_timeline_version_id,connection=connection)
         restore = desired_version is not None and isinstance(desired_version.snapshot.get('montage'),dict)
         old_tracks = []
         if restore:
-            old_tracks = self.repository.list_subtitle_tracks(task.workspace_id,task.id,
+            old_tracks = self.repository.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,
                 timeline_version_id=desired_version.id,connection=connection)
             local,old_tracks = self.local_state(desired_version.snapshot['montage'],old_tracks,section_id)
         snapshot['montage'] = replace_section_montage(current,section_id,local,section_audio=audio,

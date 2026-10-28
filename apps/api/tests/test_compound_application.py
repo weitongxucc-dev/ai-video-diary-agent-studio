@@ -32,7 +32,7 @@ def compound_state(tmp_path):
         {**state.base.snapshot, 'subtitle_track_ids': [track.id for track in tracks]}, None)
     state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
-        state.repo.create_subtitle_track(track)
+        state.repo.subtitle_records.create_subtitle_track(track)
     state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
     state.application = CompoundEditUseCase(state.repo, state.case)
     return state
@@ -64,7 +64,7 @@ def test_prepared_selection_recompiles_original_context_and_original_save_base_C
     state.repo.timeline_records.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=4,
         snapshot={**state.base.snapshot, 'subtitle_track_ids': [track.id for track in later_tracks]}))
     for track in later_tracks:
-        state.repo.create_subtitle_track(track)
+        state.repo.subtitle_records.create_subtitle_track(track)
     with pytest.raises(ValueError, match='版本|变化|version'):
         state.application.save_preview(partial)
     assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)

@@ -2668,7 +2668,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert final_output.status_code == 200
     assert final_output.content == b"playable-video"
     current_task = production.task_records.get_creation_task(workspace_id, task.id)
-    current_tracks = production.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_task.current_timeline_version_id)
+    current_tracks = production.subtitle_records.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_task.current_timeline_version_id)
     assert len(current_tracks) == 1 and current_tracks[0].language == language
     assert current_tracks[0].artifact_ref == production.get_creation_task_montage_plan(workspace_id, task.id)["subtitle_path"]
     assert current_tracks[0].transform_id is not None
@@ -2948,7 +2948,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
             created_by_operation_id=None,
         )
     )
-    cover = production.create_cover_asset(CoverAsset(
+    cover = production.cover_records.create_cover_asset(CoverAsset(
         id="cover_subtitle_edit_base", workspace_id=workspace_id, task_id=task.id,
         timeline_version_id="timeline-subtitle-edit-base",
         source_video_ref=montage.output_path, frame_time_seconds=0.5,
@@ -2962,8 +2962,8 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
 
     base = production.timeline_records.get_timeline_version(workspace_id, "timeline-subtitle-edit-base")
     chinese = main_module._subtitle_track_from_montage(workspace_id, task, base, montage)
-    production.create_subtitle_track(chinese)
-    production.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
+    production.subtitle_records.create_subtitle_track(chinese)
+    production.subtitle_records.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
         replace(chinese.cues[0], id="english-cue", source_cue_id=chinese.cues[0].id, text="MANUAL TEST", line_breaks=[])
     ]))
     display_client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
@@ -3010,7 +3010,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         production.get_creation_task_montage_plan(workspace_id, task.id)
     )
     assert saved.cues[0].text == ("原始字幕内容。" if visual_only else "修改后的字幕保留换行")
-    edited_track = production.list_subtitle_tracks(
+    edited_track = production.subtitle_records.list_subtitle_tracks(
         workspace_id,
         task.id,
         timeline_version_id=production.task_records.get_creation_task(
@@ -3467,7 +3467,7 @@ def test_first_subtitle_projection_spans_two_shots_but_keeps_explicit_short_trac
     persisted = []
     monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(
         plan_records=SimpleNamespace(get_creation_plan=lambda *_: SimpleNamespace(language="zh-CN")),
-        list_subtitle_tracks=lambda *_, **__: persisted))
+        subtitle_records=SimpleNamespace(list_subtitle_tracks=lambda *_, **__: persisted)))
     projected = main_module._current_subtitle_tracks("workspace", task,
         current_version=version, montage=montage)
     assert [(cue.id, cue.start_seconds, cue.end_seconds) for cue in projected[0].cues] == [("cue", 0., 5.)]
@@ -3903,7 +3903,7 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
     })
     assert preview.status_code == 200, preview.text
     base_version_id = preview.json()["proposal"]["operation"]["payload"]["base_version_id"]
-    state.production.create_subtitle_track(SubtitleTrack(
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="retime-source", workspace_id=state.workspace_id, task_id=state.task.id,
         timeline_version_id=base_version_id,
         language="zh-CN", source_language=None, style={"font_size": 40},
@@ -3971,7 +3971,7 @@ def test_linked_delete_removes_last_caption_without_reviving_projection(person_r
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
     version = main_module._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
-    state.production.create_subtitle_track(SubtitleTrack(id="only-caption", workspace_id=state.workspace_id,
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(id="only-caption", workspace_id=state.workspace_id,
         task_id=state.task.id, timeline_version_id=version.id, language="zh-CN", source_language=None,
         style={}, cues=[ProductionSubtitleCue(id="caption", source_cue_id=None, text="被删除的字幕", start_seconds=0, end_seconds=4)],
         generation_method="timeline", model_id=None, artifact_ref="artifacts/old.srt", transform_id="old", status="valid"))
@@ -4135,8 +4135,8 @@ def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person
         language="zh-CN", source_language=None, style={},
         cues=[ProductionSubtitleCue(id="shared", source_cue_id=None, text="AI工具 AI记录", start_seconds=0,end_seconds=4)],
         generation_method="timeline",model_id=None,artifact_ref="artifacts/zh.srt",transform_id="zh",status="valid")
-    state.production.create_subtitle_track(zh)
-    state.production.create_subtitle_track(replace(zh,id="batch-en",language="en-US",source_language="zh-CN",
+    state.production.subtitle_records.create_subtitle_track(zh)
+    state.production.subtitle_records.create_subtitle_track(replace(zh,id="batch-en",language="en-US",source_language="zh-CN",
         cues=[replace(zh.cues[0],text="AI tools and AI notes")],generation_method="translation"))
     before = state.client.get(base).json()
     single = state.client.post(base + "/edits/preview", json={"raw_command":"把这句字幕改成Local tools", "context_stage":"subtitle_cover",
@@ -4177,7 +4177,7 @@ def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_
         language="en-US", source_language=None, style={},
         cues=[ProductionSubtitleCue(id="structure-cue", source_cue_id=None, text="Local video. Good sound.", start_seconds=0,end_seconds=4)],
         generation_method="timeline",model_id=None,artifact_ref="artifacts/structure.srt",transform_id="structure-transform",status="valid")
-    state.production.create_subtitle_track(track)
+    state.production.subtitle_records.create_subtitle_track(track)
     before = state.client.get(base).json()
     def preview_confirm(command, current):
         selected = current["subtitle_tracks"][0]
@@ -4226,7 +4226,7 @@ def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibili
         language="en-US",source_language=None,style={"enabled":False},cues=[ProductionSubtitleCue(id="caption",source_cue_id=None,
         text="Real local subtitles",start_seconds=0,end_seconds=4)],generation_method="timeline",model_id=None,
         artifact_ref="artifacts/style.srt",transform_id="style-transform",status="valid")
-    state.production.create_subtitle_track(track)
+    state.production.subtitle_records.create_subtitle_track(track)
     before=state.client.get(base).json()
     missing=state.client.post(base+'/edits/exact/preview',json={"operation_type":"ConfigureSubtitleTrack","style":{"font_family":"Missing Subtitle Family 123456"}})
     assert missing.status_code==422,missing.text
@@ -4750,7 +4750,7 @@ def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_
     state=person_render_edit_state
     base=f'/api/creation-tasks/{state.task.id}'
     version=main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
-    state.production.create_subtitle_track(SubtitleTrack(id="compound-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(id="compound-caption",workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
         language="en-US",source_language=None,style={"font_size":40},cues=[ProductionSubtitleCue(id="compound-cue",source_cue_id=None,text="Local video",start_seconds=0,end_seconds=4)],
         generation_method="timeline",model_id=None,artifact_ref="artifacts/compound.srt",transform_id="compound-transform",status="valid"))
     before=state.client.get(base).json()
@@ -4793,8 +4793,8 @@ def test_compound_caption_text_time_and_translation_boundary(person_render_edit_
     zh=SubtitleTrack(id='compound-zh',workspace_id=state.workspace_id,task_id=state.task.id,timeline_version_id=version.id,
         language='zh-CN',source_language=None,style={},cues=[ProductionSubtitleCue(id='compound-source',source_cue_id=None,text='本地视频',start_seconds=0,end_seconds=4)],
         generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
-    state.production.create_subtitle_track(zh)
-    state.production.create_subtitle_track(replace(zh,id='compound-en',language='en-US',source_language='zh-CN',
+    state.production.subtitle_records.create_subtitle_track(zh)
+    state.production.subtitle_records.create_subtitle_track(replace(zh,id='compound-en',language='en-US',source_language='zh-CN',
         cues=[replace(zh.cues[0],id='compound-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
@@ -5273,7 +5273,7 @@ def test_relative_subtitle_shift_previews_confirms_and_undoes(person_render_edit
         language='zh-CN',source_language=None,style={},
         cues=[ProductionSubtitleCue(id='shift-cue',source_cue_id=None,text='移动字幕',start_seconds=1,end_seconds=3)],
         generation_method='timeline',model_id=None,artifact_ref='artifacts/shift.srt',transform_id='shift-fixture',status='valid')
-    state.production.create_subtitle_track(track)
+    state.production.subtitle_records.create_subtitle_track(track)
     before=state.client.get(base).json()
     response=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'subtitle_cover',
         'selected_object_refs':['cue:shift-cue','subtitle-track:shift-zh']})
@@ -5296,7 +5296,7 @@ def test_relative_subtitle_shift_previews_confirms_and_undoes(person_render_edit
             'selected_object_refs':[f"cue:{current_track['cues'][0]['id']}",f"subtitle-track:{current_track['id']}"]})
         assert rejected.status_code==422,rejected.text
     assert state.client.get(base).json()['task']['current_timeline_version_id']==restored['task']['current_timeline_version_id']
-    state.production.create_subtitle_track(replace(track,id='shift-en',language='en-US',source_language='zh-CN',
+    state.production.subtitle_records.create_subtitle_track(replace(track,id='shift-en',language='en-US',source_language='zh-CN',
         timeline_version_id=restored['task']['current_timeline_version_id'],generation_method='translation'))
     ambiguous=state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'subtitle_cover',
         'selected_object_refs':['cue:shift-cue']})
@@ -5312,8 +5312,8 @@ def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_ed
         language='zh-CN',source_language=None,style={},
         cues=[ProductionSubtitleCue(id='shift-source',source_cue_id=None,text='本地视频',start_seconds=1,end_seconds=3)],
         generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
-    state.production.create_subtitle_track(zh)
-    state.production.create_subtitle_track(replace(zh,id='shift-compound-en',language='en-US',source_language='zh-CN',
+    state.production.subtitle_records.create_subtitle_track(zh)
+    state.production.subtitle_records.create_subtitle_track(replace(zh,id='shift-compound-en',language='en-US',source_language='zh-CN',
         cues=[replace(zh.cues[0],id='shift-translation',source_cue_id=zh.cues[0].id,text='Local video')],generation_method='translation'))
     before=state.client.get(base).json()
     clip=before['montage']['clips'][0]
@@ -5360,8 +5360,8 @@ def test_indexed_subtitle_without_selection_previews_confirms_and_undoes(person_
         cues=[ProductionSubtitleCue(id='indexed-first',source_cue_id=None,text='第一句',start_seconds=1,end_seconds=3),
               ProductionSubtitleCue(id='indexed-second',source_cue_id=None,text='第二句',start_seconds=4,end_seconds=5)],
         generation_method='timeline',model_id=None,artifact_ref='artifacts/source.srt',transform_id='source',status='valid')
-    state.production.create_subtitle_track(zh)
-    state.production.create_subtitle_track(replace(zh,id='indexed-en',language='en-US',source_language='zh-CN',
+    state.production.subtitle_records.create_subtitle_track(zh)
+    state.production.subtitle_records.create_subtitle_track(replace(zh,id='indexed-en',language='en-US',source_language='zh-CN',
         cues=[replace(cue,id='en-'+cue.id,source_cue_id=cue.id,text=text) for cue,text in zip(zh.cues,['First cue','Second cue'])],generation_method='translation'))
     before=state.client.get(base).json()
     monkeypatch.setattr(main_module,'_task_audio',lambda:SimpleNamespace(validate=lambda *args, **kwargs:None))
@@ -5772,7 +5772,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
     assert state.client.get(f"/api/creation-tasks/{state.task.id}").status_code == 200
     base_version = main_module._ensure_montage_base_version(state.workspace_id,
         state.production.task_records.get_creation_task(state.workspace_id, state.task.id), state.montage).id
-    track = state.production.create_subtitle_track(SubtitleTrack(
+    track = state.production.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="retained-person-caption", workspace_id=state.workspace_id, task_id=state.task.id,
         timeline_version_id=base_version, language="zh-CN", source_language=None,
         style={"font_size": 40}, cues=[ProductionSubtitleCue(id="caption", source_cue_id=None,
@@ -5796,7 +5796,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
     assert [asdict(cue) for cue in plan.cues] == [asdict(cue) for cue in state.montage.cues]
     assert plan.narration_audio_path == state.montage.narration_audio_path
     assert state.production.list_narration_segments(state.workspace_id, state.task.id) == narration_before
-    tracks = state.production.list_subtitle_tracks(state.workspace_id, state.task.id,
+    tracks = state.production.subtitle_records.list_subtitle_tracks(state.workspace_id, state.task.id,
         timeline_version_id=state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id)
     assert len(tracks) == 1
     assert tracks[0].cues == track.cues and tracks[0].style == track.style

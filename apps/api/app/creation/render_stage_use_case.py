@@ -271,13 +271,13 @@ class RenderStageUseCase:
                         )
                     )
                     if inherited_cover is not None:
-                        self.repository.create_cover_asset(inherited_cover)
-                    if not self.repository.list_subtitle_tracks(
+                        self.repository.cover_records.create_cover_asset(inherited_cover)
+                    if not self.repository.subtitle_records.list_subtitle_tracks(
                         workspace_id, task.id, timeline_version_id=version.id
                     ):
                         if active_subtitle_tracks:
                             for active_track in active_subtitle_tracks:
-                                self.repository.create_subtitle_track(
+                                self.repository.subtitle_records.create_subtitle_track(
                                     _clone_subtitle_track(
                                         active_track,
                                         timeline_version_id=version.id,
@@ -298,7 +298,7 @@ class RenderStageUseCase:
                                 workspace_id, task, version, plan
                             )
                             if initial_track is not None:
-                                self.repository.create_subtitle_track(initial_track)
+                                self.repository.subtitle_records.create_subtitle_track(initial_track)
                     self.repository.execution_records.append_task_event(
                         TaskEvent(
                             id=f"event_{version.id}_render_reused",
@@ -530,22 +530,22 @@ class RenderStageUseCase:
                     )
                 # The selected cover is an immutable image with its own source reference;
                 # rendering a video must not silently discard or retarget that selection.
-                if active_cover is not None and not self.repository.list_cover_assets(
+                if active_cover is not None and not self.repository.cover_records.list_cover_assets(
                     workspace_id, task.id, timeline_version_id=version.id
                 ):
-                    self.repository.create_cover_asset(
+                    self.repository.cover_records.create_cover_asset(
                         replace(
                             _clone_cover_asset(active_cover, timeline_version_id=version.id),
                             id=version.snapshot["cover_asset_id"],
                         )
                     )
-                persisted_tracks = self.repository.list_subtitle_tracks(
+                persisted_tracks = self.repository.subtitle_records.list_subtitle_tracks(
                     workspace_id, task.id, timeline_version_id=version.id
                 )
                 if not persisted_tracks:
                     if active_subtitle_tracks:
                         for active_track in active_subtitle_tracks:
-                            self.repository.create_subtitle_track(
+                            self.repository.subtitle_records.create_subtitle_track(
                                 _clone_subtitle_track(
                                     active_track,
                                     timeline_version_id=version.id,
@@ -566,7 +566,7 @@ class RenderStageUseCase:
                             workspace_id, task, version, rendered
                         )
                         if initial_track is not None:
-                            self.repository.create_subtitle_track(initial_track)
+                            self.repository.subtitle_records.create_subtitle_track(initial_track)
                 context.report_progress(100)
                 return JobResult(tuple(output_refs))
             except JobFailure:

@@ -44,7 +44,7 @@ def test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes(t
         assert changed['audio_timeline'] == original['audio_timeline']
         assert changed['graphic_overlays'] == original['graphic_overlays']
         current_id = repo.task_records.get_creation_task('local', 'task').current_timeline_version_id
-        current_tracks = repo.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
+        current_tracks = repo.subtitle_records.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
         assert [asdict(cue) for cue in current_tracks[0].cues] == [asdict(cue) for cue in track.cues]
         if operation == 'SplitClip':
             assert len(changed['clips']) == len(original['clips'])+1
@@ -87,7 +87,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         copied = clone_subtitle_track(track,timeline_version_id='neighbor-base')
         repo.timeline_records.create_timeline_version(TimelineVersion('neighbor-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
-        repo.create_subtitle_track(copied)
+        repo.subtitle_records.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
         monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
         commit = repo.confirm_direct_edit
@@ -149,7 +149,7 @@ def test_unaffected_distant_private_source_is_not_part_of_a_reorder(tmp_path,mon
         copied=clone_subtitle_track(track,timeline_version_id='distant-base')
         repo.timeline_records.create_timeline_version(TimelineVersion('distant-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
-        repo.create_subtitle_track(copied)
+        repo.subtitle_records.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
         monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
         response=client.post('/api/creation-tasks/task/edits/exact',json={
@@ -183,7 +183,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         copied=clone_subtitle_track(track,timeline_version_id='transition-base')
         repo.timeline_records.create_timeline_version(TimelineVersion('transition-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
-        repo.create_subtitle_track(copied)
+        repo.subtitle_records.create_subtitle_track(copied)
         monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
         prepared=client.post('/api/creation-tasks/task/edits/exact/preview?draft=true',json={
             'operation_type':'SetClipTransition','clip_id':'clip_2','transition_seconds':.1})

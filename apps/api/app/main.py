@@ -4627,7 +4627,7 @@ def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
         read_summary=lambda task: project_task_summary(production_repo, task),
         person_provider=_lipsync_provider,
         read_subtitles=lambda ws, task, **values: _metadata_edit_use_case().current_subtitle_tracks(ws, task, **values),
-        read_covers=production_repo.list_cover_assets,
+        read_covers=production_repo.cover_records.list_cover_assets,
         translation_provider=lambda: subtitle_translation_provider_from_settings(settings) if isinstance(settings, Settings) else None,
         read_events=production_repo.execution_records.list_task_events,
         find_tool=shutil.which,
@@ -4993,7 +4993,7 @@ def _validate_saved_assistant_reference(request: Request, reference: dict | None
         version = _timeline_version_or_404(workspace_id, task.id, reference["version"])
         try:
             return validate_timeline_reference(reference, task=task, timeline=version,
-                subtitle_tracks=production_repo.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=version.id))
+                subtitle_tracks=production_repo.subtitle_records.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=version.id))
         except AssistantReferenceConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     else:
@@ -5276,7 +5276,7 @@ def _assistant_input_context(request: Request, context: dict, reference: dict | 
     snapshot["knowledge_reference"] = (_assistant_knowledge_snapshot(request, knowledge_item["knowledge_item_id"], knowledge_item["version"], knowledge_item.get("locator")) if knowledge_item else None)
     if context["kind"] == "task":
         task, _member_id = _exact_edit_access(context["task_id"], request)
-        tracks = production_repo.list_subtitle_tracks(workspace_id, task.id)
+        tracks = production_repo.subtitle_records.list_subtitle_tracks(workspace_id, task.id)
         try:
             refs = timeline_object_refs(items, task.id, subtitle_tracks=tracks)
         except AssistantReferenceConflict as exc:
@@ -6721,7 +6721,7 @@ def _assistant_turn_scope(
                 raise HTTPException(status_code=409, detail="当前任务没有可修改的字幕")
             refs.update(f"subtitle-track:{track.id}" for track in tracks)
             refs.update(f"cue:{cue.id}" for track in tracks for cue in track.cues)
-            covers = production_repo.list_cover_assets(
+            covers = production_repo.cover_records.list_cover_assets(
                 workspace_id, task.id, timeline_version_id=version.id,
             )
             refs.update(f"cover:{cover.id}" for cover in covers)
@@ -8799,7 +8799,7 @@ def _task_execution_capability_facts(task):
 def _task_edit_capability_facts(task):
     payload = production_repo.get_creation_task_montage_plan(task.workspace_id, task.id) if task.montage_plan_id else None
     clips = payload.get("clips", []) if payload else []
-    tracks = production_repo.list_subtitle_tracks(task.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if task.current_timeline_version_id else []
+    tracks = production_repo.subtitle_records.list_subtitle_tracks(task.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if task.current_timeline_version_id else []
     version = production_repo.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     operations = []
     for operation, fields in EXACT_EDIT_FIELDS.items():
@@ -9448,7 +9448,7 @@ def _history_montage(version: TimelineVersion) -> dict[str, object]:
 
 
 def _history_subtitle_tracks(workspace_id: str, task_id: str, version: TimelineVersion):
-    return production_repo.list_subtitle_tracks(
+    return production_repo.subtitle_records.list_subtitle_tracks(
         workspace_id, task_id, timeline_version_id=version.id
     )
 
@@ -9709,7 +9709,7 @@ def get_creation_task_cover_image(
     workspace_id = current_workspace_id(request)
     _readable_creation_task(request, task_id)
     try:
-        cover = production_repo.get_cover_asset(workspace_id, task_id, cover_id)
+        cover = production_repo.cover_records.get_cover_asset(workspace_id, task_id, cover_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task cover not found") from exc
     if cover.status != "valid" or not cover.artifact_ref:

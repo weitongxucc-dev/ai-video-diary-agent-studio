@@ -553,7 +553,7 @@ class MetadataEditUseCase:
                 current_version = None
         if current_version is None:
             return []
-        tracks = self.repository.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_version.id)
+        tracks = self.repository.subtitle_records.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_version.id)
         if tracks:
             return tracks
         if current_version.snapshot.get('subtitle_track_ids') == []:
@@ -571,7 +571,7 @@ class MetadataEditUseCase:
         if not isinstance(cover_id, str) or not cover_id:
             return None
         try:
-            return self.repository.get_cover_asset(workspace_id, task_id, cover_id)
+            return self.repository.cover_records.get_cover_asset(workspace_id, task_id, cover_id)
         except KeyError:
             return None
 

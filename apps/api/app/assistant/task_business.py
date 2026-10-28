@@ -330,7 +330,7 @@ class TaskBusiness:
             raise ValueError('追加输入接收后作品版本已变化，请查看当前作品后重新发送')
         reference=normalize_selection(frozen.get('selected_reference'))
         items=reference['items'] if reference and reference['kind']=='selection' else [reference] if reference else []
-        tracks=self.production.list_subtitle_tracks(task.workspace_id,task.id,connection=conn)
+        tracks=self.production.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,connection=conn)
         authorization=self.production.get_task_authorization(task.workspace_id,task.id,connection=conn)
         if self.authorizations.status(task.workspace_id,task.id,identity=authorization.identity,
                 operation='task_goal',connection=conn)!='valid':

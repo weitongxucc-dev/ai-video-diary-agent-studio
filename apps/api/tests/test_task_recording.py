@@ -557,7 +557,7 @@ def test_equal_size_recording_change_rejects_old_proposal(recording_task):
 
 def test_replacing_narration_preserves_subtitle_text_but_requires_review(recording_task):
     repo, task_id, version_id, client = recording_task
-    original = repo.create_subtitle_track(SubtitleTrack(
+    original = repo.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="caption_recording_old", workspace_id="local", task_id=task_id,
         timeline_version_id=version_id, language="zh-CN", source_language=None,
         style={"font_size": 40},
@@ -575,19 +575,19 @@ def test_replacing_narration_preserves_subtitle_text_but_requires_review(recordi
     confirmed = client.post(route + f"/edits/{preview.json()['proposal']['id']}/confirm", json={})
     assert confirmed.status_code == 200, confirmed.text
     current_version = repo.task_records.get_creation_task("local", task_id).current_timeline_version_id
-    tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
+    tracks = repo.subtitle_records.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
     assert len(tracks) == 1
     assert tracks[0].status == "unavailable"
     assert tracks[0].artifact_ref is None and tracks[0].transform_id is None
     assert tracks[0].cues == original.cues and tracks[0].style == original.style
     assert tracks[0].repair_action
-    assert repo.list_subtitle_tracks("local", task_id, timeline_version_id=version_id)[0].status == "valid"
+    assert repo.subtitle_records.list_subtitle_tracks("local", task_id, timeline_version_id=version_id)[0].status == "valid"
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg unavailable")
 def test_volume_edit_keeps_subtitle_track_valid(recording_task):
     repo, task_id, version_id, client = recording_task
-    original = repo.create_subtitle_track(SubtitleTrack(
+    original = repo.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="caption_recording_old", workspace_id="local", task_id=task_id,
         timeline_version_id=version_id, language="zh-CN", source_language=None,
         style={"font_size": 40},
@@ -603,7 +603,7 @@ def test_volume_edit_keeps_subtitle_track_valid(recording_task):
                             json={})
     assert confirmed.status_code == 200, confirmed.text
     current_version = repo.task_records.get_creation_task("local", task_id).current_timeline_version_id
-    tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
+    tracks = repo.subtitle_records.list_subtitle_tracks("local", task_id, timeline_version_id=current_version)
     assert len(tracks) == 1
     assert tracks[0].status == "valid"
     assert tracks[0].artifact_ref == original.artifact_ref and tracks[0].transform_id == original.transform_id

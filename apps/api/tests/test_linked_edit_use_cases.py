@@ -43,7 +43,7 @@ def linked_state(tmp_path, monkeypatch):
         "linked-base", "local", "task", "timeline", 2,
         {"montage": seeded, "subtitle_track_ids": [captions.id]}, None,
     ))
-    repo.create_subtitle_track(captions)
+    repo.subtitle_records.create_subtitle_track(captions)
     task = repo.task_records.get_creation_task("local", "task")
     identity = {"member_id": actor.member_id, "local_diagnostic": False}
     verifier = EditSourceVerifier(repo, identity=identity)
@@ -131,7 +131,7 @@ def test_linked_use_case_prepares_without_writes_then_jointly_commits_all_lanes(
     actual = repo.get_creation_task_montage_plan("local", "task")
     assert actual["audio_timeline"] == prepared.plan.audio_timeline.model_dump()
     assert actual["clips"] == creation_task_montage_plan_to_payload(prepared.plan)["clips"]
-    saved = repo.list_subtitle_tracks("local", "task", timeline_version_id=version.id)
+    saved = repo.subtitle_records.list_subtitle_tracks("local", "task", timeline_version_id=version.id)
     assert [asdict(cue) for cue in saved[0].cues] == [asdict(cue) for cue in prepared.subtitle_tracks[0].cues]
 
 
@@ -255,7 +255,7 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     base = TimelineVersion('silence-base', 'ws', state.task.id, state.base.id, 2,
         {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['silence-zh']}, None)
     state.repo.timeline_records.create_timeline_version(base)
-    state.repo.create_subtitle_track(replace(state.track, id='silence-zh', timeline_version_id=base.id))
+    state.repo.subtitle_records.create_subtitle_track(replace(state.track, id='silence-zh', timeline_version_id=base.id))
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
     values = {'base_version_id': base.id, 'removed_ranges_ms': [[1000, 1500]]}
     command = metadata_edit_command(task, state.identity, 'RemoveSilence', values)
@@ -270,7 +270,7 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     current = fresh.task_records.get_creation_task('ws', task.id)
     version = fresh.timeline_records.get_timeline_version('ws', current.current_timeline_version_id)
     operations = fresh.edit_records.list_edit_operations('ws', task.id)
-    tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
+    tracks = fresh.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
     assert len(fresh.timeline_records.list_timeline_versions('ws', task.id)) == before + 1
     assert len(operations) == 1 and operations[0].proposal_id == proposal.id
     assert result.operation.id == operations[0].id and result.operation.result_version_id == version.id

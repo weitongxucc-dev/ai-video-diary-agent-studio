@@ -69,9 +69,9 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
     state.base = TimelineVersion('subtitle-base', 'ws', state.task.id, state.base.id, 2, snapshot, None)
     state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
-        state.repo.create_subtitle_track(track)
+        state.repo.subtitle_records.create_subtitle_track(track)
     if state.cover is not None:
-        state.repo.create_cover_asset(state.cover)
+        state.repo.cover_records.create_cover_asset(state.cover)
     state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
     state.application = SubtitleEditUseCase(state.repo, state.case)
     state.voice_bytes = voice.read_bytes()
@@ -95,8 +95,8 @@ def test_style_preparation_keeps_original_ids_and_save_uses_original_base_CAS(tm
     later_en = clone_subtitle_track(state.en, timeline_version_id='later-head', track_id='later-en')
     state.repo.timeline_records.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=3,
         snapshot={**state.base.snapshot, 'subtitle_track_ids': [later_zh.id, later_en.id]}))
-    state.repo.create_subtitle_track(later_zh)
-    state.repo.create_subtitle_track(later_en)
+    state.repo.subtitle_records.create_subtitle_track(later_zh)
+    state.repo.subtitle_records.create_subtitle_track(later_en)
     with pytest.raises(ValueError, match='时间线已经变化'):
         state.application.prepare_preview(command)
     before_ids = prepared.intent.id, prepared.proposal.id

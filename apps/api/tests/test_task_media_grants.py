@@ -569,7 +569,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
         {'font_family':'Arial', 'font_size':32, 'enabled':True},
         [SubtitleCue('inside', None, 'inside', 2, 3), SubtitleCue('outside', None, 'outside', 9, 10)],
         'timeline', None, subtitle_ref, transform_id, 'valid')
-    repo.create_subtitle_track(track)
+    repo.subtitle_records.create_subtitle_track(track)
     service = TaskAudio(repo, store, tmp_path/'temp', picture_renderer=main._picture_preview_renderer().render_picture_input)
     monkeypatch.setattr(main, 'montage_renderer', MontageRenderer(tmp_path/'render'))
     monkeypatch.setattr(main, '_task_audio', lambda:service)

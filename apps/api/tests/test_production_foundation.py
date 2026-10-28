@@ -610,9 +610,10 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     )
 
 
-def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
+def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path, monkeypatch):
     from app.creation.contracts import CoverAsset, SubtitleCue, SubtitleTrack
 
+    edit_adoption_no_execution(monkeypatch)
     repo = _repository(tmp_path)
     _save_creation_task(repo, workspace_id="workspace_a", task_id="task-a")
     base = repo.timeline_records.create_timeline_version(TimelineVersion(
@@ -630,27 +631,76 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
         with repo._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
-            assert repo.create_subtitle_track(track, connection=conn) == track
-            repo.create_cover_asset(replace(cover, title=""), connection=conn)
+            assert repo.subtitle_records.create_subtitle_track(track, connection=conn) == track
+            repo.cover_records.create_cover_asset(replace(cover, title=""), connection=conn)
     assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
     with pytest.raises(KeyError):
         repo.timeline_records.get_timeline_version("workspace_a", version.id)
     with pytest.raises(KeyError):
-        repo.get_subtitle_track("workspace_a", "task-a", track.id)
+        repo.subtitle_records.get_subtitle_track("workspace_a", "task-a", track.id)
     with pytest.raises(KeyError):
-        repo.get_cover_asset("workspace_a", "task-a", cover.id)
+        repo.cover_records.get_cover_asset("workspace_a", "task-a", cover.id)
+
+    with repo._connect() as conn:
+        conn.execute("CREATE TRIGGER reject_cover_tail BEFORE INSERT ON cover_assets "
+                     "WHEN NEW.id='delivery-cover' BEGIN SELECT RAISE(ABORT,'cover tail refused'); END")
+    with pytest.raises(ValueError, match="同一时间线版本的封面已存在") as refused:
+        with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
+            repo.subtitle_records.create_subtitle_track(track, connection=conn)
+            repo.cover_records.create_cover_asset(cover, connection=conn)
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert "cover tail refused" in str(refused.value.__cause__)
+    assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
+    with pytest.raises(KeyError):
+        repo.timeline_records.get_timeline_version("workspace_a", version.id)
+    assert repo.subtitle_records.list_subtitle_tracks("workspace_a", "task-a") == []
+    assert repo.cover_records.list_cover_assets("workspace_a", "task-a") == []
+    with repo._connect() as conn:
+        conn.execute("DROP TRIGGER reject_cover_tail")
 
     with repo._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
-        assert repo.create_subtitle_track(track, connection=conn) == track
-        assert repo.create_cover_asset(cover, connection=conn) == cover
+        assert repo.subtitle_records.create_subtitle_track(track, connection=conn) == track
+        assert repo.cover_records.create_cover_asset(cover, connection=conn) == cover
+        assert conn.in_transaction
+        assert repo.subtitle_records.get_subtitle_track("workspace_a", "task-a", track.id, connection=conn) == track
+        assert repo.subtitle_records.list_subtitle_tracks("workspace_a", "task-a", connection=conn) == [track]
+        assert repo.cover_records.get_cover_asset("workspace_a", "task-a", cover.id, connection=conn) == cover
+        assert repo.cover_records.list_cover_assets("workspace_a", "task-a") == []
         assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
         with pytest.raises(KeyError):
-            repo.get_cover_asset("workspace_a", "task-a", cover.id)
+            repo.cover_records.get_cover_asset("workspace_a", "task-a", cover.id)
     assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version.id
-    assert repo.get_subtitle_track("workspace_a", "task-a", track.id) == track
-    assert repo.get_cover_asset("workspace_a", "task-a", cover.id) == cover
+    assert repo.subtitle_records.get_subtitle_track("workspace_a", "task-a", track.id) == track
+    assert repo.cover_records.get_cover_asset("workspace_a", "task-a", cover.id) == cover
+    with pytest.raises(ValueError, match="同一时间线版本的字幕轨已存在") as duplicate_track:
+        repo.subtitle_records.create_subtitle_track(track)
+    assert isinstance(duplicate_track.value.__cause__, sqlite3.IntegrityError)
+    with pytest.raises(ValueError, match="同一时间线版本的封面已存在") as duplicate_cover:
+        repo.cover_records.create_cover_asset(cover)
+    assert isinstance(duplicate_cover.value.__cause__, sqlite3.IntegrityError)
+
+    historical_track = replace(track, id="base-subtitle", timeline_version_id=base.id)
+    historical_cover = replace(cover, id="base-cover", timeline_version_id=base.id)
+    assert repo.subtitle_records.create_subtitle_track(historical_track) == historical_track
+    assert repo.cover_records.create_cover_asset(historical_cover) == historical_cover
+    assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version.id
+    # Same timestamps deliberately exercise the stable ID tie-breaker.
+    assert repo.subtitle_records.list_subtitle_tracks("workspace_a", "task-a") == [historical_track, track]
+    assert repo.cover_records.list_cover_assets("workspace_a", "task-a") == [historical_cover, cover]
+    assert repo.subtitle_records.list_subtitle_tracks("workspace_a", "task-a", timeline_version_id=version.id) == [track]
+    assert repo.cover_records.list_cover_assets("workspace_a", "task-a", timeline_version_id=base.id) == [historical_cover]
+
+    _save_creation_task(repo, workspace_id="workspace_a", task_id="task-b")
+    foreign = repo.timeline_records.create_timeline_version(
+        TimelineVersion("foreign-task-version", "workspace_a", "task-b", None, 1, {}, None))
+    with pytest.raises(ValueError, match="字幕轨必须关联当前任务"):
+        repo.subtitle_records.create_subtitle_track(replace(track, id="wrong-task-track", timeline_version_id=foreign.id))
+    with pytest.raises(ValueError, match="封面必须关联当前任务"):
+        repo.cover_records.create_cover_asset(replace(cover, id="wrong-task-cover", timeline_version_id=foreign.id))
     with repo._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         repo.timeline_records.create_timeline_version(base, connection=conn, expected_current_version_id=version.id)
@@ -4561,7 +4611,7 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
         assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
         writer.rollback()
     assert repo.edit_records.list_edit_proposals('workspace_a','task-a')==[]
-    assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
+    assert repo.subtitle_records.list_subtitle_tracks('workspace_a','task-a')==[]
     repo.edit_records.create_edit_intent(intent)
     repo.edit_records.create_edit_proposal(proposal)
     with repo._connect() as conn:
@@ -4572,6 +4622,6 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
             result_version=version,subtitle_tracks=[track])
     assert repo.edit_records.get_edit_proposal('workspace_a',proposal.id).status=='proposed'
     assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
-    assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
+    assert repo.subtitle_records.list_subtitle_tracks('workspace_a','task-a')==[]
     assert repo.timeline_records.list_timeline_versions('workspace_a','task-a')==[base]
     assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id

@@ -381,7 +381,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
         track = SubtitleTrack("input_track", "local", task_id, base.id, "zh-CN", None,
             {"enabled": True}, [SubtitleCue("cue", None, "original fixture", 0, 1)], "timeline", None,
             "artifacts/fixture/input.srt", "transform_fixture_subtitle", "valid")
-        repo.create_subtitle_track(track)
+        repo.subtitle_records.create_subtitle_track(track)
         job = execution.start("local", task_id, script_id, digest, actor=actor)
         request_id = submit_creation_stage(execution, scheduler, job, actor)
         grant = scheduler.pick_and_grant()
@@ -413,7 +413,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
             repo.timeline_records.create_timeline_version(published, connection=conn, expected_current_version_id=base.id)
         scheduler.assert_grant(grant)
         # New output tracks are not retroactively inputs to their own render.
-        repo.create_subtitle_track(replace(track, id="output_track", timeline_version_id=published.id))
+        repo.subtitle_records.create_subtitle_track(replace(track, id="output_track", timeline_version_id=published.id))
         scheduler.assert_grant(grant)
         copied = replace(published, id="timeline_independent", parent_version_id=published.id, sequence=3)
         repo.timeline_records.create_timeline_version(copied)
@@ -579,7 +579,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert version.parent_version_id == base.id
         assert version.snapshot["render_input_timeline_version_id"] == base.id
         assert version.snapshot["creation_render_request_id"] == request_id
-        tracks = repo.list_subtitle_tracks("local", task_id, timeline_version_id=version.id)
+        tracks = repo.subtitle_records.list_subtitle_tracks("local", task_id, timeline_version_id=version.id)
         assert len(tracks) == 1 and tracks[0].status == "valid"
         inner = [j for j in repo.job_records.list_job_runs("local", task_id) if j.kind == "creation_task_montage_render"]
         assert len(inner) == 1 and inner[0].status == "succeeded"
@@ -3519,7 +3519,7 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     reference,transform=edits.publish_subtitle_text(workspace_id='local',task_id=case.task_id,proposal_id='before_subtitle',
         kind='subtitle_cue_update',input_refs=[f'timeline:{base.id}'],content=render_srt(execution_subtitle_track(track)),
         engine='subtitle-srt/v1',parameters={})
-    case.repo.create_subtitle_track(replace(track,artifact_ref=reference,transform_id=transform,status='valid'))
+    case.repo.subtitle_records.create_subtitle_track(replace(track,artifact_ref=reference,transform_id=transform,status='valid'))
     # A real subtitle edit invalidates P before a later body revision produces Q.
     edits.save(case.repo.task_records.get_creation_task('local',case.task_id),metadata_edit_command(
         case.repo.task_records.get_creation_task('local',case.task_id),
@@ -3534,27 +3534,27 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     translated_ref,translated_transform=edits.publish_subtitle_text(workspace_id='local',task_id=case.task_id,
         proposal_id='before_translation',kind='subtitle_cue_update',input_refs=[f'timeline:{base.id}'],
         content=render_srt(execution_subtitle_track(translation)),engine='subtitle-srt/v1',parameters={})
-    case.repo.create_subtitle_track(replace(translation,artifact_ref=translated_ref,transform_id=translated_transform,status='valid'))
+    case.repo.subtitle_records.create_subtitle_track(replace(translation,artifact_ref=translated_ref,transform_id=translated_transform,status='valid'))
     before,request,_runtime=_submit_section_revision(case)
     for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     assert case.repo.job_records.get_job_run('local',request['job_id']).status=='succeeded'
     current=case.repo.task_records.get_creation_task('local',case.task_id)
     revised=case.repo.timeline_records.get_timeline_version('local',current.current_timeline_version_id)
-    assert next(item for item in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
+    assert next(item for item in case.repo.subtitle_records.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
         if item.language=='zh-CN').cues[0].text=='原文更紧凑'
     payload=json.loads(json.dumps(revised.snapshot,default=str))
     payload['montage']['clips'][1]['crop_y']=.31
     later=TimelineVersion('later_other_section','local',case.task_id,revised.id,revised.sequence+1,payload,None)
     case.repo.timeline_records.create_timeline_version(later,expected_current_version_id=revised.id)
-    rows=case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
+    rows=case.repo.subtitle_records.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
     source_track=next(item for item in rows if item.language=='zh-CN')
     later_track=replace(source_track,id='later_source',timeline_version_id=later.id,
         cues=[replace(cue,text='第二段后来字幕') if cue.id==full.cues[1].id else cue for cue in source_track.cues])
-    case.repo.create_subtitle_track(later_track)
+    case.repo.subtitle_records.create_subtitle_track(later_track)
     invalid_translation=replace(next(item for item in rows if item.language=='en-US'),id='later_translation',
         timeline_version_id=later.id,status='unavailable',artifact_ref=None,transform_id=None,
         failure_reason='第二段译文尚待复核',impact='后续片段没有通过语义检查',repair_action='只复核第二段译文后再生成字幕')
-    case.repo.create_subtitle_track(invalid_translation)
+    case.repo.subtitle_records.create_subtitle_track(invalid_translation)
     restore=TimelineRestoreUseCase(case.repo,edits)
     for redo in (False,True):
         prepared=restore.prepare_restore(TimelineRestoreCommand('local',case.repo.task_records.get_creation_task('local',case.task_id),redo))
@@ -3566,7 +3566,7 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
         assert case.segments.context('local',case.task_id,'section_1',case.actor)['adopted'] is redo
         assert outcome.montage.clips[0].crop_x==(.5 if redo else .23)
         assert outcome.montage.clips[1].crop_y==.31
-        tracks=case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=outcome.task.current_timeline_version_id)
+        tracks=case.repo.subtitle_records.list_subtitle_tracks('local',case.task_id,timeline_version_id=outcome.task.current_timeline_version_id)
         source_track=next(item for item in tracks if item.language=='zh-CN')
         assert source_track.cues[0].text==('原文更紧凑' if redo else '修订前人工字幕')
         assert source_track.cues[1].text=='第二段后来字幕'
@@ -6679,7 +6679,7 @@ def _section_context_projection_case(tmp_path):
         f'narration://artifact/audio_{i}',1,24000,'test','voice_1','v1','zh','original','ready') for i in range(1,6)]
     repo.save_narration_segments('local',case.task_id,case.script_id,audio)
     for language in ('zh-CN','en-US'):
-        repo.create_subtitle_track(SubtitleTrack(f'track_{language}','local',case.task_id,'projection_v1',language,
+        repo.subtitle_records.create_subtitle_track(SubtitleTrack(f'track_{language}','local',case.task_id,'projection_v1',language,
             None,{'enabled':True},[SubtitleCue(f'far_{language}','cue_0','FORBIDDEN_SUBTITLE_BODY',0,.5),
                 SubtitleCue(f'overlap_{language}','cue_1','相邻重叠字幕',1.75,2.25),
                 SubtitleCue(f'target_{language}','cue_2','目标字幕',2.25,2.5),
@@ -6728,9 +6728,9 @@ def _section_projection_next_version(case, snapshot, *, connection=None, subtitl
             return _section_projection_next_version(case,snapshot,connection=conn,subtitle_change=subtitle_change)
     case.repo.timeline_records.create_timeline_version(TimelineVersion('projection_v2','local',case.task_id,'projection_v1',2,snapshot,None),
         connection=connection,expected_current_version_id='projection_v1')
-    for track in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id='projection_v1',connection=connection):
+    for track in case.repo.subtitle_records.list_subtitle_tracks('local',case.task_id,timeline_version_id='projection_v1',connection=connection):
         cues = [replace(cue,text='changed overlap') if subtitle_change and cue.id=='overlap_zh-CN' else cue for cue in track.cues]
-        case.repo.create_subtitle_track(replace(track,id=track.id+'_v2',timeline_version_id='projection_v2',cues=cues),connection=connection)
+        case.repo.subtitle_records.create_subtitle_track(replace(track,id=track.id+'_v2',timeline_version_id='projection_v2',cues=cues),connection=connection)
 
 
 def test_section_dependency_projection_borrows_transaction_and_preserves_cas(tmp_path):
@@ -6814,7 +6814,7 @@ def _section_change_paid_case(tmp_path, monkeypatch):
     ref,transform = case.edits.publish_subtitle_text(workspace_id='local',task_id=case.task_id,proposal_id='text_before',
         kind='subtitle_cue_update',input_refs=['timeline:change_base'],content=render_srt(execution_subtitle_track(track)),
         engine='subtitle-srt/v1',parameters={})
-    repo.create_subtitle_track(replace(track,status='valid',artifact_ref=ref,transform_id=transform,
+    repo.subtitle_records.create_subtitle_track(replace(track,status='valid',artifact_ref=ref,transform_id=transform,
         failure_reason=None,impact=None,repair_action=None))
     case.before = next(row for row in case.original_rows if row.source_section_id=='section_3')
     case.replacement = replace(case.before,text='目标段改写后的正文',audio_reference='narration://artifact/replacement',
@@ -6873,8 +6873,8 @@ def test_section_change_publish_restore_preserves_later_facts_without_full_input
     snapshot['montage']['clips'][-1]['crop_y']=.31
     later = TimelineVersion('change_later','local',case.task_id,version.id,version.sequence+1,snapshot,None)
     case.repo.timeline_records.create_timeline_version(later,expected_current_version_id=version.id)
-    for track in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=version.id):
-        case.repo.create_subtitle_track(replace(track,id=track.id+'_later',timeline_version_id=later.id))
+    for track in case.repo.subtitle_records.list_subtitle_tracks('local',case.task_id,timeline_version_id=version.id):
+        case.repo.subtitle_records.create_subtitle_track(replace(track,id=track.id+'_later',timeline_version_id=later.id))
     restore = TimelineRestoreUseCase(case.repo,case.edits)
     for redo,expected in [(False,case.before),(True,case.replacement)]:
         task=case.repo.task_records.get_creation_task('local',case.task_id)
