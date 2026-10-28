@@ -2290,7 +2290,7 @@ def test_script_active_headers_only_include_latest_and_confirmed_roles(api_state
         with state.repository._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             conn.execute('INSERT INTO creation_task_scripts VALUES(?,?,?,?,?,?)',
-                (script.id, 'local', 'task', '', state.repository._script_payload(conn, script), script.updated_at.isoformat()))
+                (script.id, 'local', 'task', '', state.repository.script_records._script_payload(conn, script), script.updated_at.isoformat()))
     with state.repository._connect() as conn:
         task = json.loads(conn.execute("SELECT payload FROM creation_tasks WHERE id='task'").fetchone()[0])
         task['confirmed_script_id'] = 'confirmed'

@@ -68,7 +68,7 @@ def library(tmp_path, monkeypatch, request):
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) "
-            "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", repo._script_payload(conn, script),
+            "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", repo.script_records._script_payload(conn, script),
                                       script.updated_at.isoformat()),
         )
     repo.script_records.confirm_creation_task_script(
@@ -300,7 +300,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
         script=repo.script_records.get_creation_task_script('local','script_original')
         script.sections[0].evidence_reference_ids=[f"knowledge:{versioned.id}:1"]
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (repo._script_payload(conn,script),))
+        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (repo.script_records._script_payload(conn,script),))
         conn.execute(
             "UPDATE creation_plans SET payload=? WHERE id='plan_original'",
             (json.dumps({**json.loads(
@@ -354,7 +354,7 @@ def test_owned_script_without_external_references_can_save_and_reuse(library):
         script=repo.script_records.get_creation_task_script('local','script_original')
         script.sections[0].evidence_reference_ids=[]
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (repo._script_payload(conn,script),))
+        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (repo.script_records._script_payload(conn,script),))
     entry = save(client,repo)
     assert client.get(f"/api/production/script-library/{entry['id']}/sources").json() == []
     response = reuse(client, entry["id"])

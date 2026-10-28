@@ -169,5 +169,67 @@ def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp
         assert borrowed.execute("SELECT 1").fetchone() == (1,)
     finally:
         borrowed.close()
+
+    # The public currentness reader owns one connection and uses the same
+    # canonical Task decoder. Its policy port declares facts, not permissions.
+    from app.creation.contracts import CreationTask
+    from app.creation.task_input_reads import require_creation_task
+
+    task = CreationTask(id="task", workspace_id="workspace", plan_id="plan",
+                        name="隔离事实", scenario="knowledge_explanation")
+    with connect() as conn:
+        conn.execute("CREATE TABLE creation_tasks(workspace_id TEXT,id TEXT,payload TEXT)")
+        conn.execute("INSERT INTO creation_tasks VALUES (?,?,?)",
+                     (task.workspace_id, task.id, json.dumps(asdict(task), default=str)))
+
+    traces = []
+    policy_calls = []
+    policy_result = False
+
+    @contextmanager
+    def current_connect():
+        with connect() as conn:
+            trace = []
+            traces.append(trace)
+            conn.set_trace_callback(trace.append)
+            yield conn
+
+    def current_policy(conn, workspace_id, task_id, plan_id, references):
+        assert conn is connections[-1] and not conn.in_transaction
+        assert (workspace_id, task_id, plan_id, references) == ("workspace", "task", "plan", [])
+        policy_calls.append(conn)
+        return policy_result
+
+    current_store = ScriptRecordStore(
+        current_connect, read_task=unavailable, require_task=require_creation_task,
+        decode_plan=unavailable, read_topic=unavailable, transition_task=unavailable,
+        create_library_task=unavailable, knowledge_inputs_current=current_policy,
+        append_event=unavailable, get_event=unavailable, decode_event=unavailable,
+    )
+    assert current_store._require_creation_task is require_creation_task
+
+    def closed_current_reader(count):
+        assert len(connections) == count + 1
+        assert not any(sql.lstrip().upper().startswith("BEGIN") for sql in traces[-1])
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connections[-1].execute("SELECT 1")
+
+    for policy_result in (False, True):
+        count = len(connections)
+        assert current_store.script_knowledge_inputs_current("workspace", "task", "script") is policy_result
+        assert policy_calls[-1] is connections[-1]
+        assert "FROM creation_tasks" in traces[-1][0]
+        assert "LEFT JOIN script_generation_runs" in traces[-1][1]
+        closed_current_reader(count)
+    assert len(policy_calls) == 2
+
+    for task_id, script_id, missing in (("missing-task", "script", "missing-task"),
+                                        ("task", "missing-script", "missing-script")):
+        count = len(connections)
+        with pytest.raises(KeyError) as failed:
+            current_store.script_knowledge_inputs_current("workspace", task_id, script_id)
+        assert failed.value.args == (missing,) and len(policy_calls) == 2
+        assert len(traces[-1]) == (1 if missing == "missing-task" else 2)
+        closed_current_reader(count)
     assert "app.main" not in sys.modules
     assert "app.device_runtime" not in sys.modules

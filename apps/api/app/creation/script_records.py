@@ -115,6 +115,11 @@ class ScriptRecordStore:
             ),
         )
 
+    def script_knowledge_inputs_current(self, workspace_id: str, task_id: str, script_id: str) -> bool:
+        with self._connect() as conn:
+            task = self._require_creation_task(conn, workspace_id, task_id)
+            return self._script_knowledge_inputs_current(conn, task, script_id)
+
     def _script_knowledge_inputs_current(
         self, conn: sqlite3.Connection, task: CreationTask, script_id: str
     ) -> bool:

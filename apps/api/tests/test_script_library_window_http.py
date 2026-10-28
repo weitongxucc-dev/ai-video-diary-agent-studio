@@ -123,7 +123,7 @@ def test_library_http_reads_45_sections_without_full_body_getters(library, monke
     with repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',
-                     (repo._script_payload(conn, script), script.id))
+                     (repo.script_records._script_payload(conn, script), script.id))
     entry = repo.script_records.save_script_library_entry_header('local',
         source_script_id=script.id, name='长稿', category='产品')
     repo.script_records.save_script_library_entry_header('local',

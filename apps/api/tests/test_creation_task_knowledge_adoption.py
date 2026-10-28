@@ -193,7 +193,7 @@ def test_unchanged_reference_is_explicit_noop_and_does_not_invalidate_draft(stat
     assert response.status_code == 200, response.text
     assert response.json()['status'] == 'unchanged' and response.json()['next_step'] == 'unchanged'
     assert response.json()['added_references'] == [] and rows(state, before) == before
-    assert state.repository.script_knowledge_inputs_current('local', 'task', old.id)
+    assert state.repository.script_records.script_knowledge_inputs_current('local', 'task', old.id)
 
 
 @pytest.mark.parametrize('busy', ['script_running', 'queued', 'running', 'interrupted', 'confirmed'])

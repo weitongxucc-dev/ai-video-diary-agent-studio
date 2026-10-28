@@ -35,7 +35,7 @@ def _bounded_preview_case(tmp_path):
     with repo._connect() as conn:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('BEGIN')
-        payload = repo._script_payload(conn, script)
+        payload = repo.script_records._script_payload(conn, script)
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (payload, script_id))
     def no_media(*args, **kwargs):
         raise AssertionError('this representative must not dispatch media')

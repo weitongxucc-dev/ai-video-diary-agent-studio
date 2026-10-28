@@ -202,7 +202,7 @@ def _montage_stream_case(tmp_path, monkeypatch):
         CreationTaskScriptSection('second', '尾段', '实际尾段。', '素材画面', [])]
     with repo._connect() as conn:
         conn.execute('BEGIN')
-        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo._script_payload(conn, script), script.id))
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo.script_records._script_payload(conn, script), script.id))
     actor = CreationExecutionActor('local', 'stream-member')
     path = tmp_path/'paid.wav'; path.write_bytes(b'paid source metadata; no decode')
     record = NarrationArtifactRecord(id='paid', workspace_id='local', task_id=task.id, script_id=script.id,

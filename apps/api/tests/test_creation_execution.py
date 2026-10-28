@@ -95,7 +95,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
         conn.execute('BEGIN')
         conn.execute(
             "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
-            (script_id, workspace_id, task_id, payload["run_id"], repo._script_payload(conn, seeded_script), now),
+            (script_id, workspace_id, task_id, payload["run_id"], repo.script_records._script_payload(conn, seeded_script), now),
         )
         if confirmed:
             task.confirmed_script_id = script_id
@@ -2858,7 +2858,7 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
         seeded = repo.script_records._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
         seeded.sections = [CreationTaskScriptSection(**{**asdict(seeded.sections[0]),
             'id': f'section_{ordinal}', 'content': '原文' * 130}) for ordinal in range(1, section_count + 1)]
-        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo._script_payload(conn, seeded), script_id))
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo.script_records._script_payload(conn, seeded), script_id))
     task = repo.task_records.get_creation_task('local', task_id)
     script = repo.script_records.get_creation_task_script('local', script_id)
     plan = repo.plan_records.get_creation_plan('local', task.plan_id)
@@ -6184,7 +6184,7 @@ def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_pa
         with repo._connect() as conn:
             conn.execute('BEGIN')
             conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',
-                (repo._script_payload(conn, script), script.id))
+                (repo.script_records._script_payload(conn, script), script.id))
         plan = repo.plan_records.get_creation_plan('local', task.plan_id)
         rows = []
         for index, section in enumerate(script.sections):

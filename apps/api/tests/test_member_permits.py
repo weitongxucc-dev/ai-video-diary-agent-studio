@@ -435,7 +435,7 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
         created_at=now, updated_at=now, confirmed_at=now)
     with repo._connect() as conn:
         conn.execute('BEGIN')
-        encoded = repo._script_payload(conn, seeded)
+        encoded = repo.script_records._script_payload(conn, seeded)
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
             ("script", WORKSPACE, task.id, "run", encoded, now.isoformat()))
         task.confirmed_script_id = "script"
