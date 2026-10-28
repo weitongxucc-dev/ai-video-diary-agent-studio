@@ -762,7 +762,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
 
 
 def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
-    tmp_path,
+    tmp_path, lineage_no_execution,
 ):
     production = _repository(tmp_path)
     _save_creation_task(
@@ -793,7 +793,7 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
             status="succeeded",
             output_refs=["artifacts/task-a/unregistered.mp4"],
         )
-    artifact = production.create_artifact_record(
+    artifact = production.execution_records.create_artifact_record(
         ArtifactRecord(
             id="artifact-1",
             workspace_id="workspace_a",
@@ -806,7 +806,7 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
             input_refs=["timeline://task-a/timeline-v1"],
         )
     )
-    event = production.append_task_event(
+    event = production.execution_records.append_task_event(
         TaskEvent(
             id="event-1",
             workspace_id="workspace_a",
@@ -845,8 +845,8 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
         video_library_path=production.video_library_path,
     )
     assert reloaded.get_job_run("workspace_a", created.id) == succeeded
-    assert reloaded.get_artifact_record("workspace_a", artifact.id) == artifact
-    assert reloaded.get_task_event("workspace_a", event.id) == event
+    assert reloaded.execution_records.get_artifact_record("workspace_a", artifact.id) == artifact
+    assert reloaded.execution_records.get_task_event("workspace_a", event.id) == event
     assert reloaded.get_job_run("workspace_a", interrupted_candidate.id).status == "running"
     assert reloaded.interrupt_running_job_runs("workspace_a") == 1
     interrupted = reloaded.get_job_run("workspace_a", interrupted_candidate.id)
@@ -874,8 +874,8 @@ def test_job_artifact_and_event_records_are_recoverable_and_workspace_scoped(
 
     for getter, record_id in (
         (reloaded.get_job_run, created.id),
-        (reloaded.get_artifact_record, artifact.id),
-        (reloaded.get_task_event, event.id),
+        (reloaded.execution_records.get_artifact_record, artifact.id),
+        (reloaded.execution_records.get_task_event, event.id),
     ):
         with pytest.raises(KeyError):
             getter("workspace_b", record_id)
@@ -932,7 +932,7 @@ def test_transform_and_dependency_lineage_is_validated_and_restart_safe(tmp_path
         ("artifact-preview", "preview", preview_ref, b"preview"),
         ("artifact-subtitles", "subtitles", subtitles_ref, b"subtitles"),
     ):
-        production.create_artifact_record(
+        production.execution_records.create_artifact_record(
             ArtifactRecord(
                 id=artifact_id,
                 workspace_id="workspace_a",
@@ -1047,7 +1047,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
         producer_job_id=job.id,
         input_refs=["timeline://task-a/base"],
     )
-    production.create_artifact_record(artifact)
+    production.execution_records.create_artifact_record(artifact)
     transform = TransformRun(
         id="transform-replay",
         workspace_id="workspace_a",
@@ -1081,7 +1081,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
         event_type="render_facts_registered",
         payload={"artifact_id": artifact.id, "transform_id": transform.id},
     )
-    production.append_task_event(event)
+    production.execution_records.append_task_event(event)
     version = TimelineVersion(
         id="timeline-replay",
         workspace_id="workspace_a",
@@ -1099,10 +1099,10 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
         output_refs=[artifact.logical_ref],
     )
 
-    assert production.create_artifact_record(artifact) == artifact
+    assert production.execution_records.create_artifact_record(artifact) == artifact
     assert production.lineage_records.create_transform_run(transform) == transform
     assert production.lineage_records.create_dependency_edge(edge) == edge
-    assert production.append_task_event(event) == event
+    assert production.execution_records.append_task_event(event) == event
     assert production.create_timeline_version(version) == version
     assert (
         production.get_creation_task("workspace_a", "task-a").current_timeline_version_id
@@ -1110,9 +1110,9 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
     )
 
     with pytest.raises(ValueError, match="领域字段不一致"):
-        production.create_artifact_record(replace(artifact, size_bytes=99))
+        production.execution_records.create_artifact_record(replace(artifact, size_bytes=99))
     with pytest.raises(ValueError, match="领域字段不一致"):
-        production.create_artifact_record(
+        production.execution_records.create_artifact_record(
             replace(artifact, id="artifact-same-logical-ref")
         )
     with pytest.raises(ValueError, match="领域字段不一致"):
@@ -1122,7 +1122,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
             replace(edge, created_at=datetime.now(timezone.utc))
         )
     with pytest.raises(ValueError, match="领域字段不一致"):
-        production.append_task_event(replace(event, payload={"artifact_id": "other"}))
+        production.execution_records.append_task_event(replace(event, payload={"artifact_id": "other"}))
     with pytest.raises(ValueError, match="不能覆盖"):
         production.create_timeline_version(replace(version, snapshot={"changed": True}))
 
@@ -1878,7 +1878,7 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
         published = artifact_store.publish_bytes(
             "artifacts/task-a/timeline-v1/preview.mp4", b"rendered preview"
         )
-        record = production.create_artifact_record(
+        record = production.execution_records.create_artifact_record(
             ArtifactRecord(
                 id="artifact-preview-v1",
                 workspace_id=context.workspace_id,
@@ -1891,7 +1891,7 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
                 input_refs=[f"timeline://task-a/{version.id}"],
             )
         )
-        production.append_task_event(
+        production.execution_records.append_task_event(
             TaskEvent(
                 id="event-preview-v1",
                 workspace_id=context.workspace_id,
@@ -1929,10 +1929,10 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
     assert reloaded.get_creation_task(
         "workspace_a", "task-a"
     ).current_timeline_version_id == version.id
-    assert reloaded.get_artifact_record(
+    assert reloaded.execution_records.get_artifact_record(
         "workspace_a", "artifact-preview-v1"
     ).logical_ref == completed.output_refs[0]
-    assert reloaded.get_task_event(
+    assert reloaded.execution_records.get_task_event(
         "workspace_a", "event-preview-v1"
     ).payload == {"artifact_id": "artifact-preview-v1"}
 
@@ -2235,7 +2235,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
             input_digest="c" * 64,
         )
     )
-    artifact = production.create_artifact_record(
+    artifact = production.execution_records.create_artifact_record(
         ArtifactRecord(
             id="artifact-person-render-a",
             workspace_id="workspace_a",
@@ -2282,7 +2282,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
             input_digest="e" * 64,
         )
     )
-    foreign_artifact = production.create_artifact_record(
+    foreign_artifact = production.execution_records.create_artifact_record(
         ArtifactRecord(
             id="artifact-person-render-other",
             workspace_id="workspace_a",
@@ -2299,7 +2299,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         production.bind_person_render_artifact(
             "workspace_a", "task-person", ready.id, foreign_artifact.logical_ref
         )
-    wrong_kind_artifact = production.create_artifact_record(
+    wrong_kind_artifact = production.execution_records.create_artifact_record(
         replace(
             artifact,
             id="artifact-person-render-wrong-kind",
@@ -4284,7 +4284,7 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
     with production._connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         production.create_job_run(job, connection=connection)
-        production.create_artifact_record(artifact, connection=connection)
+        production.execution_records.create_artifact_record(artifact, connection=connection)
         assert production.lineage_records.create_transform_run(transform, connection=connection) == transform
         assert production.lineage_records.create_dependency_edge(edge, connection=connection) == edge
         assert connection.in_transaction
@@ -4293,7 +4293,7 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
             assert observer.execute("SELECT COUNT(*) FROM transform_runs").fetchone()[0] == 0
         connection.rollback()
     assert production.list_job_runs("workspace_a", "task-a") == []
-    assert production.list_artifact_records("workspace_a", "task-a") == []
+    assert production.execution_records.list_artifact_records("workspace_a", "task-a") == []
     assert production.lineage_records.list_transform_runs("workspace_a", "task-a") == []
     production.create_job_run(job)
     tail = replace(edge, id="lineage-tail", upstream_ref=transform.input_refs[1])
@@ -4306,6 +4306,57 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
     assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
     assert str(refused.value.__cause__) == "isolated lineage tail refusal"
     assert production.get_job_run("workspace_a", job.id) == job
-    assert production.list_artifact_records("workspace_a", "task-a") == []
+    assert production.execution_records.list_artifact_records("workspace_a", "task-a") == []
     assert production.lineage_records.list_transform_runs("workspace_a", "task-a") == []
     assert production.lineage_records.list_dependency_edges("workspace_a", "task-a") == []
+
+
+def test_execution_records_borrow_pending_job_and_rollback_artifact_event_tail(tmp_path, lineage_no_execution):
+    from app.creation.execution_records import ExecutionRecordStore
+
+    production = _repository(tmp_path)
+    _save_creation_task(production, workspace_id="workspace_a", task_id="task-a")
+    records = production.execution_records
+    assert isinstance(records, ExecutionRecordStore)
+    for name in ("create_artifact_record", "get_artifact_record", "list_artifact_records",
+                 "append_task_event", "get_task_event", "list_task_events",
+                 "latest_task_resource_admission", "_artifact_record_from_row",
+                 "_task_event_from_row", "_lineage_output_producers"):
+        assert not hasattr(ProductionRepository, name)
+    job = JobRun("pending-job", "workspace_a", "task-a", "render_preview", "pending-key", "pending-digest")
+    artifact = ArtifactRecord("pending-artifact", "workspace_a", "task-a", "preview",
+        "artifacts/task-a/pending/preview.mp4", hashlib.sha256(b"declared").hexdigest(),
+        len(b"declared"), job.id, ["timeline://task-a/base"])
+    event = TaskEvent("pending-event", "workspace_a", "task-a", job.id,
+        "task_media_resource_admission", {"device_request_id": "original-request", "attempt_number": 2,
+        "last_grant_generation": 3, "label": "原请求"})
+    with production._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        production.create_job_run(job, connection=connection)
+        assert records.create_artifact_record(artifact, connection=connection) == artifact
+        assert records.append_task_event(event, connection=connection) == event
+        assert records.get_artifact_record("workspace_a", artifact.id, connection=connection) == artifact
+        assert records.get_task_event("workspace_a", event.id, connection=connection) == event
+        assert records.latest_task_resource_admission("workspace_a", "task-a", job.id,
+            "original-request", connection=connection) == event
+        assert records.output_producers(connection, "workspace_a", "task-a", [artifact.logical_ref]) == {artifact.logical_ref: job.id}
+        assert connection.in_transaction
+        with sqlite3.connect(production.database_path) as observer:
+            for table in ("job_runs", "artifact_records", "task_events"):
+                assert observer.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        connection.rollback()
+    with production._connect() as connection:
+        connection.execute("""CREATE TRIGGER refuse_execution_event BEFORE INSERT ON task_events
+            WHEN NEW.id = 'pending-event'
+            BEGIN SELECT RAISE(ABORT, 'isolated execution event tail refusal'); END""")
+    with pytest.raises(ValueError, match="任务事件 ID 已存在") as refused:
+        with production._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            production.create_job_run(job, connection=connection)
+            records.create_artifact_record(artifact, connection=connection)
+            records.append_task_event(event, connection=connection)
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert str(refused.value.__cause__) == "isolated execution event tail refusal"
+    assert production.list_job_runs("workspace_a", "task-a") == []
+    assert records.list_artifact_records("workspace_a", "task-a") == []
+    assert records.list_task_events("workspace_a", "task-a") == []

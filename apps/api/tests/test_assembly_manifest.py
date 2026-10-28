@@ -243,7 +243,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
                 assert case.repo.get_job_run('local', case.job.id).status == 'failed'
             assert len(case.generated) == 2
             assert case.repo.get_creation_task('local', case.task_id).narration_cache_key == before_cache
-            assert not [record for record in case.repo.list_artifact_records('local', case.task_id)
+            assert not [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id)
                 if record.kind == 'audio_assembly_fragment']
             case.scheduler.assert_released(grant)
             case.scheduler.close()
@@ -272,7 +272,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
                     actor=case.actor, budget=case.owner.narration_audio_budget, context=context)
         assert case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage'] == before
         assert case.repo.get_creation_task('local', case.task_id).narration_cache_key == before_cache
-        assert not [record for record in case.repo.list_artifact_records('local', case.task_id)
+        assert not [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id)
             if record.kind == 'audio_assembly_fragment']
         assert len(case.generated) == 2
         assert case.repo.get_job_run('local', case.job.id).status == 'queued'
@@ -296,7 +296,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
         if current.status == 'succeeded':
             break
         if restart_after_first and len(admitted) == 1 and not restarted:
-            record = case.repo.get_artifact_record('local', f'artifact_audio_assembly_{admitted[0]}')
+            record = case.repo.execution_records.get_artifact_record('local', f'artifact_audio_assembly_{admitted[0]}')
             first_fragment = (record.logical_ref, record.sha256, store.resolve_file(record.logical_ref).stat().st_mtime_ns)
             scope_before_restart = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
             previous_owner = case.owner
@@ -325,7 +325,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     output = case.repo.get_creation_task_montage_plan('local', case.task_id)['output_path']
     actual = store.describe(output)
     assert actual.sha256 == hashlib.sha256(store.resolve_file(output).read_bytes()).hexdigest()
-    events = case.repo.list_task_events('local', case.task_id)
+    events = case.repo.execution_records.list_task_events('local', case.task_id)
     settlements = [event for event in events if event.event_type == 'task_execution_unit_settled']
     assert len(settlements) == 6 and all(event.payload['output_bytes'] > 0 for event in settlements)
     assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
@@ -371,7 +371,7 @@ def test_same_audio_recipe_has_distinct_persistent_task_and_producer_instances(t
         with pytest.raises(PermissionError):
             restored.validate_scope('local', task_id, 'another-producer')
         plans.append(plan)
-        records.append(repo.get_artifact_record('local', record.id))
+        records.append(repo.execution_records.get_artifact_record('local', record.id))
     assert len({plan.units[0].id for plan in plans}) == 3
     assert len({record.id for record in records}) == 3
     assert len({record.logical_ref for record in records}) == 3

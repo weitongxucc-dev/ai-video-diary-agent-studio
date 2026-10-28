@@ -216,7 +216,7 @@ class NarrationStageUseCase:
         if grant.workspace_id != workspace_id:
             raise PermissionError('配音准备工作区与原作业许可不一致')
         job = self.repository.get_job_run(workspace_id, grant.owner_id)
-        event = self.repository.get_task_event(workspace_id, f'event_{job.id}_start')
+        event = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start')
         execution_input = self.repository.creation_execution_input(workspace_id, job.id)
         if (job.kind != 'creation_task_execution' or job.workspace_id != workspace_id or job.task_id != task_id
                 or job.input_digest != grant.input_digest

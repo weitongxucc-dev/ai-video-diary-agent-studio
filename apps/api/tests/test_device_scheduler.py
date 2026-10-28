@@ -242,7 +242,7 @@ def test_production_snapshot_contends_with_original_scheduler_checkpoint(tmp_pat
     def checkpoint(conn, current):
         assert conn.in_transaction and current.request_id == request.id
         repository.finish_job_run(job.workspace_id, job.id, status="succeeded", connection=conn)
-        repository.append_task_event(TaskEvent(event_id, job.workspace_id, task_id, job.id,
+        repository.execution_records.append_task_event(TaskEvent(event_id, job.workspace_id, task_id, job.id,
                                                "snapshot_checkpoint", {}), connection=conn)
         return event_id
 

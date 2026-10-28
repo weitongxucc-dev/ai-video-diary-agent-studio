@@ -459,7 +459,7 @@ def test_assistant_typed_source_is_host_bound_and_not_parsed_again(material_edit
                  fit_mode="fill", crop_x=0.2, crop_y=0.5, assistant_turn_id=turn["id"])
     queued = original_post(state.base_url + "/edits/exact/preview", json=crop)
     assert queued.status_code == 202, queued.text
-    event = state.production.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
+    event = state.production.execution_records.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
     command = event.payload['arguments']['_clip_preview']
     assert command['base_version_id'] == crop['expected_timeline_version_id']
     assert command['values'] == {'fit_mode':'fill', 'crop_x':.2, 'crop_y':.5}

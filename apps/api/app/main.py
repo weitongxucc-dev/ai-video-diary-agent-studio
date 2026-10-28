@@ -3805,7 +3805,7 @@ def _task_observation_metadata(task,member_id):
         start = json.loads(row["payload_json"])
         result = None
         if job.status == "succeeded":
-            result = production_repo.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
+            result = production_repo.execution_records.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
         stale = start["input_facts"]["base_version_id"] != task.current_timeline_version_id
         if not stale:
             try:
@@ -4160,7 +4160,7 @@ def get_creation_task_audio_artifact(task_id: str, artifact_id: str, request: Re
     workspace_id = current_workspace_id(request)
     _creation_task_or_404(workspace_id, task_id)
     try:
-        record = production_repo.get_artifact_record(workspace_id, artifact_id)
+        record = production_repo.execution_records.get_artifact_record(workspace_id, artifact_id)
         if record.task_id != task_id:
             raise KeyError(artifact_id)
         _require_task_media_artifact(record, request)
@@ -4476,7 +4476,7 @@ def get_creation_task_graphic_source(task_id: str,artifact_id: str,request: Requ
     workspace_id=current_workspace_id(request)
     _exact_edit_access(task_id,request)
     try:
-        record=production_repo.get_artifact_record(workspace_id,artifact_id)
+        record=production_repo.execution_records.get_artifact_record(workspace_id,artifact_id)
         if record.task_id!=task_id or record.kind!='graphic_source':
             raise KeyError(artifact_id)
         path=resolve_graphic_source(production_repo,artifact_store,workspace_id,task_id,record.logical_ref)
@@ -4490,7 +4490,7 @@ def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Re
     workspace_id=current_workspace_id(request)
     _creation_task_or_404(workspace_id,task_id)
     try:
-        record=production_repo.get_artifact_record(workspace_id,artifact_id)
+        record=production_repo.execution_records.get_artifact_record(workspace_id,artifact_id)
         if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview", "compound_preview", "silence_preview"}:
             raise KeyError(artifact_id)
         path=artifact_store.resolve_file(record.logical_ref)
@@ -4750,7 +4750,7 @@ def _creation_task_workspace_response(
         else None
     )
     last_translation = next((
-        event for event in reversed(production_repo.list_task_events(workspace_id, task.id))
+        event for event in reversed(production_repo.execution_records.list_task_events(workspace_id, task.id))
         if event.event_type == "subtitle_translation_returned"
         and translation_provider is not None
         and event.payload.get("model_id") == translation_provider.model_id
@@ -6679,7 +6679,7 @@ def get_creation_task_assistant_history(task_id: str, request: Request) -> Creat
         {"role": event.payload.get("role"), "message": event.payload.get("message"),
          "stage": event.payload.get("stage"), "script_id": event.payload.get("script_id"),
          "at": event.created_at}
-        for event in production_repo.list_task_events(workspace_id, task_id)
+        for event in production_repo.execution_records.list_task_events(workspace_id, task_id)
         if event.event_type == "assistant_turn" and event.payload.get("role") in {"user", "assistant"}
     ]})
 
@@ -7268,7 +7268,7 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
     if reported is not None and reported.get("job_id") != actual["job_id"]:
         raise HTTPException(status_code=502, detail="故事板回执与原请求的实际作业不一致")
     if action == "submit":
-        original = production_repo.get_task_event(workspace_id, f"event_{actual['job_id']}_start").payload["request_inputs"]
+        original = production_repo.execution_records.get_task_event(workspace_id, f"event_{actual['job_id']}_start").payload["request_inputs"]
         if original.get("assistant_turn_id") != str(turn_id):
             raise HTTPException(status_code=502, detail="故事板原请求不属于本轮提交")
         snapshot = origin["context"]["target_snapshot"]
@@ -8201,7 +8201,7 @@ def revise_creation_task_segment(task_id: str, section_id: str, payload: dict, r
         command = NarrationRevisionRequest.model_validate({key:value for key,value in payload.items() if key!='assistant_turn_id'})
         if command.section_id != section_id:
             raise ValueError('路由与稳定段落ID不一致')
-        review = production_repo.get_task_event(ws,command.semantic_review_ref)
+        review = production_repo.execution_records.get_task_event(ws,command.semantic_review_ref)
         source = review.payload.get('source',{})
         if (source.get('conversation_id'),source.get('assistant_turn_id'),source.get('input_id') or source.get('assistant_turn_id')) != (
                 origin['conversation_id'],origin['assistant_turn_id'],origin['input_id']):
@@ -9994,7 +9994,7 @@ def get_creation_task_cover_image(
     registered = next(
         (
             artifact
-            for artifact in production_repo.list_artifact_records(workspace_id, task_id)
+            for artifact in production_repo.execution_records.list_artifact_records(workspace_id, task_id)
             if artifact.logical_ref == cover.artifact_ref and artifact.kind == "cover_image"
         ),
         None,
@@ -13908,13 +13908,13 @@ def _assistant_goal_action_proofs(workspace_id, task_id, turn_id, *, media_job, 
                            **({"input_id": source["input_id"]} if source.get("input_id") else {})})
 
     if media_job:
-        start = production_repo.get_task_event(workspace_id, f"event_{media_job.job_id}_start").payload
+        start = production_repo.execution_records.get_task_event(workspace_id, f"event_{media_job.job_id}_start").payload
         append("media_job", media_job.job_id, start["arguments"].get("_typed_source", {}))
     if edit_preview:
         intent = production_repo.get_edit_intent(workspace_id, edit_preview.proposal.intent_id)
         append("edit_preview", edit_preview.proposal.id, intent.constraints.get("request_source", {}))
     if edit_request or execution_status:
-        for event in production_repo.list_task_events(workspace_id, task_id):
+        for event in production_repo.execution_records.list_task_events(workspace_id, task_id):
             if (edit_request and event.event_type == "assistant_edit_request_located"
                     and event.payload["locator"]["request_id"] == str(edit_request.request_id)):
                 append("edit_request", str(edit_request.request_id), event.payload["source"])

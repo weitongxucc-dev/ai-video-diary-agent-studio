@@ -318,9 +318,9 @@ class LinkedTimelineEditUseCase:
             analysis_transform = service._transform_for(workspace_id, task.id, analysis)
             measured_event = TaskEvent(id=f'event_{active_job.id}_{analysis.id}_silence_detected', workspace_id=workspace_id, task_id=task.id, job_id=active_job.id, event_type='silence_analysis_result', payload={'base_version_id': base.id, 'clip_id': clip.id, 'analysis_ref': analysis.logical_ref, 'analysis_sha256': analysis.sha256, 'transform_id': analysis_transform.id, 'removed_ranges_ms': cuts}, created_at=datetime.now(UTC))
             try:
-                saved_event = self.repository.get_task_event(workspace_id, measured_event.id)
+                saved_event = self.repository.execution_records.get_task_event(workspace_id, measured_event.id)
             except KeyError:
-                self.repository.append_task_event(measured_event)
+                self.repository.execution_records.append_task_event(measured_event)
             else:
                 if replace(saved_event, created_at=measured_event.created_at) != measured_event:
                     raise ValueError('同一分析产物的静音结果已变化，未生成新预览')

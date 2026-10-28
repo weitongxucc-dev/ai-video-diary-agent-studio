@@ -91,7 +91,7 @@ def test_command_subtitle_font_preview_has_real_media_and_replays_without_render
     assert job.input_digest==start['input_digest']==media_digest({k:v for k,v in start.items() if k!='input_digest'})
     result=completed.json()['result'];assert 'request_source' not in result['intent']['constraints']
     assert result['proposal']['operation']['operation_type']=='ConfigureSubtitleTrack'
-    records=[r for r in state.production.list_artifact_records(state.workspace_id,state.task.id) if r.producer_job_id==job_id]
+    records=[r for r in state.production.execution_records.list_artifact_records(state.workspace_id,state.task.id) if r.producer_job_id==job_id]
     assert len(records)==2 and {r.kind for r in records}=={'subtitle_style_preview'}
     side_records={case.metadata.audio_service._transform_for(state.workspace_id,state.task.id,r).parameters['side']:r for r in records}
     assert set(side_records)=={'before','after'}

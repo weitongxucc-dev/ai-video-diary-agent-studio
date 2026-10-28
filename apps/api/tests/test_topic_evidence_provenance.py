@@ -218,7 +218,7 @@ def test_topic_record_owner_rolls_back_event_refusal_and_guards_confirmed_reentr
     assert str(refused.value.__cause__) == "isolated topic event refusal"
     assert production.get_creation_task("qa", task.id).selected_topic_id is None
     assert production.topic_records.get_topic_candidate("qa", task.id, candidate.id).selection_status == "unselected"
-    assert not [event for event in production.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]
+    assert not [event for event in production.execution_records.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]
     with production._connect() as connection:
         connection.execute("DROP TRIGGER refuse_topic_event")
     production.topic_records.confirm_topic_candidate(
@@ -234,4 +234,4 @@ def test_topic_record_owner_rolls_back_event_refusal_and_guards_confirmed_reentr
             "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=revoked,
         )
     assert len(guards) == 2
-    assert len([event for event in production.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]) == 1
+    assert len([event for event in production.execution_records.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]) == 1

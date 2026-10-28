@@ -111,10 +111,10 @@ class AssistantScriptToolResultBinding:
                 registration_id = self.registry.registration_identity(actor, request_id)[1]
                 event_id = f'event_script_tool_locator_{turn_id}_{request_id}'
                 try:
-                    created_at = self.production.get_task_event(workspace_id, event_id).created_at
+                    created_at = self.production.execution_records.get_task_event(workspace_id, event_id).created_at
                 except KeyError:
                     created_at = utc_now()
-                self.production.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id, job_id=None, event_type='assistant_script_tool_located', payload={'source': source, 'request_id': str(request_id), 'query_url': query_url, 'submitted_input': submitted, 'registration_id': registration_id}, created_at=created_at))
+                self.production.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id, job_id=None, event_type='assistant_script_tool_located', payload={'source': source, 'request_id': str(request_id), 'query_url': query_url, 'submitted_input': submitted, 'registration_id': registration_id}, created_at=created_at))
         else:
             reported = details.get('tool') if recorded else details
             tool_id = reported.get('tool_id') if isinstance(reported, dict) else None

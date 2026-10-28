@@ -61,7 +61,7 @@ def test_user_action_turn_keeps_unsent_draft_and_belongs_to_callers_transaction(
 def test_generation_request_is_unique_and_failed_owner_write_rolls_back_all_facts(generation, monkeypatch):
     state, conversations, case, actor = generation
     request_id = str(uuid4())
-    original = state.repository.append_task_event
+    original = state.repository.execution_records.append_task_event
 
     def refuse(event, **kwargs):
         if event.event_type == "script_generation_requested":
@@ -69,7 +69,7 @@ def test_generation_request_is_unique_and_failed_owner_write_rolls_back_all_fact
         return original(event, **kwargs)
 
     with monkeypatch.context() as failed:
-        failed.setattr(state.repository, "append_task_event", refuse)
+        failed.setattr(state.repository.execution_records, "append_task_event", refuse)
         with pytest.raises(RuntimeError, match="request receipt unavailable"):
             case.start("local", "task", request_id, actor)
     with state.repository._connect() as conn:
@@ -238,7 +238,7 @@ def test_restart_reconciles_original_run_and_preserves_saved_or_unknown_writes(g
             result_write=lambda conn, value: case.bind_generation_result(conn, "local", "task", request_id,
                 actor.member_id, run_id=value.run_id, script_id=value.id, draft_ready=checkpoint == "ready"))
     elif checkpoint == "pending_claim":
-        state.repository.append_task_event(TaskEvent("unfinished-window", "local", "task", None,
+        state.repository.execution_records.append_task_event(TaskEvent("unfinished-window", "local", "task", None,
             "script_window_request_claimed", {"generation_request_id": request_id, "member_id": actor.member_id,
                 "operation": "start", "request_id": str(uuid4())}))
     elif checkpoint == "unknown":

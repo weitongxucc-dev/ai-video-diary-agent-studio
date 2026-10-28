@@ -226,8 +226,8 @@ def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, 
     event = TaskEvent(id=execution_locator_id("turn", "input-old"),
         workspace_id="local", task_id="task", job_id="job", event_type="assistant_execution_located",
         payload={"source": source, "job_id": "job", "input_digest": "digest"})
-    monkeypatch.setattr(repository, "list_task_events", lambda *_: [event])
-    monkeypatch.setattr(repository, "get_task_event", lambda *_: event)
+    monkeypatch.setattr(repository.execution_records, "list_task_events", lambda *_: [event])
+    monkeypatch.setattr(repository.execution_records, "get_task_event", lambda *_: event)
     receipt = {"job": {"id": "job", "input_digest": "digest", "status": "succeeded"}}
     records = []
     monkeypatch.setattr(main, "_read_bound_execution_result", lambda *_: receipt)

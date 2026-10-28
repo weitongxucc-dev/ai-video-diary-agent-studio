@@ -228,7 +228,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     initial_files={r.id:_file_fact(s.case.metadata.picture_renderer.person_path(r)) for r in renders}
     initial_child_jobs=[job for job in repo.list_job_runs('local',s.task_id) if job.kind=='person_render']
     assert len(initial_child_jobs)==1 and all(job.status=='succeeded' for job in initial_child_jobs)
-    event=repo.get_task_event('local',f'event_{full_job}_person_render_queued')
+    event=repo.execution_records.get_task_event('local',f'event_{full_job}_person_render_queued')
     assert set(event.payload['output'].split(','))=={r.id for r in renders}
     stopped=s.client.post(url+'/execution/cancel');assert stopped.status_code==200,stopped.text
     cues=[NarrationCue('cue-'+item.id,item.source_section_id,item.text,2,item.id) for item in s.sections]

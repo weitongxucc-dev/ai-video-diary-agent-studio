@@ -97,7 +97,7 @@ class AssistantEditResultBinding:
         locator: AssistantEditRequestLocator, details: dict,
     ) -> PreparedEditResult:
         source = None
-        previous = next((event for event in self.production.list_task_events(workspace_id, task_id)
+        previous = next((event for event in self.production.execution_records.list_task_events(workspace_id, task_id)
             if event.event_type == 'assistant_edit_request_located'
             and event.payload['source']['assistant_turn_id'] == turn_id
             and event.payload['locator']['request_id'] == str(locator.request_id)), None)
@@ -105,7 +105,7 @@ class AssistantEditResultBinding:
             source = previous.payload['source']
         actual_result = locator.result or {}
         if actual_result.get('job_id'):
-            start = self.production.get_task_event(workspace_id, f"event_{actual_result['job_id']}_start")
+            start = self.production.execution_records.get_task_event(workspace_id, f"event_{actual_result['job_id']}_start")
             original = start.payload['arguments'].get('_typed_source')
             if original is not None:
                 source = original
@@ -159,7 +159,7 @@ class AssistantEditResultBinding:
         if (source.get('workspace_id'), source.get('task_id'), source.get('member_id'), source.get('assistant_turn_id')) != (
                 ws, task_id, member_id, turn_id):
             raise EditResultRejected('原编辑回执来源与当前查询身份不一致')
-        self.production.append_task_event(TaskEvent(id=f'event_edit_locator_{turn_id}_{locator.request_id}',
+        self.production.execution_records.append_task_event(TaskEvent(id=f'event_edit_locator_{turn_id}_{locator.request_id}',
             workspace_id=ws, task_id=task_id, job_id=None, event_type='assistant_edit_request_located',
             payload={'source':source, 'locator':locator.model_dump(mode='json'),
                 'request_event_id':'event_edit_request_'+media_digest([ws,member_id,str(locator.request_id),locator.phase])},

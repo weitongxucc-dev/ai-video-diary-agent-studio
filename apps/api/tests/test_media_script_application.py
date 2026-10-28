@@ -71,7 +71,7 @@ def test_raw_source_recipe_and_replay_use_explicit_owner(script_application):
         imported = state.client.post(state.base_url + '/graphics/import',
             files={'image': (color + '.png', buffer.getvalue(), 'image/png')})
         assert imported.status_code == 200, imported.text
-        record = state.production.get_artifact_record(state.workspace_id, imported.json()['artifact_id'])
+        record = state.production.execution_records.get_artifact_record(state.workspace_id, imported.json()['artifact_id'])
         inputs.append({'name': 'input.png', 'source_ref': record.logical_ref,
             'expected_artifact_id': record.id, 'expected_sha256': record.sha256})
     raw_payload = {**state.payload, 'input_refs': [inputs[0]]}
@@ -111,14 +111,14 @@ def test_raw_source_recipe_and_replay_use_explicit_owner(script_application):
         assert image.status_code == 200
         with Image.open(io.BytesIO(image.content)) as png:
             assert png.format == 'PNG' and png.size == (16, 16)
-        records = [r for r in state.production.list_artifact_records(state.workspace_id, state.task.id)
+        records = [r for r in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id)
                    if r.producer_job_id == queued.json()['job_id']]
         assert {r.kind for r in records} == {'graphic_source', 'media_script_definition'}
         definition, = [r for r in records if r.kind == 'media_script_definition']
         document = json.loads(main.artifact_store.resolve_file(definition.logical_ref).read_bytes())
         assert document['input_slots'] == [{'name': 'input.png', 'kind': 'graphic_source_png'}]
         assert str(state.root) not in json.dumps(document)
-        start = state.production.get_task_event(state.workspace_id, 'event_' + queued.json()['job_id'] + '_start').payload
+        start = state.production.execution_records.get_task_event(state.workspace_id, 'event_' + queued.json()['job_id'] + '_start').payload
         assert document['script_digest'] == start['input_facts']['script_digest']
         assert document['parameters']['color'] == ('red' if queued is first else 'blue')
         replay = state.client.post(url, json=payload)

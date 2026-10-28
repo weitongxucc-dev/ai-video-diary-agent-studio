@@ -154,7 +154,7 @@ class SectionTimelineChange:
                 artifact = ArtifactRecord(id=f'artifact_{version_id}_{track.language}', workspace_id=task.workspace_id,
                     task_id=task.id, kind='subtitle_track', logical_ref=publication.logical_ref,
                     sha256=publication.sha256, size_bytes=publication.size_bytes, producer_job_id=job.id, input_refs=inputs)
-                self.repository.create_artifact_record(artifact, connection=connection)
+                self.repository.execution_records.create_artifact_record(artifact, connection=connection)
                 transform = TransformRun(id=f'transform_{artifact.id}', workspace_id=task.workspace_id, task_id=task.id,
                     job_id=job.id, transform_type='subtitle_section_retime', input_digest=key, input_refs=inputs,
                     output_refs=[publication.logical_ref], engine='subtitle-srt/v1', parameters={'section_id': section_id,

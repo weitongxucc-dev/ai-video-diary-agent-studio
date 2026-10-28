@@ -142,7 +142,7 @@ def seed_source(repository, store, version="v1"):
     producer = f"fixture-producer-{version}"
     repository.create_job_run(JobRun(id=producer, workspace_id="local", task_id="task", kind="creation_task_montage_render",
         idempotency_key=producer, input_digest=version))
-    repository.create_artifact_record(ArtifactRecord(f"artifact-{version}", "local", "task", "rendered_video", ref,
+    repository.execution_records.create_artifact_record(ArtifactRecord(f"artifact-{version}", "local", "task", "rendered_video", ref,
         publication.sha256, publication.size_bytes, producer, []))
     payload = creation_task_montage_plan_to_payload(fixture_montage(ref))
     repository.save_creation_task_montage_plan("local", "task", "montage", payload)
@@ -251,7 +251,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         for check_id in (old_id, newer[0]):
             job = repository.get_job_run("local", f"job_quality_{check_id}")
             assert job.status == "succeeded"
-            terminal = repository.get_task_event("local", f"event_{job.id}_quality_terminal")
+            terminal = repository.execution_records.get_task_event("local", f"event_{job.id}_quality_terminal")
             assert terminal.payload == {"check_id": check_id, "status": "succeeded"}
             assert reopened.get_check("local", "task", check_id)["check_state"] == "done"
         assert calls.count(old_id) == calls.count(newer[0]) == len(QUALITY_PHASES)
@@ -291,7 +291,7 @@ def test_quality_owner_metadata_current_history_terminal_and_recovery(tmp_path):
         service.recover(runtime.scheduler)
         assert repository.get_job_run("local", f"job_quality_{released_result}").status == "succeeded"
         assert reopened.get_check("local", "task", released_result)["result_status"] == "unavailable"
-        assert repository.get_task_event("local", f"event_job_quality_{released_result}_quality_terminal").payload == {
+        assert repository.execution_records.get_task_event("local", f"event_job_quality_{released_result}_quality_terminal").payload == {
             "check_id": released_result, "status": "succeeded"}
         assert reopened.get("local", "task")["check_id"] == interrupted
         assert reopened.get("local", "task")["check_state"] == "checking"

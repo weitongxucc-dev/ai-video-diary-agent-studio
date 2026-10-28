@@ -201,7 +201,7 @@ class MediaScriptTools:
         run = transforms[0]
         if run.parameters.get("owner_member_id") != owner:
             raise PermissionError("script producer does not belong to the current creator")
-        records = [record for record in self.repository.list_artifact_records(actor.workspace_id, task.id)
+        records = [record for record in self.repository.execution_records.list_artifact_records(actor.workspace_id, task.id)
                    if record.kind == "media_script_definition" and record.producer_job_id == job.id
                    and record.logical_ref == run.parameters.get("definition_ref")]
         if (len(records) != 1 or records[0].logical_ref not in run.output_refs
@@ -271,7 +271,7 @@ class MediaScriptTools:
             if self.task_authorizations.verdict(actor,self.task_id,"task_media",
                     references=[metadata["definition_ref"]]) != "ready":
                 raise PermissionError("配方来源不在原任务授权范围内")
-        record = self.repository.get_artifact_record(actor.workspace_id, metadata["recipe_artifact_id"])
+        record = self.repository.execution_records.get_artifact_record(actor.workspace_id, metadata["recipe_artifact_id"])
         job = self.repository.get_job_run(actor.workspace_id, run.job_id)
         if (job.kind != "media_script_tool_registration" or job.status != "succeeded" or run.status != "succeeded"
                 or record.kind != "media_script_tool_recipe" or record.producer_job_id != job.id
@@ -283,7 +283,7 @@ class MediaScriptTools:
         if (value["tool_id"],value["version"],value["owner_member_id"]) != (
                 metadata["tool_id"],metadata["version"],self._identity(actor)):
             raise ScriptToolError("recipe metadata does not match its immutable version")
-        source = self.repository.get_artifact_record(actor.workspace_id, value["definition_artifact_id"])
+        source = self.repository.execution_records.get_artifact_record(actor.workspace_id, value["definition_artifact_id"])
         if (source.kind != "media_script_definition" or source.task_id != run.task_id
                 or source.logical_ref != value["definition_ref"] or source.producer_job_id != value["source_job_id"]):
             raise ScriptToolError("recipe definition provenance changed")
@@ -328,7 +328,7 @@ class MediaScriptTools:
         published = self.store.publish_bytes(f"script-tools/{tool_id}/{version}-{registration.id}.json", content)
         if self.store.describe(published.logical_ref) != published:
             raise ScriptToolError("recipe publication cannot be verified")
-        artifact = self.repository.create_artifact_record(ArtifactRecord(id="artifact_"+registration.id,
+        artifact = self.repository.execution_records.create_artifact_record(ArtifactRecord(id="artifact_"+registration.id,
             workspace_id=actor.workspace_id, task_id=job.task_id, kind="media_script_tool_recipe",
             logical_ref=published.logical_ref, sha256=published.sha256, size_bytes=published.size_bytes,
             producer_job_id=registration.id, input_refs=[record.logical_ref]), connection=conn)

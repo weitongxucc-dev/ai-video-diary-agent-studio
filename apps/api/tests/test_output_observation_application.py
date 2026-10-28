@@ -86,7 +86,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     producer = repo.create_job_run(JobRun('fixture-output-job', 'local', 'task', 'creation_task_montage_render',
         'owned-output-input', hashlib.sha256(original.read_bytes()).hexdigest()))
     running = repo.claim_job_run('local', producer.id)
-    artifact = repo.create_artifact_record(ArtifactRecord('fixture-output-artifact', 'local', 'task', 'rendered_video',
+    artifact = repo.execution_records.create_artifact_record(ArtifactRecord('fixture-output-artifact', 'local', 'task', 'rendered_video',
         publication.logical_ref, publication.sha256, publication.size_bytes, producer.id, [source_ref]))
     repo.lineage_records.create_transform_run(TransformRun('fixture-output-transform', 'local', 'task', producer.id,
         'rendered_video', producer.input_digest, [source_ref], [publication.logical_ref], 'synthetic-fixture-input/v1',
@@ -128,8 +128,8 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     query=client.get('/api/creation-tasks/task/assistant/edit-requests/'+request['request_id']+'?phase=observation')
     assert query.status_code==200 and query.json()['result']['job_id']==receipt['job_id']
     assert client.get(receipt['result_url']).json()['result']==measured and calls==[receipt['job_id']]
-    assert len(repo.list_job_runs('local','task'))==2 and len(repo.list_artifact_records('local','task'))==1
-    assert repo.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
+    assert len(repo.list_job_runs('local','task'))==2 and len(repo.execution_records.list_artifact_records('local','task'))==1
+    assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
     assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
     assert main._creation_task_output_path('local','task',subtitle=False)==store.resolve_file(publication.logical_ref)
     assert main._quality_check_source('local','task')[3].sha256==publication.sha256

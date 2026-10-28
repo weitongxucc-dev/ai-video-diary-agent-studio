@@ -56,7 +56,7 @@ class TaskBudgetUseCase:
         if job.task_id != task_id:
             raise ValueError('恢复请求不属于原任务')
         if job.kind=='creation_task_segment_revision':
-            event = self.repository.get_task_event(workspace_id,f'event_{job.id}_start')
+            event = self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start')
             result = runtime.registrations['creation_job'].owner.segments.resume_request(workspace_id,task_id,
                 event.payload['command']['request_id'],actor,runtime=runtime,write_guard=write_guard)
             return {'request_id':command.request_id,'execution':result,'budget':self.read(workspace_id,task_id,actor)}

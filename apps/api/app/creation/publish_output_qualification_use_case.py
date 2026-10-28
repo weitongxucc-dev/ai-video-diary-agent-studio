@@ -50,7 +50,7 @@ class PublishOutputQualificationUseCase:
 
     def qualified_output(self, workspace_id: str, task_id: str, task: CreationTask,
                          version: TimelineVersion, ref: str, path: Path) -> dict[str, object]:
-        artifact = next((item for item in self.production.list_artifact_records(workspace_id, task_id)
+        artifact = next((item for item in self.production.execution_records.list_artifact_records(workspace_id, task_id)
                          if item.logical_ref == ref and item.kind == "rendered_video"), None)
         if artifact is None or not path.is_file() or path.stat().st_size != artifact.size_bytes:
             raise ValueError("当前成片文件与已登记产物不一致")

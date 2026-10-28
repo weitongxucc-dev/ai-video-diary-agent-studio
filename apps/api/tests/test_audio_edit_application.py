@@ -45,10 +45,10 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     repo,actor,media,runtime,client,base,graph,path,calls=edit_state(tmp_path,monkeypatch)
     url='/api/creation-tasks/task/audio/preview'
     edit={'base_version_id':base.id,'action':'update','target_id':graph.tracks[0].clips[0].id,'values':{'gain_db':-3}}
-    before_jobs=repo.list_job_runs('local','task');before_artifacts=repo.list_artifact_records('local','task')
+    before_jobs=repo.list_job_runs('local','task');before_artifacts=repo.execution_records.list_artifact_records('local','task')
     draft=client.post(url+'?draft=true',json=edit)
     assert draft.status_code==200,draft.text
-    assert repo.list_job_runs('local','task')==before_jobs and repo.list_artifact_records('local','task')==before_artifacts
+    assert repo.list_job_runs('local','task')==before_jobs and repo.execution_records.list_artifact_records('local','task')==before_artifacts
     assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
     submitted=client.post(url,json=edit)
     assert submitted.status_code==202,submitted.text
@@ -117,7 +117,7 @@ def test_exact_command_and_original_audio_share_original_job_and_recording_block
     assert raw.status_code==202,raw.text
     raw_result=settled(client,runtime,raw.json());assert raw_result['status']=='succeeded',raw_result
     proposal=raw_result['result']['proposal'];new_ref=proposal['operation']['payload']['edit']['values']['source_ref']
-    published=[row for row in repo.list_artifact_records('local','task') if row.producer_job_id==raw.json()['job_id']]
+    published=[row for row in repo.execution_records.list_artifact_records('local','task') if row.producer_job_id==raw.json()['job_id']]
     assert len(published)==3 and next(row for row in published if row.logical_ref==new_ref).kind=='audio_source'
     assert calls[-1][1]==raw.json()['job_id'] and len(calls)==3
     assert repo.get_creation_task('local','task').current_timeline_version_id==next_base.id

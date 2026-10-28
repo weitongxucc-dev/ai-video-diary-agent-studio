@@ -91,7 +91,7 @@ def test_generation_main_host_uses_request_scope_without_constructing_media_exec
     api_state.repository.claim_job_run("local", original_job.id)
     original_job = api_state.repository.finish_job_run("local", original_job.id, status="failed",
         failure_reason="原制作失败", impact="尚未完成制作", repair_action="检查原作业后恢复")
-    api_state.repository.append_task_event(TaskEvent(
+    api_state.repository.execution_records.append_task_event(TaskEvent(
         "original-stage", "local", "task", original_job.id, "creation_execution_stage",
         {"stage": "narration", "status": "failed", "reason": "原制作失败"}))
     case = main._script_generation_intent("local")

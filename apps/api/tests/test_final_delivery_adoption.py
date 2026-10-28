@@ -70,7 +70,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
                 assert conn.execute("SELECT count(*) FROM timeline_versions WHERE id=?", (f'timeline_delivery_{job.id}',)).fetchone()[0] == 0
                 assert conn.execute("SELECT count(*) FROM subtitle_tracks WHERE timeline_version_id=?", (f'timeline_delivery_{job.id}',)).fetchone()[0] == 0
                 assert conn.execute("SELECT count(*) FROM transform_runs WHERE id=?", (f'transform_delivery_adoption_{job.id}',)).fetchone()[0] == 0
-            preserved = [record for record in case.repo.list_artifact_records('local', case.task_id) if record.kind == 'rendered_video']
+            preserved = [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id) if record.kind == 'rendered_video']
             assert len(preserved) == 1 and store.resolve_file(preserved[0].logical_ref).is_file()
             usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
             assert usage['reserved_bytes'] == 0 and usage['unknown_unit_count'] == 0 and usage['generated_bytes'] > baseline
@@ -80,7 +80,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
             return
         assert case.scheduler._get(grant.request_id).state == 'done', case.repo.get_job_run('local', job.id).failure_reason
         if request.resources.get('subtitle_sidecar_bytes', 0):
-            measured = case.repo.get_task_event('local', leaf.measured_event_id(grant))
+            measured = case.repo.execution_records.get_task_event('local', leaf.measured_event_id(grant))
             sidecar_measurement = (request.resources, measured.payload)
     final_job = case.repo.get_job_run('local', job.id)
     assert final_job.status == 'succeeded', final_job.failure_reason
@@ -92,7 +92,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     version = case.repo.get_timeline_version('local', current.current_timeline_version_id)
     assert version.parent_version_id == parent_head and version.snapshot['audio_delivery']['job_id'] == job.id
     assert final_job.output_refs == version.snapshot['output_refs'] and len(final_job.output_refs) == 2
-    subtitle = case.repo.get_artifact_record('local', version.snapshot['audio_delivery']['subtitle_artifact_id'])
+    subtitle = case.repo.execution_records.get_artifact_record('local', version.snapshot['audio_delivery']['subtitle_artifact_id'])
     text = store.resolve_file(subtitle.logical_ref).read_text()
     assert '窗口字幕' in text and '-->' in text
     assert sidecar_measurement is not None
@@ -154,13 +154,13 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
     refused(case.actor, 409)
     with case.repo._connect() as conn:
         conn.execute('UPDATE task_events SET id=? WHERE id=?', (measurement_id, 'withheld-measurement'))
-    original_record_read = case.repo.get_artifact_record
+    original_record_read = case.repo.execution_records.get_artifact_record
     def missing_final_registration(workspace_id, artifact_id):
         if artifact_id.startswith('artifact_final_mux_'):
             raise KeyError(artifact_id)
         return original_record_read(workspace_id, artifact_id)
     with monkeypatch.context() as registration_failure:
-        registration_failure.setattr(case.repo, 'get_artifact_record', missing_final_registration)
+        registration_failure.setattr(case.repo.execution_records, 'get_artifact_record', missing_final_registration)
         refused(case.actor, 409)
     # A changed current HEAD must not adopt the previous final media into it.
     changed = {**json.loads(task_payload), 'current_timeline_version_id': None}
@@ -171,7 +171,7 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (task_payload, case.task_id))
     original_calls = list(case.generated)
     artifacts = {item.id: (item.logical_ref, item.sha256, item.size_bytes)
-        for item in case.repo.list_artifact_records('local', case.task_id)}
+        for item in case.repo.execution_records.list_artifact_records('local', case.task_id)}
     def forbidden(*args, **kwargs):
         raise AssertionError('adoption recovery must not regenerate any media or create a replacement Job')
     monkeypatch.setattr(delivery, 'execute', forbidden)
@@ -218,7 +218,7 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
     assert case.scheduler._get(original.id) == original
     assert case.generated == original_calls
     assert {item.id: (item.logical_ref, item.sha256, item.size_bytes)
-        for item in case.repo.list_artifact_records('local', case.task_id)} == artifacts
+        for item in case.repo.execution_records.list_artifact_records('local', case.task_id)} == artifacts
     assert render.valid('local', case.task_id, verify_media=False)
     # A replay after completion also preserves the original completed request.
     assert control.resume('local', case.task_id, case.actor, runtime, verify_media=False)['job']['id'] == case.job.id

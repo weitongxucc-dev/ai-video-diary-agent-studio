@@ -144,13 +144,13 @@ def case(tmp_path, monkeypatch):
             input_revisions=(ScriptInputRevision("frame.png","fixture-revision","a"*64),),
             digest=digest, toolchain=SimpleNamespace(version="fixture-runtime",digest="a"*64))
         blob = store.publish_bytes(f"definitions/{number}.json", script_definition(sealed,payload))
-        record = repository.create_artifact_record(ArtifactRecord(id=f"definition-{number}", workspace_id="local", task_id=task_id,
+        record = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"definition-{number}", workspace_id="local", task_id=task_id,
             kind="media_script_definition", logical_ref=blob.logical_ref, sha256=blob.sha256,
             size_bytes=blob.size_bytes, producer_job_id=job.id, input_refs=[]))
         data = io.BytesIO()
         Image.new("RGB", (4,4), "green").save(data, format="PNG")
         png = store.publish_bytes(f"outputs/{number}.png", data.getvalue())
-        picture = repository.create_artifact_record(ArtifactRecord(id=f"png-{number}", workspace_id="local", task_id=task_id,
+        picture = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"png-{number}", workspace_id="local", task_id=task_id,
             kind="graphic_source", logical_ref=png.logical_ref, sha256=png.sha256, size_bytes=png.size_bytes,
             producer_job_id=job.id, input_refs=[]))
         now = utc_now()
@@ -162,7 +162,7 @@ def case(tmp_path, monkeypatch):
         outputs = ([record.logical_ref] if include_definition else []) + [picture.logical_ref]
         repository.finish_job_run("local",job.id,status=status,output_refs=outputs if status=="succeeded" else [],
             **({} if status=="succeeded" else {"failure_reason":"fixture","impact":"fixture","repair_action":"fixture"}))
-        repository.append_task_event(TaskEvent(id=f"event_{job.id}_verified",workspace_id="local",task_id=task_id,job_id=job.id,
+        repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_verified",workspace_id="local",task_id=task_id,job_id=job.id,
             event_type="fixture_verified",payload={"outputs":[{"reference":record.logical_ref},{"reference":picture.logical_ref}]}))
         return job.id,record
 
@@ -209,12 +209,12 @@ def test_persistent_discovery_reuse_version_cas_and_revoke_preserve_history(case
 def test_registration_does_not_expand_source_job_artifacts_or_rewrite_verified_event(case):
     repository,store,members,actor,tools,producer = case
     job,definition = producer()
-    before = [item for item in repository.list_artifact_records("local","task") if item.producer_job_id==job]
-    event = repository.get_task_event("local",f"event_{job}_verified")
+    before = [item for item in repository.execution_records.list_artifact_records("local","task") if item.producer_job_id==job]
+    event = repository.execution_records.get_task_event("local",f"event_{job}_verified")
     recipe = tools().create_from_job(actor,job,name="fixture",description="fixture",parameter_schema=SCHEMA,request_id="12345678-1234-4321-8123-123456789abc")
     tools().revoke(actor,recipe["tool_id"],expected_version=1)
-    after = [item for item in repository.list_artifact_records("local","task") if item.producer_job_id==job]
-    assert before == after and repository.get_task_event("local",event.id) == event
+    after = [item for item in repository.execution_records.list_artifact_records("local","task") if item.producer_job_id==job]
+    assert before == after and repository.execution_records.get_task_event("local",event.id) == event
     assert store.describe(definition.logical_ref).sha256 == definition.sha256
     metadata_jobs = [job for job in repository.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
     assert len(metadata_jobs)==1 and metadata_jobs[0].status=="succeeded"
@@ -308,7 +308,7 @@ def test_reuse_rejects_definition_change_after_registration(case,corruption):
 def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
     repository,store,members,actor,tools,producer = case
     job,_ = producer()
-    before = (repository.list_job_runs("local","task"),repository.list_artifact_records("local","task"),
+    before = (repository.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
               repository.lineage_records.list_transform_runs("local","task"))
     with repository._connect() as conn:
         conn.execute("""CREATE TRIGGER reject_fixture_recipe BEFORE INSERT ON transform_runs
@@ -316,7 +316,7 @@ def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
             BEGIN SELECT RAISE(ABORT,'synthetic metadata write failure'); END""")
     with pytest.raises(ValueError):
         tools().create_from_job(actor,job,name="fixture",description="fixture",parameter_schema=SCHEMA,request_id="12345678-1234-4321-8123-123456789abc")
-    after = (repository.list_job_runs("local","task"),repository.list_artifact_records("local","task"),
+    after = (repository.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
              repository.lineage_records.list_transform_runs("local","task"))
     assert after == before
     assert tools().list(actor) == []

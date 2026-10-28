@@ -182,7 +182,7 @@ def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: P
         repo, plan_id="generated-new-plan-id", task_id="generated-new-task-id",
     )
     assert (retry_plan.id, retry_task.id) == (plan.id, task.id)
-    event = repo.list_task_events(WORKSPACE, task.id)
+    event = repo.execution_records.list_task_events(WORKSPACE, task.id)
     assert len(event) == 1
     assert event[0].event_type == "assistant_reply_plan_confirmed"
     assert event[0].payload["reply_reference"] == REPLY_REFERENCE
@@ -199,7 +199,7 @@ def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: P
             request_id="44444444-4444-4444-8444-444444444444",
             verified_owner_user_id=OWNER,
         )
-    assert len(repo.list_task_events(WORKSPACE, task.id)) == 1
+    assert len(repo.execution_records.list_task_events(WORKSPACE, task.id)) == 1
     with pytest.raises(ValueError, match="SHA-256 摘要"):
         repo.confirm_creation_plan_from_reply(
             make_plan("bad-digest"),
@@ -213,7 +213,7 @@ def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: P
 
 def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path: Path) -> None:
     repo, plan, task = ready_task_for_transfer(tmp_path)
-    prior_events = repo.list_task_events(WORKSPACE, task.id)
+    prior_events = repo.execution_records.list_task_events(WORKSPACE, task.id)
     draft_task, run, script = transfer(repo, plan, task)
     assert draft_task.stage == "script" and draft_task.stage_status == "waiting_for_user"
     assert run.run_kind == "assistant_reply_transfer"
@@ -222,8 +222,8 @@ def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path
     assert script.source_reply_reference == REPLY_REFERENCE
     assert script.sections[0].content == REPLY_TEXT
     assert script.sections[0].evidence_reference_ids == []
-    assert REPLY_TEXT not in str(repo.list_task_events(WORKSPACE, task.id)[-1].payload)
-    saved_events = repo.list_task_events(WORKSPACE, task.id)
+    assert REPLY_TEXT not in str(repo.execution_records.list_task_events(WORKSPACE, task.id)[-1].payload)
+    saved_events = repo.execution_records.list_task_events(WORKSPACE, task.id)
     assert saved_events[:-1] == prior_events
     assert saved_events[-1].event_type == "assistant_reply_script_transferred"
 
@@ -233,7 +233,7 @@ def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path
     )
     assert (retry_task.id, retry_run.id, retry_script.id) == (task.id, run.id, script.id)
     assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
-    assert repo.list_task_events(WORKSPACE, task.id) == saved_events
+    assert repo.execution_records.list_task_events(WORKSPACE, task.id) == saved_events
 
     with pytest.raises(ValueError, match="正文已变化"):
         transfer(repo, plan, task, reply_text="另一条回复")
@@ -271,7 +271,7 @@ def test_concurrent_same_transfer_request_returns_one_persisted_draft(tmp_path: 
     assert results[0][2].id == results[1][2].id
     assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
     transfer_events = [
-        event for event in repo.list_task_events(WORKSPACE, task.id)
+        event for event in repo.execution_records.list_task_events(WORKSPACE, task.id)
         if event.event_type == "assistant_reply_script_transferred"
     ]
     assert len(transfer_events) == 1
@@ -279,7 +279,7 @@ def test_concurrent_same_transfer_request_returns_one_persisted_draft(tmp_path: 
 
 def test_transfer_rejects_wrong_member_scope_and_stale_task_without_writes(tmp_path: Path) -> None:
     repo, plan, task = ready_task_for_transfer(tmp_path)
-    prior_events = repo.list_task_events(WORKSPACE, task.id)
+    prior_events = repo.execution_records.list_task_events(WORKSPACE, task.id)
     with pytest.raises(ValueError, match="没有绑定这条已完成对话回复"):
         transfer(repo, plan, task, verified_owner_user_id="other-member")
     with pytest.raises(ValueError, match="任务版本已变化"):
@@ -287,7 +287,7 @@ def test_transfer_rejects_wrong_member_scope_and_stale_task_without_writes(tmp_p
     with pytest.raises(ValueError, match="选题已变化"):
         transfer(repo, plan, task, expected_topic_id="another-topic")
     assert repo.list_creation_task_scripts(WORKSPACE, task.id) == []
-    assert repo.list_task_events(WORKSPACE, task.id) == prior_events
+    assert repo.execution_records.list_task_events(WORKSPACE, task.id) == prior_events
 
 
 def test_existing_task_transfer_does_not_require_plan_created_from_reply(tmp_path: Path) -> None:
@@ -540,7 +540,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     first = main_module.confirm_creation_plan(request, payload)
     second = main_module.confirm_creation_plan(request, payload)
     assert second == first
-    events = repo.list_task_events(WORKSPACE, first["task_id"])
+    events = repo.execution_records.list_task_events(WORKSPACE, first["task_id"])
     assert len(events) == 1
     assert events[0].event_type == "assistant_reply_plan_confirmed"
     assert events[0].payload["reply_reference"] == {
@@ -644,9 +644,9 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     assert read_back.source_task_id == task.id and read_back.source_script_id == draft.id
     assert read_back.version == entry['version']
 
-    prior_events = repo.list_task_events(WORKSPACE, task.id)
+    prior_events = repo.execution_records.list_task_events(WORKSPACE, task.id)
     turn["result"] = {"response": {"reply": "被篡改的正文"}}
     with pytest.raises(main_module.HTTPException) as exc:
         main_module.confirm_creation_plan(request, payload)
     assert exc.value.status_code == 409
-    assert repo.list_task_events(WORKSPACE, first["task_id"]) == prior_events
+    assert repo.execution_records.list_task_events(WORKSPACE, first["task_id"]) == prior_events

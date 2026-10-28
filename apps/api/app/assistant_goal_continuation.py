@@ -487,7 +487,7 @@ class GoalResultProjection:
 
     def bound_execution(self, goal, base_version):
         matches = []
-        for event in self.production.list_task_events(goal["workspace_id"], goal["task_id"]):
+        for event in self.production.execution_records.list_task_events(goal["workspace_id"], goal["task_id"]):
             if event.event_type != "assistant_execution_located":
                 continue
             source = event.payload["source"]
@@ -586,7 +586,7 @@ class GoalResultProjection:
 
         event_id = "event_edit_request_" + media_digest([task.workspace_id, member_id, request_id, phase])
         try:
-            event = self.production.get_task_event(task.workspace_id, event_id)
+            event = self.production.execution_records.get_task_event(task.workspace_id, event_id)
         except KeyError as exc:
             raise GoalProjectionRejected(status_code=404, detail="编辑请求不存在") from exc
         if event.task_id != task.id:
@@ -670,7 +670,7 @@ class GoalResultProjection:
         from app.task_audio import TASK_MEDIA_KIND, media_digest
 
         job = self.production.get_job_run(goal["workspace_id"], job_id)
-        start = self.production.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
+        start = self.production.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start").payload
         source = start["arguments"]["_typed_source"]
         if (job.task_id != goal["task_id"] or job.kind != TASK_MEDIA_KIND or job.status != "succeeded"
                 or start["result_kind"] != "graphic_source" or CreationExecutionActor.from_event(job.workspace_id, start) != actor
@@ -680,7 +680,7 @@ class GoalResultProjection:
                 or media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest):
             raise ValueError("已完成程序来源不属于原目标的实际成功作业")
         payload = start["arguments"]["payload"]
-        result = self.production.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
+        result = self.production.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
         facts = graphic_source_facts(self.production, artifact_store, job.workspace_id, job.task_id, result["source_ref"], actor=actor)
         publication = artifact_store.describe(result["source_ref"])
         if (facts["producer_job_id"] != job.id or not outputs.published_outputs_current(job)
@@ -690,7 +690,7 @@ class GoalResultProjection:
         if start["operation"] == "media_script_preview":
             requested = payload["requested_outputs"]
         elif start["operation"] == "media_script_tool_preview":
-            definition = next(item for item in self.production.list_artifact_records(job.workspace_id, job.task_id)
+            definition = next(item for item in self.production.execution_records.list_artifact_records(job.workspace_id, job.task_id)
                 if item.producer_job_id == job.id and item.kind == "media_script_definition")
             published = artifact_store.describe(definition.logical_ref)
             if (published.sha256, published.size_bytes) != (definition.sha256, definition.size_bytes) or definition.size_bytes > 256 * 1024:
@@ -735,7 +735,7 @@ class GoalResultProjection:
                 or result.get("timeline_version_id") != version.id or result.get("timeline_sequence") != version.sequence
                 or result.get("measurement_scope") != "actual_output_bounded_frames"):
             return None
-        observed = self.production.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
+        observed = self.production.execution_records.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
         source = observed["arguments"].get("_typed_source", {})
         if not source.get("assistant_turn_id") or not self.source_belongs_to_goal(goal, source):
             return None
@@ -870,7 +870,7 @@ class GoalResultProjection:
         if not self.conversations.project_business_result(turn_id, workspace_id, source["member_id"], event,
                 response_patch={"execution_status": actual}, message="原制作作业的实际终态已回读，未重复启动制作。"):
             return None
-        self.production.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id,
+        self.production.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=workspace_id, task_id=task_id,
             job_id=job_id, event_type="assistant_business_projected", payload={"turn_id": turn_id,
                 "source_kind": "execution", "source_id": row["id"]}))
         return event
@@ -878,7 +878,7 @@ class GoalResultProjection:
     def mark(self, candidate):
         from app.creation.contracts import TaskEvent
 
-        self.production.append_task_event(TaskEvent(id=candidate["event_id"], workspace_id=candidate["workspace_id"],
+        self.production.execution_records.append_task_event(TaskEvent(id=candidate["event_id"], workspace_id=candidate["workspace_id"],
             task_id=candidate["task_id"], job_id=candidate["id"] if candidate["kind"] == "job" else None,
             event_type="assistant_business_projected", payload={"turn_id": candidate["source"]["assistant_turn_id"],
                 "source_kind": candidate["kind"], "source_id": candidate["id"]},
@@ -939,7 +939,7 @@ class GoalResultProjection:
             if not media_available:
                 return False
             job = self.production.get_job_run(workspace_id, candidate["id"])
-            start = self.production.get_task_event(workspace_id, f"event_{job.id}_start").payload
+            start = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_start").payload
             if media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest:
                 self.mark(candidate)
                 return True
@@ -947,7 +947,7 @@ class GoalResultProjection:
             if self.production.goal_unreleased_job_request(workspace_id, job.id) is not None:
                 return False
             if job.status == "succeeded":
-                media_result = self.production.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
+                media_result = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
                 if media_result.get("proposal"):
                     proposal = self.production.get_edit_proposal(workspace_id, media_result["proposal"]["id"])
         else:
@@ -1066,7 +1066,7 @@ class GoalResultProjection:
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         locator = dict(candidate["request"]["locator"])
         if recorded is not None:
-            claim = self.production.get_task_event(workspace_id, self.request_event_id(context))
+            claim = self.production.execution_records.get_task_event(workspace_id, self.request_event_id(context))
             if claim.task_id != task_id or claim.payload["member_id"] != source["member_id"]:
                 self.mark(candidate)
                 return True

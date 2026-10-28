@@ -35,7 +35,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
     # It has never executed and makes no render/worker success claim.
     producer = repository.create_job_run(JobRun(id="producer-metadata", workspace_id=workspace,
         task_id=task.id, kind="metadata_fixture", idempotency_key="producer-metadata", input_digest="metadata-fixture"))
-    artifact = repository.create_artifact_record(ArtifactRecord(id="artifact-metadata", workspace_id=workspace,
+    artifact = repository.execution_records.create_artifact_record(ArtifactRecord(id="artifact-metadata", workspace_id=workspace,
         task_id=task.id, kind="rendered_video", logical_ref=logical_ref, sha256=publication.sha256,
         size_bytes=publication.size_bytes, producer_job_id=producer.id, input_refs=[]))
     source_task = repository.get_creation_task(workspace, task.id)
@@ -52,7 +52,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
 
     before = counts()
     trace, task_reads, version_reads = [], [], []
-    get_task, get_version, list_artifacts = repository.get_creation_task, repository.get_timeline_version, repository.list_artifact_records
+    get_task, get_version, list_artifacts = repository.get_creation_task, repository.get_timeline_version, repository.execution_records.list_artifact_records
 
     def observe_task(ws, identifier):
         trace.append("task")
@@ -96,7 +96,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
     monkeypatch.setattr(main, "production_repo", repository)
     monkeypatch.setattr(repository, "get_creation_task", observe_task)
     monkeypatch.setattr(repository, "get_timeline_version", observe_version)
-    monkeypatch.setattr(repository, "list_artifact_records", observe_artifacts)
+    monkeypatch.setattr(repository.execution_records, "list_artifact_records", observe_artifacts)
     monkeypatch.setattr(main, "_creation_render_is_valid", declared_render)
     monkeypatch.setattr(main, "_creation_task_output_path", declared_output)
     visible = main._platform_publish_task_for_user(workspace, task.id, owner)
@@ -114,7 +114,7 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
     fresh = ProductionRepository(database, tmp_path / "unused-library")
     assert asdict(fresh.get_creation_task(workspace, task.id)) == source_snapshot
     assert fresh.get_timeline_version(workspace, version.id) == version
-    assert fresh.get_artifact_record(workspace, artifact.id) == artifact
+    assert fresh.execution_records.get_artifact_record(workspace, artifact.id) == artifact
     fresh_producer = fresh.get_job_run(workspace, producer.id)
     assert (fresh_producer.status, fresh_producer.progress, fresh_producer.attempt) == ("queued", 0, 0)
     assert fresh_producer.started_at is None and fresh_producer.finished_at is None and fresh_producer.output_refs == []

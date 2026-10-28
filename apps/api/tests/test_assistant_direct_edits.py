@@ -246,7 +246,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 cue = state.repo.get_creation_task_montage_plan("ws", state.task.id)["cues"][0]
                 assert cue["text"] == message.split("：")[1]
                 locator=response.json()["edit_request"]
-                saved_source=state.repo.get_task_event("ws",f"event_edit_locator_{response.json()['turn_id']}_{locator['request_id']}").payload["source"]
+                saved_source=state.repo.execution_records.get_task_event("ws",f"event_edit_locator_{response.json()['turn_id']}_{locator['request_id']}").payload["source"]
                 assert saved_source["expected_timeline_version_id"] == version.id
                 candidate={"workspace_id":"ws","task_id":task.id,"event_id":f"recovered-{len(replies)}",
                     "request":{"locator":locator}}
@@ -299,7 +299,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert input_headers[-1] == receipt["input_id"]
         assert state.repo.get_creation_task_montage_plan("ws",state.task.id)["cues"][0]["text"] == "追加输入文字"
         locator=response.json()["edit_request"]
-        source=state.repo.get_task_event("ws",f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
+        source=state.repo.execution_records.get_task_event("ws",f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
         assert source["input_id"] == receipt["input_id"] and source["expected_timeline_version_id"] == receipt["request_context"]["target_snapshot"]["timeline_version_id"]
         monkeypatch.setattr(main,"LEGACY_WORKSPACE_ID","ws")
         assert main._reconcile_assistant_business_results() > 0
@@ -589,7 +589,7 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     gap_event,_=s.repo.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
     gap=s.client.post(endpoint,json=gap_payload)
     assert gap.status_code==409 and gap.json()['detail']['submission_effect']=='unknown',gap.text
-    with pytest.raises(KeyError): s.repo.get_task_event('ws',gap_event+'_source')
+    with pytest.raises(KeyError): s.repo.execution_records.get_task_event('ws',gap_event+'_source')
     assert s.repo.read_edit_request_result(current,gap_event) is None
     conversations.finish_turn(turn['id'],'completed','原请求已提交',{})
     foreign_input=s.client.post(endpoint,json=payload,headers={'X-Assistant-Input-ID':'another-input'})

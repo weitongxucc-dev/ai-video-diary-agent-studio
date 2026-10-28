@@ -587,7 +587,7 @@ class MetadataEditUseCase:
                 staged = Path(staging) / 'subtitles.srt'
                 staged.write_text(content, encoding='utf-8')
                 publication = self.artifact_store.publish_file(logical_ref, staged)
-            artifact = self.repository.create_artifact_record(ArtifactRecord(id=f'artifact_{job.id}_subtitles', workspace_id=workspace_id, task_id=task_id, kind='subtitle_track', logical_ref=publication.logical_ref, sha256=publication.sha256, size_bytes=publication.size_bytes, producer_job_id=job.id, input_refs=input_refs))
+            artifact = self.repository.execution_records.create_artifact_record(ArtifactRecord(id=f'artifact_{job.id}_subtitles', workspace_id=workspace_id, task_id=task_id, kind='subtitle_track', logical_ref=publication.logical_ref, sha256=publication.sha256, size_bytes=publication.size_bytes, producer_job_id=job.id, input_refs=input_refs))
             transform = self.repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{job.id}', workspace_id=workspace_id, task_id=task_id, job_id=job.id, transform_type=kind, input_digest=input_digest, input_refs=input_refs, output_refs=[artifact.logical_ref], engine=engine, parameters=parameters, status='succeeded', started_at=running.started_at or utc_now(), finished_at=utc_now()))
             for upstream in input_refs:
                 self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f'edge_{job.id}_{hashlib.sha256(upstream.encode()).hexdigest()[:20]}', workspace_id=workspace_id, task_id=task_id, upstream_ref=upstream, downstream_ref=artifact.logical_ref, created_by_transform_id=transform.id))
@@ -645,7 +645,7 @@ class MetadataEditUseCase:
             if verify_sources is not None:
                 verify_sources(conn)
             readiness.update(authorization_write(conn))
-            self.repository.append_task_event(TaskEvent(f'event_{change.operation.id}_execution_readiness',workspace_id,
+            self.repository.execution_records.append_task_event(TaskEvent(f'event_{change.operation.id}_execution_readiness',workspace_id,
                 task.id,None,'edit_execution_readiness',{'operation_id':change.operation.id,**readiness}),connection=conn)
         try:
             _proposal, persisted_operation, _version, current_task = commit_change_set(self.repository, change,verify_sources=verify_commit)
@@ -709,7 +709,7 @@ class MetadataEditUseCase:
             elif verify_sources is not None:
                 verify_sources(conn)
             readiness.update(authorization_write(conn))
-            self.repository.append_task_event(TaskEvent(f'event_{change.operation.id}_execution_readiness',workspace_id,
+            self.repository.execution_records.append_task_event(TaskEvent(f'event_{change.operation.id}_execution_readiness',workspace_id,
                 task.id,None,'edit_execution_readiness',{'operation_id':change.operation.id,**readiness}),connection=conn)
         try:
             _confirmed, persisted_operation, _version, _task = commit_direct_change(self.repository, direct_command, direct_intent, proposal, change, verify_sources=lambda command, conn: verify_commit(conn), connection=connection) if direct_intent is not None else commit_change_set(self.repository, change, connection=connection, verify_sources=verify_commit)

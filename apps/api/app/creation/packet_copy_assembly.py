@@ -44,7 +44,7 @@ class PacketCopyAssembly:
         return f'event_{job.id}_picture_packet_manifest'
 
     def _parent(self, job, artifact_id, recipe, *, connection=None):
-        record = self.repository.get_artifact_record(job.workspace_id, artifact_id)
+        record = self.repository.execution_records.get_artifact_record(job.workspace_id, artifact_id)
         if (record.task_id != job.task_id or record.producer_job_id != job.id
                 or record.kind not in {'picture_fragment', 'picture_packet_copy'}):
             raise ValueError('画面父产物不属于原任务与原producer Job')
@@ -86,7 +86,7 @@ class PacketCopyAssembly:
         expected_identity = facts.get('file_identity')
         if record.kind == 'picture_fragment':
             try:
-                sealed = self.repository.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+                sealed = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
             except KeyError:
                 sealed = None
             if sealed is not None:
@@ -140,19 +140,19 @@ class PacketCopyAssembly:
             if connection is None:
                 conn.execute('BEGIN IMMEDIATE')
             write_guard(conn)
-            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
             if CreationExecutionActor.from_event(job.workspace_id, event.payload) != actor or self.recipe(job, connection=conn) != recipe:
                 raise PermissionError('原Job身份或画面配方在封存期间已变化')
             for record, path, _facts in parents:
                 if _file_identity(path.stat()) != instance['leaf_file_identities'][record.id]:
                     raise ValueError('画面父stat在manifest封存期间已变化')
-            self.repository.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
+            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
                 job.id, 'picture_packet_manifest', payload), connection=conn)
         return payload
 
     def manifest(self, job, *, connection=None):
         try:
-            event = self.repository.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
         except KeyError:
             return None
         payload = event.payload
@@ -202,7 +202,7 @@ class PacketCopyAssembly:
             paths = {role: str(Path(path).parent) for role, path in files.items()}
             resource_id = f'event_{job.id}_picture_packet_resources_{unit["id"]}'
             try:
-                sealed = self.repository.get_task_event(job.workspace_id, resource_id, connection=connection).payload
+                sealed = self.repository.execution_records.get_task_event(job.workspace_id, resource_id, connection=connection).payload
             except KeyError:
                 sealed = None
             if sealed is not None:
@@ -235,7 +235,7 @@ class PacketCopyAssembly:
             if sealed is not None and sealed != facts:
                 raise ValueError('原归约单元封存预算、父事实或目录已变化，不能重写原许可')
             if sealed is None:
-                self.repository.append_task_event(TaskEvent(resource_id, job.workspace_id, job.task_id,
+                self.repository.execution_records.append_task_event(TaskEvent(resource_id, job.workspace_id, job.task_id,
                     job.id, 'picture_packet_resources', facts), connection=connection)
             return f'render:packet-copy:v1:{unit["id"]}', facts
         return None
@@ -307,7 +307,7 @@ class PacketCopyAssembly:
         try:
             verified = self._verify_parent_bytes(parents, context)
             with self.repository._connect() as conn:
-                self.repository.append_task_event(TaskEvent(f'event_{context.grant.request_id}_{context.grant.generation}_picture_parents_verified',
+                self.repository.execution_records.append_task_event(TaskEvent(f'event_{context.grant.request_id}_{context.grant.generation}_picture_parents_verified',
                     job.workspace_id, job.task_id, job.id, 'picture_packet_parents_verified',
                     {'request_id': context.grant.request_id, 'permit_generation': context.grant.generation,
                      'parents': [{'artifact_id': record.id, 'sha256': record.sha256,
@@ -338,7 +338,7 @@ class PacketCopyAssembly:
                 publication_guard(conn)
                 for identity in unit['parents']:
                     self._parent(job, identity, manifest['recipe_digest'], connection=conn)
-                self.repository.create_artifact_record(record, connection=conn)
+                self.repository.execution_records.create_artifact_record(record, connection=conn)
                 self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 for reference in record.input_refs:
                     self.repository.lineage_records.create_dependency_edge(DependencyEdge(f'edge_{_digest([record.id, reference])}',
@@ -352,7 +352,7 @@ class PacketCopyAssembly:
             except (OSError, ValueError):
                 generated = None
             with self.repository._connect() as conn:
-                self.repository.append_task_event(TaskEvent(f'event_{context.grant.request_id}_{context.grant.generation}_picture_output',
+                self.repository.execution_records.append_task_event(TaskEvent(f'event_{context.grant.request_id}_{context.grant.generation}_picture_output',
                     job.workspace_id, job.task_id, job.id, 'picture_packet_output_measured',
                     {'request_id': context.grant.request_id, 'permit_generation': context.grant.generation,
                      'consumption_known': generated is not None, 'output_bytes': generated}), connection=conn)

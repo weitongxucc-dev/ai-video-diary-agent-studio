@@ -235,12 +235,12 @@ def test_granted_failure_or_cancellation_preserves_adopted_work(state, monkeypat
         return candidate
     monkeypatch.setattr(state.stage, "build_candidate", changed)
     if failure == "commit":
-        append = state.repo.append_task_event
+        append = state.repo.execution_records.append_task_event
         def reject(event, **kwargs):
             if event.event_type == "storyboard_regenerated":
                 raise ValueError("fixture result checkpoint failure")
             return append(event, **kwargs)
-        monkeypatch.setattr(state.repo, "append_task_event", reject)
+        monkeypatch.setattr(state.repo.execution_records, "append_task_event", reject)
     grant = run(state)
     state.scheduler.assert_released(grant)
     result = state.client.get(receipt["result_url"]).json()
@@ -277,7 +277,7 @@ def test_normal_start_resume_keeps_manual_storyboard_and_does_not_request_replan
     enqueue(state)
     run(state)
     resumed = state.execution.retry("ws", state.task.id, member_id=state.actor.member_id)
-    event = state.repo.get_task_event("ws", f"event_{resumed.id}_start").payload
+    event = state.repo.execution_records.get_task_event("ws", f"event_{resumed.id}_start").payload
     assert "operation" not in event and "request_inputs" not in event
     assert next_creation_intent(state.repo, state.scheduler, resumed).unit_key == "render:current-manual"
     assert len(state.builds) == 1
@@ -433,7 +433,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     completed = state.client.get(receipt['result_url']).json()
     assert completed['status'] == 'succeeded'
     job = state.repo.get_job_run('ws', receipt['job_id'])
-    start = state.repo.get_task_event('ws', f'event_{job.id}_start')
+    start = state.repo.execution_records.get_task_event('ws', f'event_{job.id}_start')
     task = state.repo.get_creation_task('ws', state.task.id)
     base = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
     confirmed = replace(base, id='confirmed-storyboard-head', parent_version_id=base.id, sequence=base.sequence+1,
@@ -478,7 +478,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
         grant = state.scheduler.pick_and_grant()
         assert grant.request_id == pending[0]['id'] and grant.owner_id == job.id
         state.scheduler.cancel(grant.request_id, state.actor)
-    assert state.repo.get_task_event('ws', start.id) == start
+    assert state.repo.execution_records.get_task_event('ws', start.id) == start
     assert state.repo.read_storyboard_regeneration_receipt('ws', task.id, receipt['request_id'])[2] == completed['result']
     assert state.repo.creation_narration_usage('ws', job.id) == usage
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
@@ -616,7 +616,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             assert current.current_timeline_version_id == base.id
             assert repo.get_creation_task_montage_plan('local', task.id) == before
             assert not repo.list_edit_operations('local', task.id)
-            assert not [e for e in repo.list_task_events('local', task.id)
+            assert not [e for e in repo.execution_records.list_task_events('local', task.id)
                 if e.event_type == 'storyboard_regenerated']
     finally:
         case.scheduler.close()

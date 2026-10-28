@@ -173,7 +173,7 @@ def test_queued_fine_edit_keeps_sparse_dto_and_real_target_refs(fine_state, monk
         assert response.status_code == 202, response.text
         receipt = response.json()
         assert receipt["target_refs"] == ["audio:fine-music-clip" if audio else f"clip:{state.clip.id}"]
-        saved = state.production.get_task_event(state.workspace_id, f"event_{receipt['job_id']}_start").payload
+        saved = state.production.execution_records.get_task_event(state.workspace_id, f"event_{receipt['job_id']}_start").payload
         assert saved["arguments"]["payload"] == action
         assert saved["arguments"]["_typed_source"]["action"] == action
         assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1

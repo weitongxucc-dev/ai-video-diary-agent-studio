@@ -79,7 +79,7 @@ def test_invocation_reuses_common_script_job_and_fresh_request_binding(state):
     url = state.base_url + f"/media-script-tools/{state.tool['tool_id']}/preview"
     queued = state.client.post(url, json=payload)
     assert queued.status_code == 202, queued.text
-    start = state.production.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
+    start = state.production.execution_records.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
     assert start.payload["operation"] == "media_script_tool_preview"
     assert start.payload["arguments"]["payload"] == payload
     assert start.payload["arguments"]["_recipe_ref"]["version"] == 1
@@ -141,7 +141,7 @@ def test_real_recipe_bridge_keeps_leaf_validated_parameter_defaults(state):
     assert expanded.parameters == {"color": "blue", "gain": 1}
     queued = state.client.post(state.base_url + f"/media-script-tools/{saved.json()['tool_id']}/preview", json=call.model_dump(mode="json", exclude_unset=True))
     assert queued.status_code == 202 and state.runtime.run_once(), queued.text
-    start = state.production.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
+    start = state.production.execution_records.get_task_event(state.workspace_id, f"event_{queued.json()['job_id']}_start")
     # Caller omission remains in the sealed invocation; expansion consistently
     # reuses the same Leaf defaults at admission and dispatch.
     assert start.payload["arguments"]["payload"]["parameters"] == {"color": "blue"}
@@ -195,7 +195,7 @@ def test_saved_program_uses_new_task_without_inheriting_old_timeline_or_input_au
     assert state.runtime.run_once()
     result = state.client.get(queued.json()["result_url"])
     assert result.json()["status"] == "succeeded", result.text
-    record = state.production.get_artifact_record(state.workspace_id, result.json()["result"]["artifact_id"])
+    record = state.production.execution_records.get_artifact_record(state.workspace_id, result.json()["result"]["artifact_id"])
     assert record.task_id == task.id and record.input_refs == []
     assert state.production.get_creation_task(state.workspace_id, task.id).current_timeline_version_id is None
 
@@ -403,7 +403,7 @@ def test_unknown_tool_save_refuses_unbound_source(assistant_state, invalid):
     response = state.send(forged)
     assert response.status_code == 502, response.text
     assert not any(event.event_type == "assistant_script_tool_located"
-        for event in state.production.list_task_events(state.workspace_id, state.task.id))
+        for event in state.production.execution_records.list_task_events(state.workspace_id, state.task.id))
 
 
 @pytest.mark.parametrize("invalid", ["missing_input", "expected_mismatch"])
@@ -481,7 +481,7 @@ def receipt_state(tmp_path, monkeypatch):
         'requested_outputs':[{'name':'card.png','max_bytes':4096,'width':16,'height':16}],
         'purpose':'preview', 'script_digest':digest, 'toolchain':{'version':'declared','digest':'b'*64}}
     blob = store.publish_bytes('definitions/declared.json',json.dumps(definition,sort_keys=True).encode())
-    record = repo.create_artifact_record(ArtifactRecord('declared-definition','local',task.id,
+    record = repo.execution_records.create_artifact_record(ArtifactRecord('declared-definition','local',task.id,
         'media_script_definition',blob.logical_ref,blob.sha256,blob.size_bytes,producer.id,[]))
     now = utc_now()
     repo.lineage_records.create_transform_run(TransformRun('declared-transform','local',task.id,producer.id,
@@ -554,9 +554,9 @@ def test_recipe_receipt_unknown_reentry_preserves_identity_and_never_registers(r
     assert first.status=='unknown' and first.tool_id is None
     assert order==['identity','source','identity']
     event_id=f"event_script_tool_locator_{state.turn_id}_{details['request_id']}"
-    original_event=state.production.get_task_event('local',event_id)
+    original_event=state.production.execution_records.get_task_event('local',event_id)
     second,_=main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
-    assert second==first and state.production.get_task_event('local',event_id)==original_event
+    assert second==first and state.production.execution_records.get_task_event('local',event_id)==original_event
     # Equal replay must still enter the immutable owner gate: a different
     # provenance value under the same UUID cannot replace the original event.
     from copy import deepcopy
@@ -568,7 +568,7 @@ def test_recipe_receipt_unknown_reentry_preserves_identity_and_never_registers(r
         changed.setattr(state.conversations,'task_result_source',changed_origin)
         with pytest.raises(ValueError):
             main._resolve_assistant_script_tool(state.task.id,state.request,state.turn_id,details)
-    assert state.production.get_task_event('local',event_id)==original_event
+    assert state.production.execution_records.get_task_event('local',event_id)==original_event
     assert [j.id for j in state.production.list_job_runs('local',state.task.id)]==before
     assert not hasattr(MediaScriptTools,'_creation_identity')
 

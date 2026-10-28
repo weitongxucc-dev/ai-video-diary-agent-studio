@@ -320,7 +320,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     source_job = repo.create_job_run(JobRun("source", "workspace", task.id, "declared_render_metadata",
         "fixture:source", published.sha256))
     repo.claim_job_run("workspace", source_job.id)
-    repo.create_artifact_record(ArtifactRecord("source-artifact", "workspace", task.id, "rendered_video",
+    repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", "workspace", task.id, "rendered_video",
         published.logical_ref, published.sha256, published.size_bytes, source_job.id, []))
     repo.finish_job_run("workspace", source_job.id, status="succeeded", output_refs=[published.logical_ref])
     intent = repo.create_edit_intent(EditIntent("intent", "workspace", task.id, "选帧封面", "review", [], None,

@@ -197,7 +197,7 @@ class AssistantExecutionBinding:
         source = {**prepared.source, 'actor_identity': actor.identity_payload(), 'action': prepared.action}
         self.require_input_origin(input_id, source)
         try:
-            located = self.production.get_task_event(
+            located = self.production.execution_records.get_task_event(
                 task.workspace_id, execution_locator_id(turn_id, source.get('input_id')))
         except KeyError:
             return source, None
@@ -220,7 +220,7 @@ class AssistantExecutionBinding:
         if source is None:
             # A late model completion must retain the Job's original input, even
             # when another input has since been consumed by the conversation.
-            previous = next((event for event in self.production.list_task_events(workspace_id, task_id)
+            previous = next((event for event in self.production.execution_records.list_task_events(workspace_id, task_id)
                 if event.event_type == 'assistant_execution_located' and event.job_id == result['job']['id']
                 and event.payload['source']['assistant_turn_id'] == turn_id), None)
             if previous is None:
@@ -228,9 +228,9 @@ class AssistantExecutionBinding:
             source = previous.payload['source']
         event_id = execution_locator_id(turn_id, source.get('input_id'))
         try:
-            previous = self.production.get_task_event(workspace_id, event_id)
+            previous = self.production.execution_records.get_task_event(workspace_id, event_id)
         except KeyError:
-            self.production.append_task_event(TaskEvent(
+            self.production.execution_records.append_task_event(TaskEvent(
                 id=event_id, workspace_id=workspace_id, task_id=task_id,
                 job_id=result['job']['id'], event_type='assistant_execution_located',
                 payload={'job_id': result['job']['id'], 'input_digest': result['job']['input_digest'], 'source': source}))

@@ -86,7 +86,7 @@ class QualityInspectionUseCase:
             digest = successor["unit_key"].rsplit(":", 1)[-1]
             if not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise ValueError("质检后继缺少封存尝试身份")
-            event = self.production.get_task_event(workspace_id, f"event_{job_id}_quality_attempt_{digest}")
+            event = self.production.execution_records.get_task_event(workspace_id, f"event_{job_id}_quality_attempt_{digest}")
             payload = event.payload
             attempt = payload.get("attempt", {})
             if (event.task_id != job.task_id or event.job_id != job_id
@@ -181,7 +181,7 @@ class QualityInspectionUseCase:
                 expected_attempt=job.attempt, connection=conn)
             self.checks.reopen_phase(workspace_id, job.task_id, record["check_id"],
                 expected_updated_at=record["updated_at"], attempt=attempt, connection=conn)
-            self.production.append_task_event(TaskEvent(id=f"event_{job_id}_quality_attempt_{attempt['digest']}",
+            self.production.execution_records.append_task_event(TaskEvent(id=f"event_{job_id}_quality_attempt_{attempt['digest']}",
                 workspace_id=workspace_id, task_id=job.task_id, job_id=job_id,
                 event_type="quality_check_phase_attempt_created", payload={"check_id": record["check_id"],
                     "attempt": attempt, "new_request_id": new_request_id, "previous_failure": record["error"]}), connection=conn)
@@ -307,7 +307,7 @@ class QualityInspectionUseCase:
 
     def read(self, workspace_id, job_id, *, connection=None):
         job = self.production.get_job_run(workspace_id, job_id)
-        event = self.production.get_task_event(workspace_id, f"event_{job_id}_start").payload
+        event = self.production.execution_records.get_task_event(workspace_id, f"event_{job_id}_start").payload
         if job.kind != QUALITY_KIND:
             raise ValueError("该作业不属于独立质检")
         record = self.checks.get_check(workspace_id, job.task_id, event["check_id"], connection=connection)
@@ -330,7 +330,7 @@ class QualityInspectionUseCase:
             job = self.production.get_job_run(workspace_id, render_job_id)
             if job.task_id != task_id:
                 raise ValueError("自动质检与原制作任务不一致")
-            event = self.production.get_task_event(workspace_id, f"event_{job.id}_start")
+            event = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
             actor = CreationExecutionActor.from_event(workspace_id, event.payload)
             return self.start(runtime, actor, workspace_id, task_id)
         except (KeyError, PermissionError, ValueError) as exc:
@@ -376,7 +376,7 @@ class QualityInspectionUseCase:
     def verify_source(self, request, actor):
         source = request["source"]
         self.require_actor(source["workspace_id"], source["task_id"], actor)
-        record = self.production.get_artifact_record(source["workspace_id"], source["artifact_id"])
+        record = self.production.execution_records.get_artifact_record(source["workspace_id"], source["artifact_id"])
         if (record.task_id, record.kind, record.logical_ref, record.sha256, record.size_bytes) != (
                 source["task_id"], "rendered_video", source["source_ref"], source["render_ref"], source["size_bytes"]):
             raise ValueError("质检固定来源产物已变化")
@@ -458,7 +458,7 @@ class QualityInspectionUseCase:
             job = self.production.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
                 task_id=task_id, kind=QUALITY_KIND, idempotency_key=f"quality:{check_id}", input_digest=digest), connection=conn)
             self.checks.seal_request(workspace_id, task_id, check_id, request, connection=conn)
-            self.production.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id=workspace_id,
+            self.production.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id=workspace_id,
                 task_id=task_id, job_id=job.id, event_type="quality_check_submitted",
                 payload={"check_id": check_id, "input_digest": digest, **actor.identity_payload()}), connection=conn)
         return check_id, job
@@ -552,7 +552,7 @@ class QualityInspectionUseCase:
             payload={"check_id": check_id, "phase": request["phase"], "checkpoint_digest": request["checkpoint_digest"],
                 "worker_sha256": result["worker_sha256"],
                 **({"file_sha256": result["file_sha256"]} if "file_sha256" in result else {})})
-        self.production.append_task_event(event, connection=connection)
+        self.production.execution_records.append_task_event(event, connection=connection)
         return event.id
 
     def read_measurements(self, workspace_id, job_id, actor):
@@ -607,7 +607,7 @@ class QualityInspectionUseCase:
         suffix = "_" + private["_phase_attempt"]["digest"] if "_phase_attempt" in private else ""
         event = TaskEvent(id=f"event_{job.id}_quality_terminal{suffix}", workspace_id=job.workspace_id, task_id=job.task_id,
             job_id=job.id, event_type="quality_check_terminal", payload={"check_id": check_id, "status": status})
-        self.production.append_task_event(event, connection=connection)
+        self.production.execution_records.append_task_event(event, connection=connection)
         return event.id
 
     def cancel_queued(self, request_id, actor):
@@ -635,7 +635,7 @@ class QualityInspectionUseCase:
         event = TaskEvent(id=f"event_{job.id}_quality_pause_{uuid4().hex}",
             workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
             event_type="quality_check_paused", payload={"check_id": check_id, "reason": reason})
-        self.production.append_task_event(event, connection=connection)
+        self.production.execution_records.append_task_event(event, connection=connection)
 
     def recover(self, scheduler):
         if scheduler is None or Path(scheduler.database_path).resolve() != Path(self.production.database_path).resolve():

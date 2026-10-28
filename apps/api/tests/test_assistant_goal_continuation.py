@@ -64,7 +64,7 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     source = {"workspace_id": "workspace", "task_id": task.id, "member_id": "member",
         "conversation_id": chat["id"], "assistant_turn_id": turn["id"],
         "expected_timeline_version_id": base.id, "expected_timeline_sequence": 1}
-    production.append_task_event(TaskEvent("located:one", "workspace", task.id, job.id,
+    production.execution_records.append_task_event(TaskEvent("located:one", "workspace", task.id, job.id,
         "assistant_execution_located", {"source": source, "job_id": job.id, "input_digest": job.input_digest}))
     owner = GoalResultProjection(production, conversations)
     rows = production.assistant_execution_projection_rows()
@@ -975,7 +975,7 @@ def test_home_resume_rolls_back_all_roots_when_scope_inheritance_fails(tmp_path,
     for root in roots:
         goal=case.conversations.get_task_goal(root)
         with pytest.raises(KeyError):
-            case.production.get_task_event('workspace',case.authorizations.business_context_id({**goal,'revision':1}))
+            case.production.execution_records.get_task_event('workspace',case.authorizations.business_context_id({**goal,'revision':1}))
 
 
 def test_home_resume_reconciles_unknown_original_request_before_any_new_business(tmp_path):
@@ -1045,7 +1045,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     if recorded_state in {'queued','running'}:
         job=case.production.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
             'original-request-job','a'*64))
-        case.production.append_task_event(TaskEvent('event_'+job.id+'_start','workspace',task.id,job.id,
+        case.production.execution_records.append_task_event(TaskEvent('event_'+job.id+'_start','workspace',task.id,job.id,
             'task_media_submitted',{**actor.identity_payload(),'arguments':{'_typed_source':{
                 'assistant_turn_id':claim['turn_id'],'request_id':request_id,'conversation_id':case.chat['id']}}}))
         receipt={'job_id':job.id,'status':'queued','input_digest':job.input_digest,'result_kind':'observation'}
@@ -1065,7 +1065,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     def read_media(task,actor,job_id):
         reads.append(job_id)
         current=case.production.get_job_run('workspace',job_id)
-        source=case.production.get_task_event('workspace','event_'+job_id+'_start')
+        source=case.production.execution_records.get_task_event('workspace','event_'+job_id+'_start')
         owner.require_media_task(task.id,current)
         assert CreationExecutionActor.from_event('workspace',source.payload)==actor
         return {'job_id':current.id,'status':current.status}

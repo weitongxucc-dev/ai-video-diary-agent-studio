@@ -422,7 +422,7 @@ def test_metadata_late_write_failure_rolls_back_change_but_keeps_prior_claim(sta
     with pytest.raises(sqlite3.IntegrityError, match='second write'):
         state.case.save(state.task, crop_command(state))
     assert editorial_rows(state.repo) == before
-    assert state.repo.get_task_event('ws', event_id).event_type == 'edit_request_claimed'
+    assert state.repo.execution_records.get_task_event('ws', event_id).event_type == 'edit_request_claimed'
     assert state.repo.read_edit_request_result(state.task, event_id) is None
 
 

@@ -81,7 +81,7 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
     elif invalid == 'other_task':
         task_id = 'missing-task'
     else:
-        record = state.repo.get_artifact_record(state.task.workspace_id, state.source['artifact_id'])
+        record = state.repo.execution_records.get_artifact_record(state.task.workspace_id, state.source['artifact_id'])
         if invalid == 'revision':
             path = state.store.resolve_file(record.logical_ref)
             path.write_bytes(path.read_bytes())  # Same bytes/length, different actual ctime.
@@ -143,8 +143,8 @@ def test_grant_verifies_actual_png_digest_and_dimensions_before_renderer(state, 
     context = SimpleNamespace(check=lambda: checks.append(True), grant=SimpleNamespace(owner_id='current-render'))
     monkeypatch.setattr(main, 'production_repo', state.repo)
     monkeypatch.setattr(main, 'artifact_store', state.store)
-    original_event = state.repo.get_task_event
-    monkeypatch.setattr(state.repo, 'get_task_event', lambda workspace, identity:
+    original_event = state.repo.execution_records.get_task_event
+    monkeypatch.setattr(state.repo.execution_records, 'get_task_event', lambda workspace, identity:
         SimpleNamespace(payload=state.actor.identity_payload()) if identity == 'event_current-render_start' else original_event(workspace, identity))
     monkeypatch.setattr(main, '_verify_creation_identity', lambda actor: 'ready' if actor == state.actor else 'unauthorized')
     with pytest.raises(ValueError, match='设备许可'):

@@ -64,7 +64,7 @@ def test_quality_pressure_defers_to_future_without_terminal_result(tmp_path):
         assert checks.get("local", "task")["check_state"] == "checking"
         assert service.projection("local", "task")["result_status"] is None
         with pytest.raises(KeyError):
-            repository.get_task_event("local", f"event_{job_id}_quality_terminal")
+            repository.execution_records.get_task_event("local", f"event_{job_id}_quality_terminal")
         assert service.source_metadata("local", "task")[2] == source_before
         assert calls == [check_id] and runtime.last_error is None
         admissions = len(resources.admissions)

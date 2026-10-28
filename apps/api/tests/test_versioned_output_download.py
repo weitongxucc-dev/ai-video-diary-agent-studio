@@ -31,7 +31,7 @@ def output(linked, tmp_path, monkeypatch):
             ref = f'artifacts/task/output-{number}.{suffix}'
             store.publish_bytes(ref, body)
             if registered:
-                repository.create_artifact_record(ArtifactRecord(f'artifact-{number}-{suffix}', WORKSPACE,
+                repository.execution_records.create_artifact_record(ArtifactRecord(f'artifact-{number}-{suffix}', WORKSPACE,
                     task.id, kind, ref, hashlib.sha256(body).hexdigest(), len(body), job.id, []))
             refs.append(ref)
         snapshot = {'montage': {'status': 'rendered' if rendered else 'ready',

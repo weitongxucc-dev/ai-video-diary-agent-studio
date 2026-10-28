@@ -398,7 +398,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
         repo.claim_job_run("local", inner.id)
         refs = ["artifacts/fixture/video.mp4", "artifacts/fixture/subtitles.srt"]
         for index, ref in enumerate(refs):
-            repo.create_artifact_record(ArtifactRecord(f"fixture_artifact_{index}", "local", task_id,
+            repo.execution_records.create_artifact_record(ArtifactRecord(f"fixture_artifact_{index}", "local", task_id,
                 "rendered_video" if index == 0 else "subtitle_track", ref, "0" * 64, 1, inner.id, []))
         repo.finish_job_run("local", inner.id, status="succeeded", output_refs=refs)
         transform = repo.lineage_records.create_transform_run(TransformRun(f"transform_{inner.id}", "local", task_id,
@@ -485,7 +485,7 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
         current = repo.get_creation_task_montage_plan("local", task_id)
         assert current["status"] == "ready" and current["clips"][0]["crop_x"] == 0
         assert current["output_path"] is None
-        assert not any(e.event_type == "render_succeeded" for e in repo.list_task_events("local", task_id))
+        assert not any(e.event_type == "render_succeeded" for e in repo.execution_records.list_task_events("local", task_id))
         scheduler.defer_unit(grant, reason="input_stale")
         scheduler.assert_released(grant)
     finally:
@@ -910,7 +910,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             assert repo.get_job_run(workspace, job_id).status == (
                 "cancelled" if stop == "cancelled" else "interrupted" if stop in {"revoked", "commit_unknown"} else "failed")
             assert calls == ["narration"]
-            assert not any(event.payload.get("status") == "completed" for event in repo.list_task_events(workspace, task_id))
+            assert not any(event.payload.get("status") == "completed" for event in repo.execution_records.list_task_events(workspace, task_id))
             assert scheduler.pick_and_grant() is None
             return
         grant = scheduler.pick_and_grant()
@@ -938,7 +938,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             if stage == "render" and stop in {"render_revoked", "render_commit_unknown"}:
                 assert repo.get_job_run(workspace, retry.id).status != "succeeded"
                 assert not any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed"
-                               for event in repo.list_task_events(workspace, task_id))
+                               for event in repo.execution_records.list_task_events(workspace, task_id))
                 assert scheduler.processes.children_released(tuple(children)) is True
                 assert render_calls == ([] if stop == "render_revoked" else ["render"])
                 return
@@ -998,9 +998,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         finished = repo.get_job_run(workspace, retry.id)
         assert finished.status == "succeeded", finished.failure_reason
         assert calls == ["narration", "montage_plan", "montage_plan"]
-        events = repo.list_task_events(workspace, task_id)
+        events = repo.execution_records.list_task_events(workspace, task_id)
         assert any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed" for event in events)
-        start = repo.get_task_event(workspace, f"event_{retry.id}_start")
+        start = repo.execution_records.get_task_event(workspace, f"event_{retry.id}_start")
         assert CreationExecutionActor.from_event(workspace, start.payload) == actor
         assert "ephemeral-fixture-token" not in json.dumps(start.payload)
         assert len(identity_calls) > 10
@@ -1557,7 +1557,7 @@ def _render_validity_fixture(tmp_path, monkeypatch):
         get_creation_task=lambda *_: task,
         get_creation_task_montage_plan=lambda *_: plan,
         get_timeline_version=lambda *_: current_version,
-        list_artifact_records=lambda *_: [record],
+        execution_records=SimpleNamespace(list_artifact_records=lambda *_: [record]),
         get_job_run=lambda *_: SimpleNamespace(status="succeeded", task_id="task_1",
             output_refs=[published.logical_ref], input_digest="render-input"),
         lineage_records=SimpleNamespace(get_transform_run=lambda *_: transform),
@@ -1643,7 +1643,7 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
             repo.get_creation_plan("local", repo.get_creation_task("local", task_id).plan_id))
         newer = repo.create_job_run(JobRun("newer-execution", "local", task_id,
             "creation_task_execution", "newer-execution-input", newer_digest))
-        repo.append_task_event(TaskEvent(f"event_{newer.id}_start", "local", task_id, newer.id,
+        repo.execution_records.append_task_event(TaskEvent(f"event_{newer.id}_start", "local", task_id, newer.id,
             "creation_execution_started", {"script_id":script_id,
                 "plan_id":repo.get_creation_task("local", task_id).plan_id,
                 "input_digest":newer_digest, "member_id":member.member_id}))
@@ -2076,7 +2076,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         first_ready = conn.execute("SELECT first_ready_at_utc FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0]
     rolled_back = []
     if after_wait == "write_failure":
-        original_append = repo.append_task_event
+        original_append = repo.execution_records.append_task_event
         def fail_pressure_receipt(event, **kwargs):
             if event.id.startswith(f"event_{job.id}_pressure_"):
                 raise OSError("fixture receipt storage failure")
@@ -2085,7 +2085,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
                     conn.execute("SELECT status FROM job_runs WHERE id=?", (job.id,)).fetchone()[0],
                     repo.get_creation_task("local", task_id).stage_status))
             return original_append(event, **kwargs)
-        monkeypatch.setattr(repo, "append_task_event", fail_pressure_receipt)
+        monkeypatch.setattr(repo.execution_records, "append_task_event", fail_pressure_receipt)
     try:
         if after_wait in {"unknown", "unreleased", "write_failure"}:
             with pytest.raises(OSError if after_wait == "write_failure" else RecoveryBlocked):
@@ -2093,12 +2093,12 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             assert runtime.last_error is not None
             assert repo.get_job_run("local", job.id).status == "interrupted"
             assert repo.get_creation_task("local", task_id).stage_status == "not_started"
-            stopped = repo.get_task_event("local", f"event_{job.id}_stopped_{grants[-1].generation}")
+            stopped = repo.execution_records.get_task_event("local", f"event_{job.id}_stopped_{grants[-1].generation}")
             assert stopped.payload["permit_retained"] is True
             if after_wait == "write_failure":
                 assert rolled_back == [("held", "running", "running")]
                 with pytest.raises(KeyError):
-                    repo.get_task_event("local", f"event_{job.id}_pressure_{grants[-1].generation}")
+                    repo.execution_records.get_task_event("local", f"event_{job.id}_pressure_{grants[-1].generation}")
             with repo._connect() as conn:
                 assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "held"
                 assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "granted"
@@ -2155,7 +2155,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             retry_at = datetime.fromisoformat(row["retry_not_before_utc"])
             assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
         if after_wait == "io_gap":
-            event = repo.get_task_event("local", f"event_{job.id}_pressure_{grants[-1].generation}")
+            event = repo.execution_records.get_task_event("local", f"event_{job.id}_pressure_{grants[-1].generation}")
             assert event.payload["decision"]["reason"] == "io_observation_gap"
             assert repo.get_creation_task("local", task_id).stage_reason == "resource_pressure"
         assert runtime.run_once() is False  # Cannot cold-start every polling tick.
@@ -2170,7 +2170,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         if after_wait in {"recover", "io_gap", "checkpoint_pressure"}:
             assert repo.get_job_run("local", job.id).status == "queued"
             assert repo.get_creation_task("local", task_id).narration_cache_key == "pressure_cache"
-            assert all(event.payload.get("stage") != "render" for event in repo.list_task_events("local", task_id))
+            assert all(event.payload.get("stage") != "render" for event in repo.execution_records.list_task_events("local", task_id))
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
     finally:
@@ -2240,7 +2240,7 @@ def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_o
     assert authorization.resource_scope["assets"] == ["selected"]
     source = repo.workspace_media_reference_for_asset("local", "selected")
     job = repo.create_job_run(JobRun("derived-job", "local", task_id, "creation_task_execution", "derived", "a"*64))
-    repo.create_artifact_record(ArtifactRecord("derived-artifact", "local", task_id, "rendered_video",
+    repo.execution_records.create_artifact_record(ArtifactRecord("derived-artifact", "local", task_id, "rendered_video",
         "artifacts/own-output.mp4", "a"*64, 1, job.id, [source]))
     assert service.verdict(actor, task_id, "task_media", references=["artifacts/own-output.mp4"]) == "ready"
     assert service.verdict(actor, task_id, "task_media", references=[repo.workspace_media_reference_for_asset("local", "unselected")]) == "unauthorized"
@@ -2314,7 +2314,7 @@ def test_scope_refusal_does_not_stop_other_task_authorization_observation(tmp_pa
         assert refused.expires_at == denied.expires_at and refused.issued_at is None
         assert refused.last_verdict.startswith("scope_refused: 原任务声音参考不可用")
         assert refused.last_checked_at == now[0]
-        receipt = repo.get_task_event("local",f"event_{refused.id}_{refused.revision}")
+        receipt = repo.execution_records.get_task_event("local",f"event_{refused.id}_{refused.revision}")
         assert receipt.payload["verdict"] == refused.last_verdict
         assert valid.issued_at == now[0] and valid.expires_at > now[0]
         assert service.last_error is None and service._thread.is_alive()
@@ -2351,7 +2351,7 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     goal=claim['goal']
     control=CreationExecutionControl(repo,_execution(repo),None,lambda _: 'ready')
     job=repo.create_job_run(JobRun('original-job','local',task_id,'creation_task_execution','original-job','a'*64))
-    repo.append_task_event(TaskEvent('event_original-job_start','local',task_id,job.id,'creation_execution_started',
+    repo.execution_records.append_task_event(TaskEvent('event_original-job_start','local',task_id,job.id,'creation_execution_started',
         {'member_id':member,'script_id':'script_local','plan_id':'plan_local','input_digest':'a'*64}))
     repo.bind_creation_execution_source(job,{'assistant_turn_id':claim['turn_id'],'conversation_id':chat['id'],
         'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')})
@@ -2402,7 +2402,7 @@ def test_creation_job_and_original_goal_source_share_the_guarded_owner_transacti
         calls.append(True)
     job=execution.start('local',task_id,script_id,digest,actor=actor,write_guard=allowed,execution_source=source)
     assert execution.start('local',task_id,script_id,digest,actor=actor,write_guard=allowed,execution_source=source).id==job.id
-    located=repo.get_task_event('local','event_assistant_execution_locator_trusted-turn')
+    located=repo.execution_records.get_task_event('local','event_assistant_execution_locator_trusted-turn')
     assert located.job_id==job.id and located.payload['source']==source
     assert calls==[True,True] and len(repo.list_job_runs('local',task_id))==1
     binding=repo.creation_narration_source_binding('local',job.id)
@@ -2505,8 +2505,8 @@ def test_background_input_consumption_inherits_scope_and_fences_old_calls(tmp_pa
     assert not read(binding)['ok']
     assert read(current)=={'ok':True,'value':{'revision':3}}
     goal=conversations.get_task_goal(claim['turn_id'])
-    before=business.production.get_task_event('local',business.authorizations.business_context_id(claim['goal'])).payload
-    after=business.production.get_task_event('local',business.authorizations.business_context_id(goal)).payload
+    before=business.production.execution_records.get_task_event('local',business.authorizations.business_context_id(claim['goal'])).payload
+    after=business.production.execution_records.get_task_event('local',business.authorizations.business_context_id(goal)).payload
     assert before['authorization_id']==after['authorization_id'] and before['identity']==after['identity']
     assert before['source_revisions']==after['source_revisions']
     for invalid_context in ({**context,'task_id':'another-task'},
@@ -2528,7 +2528,7 @@ def test_background_input_consumption_inherits_scope_and_fences_old_calls(tmp_pa
         assert delivery('consume',rolled_back['input_id'],cancel_event=Event(),deadline_monotonic=time.monotonic()+10) is None
     assert conversations.get_task_goal(claim['turn_id'])['revision']==goal['revision']
     with pytest.raises(KeyError):
-        business.production.get_task_event('local',business.authorizations.business_context_id(
+        business.production.execution_records.get_task_event('local',business.authorizations.business_context_id(
             {**goal,'revision':goal['revision']+1,'source_input_id':rolled_back['input_id']}))
     cancelled=enqueue(context);stop=Event();stop.set()
     assert delivery('consume',cancelled['input_id'],cancel_event=stop,deadline_monotonic=time.monotonic()+10) is None
@@ -2800,11 +2800,11 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         assert receipt['input_digest']==request.input_digest and receipt['failed_limits']==[
             {'field':'text_chars','actual':547,'maximum':374}]
         assert status['current_stage']=='narration' and '547' in first.failure_reason
-        stored=repo.get_task_event('local',receipt['observation_id'])
+        stored=repo.execution_records.get_task_event('local',receipt['observation_id'])
         with repo._connect() as conn:
             assert owner.record_admission(conn,request,SimpleNamespace(verdict=False,
                 reason='declared_resources_exceed_budget',declared=request.resources),datetime.now(timezone.utc))=='input_rejected'
-        assert repo.get_task_event('local',stored.id)==stored
+        assert repo.execution_records.get_task_event('local',stored.id)==stored
         def must_not_render(*args, **kwargs):
             raise AssertionError('admission recovery must not execute media')
         executor=CreationJobUnitExecutor(repo,render_action=must_not_render,render_is_valid=must_not_render)
@@ -2823,7 +2823,7 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         resumed=control.resume('local',task_id,actor,runtime,verify_media=False)
         assert resumed['job']['status']=='queued' and resumed['job']['id']!=request.owner_id
         assert repo.get_job_run('local',request.owner_id).status=='failed'
-        assert repo.get_task_event('local',stored.id)==stored and calls==[request.id]
+        assert repo.execution_records.get_task_event('local',stored.id)==stored and calls==[request.id]
     else:
         assert current.state=='blocked' and current.wait_reason=='resource_busy'
         assert first.status=='queued' and calls==[request.id,request.id]
@@ -2838,7 +2838,7 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
         scheduler.pick_and_grant()
     assert repo.get_job_run('local',request.owner_id).status=='queued'
     assert scheduler._get(request.id).state=='waiting'
-    assert not [event for event in repo.list_task_events('local',task_id)
+    assert not [event for event in repo.execution_records.list_task_events('local',task_id)
         if event.payload.get('failure_kind')=='input_budget_exceeded']
 from app.voice_clone import Qwen3TTSSubprocessProvider
 
@@ -3167,7 +3167,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
             assert case.repo.list_edit_operations('local', task.id) == []
             usage = case.repo.creation_narration_usage('local', job.id)
             assert not usage['unsettled'] and usage['used_output_bytes'] == 192096
-            reconciled = [event for event in case.repo.list_task_events('local', task.id)
+            reconciled = [event for event in case.repo.execution_records.list_task_events('local', task.id)
                 if event.job_id == job.id and event.event_type == 'narration_edit_result_reconciled']
             assert len(reconciled) == 1 and reconciled[0].payload['publication_blocked']
             assert reconciled[0].payload['pcm']['finalized']
@@ -3591,7 +3591,7 @@ def test_segment_revision_checks_actual_target_dependencies_and_semantic_input(t
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     _before,request,_runtime = _submit_section_revision(case)
-    event = case.repo.get_task_event('local',f'event_{request["job_id"]}_start')
+    event = case.repo.execution_records.get_task_event('local',f'event_{request["job_id"]}_start')
     command = NarrationRevisionRequest.model_validate(event.payload['command'])
     queued=case.repo.list_creation_job_request_states('local',request['job_id'])[0]
     with case.repo._connect() as conn:
@@ -3606,7 +3606,7 @@ def test_segment_revision_checks_actual_target_dependencies_and_semantic_input(t
         case.repo.save_narration_segments('local',case.task_id,case.script_id,
             [replace(row,pronunciation_version='changed') if row.source_section_id=='section_1' else row for row in segments])
     else:
-        review = case.repo.get_task_event('local','review_revision')
+        review = case.repo.execution_records.get_task_event('local','review_revision')
         case.repo.save_semantic_review(TaskEvent('different_input','local',case.task_id,None,'narration_semantic_review',
             {**review.payload,'input_id':'another_input'}),write_guard=lambda conn:None)
         command = command.model_copy(update={'semantic_review_ref':'different_input'})
@@ -3639,8 +3639,8 @@ def test_segment_revision_http_adapter_checks_trusted_source_before_atomic_effec
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     _before,original,runtime = _submit_section_revision(case)
-    command = case.repo.get_task_event('local',f'event_{original["job_id"]}_start').payload['command']
-    review = case.repo.get_task_event('local','review_revision')
+    command = case.repo.execution_records.get_task_event('local',f'event_{original["job_id"]}_start').payload['command']
+    review = case.repo.execution_records.get_task_event('local','review_revision')
     origin = {'conversation_id':'conversation_revision','input_id':None}
     source = {**review.payload['source'],'conversation_id':origin['conversation_id']}
     case.repo.save_semantic_review(TaskEvent('http_review','local',case.task_id,None,'narration_semantic_review',
@@ -3761,7 +3761,7 @@ def _queued_narration_voice_selection_case(tmp_path):
 
 def test_queued_voice_selection_rebinds_original_job_and_request_once_without_budget_reset(tmp_path):
     case = _queued_narration_voice_selection_case(tmp_path)
-    start = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+    start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
     usage = case.repo.creation_narration_usage('local', case.job.id)
     old = case.scheduler._get(case.request_id)
     receipt = case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
@@ -3773,7 +3773,7 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     job = case.repo.get_job_run('local', case.job.id)
     assert job.input_digest != case.job.input_digest and job.status == 'queued' and job.attempt == 0
     assert job.idempotency_key == case.job.idempotency_key and job.created_at == case.job.created_at
-    assert case.repo.get_task_event('local', start.id) == start
+    assert case.repo.execution_records.get_task_event('local', start.id) == start
     effective = case.repo.creation_execution_input('local', job.id)
     source = case.repo.creation_narration_source_binding('local', job.id)
     assert effective == {**start.payload, 'input_digest': job.input_digest, 'source_binding_event_id': source.id}
@@ -3822,9 +3822,9 @@ def test_queued_voice_selection_refuses_races_or_unknown_and_rolls_back_all_writ
         case.selection['expected_plan_updated_at'] = '2020-01-01T00:00:00+00:00'
     elif blocked == 'unknown':
         active = f'event_{case.job.id}_narration_started_unknown'
-        case.repo.append_task_event(TaskEvent(active, 'local', case.task_id, case.job.id,
+        case.repo.execution_records.append_task_event(TaskEvent(active, 'local', case.task_id, case.job.id,
             'creation_narration_unit_started', {'usage_id': 'unknown-original-unit'}))
-        case.repo.append_task_event(TaskEvent(f'event_{case.job.id}_narration_budget', 'local', case.task_id, case.job.id,
+        case.repo.execution_records.append_task_event(TaskEvent(f'event_{case.job.id}_narration_budget', 'local', case.task_id, case.job.id,
             'creation_narration_budget', {'active_event_id': active, 'settled_event_id': None,
                 'parent_timeout_seconds': 300, 'parent_max_output_bytes': 3*1024*1024}))
     elif blocked == 'replacement_failure':
@@ -4013,7 +4013,7 @@ def test_narration_legacy_static_refusal_migrates_idempotently_without_new_job(t
     assert case.scheduler._get(request.id).wait_reason == f'replaced_by:{replacement.id}'
     assert case.repo.get_job_run('local', case.job.id).status == 'queued'
     assert len(case.execution.jobs('local', case.task_id)) == 1
-    assert any(e.payload.get('failure_kind') == 'input_budget_exceeded' for e in case.repo.list_task_events('local', case.task_id))
+    assert any(e.payload.get('failure_kind') == 'input_budget_exceeded' for e in case.repo.execution_records.list_task_events('local', case.task_id))
 
 
 def test_narration_quit_settles_then_cached_resume_does_not_charge_output_twice(tmp_path, monkeypatch):
@@ -4259,7 +4259,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
             case.job.input_digest, key, SchedulePolicy()), case.actor)
     else:
         old = case.scheduler._get(submit_creation_stage(case.execution, case.scheduler, case.job, case.actor))
-    start = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+    start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
     usage = case.repo.creation_narration_usage('local', case.job.id)
     if legacy == 'device_only':
         source = case.repo.creation_narration_source_binding('local',case.job.id)
@@ -4287,11 +4287,11 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
     assert new.resources['parent_max_output_bytes'] == old.resources.get('parent_max_output_bytes', old.resources['max_output_bytes'])
     assert new.resources['parent_timeout_seconds'] == old.resources.get('parent_timeout_seconds', old.resources['timeout_seconds'])
     assert case.repo.get_job_run('local', case.job.id).idempotency_key == case.job.idempotency_key
-    assert case.repo.get_task_event('local', start.id) == start
+    assert case.repo.execution_records.get_task_event('local', start.id) == start
     assert case.repo.creation_narration_source_binding('local', case.job.id) == source
     assert case.repo.creation_narration_usage('local', case.job.id) == usage
     assert source.payload['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
-    assert case.repo.get_task_event('local', f'event_{new.id}_source_revalidated').payload['source_binding_event_id'] == source.id
+    assert case.repo.execution_records.get_task_event('local', f'event_{new.id}_source_revalidated').payload['source_binding_event_id'] == source.id
     assert migrate_creation_narration_request(case.repo, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor).id == new.id
     assert submit_creation_stage(case.execution, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor) == new.id
     with case.repo._connect() as conn:
@@ -4312,7 +4312,7 @@ def test_unstarted_narration_revalidation_refuses_without_new_baseline(tmp_path,
     source, _ = _replace_fixed_voice_file(case, changed=failure == 'changed_bytes')
     if failure == 'missing_anchor':
         with case.repo._connect() as conn:
-            start = case.repo.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
+            start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
             payload = dict(start.payload); payload.pop('source_binding_event_id')
             conn.execute('UPDATE task_events SET payload_json=? WHERE id=?', (json.dumps(payload), start.id))
         # Original start replay cannot turn the unrelated saved source event into
@@ -4330,7 +4330,7 @@ def test_unstarted_narration_revalidation_refuses_without_new_baseline(tmp_path,
         assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_bound'").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='creation_narration_source_revalidated'").fetchone()[0] == 0
-    assert case.repo.get_task_event('local', source.id) == source
+    assert case.repo.execution_records.get_task_event('local', source.id) == source
     assert case.repo.get_job_run('local', case.job.id) == case.job
 
 
@@ -4384,7 +4384,7 @@ def test_unsealed_original_job_without_device_request_cannot_resume_as_fresh_inp
     from app.device_scheduler import RecoveryBlocked
     case = _narration_units_case(tmp_path)
     with case.repo._connect() as conn:
-        start = case.repo.get_task_event('local',f'event_{case.job.id}_start',connection=conn)
+        start = case.repo.execution_records.get_task_event('local',f'event_{case.job.id}_start',connection=conn)
         payload = dict(start.payload); payload.pop('source_binding_event_id')
         conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',(json.dumps(payload),start.id))
     # Idempotent start remains a read of the original request. First admission
@@ -4484,7 +4484,7 @@ def test_account_voice_http_uses_content_owner_and_full_current_actor_then_repla
     body = CreationTaskNarrationVoiceSelectionRequest.model_validate({key:value for key,value in case.selection.items()
         if key not in {'workspace_id','task_id','member_id'}}).model_dump(mode='json')
     old = case.scheduler._get(case.request_id)
-    start = case.repo.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
+    start = case.repo.execution_records.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
     usage = case.repo.creation_narration_usage(case.actor.workspace_id,case.job.id)
     route = f'/api/creation-tasks/{case.task_id}/narration/voice'
     before = _voice_selection_snapshot(case)
@@ -4499,7 +4499,7 @@ def test_account_voice_http_uses_content_owner_and_full_current_actor_then_repla
     receipt = response.json()
     assert receipt['member_id'] == case.actor.user_id != case.actor.member_id
     assert receipt['selected_voice']['profile_id'] == 'voice_2'
-    assert case.repo.get_task_event(case.actor.workspace_id,start.id) == start
+    assert case.repo.execution_records.get_task_event(case.actor.workspace_id,start.id) == start
     updated = case.repo.get_job_run(case.actor.workspace_id,case.job.id)
     assert updated.id == case.job.id and updated.idempotency_key == case.job.idempotency_key and updated.attempt == 0
     source = case.repo.creation_narration_source_binding(case.actor.workspace_id,case.job.id)
@@ -4547,7 +4547,7 @@ def test_account_queued_voice_selection_rechecks_original_actor_in_writer(tmp_pa
     def changed_original(**inputs):
         nonlocal before
         other = CreationExecutionActor.account(case.actor.workspace_id,str(uuid4()),case.actor.user_id)
-        start = case.repo.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
+        start = case.repo.execution_records.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
         with case.repo._connect() as conn:
             conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',
                 (json.dumps({**start.payload,**other.identity_payload()}),start.id))
@@ -4696,7 +4696,7 @@ def test_segment_visual_decision_rejects_stale_or_revoked_adoption(tmp_path, mon
     assert after['device_request_id'] is None
     assert case.segments.visual_decision(case.job, 'section_1') == decision
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
+        case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
     assert case.scheduler.pick_and_grant() is None
 
 
@@ -4721,7 +4721,7 @@ def _edit_source_boundary_case(tmp_path, monkeypatch, kind):
             'payload': {'person_profile_id': 'person', 'person_version': 'v1'}}, [], {}, []))
     with case.repo._connect() as conn:
         conn.execute('UPDATE job_runs SET kind=?,status=? WHERE id=?', (kind, 'running', case.job.id))
-        event = case.repo.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
+        event = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
         payload = {**event.payload, 'source': source, 'edit_proposal_id': proposal.id}
         conn.execute('UPDATE task_events SET payload_json=? WHERE id=?',
             (json.dumps(payload), event.id))
@@ -4769,8 +4769,8 @@ def test_edit_source_rechecked_in_submission_grant_and_success_transaction(tmp_p
         # Terminal receipts and original reads do not require renewed source permission.
         terminal = 'cancelled' if kind == 'creation_task_person_edit' else 'failed'
         ref = checkpoint(conn, grant, terminal, reason='source_unavailable')
-        assert case.repo.get_task_event('local', ref, connection=conn).payload['status'] == terminal
-    original = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+        assert case.repo.execution_records.get_task_event('local', ref, connection=conn).payload['status'] == terminal
+    original = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
     assert original.payload['source'] == case.source
     assert case.repo.list_edit_operations('local', case.task_id) == []
 
@@ -4785,7 +4785,7 @@ def test_edit_source_unverifiable_jobs_cannot_be_submitted(tmp_path, monkeypatch
     case = _edit_source_boundary_case(tmp_path, monkeypatch, kind)
     with case.repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        event = case.repo.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
+        event = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start', connection=conn)
         payload = event.payload
         if blocker == 'missing':
             payload.pop('source')
@@ -4840,7 +4840,7 @@ def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=Fal
     case.executor.execute(grant, case.scheduler)
     assert case.repo.get_job_run('local', case.job.id).status == 'failed'
     assert case.scheduler._get(grant.request_id).state == 'failed'
-    settled = case.repo.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
+    settled = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
     assert settled.payload['output_file'] is None and settled.payload['output_bytes'] > 0
     assert case.repo.get_narration_artifact('local', output['cache_key']) is None
     monkeypatch.setattr(case.segments, 'prepare_video', prepare_video)
@@ -4891,7 +4891,7 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         assert case.segments.visual_decision(case.repo.get_job_run('local', case.job.id), 'section_1') == decision
         assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.repo.creation_narration_usage('local', case.job.id) == before
-    assert case.repo.get_task_event('local', case.settled.id) == case.settled
+    assert case.repo.execution_records.get_task_event('local', case.settled.id) == case.settled
     assert case.scheduler._get(case.grant.request_id).state == 'failed'
     assert case.scheduler.pick_and_grant() is None
 
@@ -4958,12 +4958,12 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     original_request = submit_creation_stage(execution, scheduler, job, actor)
     old_output = TaskEvent(f'event_{job.id}_render_succeeded', 'local', task_id, job.id,
         'creation_execution_stage', {'stage': 'render', 'status': 'completed', 'output': 'timeline_old:preview.mp4'})
-    repo.append_task_event(old_output)
+    repo.execution_records.append_task_event(old_output)
     settled = TaskEvent(f'event_{job.id}_narration_settled_1', 'local', task_id, job.id,
         'creation_narration_unit_settled', {'usage_id': 'original-tts:1', 'elapsed_seconds': 12.5,
             'output_bytes': 48044, 'total_seconds': 12.5, 'total_output_bytes': 48044})
-    repo.append_task_event(settled)
-    repo.append_task_event(TaskEvent(f'event_{job.id}_narration_budget', 'local', task_id, job.id,
+    repo.execution_records.append_task_event(settled)
+    repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_narration_budget', 'local', task_id, job.id,
         'creation_narration_budget', {'parent_timeout_seconds': 300, 'parent_max_output_bytes': 3145728,
             'settled_event_id': settled.id, 'active_event_id': None}))
     with repo._connect() as conn:
@@ -4996,7 +4996,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
         assert repo.get_job_run('local', job.id).status == 'succeeded'
         assert len(repo.list_creation_job_request_states('local', job.id)) == 1
         assert not any(event.payload.get('input_timeline_version_id') == edited.id
-            for event in repo.list_task_events('local', task_id))
+            for event in repo.execution_records.list_task_events('local', task_id))
     else:
         control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
         requests = repo.list_creation_job_request_states('local', job.id)
@@ -5019,13 +5019,13 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
             executor._checkpoint(conn, grant, status='succeeded', stage='render',
                 output=f'{published.id}:{rendered["output_path"]}')
         scheduler.defer_unit(grant, reason='input_stale')
-        completed = repo.get_task_event('local', f'{old_output.id}_{fresh["id"]}')
+        completed = repo.execution_records.get_task_event('local', f'{old_output.id}_{fresh["id"]}')
         assert completed.payload['output'] == f'{published.id}:{rendered["output_path"]}'
         assert completed.payload['request_id'] == fresh['id']
         assert len(execution.jobs('local', task_id)) == 1
     assert guarded
-    assert repo.get_task_event('local', old_output.id) == old_output
-    assert repo.get_task_event('local', settled.id) == settled
+    assert repo.execution_records.get_task_event('local', old_output.id) == old_output
+    assert repo.execution_records.get_task_event('local', settled.id) == settled
     assert repo.creation_narration_usage('local', job.id) == usage
     assert repo.get_narration_artifact('local', 'cache_1') == audio
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
@@ -5125,7 +5125,7 @@ def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_
     assert current.status == 'cancelled' and current.failure_reason == 'user_cancelled'
     assert case.segments.visual_usage(current) == usage
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', case.segments.video_preparation_id(job, 'section_1'))
+        case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(job, 'section_1'))
     assert all(row['state'] == 'done' for row in case.repo.list_creation_job_request_states('local', job.id))
     case.scheduler.close()
 
@@ -5197,7 +5197,7 @@ def test_pcm_sealed_two_input_unit_survives_larger_cap_and_prefix_uses_one_slot(
 
 def test_local_goal_twenty_sections_keep_finite_units_without_task_total_cap(tmp_path):
     case = _narration_units_case(tmp_path, section_count=20, audio_input_count=5, local_policy=True)
-    start = case.repo.get_task_event('local', f'event_{case.job.id}_start')
+    start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
     assert start.payload['execution_budget_policy']['policy_kind'] == 'scope'
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     for _ in range(20):
@@ -5226,7 +5226,7 @@ def test_local_goal_twenty_sections_keep_finite_units_without_task_total_cap(tmp
     assert len(case.generated) == 20
     assert all(item.status == 'ready' for item in case.repo.list_narration_segments('local', case.task_id, case.script_id))
     assert len(case.execution.jobs('local', case.task_id)) == 1
-    assert case.repo.get_task_event('local', start.id) == start
+    assert case.repo.execution_records.get_task_event('local', start.id) == start
     case.scheduler.close()
 
 
@@ -5326,7 +5326,7 @@ def _single_segment_preparation_case(tmp_path):
     case = _narration_units_case(tmp_path, section_count=45)
     repo = case.repo
     with repo._connect() as conn:
-        repo.append_task_event(TaskEvent('preparation-adopted-text', 'local', case.task_id, None,
+        repo.execution_records.append_task_event(TaskEvent('preparation-adopted-text', 'local', case.task_id, None,
             'segment_publication', {'script_id': case.script_id, 'text': '采用后的目标正文',
                                     'narration_reference': 'narration://artifact/prior'}), connection=conn)
         version = TimelineVersion(id='preparation-version', workspace_id='local', task_id=case.task_id,
@@ -5463,7 +5463,7 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
             case.executor.execute(grant, case.scheduler)
             assert settlements == [True]
             assert case.scheduler._get(grant.request_id).state == 'done'
-            assert case.repo.get_task_event('local', prepared[0].id).event_type == 'segment_visual_planning_conflict'
+            assert case.repo.execution_records.get_task_event('local', prepared[0].id).event_type == 'segment_visual_planning_conflict'
         else:
             with pytest.raises(RecoveryBlocked, match='原单段提交前'):
                 case.executor.execute(grant, case.scheduler)
@@ -5474,9 +5474,9 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
             usage = case.repo.creation_narration_usage('local', case.job.id)
             assert len(usage['unsettled']) == 1 and usage['used_output_bytes'] == usage['used_seconds'] == 0
             with pytest.raises(KeyError):
-                case.repo.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
+                case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
             with pytest.raises(KeyError):
-                case.repo.get_task_event('local', prepared[0].id)
+                case.repo.execution_records.get_task_event('local', prepared[0].id)
             with case.repo._connect() as conn:
                 assert conn.execute("SELECT COUNT(*) FROM narration_segments WHERE task_id=? AND status='ready'", (case.task_id,)).fetchone()[0] == 0
                 assert conn.execute('SELECT COUNT(*) FROM narration_artifacts').fetchone()[0] == 0
@@ -5600,7 +5600,7 @@ def test_single_segment_preparation_refuses_changed_tail_or_current_voice_before
                          "WHERE script_id=? AND section_id='section_45'", (case.script_id,))
     elif changed == 'adopted-tail':
         with repo._connect() as conn:
-            repo.append_task_event(TaskEvent('preparation-wrong-tail', 'local', case.task_id, None,
+            repo.execution_records.append_task_event(TaskEvent('preparation-wrong-tail', 'local', case.task_id, None,
                 'segment_publication', {'script_id': 'other-script', 'text': '错误采用尾段',
                                         'narration_reference': 'narration://artifact/tail'}), connection=conn)
             repo.create_timeline_version(TimelineVersion(id='preparation-tail-version', workspace_id='local',
@@ -5701,12 +5701,12 @@ def test_bounded_narration_start_unknown_and_other_member_keep_original(tmp_path
             CreationExecutionActor('local', 'other-member'), case.runtime, verify_media=False)
     assert refused.value.status_code == 403
     pending = case.scheduler._get(original_requests[0]['id'])
-    case.repo.append_task_event(TaskEvent('unsettled-original', 'local', case.task_id, job.id,
+    case.repo.execution_records.append_task_event(TaskEvent('unsettled-original', 'local', case.task_id, job.id,
         'creation_narration_unit_started', {'usage_id': f'{pending.id}:9', 'request_id': pending.id,
             'permit_generation': 9, 'unit_key': pending.unit_key, 'segment_id': pending.resources['segment_id'],
             'section_id': pending.resources['section_id'], 'ordinal': 1, 'phase': 'segment',
             'remaining_seconds': 300, 'remaining_output_bytes': 3*1024*1024}))
-    case.repo.append_task_event(TaskEvent(f'event_{job.id}_narration_budget', 'local', case.task_id, job.id,
+    case.repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_narration_budget', 'local', case.task_id, job.id,
         'creation_narration_budget', {'active_event_id': 'unsettled-original', 'settled_event_id': None,
             'parent_timeout_seconds': 300, 'parent_max_output_bytes': 3*1024*1024,
             'script_id': case.script_id, 'input_contract': 'narration_units_v1'}))
@@ -5729,7 +5729,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
     case = _bounded_narration_start_case(tmp_path, monkeypatch)
     repo = case.repo
     with repo._connect() as conn:
-        repo.append_task_event(TaskEvent('adopted-text', 'local', case.task_id, None, 'segment_publication',
+        repo.execution_records.append_task_event(TaskEvent('adopted-text', 'local', case.task_id, None, 'segment_publication',
             {'script_id': case.script_id, 'text': '采用后的正文', 'narration_reference': 'narration://artifact/prior'}), connection=conn)
         task = repo.get_creation_task('local', case.task_id, connection=conn)
         version = TimelineVersion(id='effective-text-version', workspace_id='local', task_id=case.task_id,
@@ -5791,10 +5791,10 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
             'source_section_id': 'section_1', 'text': '采用后的正文'}
         conn.execute('INSERT INTO narration_segments (' + ','.join(prefix) + ') VALUES ('
             + ','.join('?' for _ in prefix) + ')', tuple(prefix.values()))
-        repo.append_task_event(TaskEvent(case.owner.segments.visual_decision_id(job, 'section_1'),
+        repo.execution_records.append_task_event(TaskEvent(case.owner.segments.visual_decision_id(job, 'section_1'),
             'local', case.task_id, job.id, 'segment_visual_decision_required', {'section_id': 'section_1'}), connection=conn)
     assert next_creation_intent(repo, case.scheduler, job) is None  # Do not skip an earlier confirmation gate.
-    repo.append_task_event(TaskEvent(case.owner.segments.video_preparation_id(job, 'section_1'),
+    repo.execution_records.append_task_event(TaskEvent(case.owner.segments.video_preparation_id(job, 'section_1'),
         'local', case.task_id, job.id, 'segment_video_prepared', {'section_id': 'section_1'}))
     def video_facts(current_job, event, task, section_id, owner, **kwargs):
         assert current_job.id == job.id and section_id == 'section_1'
@@ -5926,7 +5926,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
     repo.save_narration_segments('local', task.id, script.id, segments)
     effective = '采用正文 "quoted"\n\\ café 😺'
     with repo._connect() as conn:
-        repo.append_task_event(TaskEvent('pcm-adopted-text', 'local', task.id, None, 'segment_publication',
+        repo.execution_records.append_task_event(TaskEvent('pcm-adopted-text', 'local', task.id, None, 'segment_publication',
             {'script_id': script.id, 'text': effective, 'narration_reference': segments[0].audio_reference}), connection=conn)
         version = TimelineVersion('pcm-effective-version', 'local', task.id, None, 1,
             {'stage_segments': {'section_1': 'pcm-adopted-text'}}, None)
@@ -6148,7 +6148,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
         elif outcome == 'source_blocked':
             assert repo.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
             assert repo.get_job_run('local', job.id).status == 'interrupted'
-            events = [e for e in repo.list_task_events('local', case.task.id)
+            events = [e for e in repo.execution_records.list_task_events('local', case.task.id)
                 if e.job_id == job.id and e.event_type == 'narration_edit_result_reconciled']
             assert len(events) == 1 and events[0].payload['publication_blocked']
             assert not repo.creation_narration_usage('local', job.id)['unsettled']
@@ -6409,13 +6409,13 @@ def test_bounded_segment_video_plan_confirmation_and_original_reentry(tmp_path, 
     from app.creation_execution import next_creation_intent
     case = _bounded_segment_video_case(tmp_path, monkeypatch)
     assert next_creation_intent(case.repo, case.scheduler, case.job) is None
-    waiting = case.repo.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
+    waiting = case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     if legacy:
         original_key, original_digest = waiting.payload['unit_key'], waiting.payload['decision_digest']
         with case.repo._connect() as conn:
             conn.execute("UPDATE task_events SET payload_json=json_remove(payload_json,'$.planning_dependency_digest') WHERE id=?",
                 (waiting.id,))
-        waiting = case.repo.get_task_event('local', waiting.id)
+        waiting = case.repo.execution_records.get_task_event('local', waiting.id)
         assert (waiting.payload['unit_key'], waiting.payload['decision_digest']) == (original_key, original_digest)
     window = waiting.payload['montage']['delivery_window']
     # Tail's 30 paid seconds constrain the global clock; equal text alone would
@@ -6425,7 +6425,7 @@ def test_bounded_segment_video_plan_confirmation_and_original_reentry(tmp_path, 
     view = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
     assert view['status'] == 'waiting_for_user' and view['required_confirmation_ids']
     assert next_creation_intent(case.repo, case.scheduler, case.job) is None
-    assert case.repo.get_task_event('local', waiting.id) == waiting
+    assert case.repo.execution_records.get_task_event('local', waiting.id) == waiting
     result = case.segments.adopt_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor,
         decision_digest=view['decision_digest'], confirmed_clip_ids=view['required_confirmation_ids'], runtime=case.runtime)
     replay = case.segments.adopt_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor,
@@ -6466,9 +6466,9 @@ def test_bounded_segment_video_save_rechecks_original_transaction(tmp_path, monk
     with pytest.raises((ValueError, PermissionError)):
         next_creation_intent(case.repo, case.scheduler, case.job)
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
+        case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
+        case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
     assert case.repo.list_creation_job_request_states('local', case.job.id) == []
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.repo.get_narration_segment('local', case.task_id, case.paid_rows[0].id) == case.paid_rows[0]
@@ -6484,17 +6484,17 @@ def test_bounded_segment_video_unknown_audio_keeps_original_request(tmp_path, mo
     case = _bounded_segment_video_case(tmp_path, monkeypatch)
     if boundary == 'adoption':
         assert next_creation_intent(case.repo, case.scheduler, case.job) is None
-        waiting = case.repo.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
+        waiting = case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     # A pending later narration unit retains its original request and unknown
     # receipt even though the first segment already has paid ready audio.
     case.owner.segments = None
     original = case.scheduler.submit(next_creation_intent(case.repo, case.scheduler, case.job), case.actor)
     case.owner.segments = case.segments
-    case.repo.append_task_event(TaskEvent('unsettled-video-predecessor', 'local', case.task_id, case.job.id,
+    case.repo.execution_records.append_task_event(TaskEvent('unsettled-video-predecessor', 'local', case.task_id, case.job.id,
         'creation_narration_unit_started', {'usage_id': f'{original.id}:9', 'request_id': original.id,
             'permit_generation': 9, 'unit_key': original.unit_key, 'phase': 'segment',
             'remaining_seconds': 300, 'remaining_output_bytes': 3*1024*1024}))
-    case.repo.append_task_event(TaskEvent(f'event_{case.job.id}_narration_budget', 'local', case.task_id, case.job.id,
+    case.repo.execution_records.append_task_event(TaskEvent(f'event_{case.job.id}_narration_budget', 'local', case.task_id, case.job.id,
         'creation_narration_budget', {'active_event_id': 'unsettled-video-predecessor', 'settled_event_id': None,
             'parent_timeout_seconds': 300, 'parent_max_output_bytes': 3*1024*1024,
             'script_id': case.script_id, 'input_contract': 'narration_units_v1'}))
@@ -6510,12 +6510,12 @@ def test_bounded_segment_video_unknown_audio_keeps_original_request(tmp_path, mo
                 confirmed_clip_ids=[clip['id'] for clip in waiting.payload['montage']['clips'] if clip['needs_confirmation']],
                 runtime=case.runtime)
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
+        case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
     if boundary == 'planning':
         with pytest.raises(KeyError):
-            case.repo.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
+            case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     else:
-        assert case.repo.get_task_event('local', waiting.id) == waiting
+        assert case.repo.execution_records.get_task_event('local', waiting.id) == waiting
     assert [row['id'] for row in case.repo.list_creation_job_request_states('local', case.job.id)] == [original.id]
     assert case.scheduler._get(original.id) == original
     assert case.repo.creation_narration_usage('local', case.job.id)['unsettled'][0]['request_id'] == original.id
@@ -6551,7 +6551,7 @@ def test_bounded_segment_planning_ports_keep_snapshot_and_transaction_owner(tmp_
         event = TaskEvent('planning-adopted', 'local', case.task_id, None, 'segment_publication', {
             'script_id': case.script_id, 'text': '已采用正文', 'narration_reference': 'narration://artifact/adopted',
             'montage': {'delivery_window': {'section_id': 'section_1', 'start_seconds': 0, 'end_seconds': 8}}})
-        repo.append_task_event(event, connection=borrowed)
+        repo.execution_records.append_task_event(event, connection=borrowed)
         version = TimelineVersion(id='planning-version', workspace_id='local', task_id=case.task_id,
             parent_version_id=None, sequence=1, created_by_operation_id=None,
             snapshot={'stage_segments': {'section_1': event.id}, 'stage_segment_invalidations': {
@@ -6583,7 +6583,7 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
     from app.creation_execution import next_creation_intent
     case = _bounded_segment_video_case(tmp_path, monkeypatch)
     assert next_creation_intent(case.repo, case.scheduler, case.job) is None
-    waiting = case.repo.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
+    waiting = case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     with case.repo._connect() as conn:
         if legacy:
             conn.execute("UPDATE task_events SET payload_json=json_remove(payload_json,'$.planning_dependency_digest') WHERE id=?", (waiting.id,))
@@ -6592,7 +6592,7 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
             publication = TaskEvent('other-adopted-clock', 'local', case.task_id, None, 'segment_publication', {
                 'script_id': case.script_id, 'text': '改变后的另一段已采用正文', 'narration_reference': 'narration://artifact/older',
                 'montage': {'delivery_window': {'section_id': 'section_2', 'start_seconds': 8, 'end_seconds': 14}}})
-            case.repo.append_task_event(publication, connection=conn)
+            case.repo.execution_records.append_task_event(publication, connection=conn)
             task = case.repo.get_creation_task('local', case.task_id, connection=conn)
             version = TimelineVersion(id='other-clock-version', workspace_id='local', task_id=case.task_id,
                 parent_version_id=None, sequence=1, created_by_operation_id=None,
@@ -6600,15 +6600,15 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
             case.repo.create_timeline_version(version, connection=conn)
             task.current_timeline_version_id = version.id
             conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
-    waiting = case.repo.get_task_event('local', waiting.id)
+    waiting = case.repo.execution_records.get_task_event('local', waiting.id)
     assert case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)['status'] == 'stale'
     with pytest.raises(ValueError, match='全片时长'):
         case.segments.adopt_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor,
             decision_digest=waiting.payload['decision_digest'],
             confirmed_clip_ids=[clip['id'] for clip in waiting.payload['montage']['clips'] if clip['needs_confirmation']], runtime=case.runtime)
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
-    assert case.repo.get_task_event('local', waiting.id) == waiting
+        case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
+    assert case.repo.execution_records.get_task_event('local', waiting.id) == waiting
     assert case.repo.list_creation_job_request_states('local', case.job.id) == []
     assert not case.generated and not case.merged
     case.scheduler.close()
@@ -6620,7 +6620,7 @@ def test_bounded_segment_video_new_audio_preparation_precedes_its_original_commi
         conn.execute("UPDATE narration_segments SET status='pending',audio_reference=NULL,duration_seconds=NULL,sample_rate=NULL "
             "WHERE task_id=? AND source_section_id='section_1'", (case.task_id,))
     task = case.repo.get_creation_task('local', case.task_id)
-    start = case.repo.get_task_event('local', f'event_{case.job.id}_start').payload
+    start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start').payload
     audio = replace(case.repo.get_narration_artifact('local', 'paid-section_1'), id='not-committed', cache_key='not-committed')
     assert case.repo.get_narration_artifact('local', audio.cache_key) is None
     prepared = case.segments.prepare_video(case.job, start, task, 'section_1', audio, case.owner, text=case.paid_rows[0].text)
@@ -6628,11 +6628,11 @@ def test_bounded_segment_video_new_audio_preparation_precedes_its_original_commi
         conn.execute('BEGIN IMMEDIATE')
         case.segments.persist_video_preparation_for_request(prepared, 'original-audio-request', connection=conn)
         assert conn.in_transaction
-        assert case.repo.get_task_event('local', prepared.id, connection=conn).payload['unit_key'] == prepared.payload['unit_key']
+        assert case.repo.execution_records.get_task_event('local', prepared.id, connection=conn).payload['unit_key'] == prepared.payload['unit_key']
         conn.rollback()
     assert case.repo.get_narration_artifact('local', audio.cache_key) is None
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local', prepared.id)
+        case.repo.execution_records.get_task_event('local', prepared.id)
     assert not case.generated and not case.merged
     case.scheduler.close()
 
@@ -6661,12 +6661,12 @@ def _section_context_projection_case(tmp_path):
     for section in (2,3):
         ref = f'publication_{section}'
         publications[f'section_{section}'] = ref
-        repo.create_artifact_record(ArtifactRecord(f'video_{section}','local',case.task_id,'video',
+        repo.execution_records.create_artifact_record(ArtifactRecord(f'video_{section}','local',case.task_id,'video',
             f'video://artifact/{section}','a'*64,1,case.job.id,[]))
         local = {**case.montage,'cues':[cue for cue in cues if cue['source_section_id']==f'section_{section}'],
             'clips':[clip for clip in clips if clip['cue_id'] in {cue['id'] for cue in cues if cue['source_section_id']==f'section_{section}'}],
             'graphic_overlays':[]}
-        repo.append_task_event(TaskEvent(ref,'local',case.task_id,case.job.id,'segment_publication',
+        repo.execution_records.append_task_event(TaskEvent(ref,'local',case.task_id,case.job.id,'segment_publication',
             {'section_id':f'section_{section}','script_id':case.script_id,'text':f'已采用段{section}中文\\转义',
                 'adopted':True,'video_artifact_id':f'video_{section}','duration_seconds':1,
                 'narration_reference':f'narration://artifact/audio_{section}','montage':local}))
@@ -6742,7 +6742,7 @@ def test_section_dependency_projection_borrows_transaction_and_preserves_cas(tmp
     case = _section_context_projection_case(tmp_path)
     repo = case.repo
     from app.creation.contracts import TaskEvent
-    repo.append_task_event(TaskEvent(case.segments.video_preparation_id(case.job,'section_3'),'local',case.task_id,
+    repo.execution_records.append_task_event(TaskEvent(case.segments.video_preparation_id(case.job,'section_3'),'local',case.task_id,
         case.job.id,'segment_video_prepared',{'montage':case.montage}))
     request = SimpleNamespace(workspace_id='local',owner_id=case.job.id,unit_key='segment_video:section_3:publication_3')
     before = repo.section_dependency_snapshot('local',case.task_id,'section_3')
@@ -6928,7 +6928,7 @@ def test_section_change_original_transaction_rolls_back_all_facts(tmp_path,monke
     assert case.repo.get_creation_task('local',case.task_id).current_timeline_version_id=='change_base'
     assert case.repo.get_narration_segment('local',case.task_id,'audio_3')==case.before
     with pytest.raises(KeyError):
-        case.repo.get_task_event('local',case.publication.id)
+        case.repo.execution_records.get_task_event('local',case.publication.id)
     with case.repo._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='ReviseScriptSection'").fetchone()[0]==0
         assert conn.execute("SELECT COUNT(*) FROM transform_runs WHERE id='change_transform'").fetchone()[0]==0

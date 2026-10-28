@@ -842,17 +842,17 @@ def test_concurrent_identical_task_event_returns_one_record(tmp_path: Path) -> N
 
     def append(_: int) -> TaskEvent:
         gate.wait()
-        return repo.append_task_event(event)
+        return repo.execution_records.append_task_event(event)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         events = list(pool.map(append, range(12)))
     assert all(item == event for item in events)
-    assert repo.list_task_events("one", "task-one") == [event]
+    assert repo.execution_records.list_task_events("one", "task-one") == [event]
     with pytest.raises(ValueError, match="领域字段不一致"):
-        repo.append_task_event(replace(event, payload={"job_id": "different"}))
+        repo.execution_records.append_task_event(replace(event, payload={"job_id": "different"}))
     seed_creation_task(repo, "two", "task-two")
     with pytest.raises(ValueError, match="领域字段不一致"):
-        repo.append_task_event(replace(event, workspace_id="two", task_id="task-two", job_id=None))
+        repo.execution_records.append_task_event(replace(event, workspace_id="two", task_id="task-two", job_id=None))
 
 
 def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary(tmp_path: Path) -> None:

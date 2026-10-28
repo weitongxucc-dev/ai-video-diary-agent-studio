@@ -22,7 +22,7 @@ def test_prepared_master_reads_original_receipt_and_clock_without_remixing(tmp_p
     manifest = plan_audio_assembly(graph, 1000, workspace_id='local', task_id=case.task_id,
         producer_job_id=case.job.id, source_hashes={ref: 'a'*64 for ref in ['artifacts/source-one', 'artifacts/source-two', 'artifacts/source-three']},
         max_input_count=2)
-    case.repo.append_task_event(TaskEvent(audio._assembly_plan_id(case.job, montage), 'local', case.task_id,
+    case.repo.execution_records.append_task_event(TaskEvent(audio._assembly_plan_id(case.job, montage), 'local', case.task_id,
         case.job.id, 'creation_audio_assembly_plan', {'input_digest': case.job.input_digest, 'manifest': manifest.payload()}))
     unit = manifest.final
     resources = {'kind': 'task_audio', 'assembly_unit_id': unit.id, 'assembly_manifest_digest': manifest.digest,
@@ -50,7 +50,7 @@ def test_prepared_master_reads_original_receipt_and_clock_without_remixing(tmp_p
         status='succeeded', started_at=utc_now(), finished_at=utc_now())
     case.repo.record_task_media_publication(record, transform, [])
     def commit(conn, current):
-        case.repo.append_task_event(TaskEvent('fixture-original-master-receipt', 'local', case.task_id, case.job.id,
+        case.repo.execution_records.append_task_event(TaskEvent('fixture-original-master-receipt', 'local', case.task_id, case.job.id,
             'task_execution_unit_settled', {'usage_id': f'{current.request_id}:{current.generation}',
                 'request_id': current.request_id, 'permit_generation': current.generation,
                 'elapsed_seconds': 0, 'output_bytes': published.size_bytes}), connection=conn)

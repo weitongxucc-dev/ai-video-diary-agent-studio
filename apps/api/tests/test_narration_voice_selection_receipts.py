@@ -156,7 +156,7 @@ def test_concurrent_replay_writes_one_receipt(state):
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: state.repo.select_creation_task_narration_voice(**body), range(2)))
     assert results[0] == results[1]
-    assert len([event for event in state.repo.list_task_events("workspace", "task")
+    assert len([event for event in state.repo.execution_records.list_task_events("workspace", "task")
         if event.event_type == "task_narration_voice_selected"]) == 1
 
 

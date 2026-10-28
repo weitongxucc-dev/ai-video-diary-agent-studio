@@ -82,7 +82,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     def run(*, prepared, scheduler, grant, cancel_event):
         scheduler.assert_grant(grant)
         job = state.production.get_job_run(grant.workspace_id, grant.owner_id)
-        event = state.production.get_task_event(grant.workspace_id, f"event_{job.id}_start").payload
+        event = state.production.execution_records.get_task_event(grant.workspace_id, f"event_{job.id}_start").payload
         assert job.status == "running" and job.task_id == state.task.id
         assert CreationExecutionActor.from_event(job.workspace_id, event) == actor
         assert event["resources"]["kind"] == "media_script"
@@ -132,7 +132,7 @@ def test_script_job_publishes_editable_png_and_actual_definition_only_after_succ
     assert image.status_code == 200
     with Image.open(io.BytesIO(image.content)) as png:
         assert png.size == (16, 16)
-    records = state.production.list_artifact_records(state.workspace_id, state.task.id)
+    records = state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id)
     definition = next(item for item in records if item.kind == "media_script_definition")
     content = json.loads(main.artifact_store.resolve_file(definition.logical_ref).read_bytes())
     assert content["script_source"] == state.payload["script_source"] and content["input_slots"] == []
@@ -186,7 +186,7 @@ def test_script_current_png_input_is_frozen_and_source_change_refuses_commit(sta
     Image.new("RGBA", (16, 16), "blue").save(image, format="PNG")
     source = import_graphic_source(state.production, main.artifact_store, main.settings.effective_temporary_root_path,
         state.workspace_id, state.task.id, SimpleNamespace(filename="input.png", file=io.BytesIO(image.getvalue())))
-    record = state.production.get_artifact_record(state.workspace_id, source["artifact_id"])
+    record = state.production.execution_records.get_artifact_record(state.workspace_id, source["artifact_id"])
     refs = [{"name": "input.png", "source_ref": record.logical_ref, "expected_artifact_id": record.id, "expected_sha256": record.sha256}]
     queued = submit(state, input_refs=refs)
     assert queued.status_code == 202, queued.text
@@ -195,7 +195,7 @@ def test_script_current_png_input_is_frozen_and_source_change_refuses_commit(sta
         changed.write(b"changed after queue")
     assert not state.runtime.run_once()
     assert state.calls == []
-    assert all(item.producer_job_id != queued.json()["job_id"] for item in state.production.list_artifact_records(state.workspace_id, state.task.id))
+    assert all(item.producer_job_id != queued.json()["job_id"] for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id))
 
 
 @pytest.mark.parametrize("change", ["old_version", "unknown_input", "other_member", "extra_field", "syntax"])
@@ -261,11 +261,11 @@ def test_shared_artifact_transform_connection_is_one_rollback_transaction(state)
     with pytest.raises(RuntimeError, match="rollback"):
         with state.production._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            assert state.production.create_artifact_record(artifact, connection=conn) == artifact
+            assert state.production.execution_records.create_artifact_record(artifact, connection=conn) == artifact
             assert state.production.lineage_records.create_transform_run(transform, connection=conn) == transform
             raise RuntimeError("rollback")
     with pytest.raises(KeyError):
-        state.production.get_artifact_record(state.workspace_id, artifact.id)
+        state.production.execution_records.get_artifact_record(state.workspace_id, artifact.id)
     with pytest.raises(KeyError):
         state.production.lineage_records.get_transform_run(state.workspace_id, transform.id)
 
@@ -277,14 +277,14 @@ def test_crash_after_graphic_record_recovers_definition_without_rerunning_python
     job_id = queued.json()["job_id"]
     def fail_after_graphic_record(*args):
         if any(item.producer_job_id == job_id and item.kind == "graphic_source"
-               for item in state.production.list_artifact_records(state.workspace_id, state.task.id)):
+               for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id)):
             raise RuntimeError("crash after PNG record")
         return original_definition(*args)
     monkeypatch.setattr(scripts, "script_definition", fail_after_graphic_record)
     assert state.runtime.run_once()
     assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
     assert any(item.producer_job_id == job_id and item.kind == "graphic_source"
-               for item in state.production.list_artifact_records(state.workspace_id, state.task.id))
+               for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id))
     assert state.client.get(state.base_url + "/graphics/sources").json() == []
     assert len(state.calls) == 1
     monkeypatch.setattr(scripts, "script_definition", original_definition)
@@ -296,7 +296,7 @@ def test_crash_after_graphic_record_recovers_definition_without_rerunning_python
     assert len(state.calls) == 1
     assert len(state.client.get(state.base_url + "/graphics/sources").json()) == 1
     assert any(item.kind == "media_script_definition" and item.producer_job_id == job_id
-               for item in state.production.list_artifact_records(state.workspace_id, state.task.id))
+               for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id))
 
 
 def test_unknown_started_script_without_publication_is_not_rerun(state, monkeypatch):
@@ -323,7 +323,7 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
             created = state.production.create_job_run(job, connection=conn)
             running = state.production.claim_job_run(state.workspace_id, created.id, connection=conn)
             assert running.status == "running"
-            artifact = state.production.create_artifact_record(ArtifactRecord(id="artifact-all-rollback", workspace_id=state.workspace_id,
+            artifact = state.production.execution_records.create_artifact_record(ArtifactRecord(id="artifact-all-rollback", workspace_id=state.workspace_id,
                 task_id=state.task.id, kind="media_script_definition", logical_ref="artifacts/all-rollback.json", sha256="f" * 64,
                 size_bytes=2, producer_job_id=job.id, input_refs=[]), connection=conn)
             state.production.lineage_records.create_transform_run(TransformRun(id="transform-all-rollback", workspace_id=state.workspace_id,
@@ -337,7 +337,7 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
     with pytest.raises(KeyError):
         state.production.get_job_run(state.workspace_id, job.id)
     with pytest.raises(KeyError):
-        state.production.get_artifact_record(state.workspace_id, "artifact-all-rollback")
+        state.production.execution_records.get_artifact_record(state.workspace_id, "artifact-all-rollback")
     with pytest.raises(KeyError):
         state.production.lineage_records.get_transform_run(state.workspace_id, "transform-all-rollback")
 
@@ -372,7 +372,7 @@ def test_partial_metadata_recovery_reuses_identical_records_without_rerunning(st
     Image.new("RGBA", (8, 8), "green").save(image, format="PNG")
     source = import_graphic_source(state.production, main.artifact_store, main.settings.effective_temporary_root_path,
         state.workspace_id, state.task.id, SimpleNamespace(filename="input.png", file=io.BytesIO(image.getvalue())))
-    record = state.production.get_artifact_record(state.workspace_id, source["artifact_id"])
+    record = state.production.execution_records.get_artifact_record(state.workspace_id, source["artifact_id"])
     inputs = [{"name": "input.png", "source_ref": record.logical_ref, "expected_artifact_id": record.id, "expected_sha256": record.sha256}]
     method = "create_transform_run" if boundary == "definition_record" else "create_dependency_edge"
     original = getattr(state.production.lineage_records, method)
@@ -381,12 +381,12 @@ def test_partial_metadata_recovery_reuses_identical_records_without_rerunning(st
     assert queued.status_code == 202 and state.runtime.run_once()
     job_id = queued.json()["job_id"]
     assert state.production.get_job_run(state.workspace_id, job_id).status == "failed"
-    definition = next(item for item in state.production.list_artifact_records(state.workspace_id, state.task.id)
+    definition = next(item for item in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id)
                       if item.producer_job_id == job_id and item.kind == "media_script_definition")
     monkeypatch.setattr(state.production.lineage_records, method, original)
     assert state.client.post(state.base_url + f"/media-jobs/{job_id}/retry").status_code == 202
     assert state.runtime.run_once()
     result = state.client.get(queued.json()["result_url"])
     assert result.json()["status"] == "succeeded", result.text
-    assert state.production.get_artifact_record(state.workspace_id, definition.id) == definition
+    assert state.production.execution_records.get_artifact_record(state.workspace_id, definition.id) == definition
     assert len(state.calls) == 1

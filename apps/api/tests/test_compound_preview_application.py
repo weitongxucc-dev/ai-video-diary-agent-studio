@@ -54,7 +54,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert data['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == 0
     assert intent['raw_command'] == original.json()['intent']['raw_command']
     assert 'request_source' not in intent['constraints']
-    records = [r for r in state.production.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
+    records = [r for r in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
     assert len(records) == 2 and {r.kind for r in records} == {'compound_preview'}
     side_records = {case.montage_edits.audio_service._transform_for(state.workspace_id, state.task.id, r).parameters['side']: r for r in records}
     assert set(side_records) == {'before', 'after'}

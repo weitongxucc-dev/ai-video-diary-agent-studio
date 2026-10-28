@@ -2343,7 +2343,7 @@ def test_section_patch_receipt_failure_rolls_back_body_order_and_header(api_stat
     script = saved_row_draft(state)
     added = CreationTaskScriptSection(id='inserted', title='新增段', content=FACT, visual_prompt='计划画面', evidence_reference_ids=script.sections[0].evidence_reference_ids)
     def fail_receipt(*args, **kwargs): raise RuntimeError('receipt persistence failed')
-    monkeypatch.setattr(state.repository, 'append_task_event', fail_receipt)
+    monkeypatch.setattr(state.repository.script_records, 'append_task_event', fail_receipt)
     with pytest.raises(RuntimeError, match='receipt persistence'):
         state.repository.patch_assistant_script_sections('local', 'task', script.id, sections=[added],
             expected_updated_at=script.updated_at, request_id='patch-1', member_id=state.owner.member_id,

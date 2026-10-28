@@ -5,6 +5,7 @@ from app.creation.script_contracts import (
     CreationTaskScriptSection as _CreationTaskScriptSection, CreationTaskScript as _CreationTaskScript, ScriptLibrarySection as _ScriptLibrarySection, ScriptLibraryEntry as _ScriptLibraryEntry,
     _validated_assistant_reply_reference as _validated_assistant_reply_reference, _assistant_reply_input_references as _assistant_reply_input_references, _assistant_reply_request_event_id as _assistant_reply_request_event_id,
 )
+from app.creation.execution_records import ExecutionRecordStore
 from app.creation.script_records import ScriptRecordStore
 from app.creation.topic_records import TopicRecordStore
 from app.creation.lineage_records import LineageRecordStore
@@ -605,20 +606,23 @@ class ProductionRepository:
             read_asset_payload=self._material_assets._asset_payload_row_by_id,
             assemble_scene_segments=self._material_assets.assemble_scene_segments,
             mark_scene_failed=self._material_assets.mark_scene_failed)
+        self.execution_records = ExecutionRecordStore(self._connect,
+            require_task=self._require_creation_task, job_belongs=self._lineage_job_belongs,
+            decode_reference_list=_string_list_from_text, decode_payload_object=_json_object_from_text)
         self.lineage_records = LineageRecordStore(self._connect,
             require_task=self._require_creation_task,
-            job_belongs=self._lineage_job_belongs, output_producers=self._lineage_output_producers,
+            job_belongs=self._lineage_job_belongs, output_producers=self.execution_records.output_producers,
             decode_reference_list=_string_list_from_text, decode_parameter_object=_json_object_from_text)
         self.topic_records = TopicRecordStore(self._connect,
             read_task=self.get_creation_task, require_task=self._require_creation_task,
             write_task=self._write_topic_task, read_plan_intent=self._topic_plan_intent,
-            append_event=self.append_task_event)
+            append_event=self.execution_records.append_task_event)
         self.script_records = ScriptRecordStore(self._connect,
             read_task=self.get_creation_task, require_task=self._require_creation_task,
             decode_plan=self._creation_plan_from_payload, read_topic=self.topic_records.get_topic_candidate,
             transition_task=self._script_task_transition, create_library_task=self._create_script_library_task,
-            knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.append_task_event,
-            get_event=self.get_task_event, decode_event=self._task_event_from_row)
+            knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.execution_records.append_task_event,
+            get_event=self.execution_records.get_task_event, decode_event=self.execution_records.task_event_from_row)
 
 
     @classmethod
@@ -1726,7 +1730,7 @@ class ProductionRepository:
             ).fetchone()
             if row is None:
                 return False
-            source = self._artifact_record_from_row(row)
+            source = self.execution_records.artifact_from_row(row)
             if source.kind != "task_recording" or source.sha256 != artifact.source_sha256:
                 return False
             try:
@@ -3131,7 +3135,7 @@ class ProductionRepository:
             task.updated_at = now
             conn.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
                 (_json_payload(task), now.isoformat(), task.workspace_id, task.id))
-        self.append_task_event(_TaskEvent(f"creation_adopted_{task.id}", task.workspace_id, task.id, None,
+        self.execution_records.append_task_event(_TaskEvent(f"creation_adopted_{task.id}", task.workspace_id, task.id, None,
             "creation_intent_adopted", {"plan_id": plan.id, "plan_adoption": plan.adoption,
                 "script_id": task.confirmed_script_id, "script_adoption": script.adoption if final else None}), connection=conn)
 
@@ -3219,7 +3223,7 @@ class ProductionRepository:
                 "SELECT * FROM task_events WHERE id = ?", (event_id,),
             ).fetchone()
             if existing is not None:
-                event = self._task_event_from_row(existing)
+                event = self.execution_records.task_event_from_row(existing)
                 if (
                     event.event_type != "assistant_reply_plan_confirmed"
                     or event.workspace_id != plan.workspace_id
@@ -3229,7 +3233,7 @@ class ProductionRepository:
                 replay_ids = (str(event.payload["plan_id"]), str(event.payload["task_id"]))
             else:
                 self.insert_confirmed_creation_plan(conn, plan, task)
-                self.append_task_event(
+                self.execution_records.append_task_event(
                     _TaskEvent(
                         id=event_id,
                         workspace_id=plan.workspace_id,
@@ -3556,7 +3560,7 @@ class ProductionRepository:
                 "plan_updated_at": _revision_value(plan.updated_at), "task_updated_at": _revision_value(task.updated_at),
                 "retained_script_count": retained, "previous_stage_status": previous_status,
                 "next_step": "generate_new_script" if added and task.stage == "script" else "unchanged" if not added else "continue_topic"}
-            self.append_task_event(_TaskEvent(event_id, workspace_id, task_id, None, "task_knowledge_adopted",
+            self.execution_records.append_task_event(_TaskEvent(event_id, workspace_id, task_id, None, "task_knowledge_adopted",
                 {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
             return receipt
 
@@ -3836,7 +3840,7 @@ class ProductionRepository:
                 return event_id, False
             if write_guard is not None:
                 write_guard(conn)
-            self.append_task_event(_TaskEvent(event_id, task.workspace_id, task.id, None, 'edit_request_claimed',
+            self.execution_records.append_task_event(_TaskEvent(event_id, task.workspace_id, task.id, None, 'edit_request_claimed',
                 {'member_id': member_id, 'request_id': request_id, 'phase': 'restore',
                     'input_digest': fingerprint, 'inputs': inputs}), connection=conn)
         return event_id, True
@@ -3855,7 +3859,7 @@ class ProductionRepository:
     def timeline_restore_receipt(self, workspace_id, task_id, member_id, request_id):
         event_id = self.timeline_restore_request_id(workspace_id, member_id, request_id)
         with self._connect() as conn:
-            claim = self.get_task_event(workspace_id, event_id, connection=conn)
+            claim = self.execution_records.get_task_event(workspace_id, event_id, connection=conn)
             if claim.task_id != task_id or claim.payload['member_id'] != member_id:
                 raise KeyError(request_id)
             row = conn.execute("SELECT * FROM edit_operations WHERE workspace_id=? AND task_id=? "
@@ -3881,13 +3885,13 @@ class ProductionRepository:
             current=self.create_job_run(run,connection=conn)
             event_id=f"event_{current.id}_start"
             try:
-                event=self.get_task_event(run.workspace_id,event_id,connection=conn)
+                event=self.execution_records.get_task_event(run.workspace_id,event_id,connection=conn)
             except KeyError:
                 if source_preparation is not None:
                     source_id = self.seal_creation_narration_source(current, source_preparation,
                         input_digest=run.input_digest, origin_event_id=event_id, connection=conn)
                     start_payload = {**start_payload, 'source_binding_event_id': source_id}
-                event=self.append_task_event(_TaskEvent(event_id,run.workspace_id,run.task_id,current.id,
+                event=self.execution_records.append_task_event(_TaskEvent(event_id,run.workspace_id,run.task_id,current.id,
                     event_type,start_payload,created_at=current.created_at),connection=conn)
             if {key:value for key,value in event.payload.items() if key != 'source_binding_event_id'} != {
                     key:value for key,value in start_payload.items() if key != 'source_binding_event_id'}:
@@ -3911,9 +3915,9 @@ class ProductionRepository:
             write_guard(connection)
         event_id=f"event_assistant_execution_locator_{source['assistant_turn_id']}"+(f"_{source['input_id']}" if source.get('input_id') else "")
         try:
-            event=self.get_task_event(job.workspace_id,event_id,connection=connection)
+            event=self.execution_records.get_task_event(job.workspace_id,event_id,connection=connection)
         except KeyError:
-            return self.append_task_event(_TaskEvent(event_id,job.workspace_id,job.task_id,job.id,
+            return self.execution_records.append_task_event(_TaskEvent(event_id,job.workspace_id,job.task_id,job.id,
                 "assistant_execution_located",{"job_id":job.id,"input_digest":job.input_digest,"source":source}),connection=connection)
         if event.job_id!=job.id or event.payload['source']!=source:
             raise ValueError("原助手输入已绑定不同制作作业")
@@ -4090,7 +4094,7 @@ class ProductionRepository:
                 raise ValueError("原制作单元尚未释放，不能重新生成故事板")
             verify_inputs(conn, task)
             saved = self.create_job_run(run, connection=conn)
-            self.append_task_event(_TaskEvent(id=f"event_{saved.id}_start", workspace_id=saved.workspace_id,
+            self.execution_records.append_task_event(_TaskEvent(id=f"event_{saved.id}_start", workspace_id=saved.workspace_id,
                 task_id=saved.task_id, job_id=saved.id, event_type="storyboard_regeneration_requested",
                 payload=payload, created_at=saved.created_at), connection=conn)
         return saved, True
@@ -4203,7 +4207,7 @@ class ProductionRepository:
         if connection.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
                 "AND owner_id=? AND state IN ('granted','yield_requested')",(workspace_id,job_id)).fetchone():
             raise PermissionError('原作业仍有执行许可，不能按未准入结束')
-        self.append_task_event(event,connection=connection)
+        self.execution_records.append_task_event(event,connection=connection)
         now=event.created_at.isoformat()
         connection.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,finished_at=?,updated_at=? "
             "WHERE workspace_id=? AND id=?",(reason,impact,repair_action,now,now,workspace_id,job_id))
@@ -4215,7 +4219,7 @@ class ProductionRepository:
             row = conn.execute("SELECT * FROM task_events WHERE workspace_id=? AND task_id=? AND event_type='segment_revision_requested' "
                 "AND json_extract(payload_json,'$.member_id')=? AND json_extract(payload_json,'$.command.request_id')=? LIMIT 1",
                 (workspace_id, task_id, member_id, request_id)).fetchone()
-        return self._task_event_from_row(row) if row is not None else None
+        return self.execution_records.task_event_from_row(row) if row is not None else None
 
     def native_available_inputs(self,workspace_id,task_id,*,offset=0,limit=30):
         query = """WITH candidates AS (
@@ -4240,7 +4244,7 @@ class ProductionRepository:
             row = conn.execute("SELECT a.* FROM artifact_records a JOIN job_runs j ON j.workspace_id=a.workspace_id AND j.id=a.producer_job_id "
                 "WHERE a.workspace_id=? AND a.task_id=? AND a.logical_ref=? AND j.task_id=a.task_id AND j.status='succeeded'",
                 (workspace_id,task_id,reference)).fetchone()
-            return self._artifact_record_from_row(row) if row else None
+            return self.execution_records.artifact_from_row(row) if row else None
 
     def task_asset_for_path(self,workspace_id,path,allowed_ids):
         with self._connect() as conn:
@@ -4256,7 +4260,7 @@ class ProductionRepository:
             row = conn.execute('SELECT id FROM task_events WHERE workspace_id=? AND id=?',(actor.workspace_id,'native_input_'+key)).fetchone()
             if row:
                 return
-            self.append_task_event(_TaskEvent(id='native_input_'+key,workspace_id=actor.workspace_id,task_id=origin['task_id'],
+            self.execution_records.append_task_event(_TaskEvent(id='native_input_'+key,workspace_id=actor.workspace_id,task_id=origin['task_id'],
                 job_id=None,event_type='native_input_mapped',payload={'origin':origin,'name':name,'entry':entry}),connection=conn)
 
     def list_native_jobs(self,workspace_id,task_id,*,limit=30,offset=0,turn_id=None,session_id=None,unreleased_only=False,before=None,started_only=False):
@@ -4299,7 +4303,7 @@ class ProductionRepository:
             event = _TaskEvent(id=f'event_{job.id}_start',workspace_id=job.workspace_id,task_id=job.task_id,
                 job_id=job.id,event_type='native_operation_submitted',payload={**actor.identity_payload(),
                     'request_id':request_id,**identity},created_at=job.created_at)
-            self.append_task_event(event,connection=conn)
+            self.execution_records.append_task_event(event,connection=conn)
         return job,event
 
     def complete_native_operation(self,job,result,*,status,connection=None):
@@ -4311,7 +4315,7 @@ class ProductionRepository:
                 self.claim_job_run(job.workspace_id,job.id,connection=conn)
             event = _TaskEvent(id=f'event_{job.id}_native_result',workspace_id=job.workspace_id,task_id=job.task_id,
                 job_id=job.id,event_type='native_operation_result',payload=result)
-            self.append_task_event(event,connection=conn)
+            self.execution_records.append_task_event(event,connection=conn)
             self.finish_job_run(job.workspace_id,job.id,status=status,connection=conn,
                 output_refs=[item['logical_ref'] for item in result.get('artifacts',[])],
                 failure_reason=result.get('error') or f'native_operation_{status}' if status!='succeeded' else None,
@@ -4349,14 +4353,14 @@ class ProductionRepository:
 
     def settle_native_execution(self,grant,*,elapsed_seconds,output_bytes,connection):
         job = self.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
-        self.append_task_event(_TaskEvent(id=f'event_{job.id}_native_usage_{grant.generation}',workspace_id=job.workspace_id,
+        self.execution_records.append_task_event(_TaskEvent(id=f'event_{job.id}_native_usage_{grant.generation}',workspace_id=job.workspace_id,
             task_id=job.task_id,job_id=job.id,event_type='task_execution_unit_settled',payload={
                 'usage_id':f'{grant.request_id}:{grant.generation}','request_id':grant.request_id,'permit_generation':grant.generation,
                 'elapsed_seconds':elapsed_seconds,'output_bytes':output_bytes,
                 'output_coverage':'unknown' if output_bytes is None else 'known','usage_source':'local_retained_output_measurement'}),connection=connection)
 
     def mark_native_released(self,job):
-        return self.append_task_event(_TaskEvent(id=f'event_{job.id}_native_released',workspace_id=job.workspace_id,
+        return self.execution_records.append_task_event(_TaskEvent(id=f'event_{job.id}_native_released',workspace_id=job.workspace_id,
             task_id=job.task_id,job_id=job.id,event_type='native_execution_released',payload={'release_state':'released'}))
 
     def create_segment_revision_job(self, task, actor, command, rules_check, *, write_guard=None, budget_policy=None):
@@ -4393,7 +4397,7 @@ class ProductionRepository:
             payload = {**actor.identity_payload(), 'command': command, 'rules_check': rules_check,
                 'input_digest': input_digest, 'script_id': command['script_id'], 'plan_id': current.plan_id, 'source_binding_event_id': source_id,
                 **({'execution_budget_policy': budget_policy} if budget_policy is not None else {})}
-            self.append_task_event(_TaskEvent(id=f'event_{job.id}_start', workspace_id=job.workspace_id,
+            self.execution_records.append_task_event(_TaskEvent(id=f'event_{job.id}_start', workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type='segment_revision_requested', payload=payload,
                 created_at=job.created_at), connection=conn)
             if budget_policy is not None and budget_policy.get('policy_kind') == 'scope':
@@ -4409,7 +4413,7 @@ class ProductionRepository:
             rows = conn.execute('SELECT * FROM task_events WHERE '+where+' ORDER BY created_at DESC LIMIT ?', (*args,limit)).fetchall()
             values = []
             for row in rows:
-                event = self._task_event_from_row(row)
+                event = self.execution_records.task_event_from_row(row)
                 job = self.get_job_run(workspace_id, event.job_id, connection=conn)
                 result = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
                     "AND event_type='segment_publication' ORDER BY created_at DESC LIMIT 1", (workspace_id,job.id)).fetchone()
@@ -4429,7 +4433,7 @@ class ProductionRepository:
             current = self.stage_section_version(event.workspace_id,event.task_id,event.payload['section_id'],connection=conn)
             if current != event.payload['expected_segment_version']:
                 raise ValueError('保存视频准备前段落版本已变化')
-            self.append_task_event(event,connection=conn)
+            self.execution_records.append_task_event(event,connection=conn)
 
     def start_segment_unit(self, grant):
         from app.device_scheduler import RecoveryBlocked
@@ -4447,7 +4451,7 @@ class ProductionRepository:
                 task_id=job.task_id,job_id=job.id,event_type='task_execution_unit_started',payload={
                     'usage_id':f'{grant.request_id}:{grant.generation}','request_id':grant.request_id,
                     'permit_generation':grant.generation,'unit_key':grant.unit_key})
-            self.append_task_event(event,connection=conn)
+            self.execution_records.append_task_event(event,connection=conn)
         return job
 
     def resume_segment_job(self,workspace_id,job_id,*,connection):
@@ -4472,7 +4476,7 @@ class ProductionRepository:
                 'usage_id':f'{grant.request_id}:{grant.generation}','request_id':grant.request_id,
                 'permit_generation':grant.generation,'unit_key':grant.unit_key,
                 'elapsed_seconds':elapsed_seconds,'output_bytes':output_bytes,'usage_source':'local_execution_measurement'})
-        self.append_task_event(event,connection=connection)
+        self.execution_records.append_task_event(event,connection=connection)
 
     def checkpoint_segment_unit(self, grant, *, status, connection, reason=None, payload=None):
         job = self.get_job_run(grant.workspace_id,grant.owner_id,connection=connection)
@@ -4488,7 +4492,7 @@ class ProductionRepository:
         event = _TaskEvent(id=f'event_{job.id}_unit_checkpoint_{grant.generation}',workspace_id=job.workspace_id,
             task_id=job.task_id,job_id=job.id,event_type='segment_execution_checkpoint',
             payload={'status':status,'reason':reason,'request_id':grant.request_id,'unit_key':grant.unit_key,**(payload or {})})
-        self.append_task_event(event,connection=connection)
+        self.execution_records.append_task_event(event,connection=connection)
         return event.id
 
     def _iter_section_change_segments(self, task, replacement, *, connection, adopted):
@@ -4581,11 +4585,11 @@ class ProductionRepository:
         if self.stage_section_version(task.workspace_id,task.id,payload['section_id'],connection=connection) != expected_segment_version:
             raise ValueError('发布前段落或时间线已变化；原采用版本保留')
         for artifact in artifacts:
-            self.create_artifact_record(artifact,connection=connection)
+            self.execution_records.create_artifact_record(artifact,connection=connection)
         self.lineage_records.create_transform_run(transform,connection=connection)
         for edge in edges:
             self.lineage_records.create_dependency_edge(edge,connection=connection)
-        self.append_task_event(event,connection=connection)
+        self.execution_records.append_task_event(event,connection=connection)
         if adopted:
             row = connection.execute('SELECT snapshot_json,sequence FROM timeline_versions WHERE workspace_id=? AND id=?',
                 (task.workspace_id,task.current_timeline_version_id)).fetchone()
@@ -4647,7 +4651,7 @@ class ProductionRepository:
             if segment is not None:
                 self.replace_adopted_narration_segment(task, segment, connection=connection)
                 self._invalidate_section_composition(task.workspace_id,task.id,connection)
-                self.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=task.workspace_id,
+                self.execution_records.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=task.workspace_id,
                     task_id=task.id,job_id=event.job_id,event_type='section_edit_dependencies',payload={
                     'operation_id':operation.id,'dependencies':self.section_dependency_snapshot(task.workspace_id,task.id,
                     payload['section_id'],connection=connection)}),connection=connection)
@@ -4726,7 +4730,7 @@ class ProductionRepository:
             actual = self.section_dependency_snapshot(workspace_id,task_id,section_id,connection=conn)
             if json.dumps(actual,sort_keys=True,default=str) != json.dumps(expected_dependencies,sort_keys=True,default=str):
                 raise ValueError('目标段的实际音画、字幕或来源依赖已变化，请先核对冲突')
-            publication = self.get_task_event(workspace_id,history[f'{side}_publication'],connection=conn)
+            publication = self.execution_records.get_task_event(workspace_id,history[f'{side}_publication'],connection=conn)
             if publication.task_id != task_id or publication.event_type != 'segment_publication':
                 raise ValueError('历史段版本不属于当前任务')
             values = dict(history[f'{side}_segment'])
@@ -4778,11 +4782,11 @@ class ProductionRepository:
                 montage_plan_id=full['id'] if full else None,montage_payload=full,subtitle_tracks=tracks,connection=conn)
             if execution_readiness_write is not None:
                 readiness=execution_readiness_write(conn)
-                self.append_task_event(_TaskEvent(f'event_{operation.id}_execution_readiness',workspace_id,task_id,None,
+                self.execution_records.append_task_event(_TaskEvent(f'event_{operation.id}_execution_readiness',workspace_id,task_id,None,
                     'edit_execution_readiness',{'operation_id':operation.id,**readiness}),connection=conn)
             self.replace_adopted_narration_segment(task, segment, connection=conn)
             task = self._invalidate_section_composition(workspace_id,task_id,conn)
-            self.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=workspace_id,task_id=task_id,
+            self.execution_records.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=workspace_id,task_id=task_id,
                 job_id=job.id,event_type='section_edit_dependencies',payload={'operation_id':operation.id,
                 'dependencies':self.section_dependency_snapshot(workspace_id,task_id,section_id,connection=conn)}),connection=conn)
             self.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[track.artifact_ref for track in tracks
@@ -4808,12 +4812,12 @@ class ProductionRepository:
             row = conn.execute('SELECT * FROM task_events WHERE workspace_id=? AND id=?',
                 (event.workspace_id, event.id)).fetchone()
             if row is not None:
-                previous = self._task_event_from_row(row)
+                previous = self.execution_records.task_event_from_row(row)
                 if (previous.task_id, previous.event_type, previous.job_id, previous.payload) != (
                         event.task_id, event.event_type, event.job_id, event.payload):
                     raise ValueError('原语义复核请求已绑定其他内容')
                 return previous
-            self.append_task_event(event, connection=conn)
+            self.execution_records.append_task_event(event, connection=conn)
         return event
 
     def _section_timeline_dependency_inputs(self, conn, task, section_id, adopted):
@@ -5107,7 +5111,7 @@ class ProductionRepository:
         """Read effective inputs while keeping the original start audit immutable."""
         with nullcontext(connection) if connection is not None else self._connect() as conn:
             job = self.get_job_run(workspace_id, job_id, connection=conn)
-            start = self.get_task_event(workspace_id, f'event_{job_id}_start', connection=conn)
+            start = self.execution_records.get_task_event(workspace_id, f'event_{job_id}_start', connection=conn)
             if (start.task_id, start.job_id) != (job.task_id, job.id):
                 raise ValueError('原制作开始记录不属于当前任务')
             payload = start.payload
@@ -5149,13 +5153,13 @@ class ProductionRepository:
             source_id = inputs.get('source_binding_event_id')
             if source_id is None:
                 raise RecoveryBlocked('original_source_content_proof_missing: 原作业未封存来源字节，须实际重新选择声音')
-            event = self.get_task_event(workspace_id, source_id, connection=conn)
+            event = self.execution_records.get_task_event(workspace_id, source_id, connection=conn)
             payload = event.payload
             if (event.event_type != 'creation_narration_source_bound' or event.task_id != job.task_id
                     or payload.get('version') != 1 or payload.get('business_input_digest') != job.input_digest
                     or payload.get('workspace_id') != workspace_id or payload.get('task_id') != job.task_id):
                 raise RecoveryBlocked('原作业来源封存引用不可核实')
-            origin = self.get_task_event(workspace_id, payload['origin_event_id'], connection=conn)
+            origin = self.execution_records.get_task_event(workspace_id, payload['origin_event_id'], connection=conn)
             if origin.job_id != event.job_id or origin.payload.get('source_binding_event_id') != source_id:
                 raise RecoveryBlocked('原作业来源缺少同事务采用关联')
             return event
@@ -5172,7 +5176,7 @@ class ProductionRepository:
             raise ValueError('原制作输入摘要与采用来源不一致')
         verify_narration_source(self, task, plan, prepared, connection=connection)
         source_id = f'{origin_event_id}_source'
-        self.append_task_event(_TaskEvent(source_id, job.workspace_id, job.task_id, job.id,
+        self.execution_records.append_task_event(_TaskEvent(source_id, job.workspace_id, job.task_id, job.id,
             'creation_narration_source_bound', source_binding_payload(prepared,
                 input_digest=input_digest, origin_event_id=origin_event_id)), connection=connection)
         return source_id
@@ -5208,7 +5212,7 @@ class ProductionRepository:
             (input_digest, utc_now().isoformat(), job.workspace_id, job.id, job.input_digest)).rowcount
         if changed != 1:
             raise ValueError('原配音作业版本已变化，声音选择未提交')
-        self.append_task_event(_TaskEvent(id=f'{selection_event_id}_execution', workspace_id=job.workspace_id,
+        self.execution_records.append_task_event(_TaskEvent(id=f'{selection_event_id}_execution', workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type='creation_execution_input_rebound',
             payload={'start_event_id': f'event_{job.id}_start', 'selection_event_id': selection_event_id,
                 'previous_input_digest': job.input_digest, 'input_digest': input_digest,
@@ -5247,7 +5251,7 @@ class ProductionRepository:
                 elif budget['parent_timeout_seconds'] is None or budget['parent_max_output_bytes'] is None:
                     raise PermissionError('历史任务不能缺字段解除原封存预算')
                 budget.update(settled_event_id=None, active_event_id=None)
-                self.append_task_event(_TaskEvent(id=f'event_{job.id}_narration_budget', workspace_id=job.workspace_id,
+                self.execution_records.append_task_event(_TaskEvent(id=f'event_{job.id}_narration_budget', workspace_id=job.workspace_id,
                     task_id=job.task_id, job_id=job.id, event_type='creation_narration_budget', payload=budget), connection=conn)
                 usage['budget'] = budget
             budget = usage['budget']
@@ -5316,7 +5320,7 @@ class ProductionRepository:
                 'ordinal': resources.get('ordinal'), 'phase': resources['narration_phase'],
                 'remaining_seconds': remaining_seconds, 'remaining_output_bytes': remaining_bytes}
             start_id = f'event_{job.id}_narration_started_{grant.generation}'
-            self.append_task_event(_TaskEvent(id=start_id,
+            self.execution_records.append_task_event(_TaskEvent(id=start_id,
                 workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                 event_type='creation_narration_unit_started', payload=payload), connection=conn)
             if usage['scope'] is not None:
@@ -5372,7 +5376,7 @@ class ProductionRepository:
             'output_file': output_file,
             'total_seconds': usage['used_seconds'] + elapsed_seconds,
             'total_output_bytes': usage['used_output_bytes'] + output_bytes}
-        self.append_task_event(_TaskEvent(id=event_id, workspace_id=grant.workspace_id,
+        self.execution_records.append_task_event(_TaskEvent(id=event_id, workspace_id=grant.workspace_id,
             task_id=start['task_id'], job_id=grant.owner_id, event_type='creation_narration_unit_settled',
             payload=payload), connection=connection)
         if usage['scope'] is not None:
@@ -5402,7 +5406,7 @@ class ProductionRepository:
         if changed != 1:
             raise PermissionError('原配音作业已停止，不能写入片段成功')
         event_id = f'event_{grant.owner_id}_narration_segment_{grant.generation}'
-        self.append_task_event(_TaskEvent(id=event_id, workspace_id=grant.workspace_id,
+        self.execution_records.append_task_event(_TaskEvent(id=event_id, workspace_id=grant.workspace_id,
             task_id=segment.task_id, job_id=grant.owner_id, event_type='creation_execution_stage',
             payload={'stage': 'narration', 'status': 'pending', 'request_id': grant.request_id,
                 'unit_key': grant.unit_key, 'segment_id': segment.id, 'ordinal': ordinal,
@@ -5422,7 +5426,7 @@ class ProductionRepository:
         if changed != 1:
             raise PermissionError('原局部配音Job已停止，未采用候选')
         event_id=f'event_{grant.owner_id}_narration_edit_generated'
-        self.append_task_event(_TaskEvent(event_id,grant.workspace_id,segment.task_id,grant.owner_id,
+        self.execution_records.append_task_event(_TaskEvent(event_id,grant.workspace_id,segment.task_id,grant.owner_id,
             'creation_narration_edit_generated',{'source_key':source_key,'segment_id':segment.id,
                 'cache_key':artifact.cache_key,'request_id':grant.request_id,'permit_generation':grant.generation}),connection=connection)
         return event_id
@@ -5450,7 +5454,7 @@ class ProductionRepository:
         if changed != 1:
             raise PermissionError('原配音作业已停止，不能写入合并成功')
         event_id = f'event_{grant.owner_id}_narration_merge_{grant.generation}'
-        self.append_task_event(_TaskEvent(id=event_id, workspace_id=grant.workspace_id,
+        self.execution_records.append_task_event(_TaskEvent(id=event_id, workspace_id=grant.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
             payload={'stage': 'narration', 'status': 'pending', 'phase': 'merge',
                 'request_id': grant.request_id, 'unit_key': grant.unit_key, 'source_digest': source_digest,
@@ -5470,7 +5474,7 @@ class ProductionRepository:
             raise PermissionError('原配音预算结束时作业状态已变化')
         self.fail_creation_task_stage(grant.workspace_id, task_id, stage='narration', reason=reason,
             impact='已完成片段保留，不能重置父预算继续。', repair_action='核对原作业预算与消耗。', retryable=False, connection=connection)
-        self.append_task_event(_TaskEvent(id=f'event_{grant.owner_id}_narration_exhausted', workspace_id=grant.workspace_id,
+        self.execution_records.append_task_event(_TaskEvent(id=f'event_{grant.owner_id}_narration_exhausted', workspace_id=grant.workspace_id,
             task_id=task_id, job_id=grant.owner_id, event_type='creation_execution_stage',
             payload={'stage': 'narration', 'status': 'failed', 'reason': reason, 'retryable': False}), connection=connection)
 
@@ -5512,7 +5516,7 @@ class ProductionRepository:
         connection.execute("UPDATE job_runs SET status='queued',progress=66,failure_reason=NULL,impact=NULL,repair_action=NULL,"
             "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
             (event.created_at.isoformat(), run.workspace_id, run.id))
-        self.append_task_event(event, connection=connection)
+        self.execution_records.append_task_event(event, connection=connection)
         return self.get_job_run(run.workspace_id, run.id, connection=connection)
 
     def reopen_failed_job_run(self, workspace_id, job_id, *, expected_updated_at, expected_attempt, connection):
@@ -5656,7 +5660,7 @@ class ProductionRepository:
         connection.execute("INSERT INTO task_authorizations("+",".join(columns)+") VALUES("+",".join("?" for _ in columns)+") "
             "ON CONFLICT(workspace_id,task_id) DO UPDATE SET "+",".join(key+"=excluded."+key for key in columns if key not in {"workspace_id","task_id"}),
             tuple(payload.values()))
-        self.append_task_event(_TaskEvent(id=f"event_{authorization.id}_{authorization.revision}",
+        self.execution_records.append_task_event(_TaskEvent(id=f"event_{authorization.id}_{authorization.revision}",
             workspace_id=authorization.workspace_id, task_id=authorization.task_id, job_id=None,
             event_type="task_authorization", payload={"authorization_id":authorization.id,
                 "revision":authorization.revision, "goal_revision":authorization.goal_revision,
@@ -5760,7 +5764,7 @@ class ProductionRepository:
                     recovery_point=task_stage, updated_at=now)
                 connection.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
                     (json.dumps(payload, ensure_ascii=False), now, event.workspace_id, event.task_id))
-        self.append_task_event(event, connection=connection)
+        self.execution_records.append_task_event(event, connection=connection)
 
     def interrupt_running_job_runs(self, workspace_id: str | None = None) -> int:
         now = utc_now().isoformat()
@@ -5782,179 +5786,12 @@ class ProductionRepository:
                 parameters,
             ).rowcount
 
-    def create_artifact_record(self, artifact: _ArtifactRecord, *, connection: sqlite3.Connection | None = None) -> _ArtifactRecord:
-        _validate_artifact_record(artifact)
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, artifact.workspace_id, artifact.task_id)
-            job = conn.execute(
-                """
-                SELECT task_id FROM job_runs
-                WHERE workspace_id = ? AND id = ?
-                """,
-                (artifact.workspace_id, artifact.producer_job_id),
-            ).fetchone()
-            if job is None or str(job["task_id"]) != artifact.task_id:
-                raise ValueError("产物生产任务不属于当前工作区与创作任务")
-            existing_row = conn.execute(
-                "SELECT * FROM artifact_records WHERE id = ?",
-                (artifact.id,),
-            ).fetchone()
-            if existing_row is None:
-                existing_row = conn.execute(
-                    """
-                    SELECT * FROM artifact_records
-                    WHERE workspace_id = ? AND logical_ref = ?
-                    """,
-                    (artifact.workspace_id, artifact.logical_ref),
-                ).fetchone()
-            if existing_row is not None:
-                persisted = self._artifact_record_from_row(existing_row)
-                if persisted != artifact:
-                    raise ValueError("产物记录或逻辑引用已存在，且领域字段不一致")
-                return persisted
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO artifact_records
-                        (id, workspace_id, task_id, kind, logical_ref, sha256,
-                         size_bytes, producer_job_id, input_refs_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        artifact.id,
-                        artifact.workspace_id,
-                        artifact.task_id,
-                        artifact.kind,
-                        artifact.logical_ref,
-                        artifact.sha256,
-                        artifact.size_bytes,
-                        artifact.producer_job_id,
-                        json.dumps(artifact.input_refs, ensure_ascii=False),
-                        artifact.created_at.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("产物记录或逻辑引用已存在") from exc
-            row = conn.execute("SELECT * FROM artifact_records WHERE workspace_id=? AND id=?", (artifact.workspace_id, artifact.id)).fetchone()
-            return self._artifact_record_from_row(row)
 
-    def get_artifact_record(
-        self, workspace_id: str, artifact_id: str, *, connection=None
-    ) -> _ArtifactRecord:
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM artifact_records WHERE workspace_id = ? AND id = ?",
-                (workspace_id, artifact_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(artifact_id)
-        return self._artifact_record_from_row(row)
 
-    def list_artifact_records(
-        self, workspace_id: str, task_id: str
-    ) -> list[_ArtifactRecord]:
-        with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM artifact_records
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._artifact_record_from_row(row) for row in rows]
 
-    def append_task_event(self, event: _TaskEvent, *, connection: sqlite3.Connection | None = None) -> _TaskEvent:
-        _validate_task_event(event)
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, event.workspace_id, event.task_id)
-            if event.job_id is not None:
-                job = conn.execute(
-                    """
-                    SELECT task_id FROM job_runs
-                    WHERE workspace_id = ? AND id = ?
-                    """,
-                    (event.workspace_id, event.job_id),
-                ).fetchone()
-                if job is None or str(job["task_id"]) != event.task_id:
-                    raise ValueError("任务事件关联的运行记录不属于当前任务")
-            existing_row = conn.execute(
-                "SELECT * FROM task_events WHERE id = ?",
-                (event.id,),
-            ).fetchone()
-            if existing_row is not None:
-                persisted = self._task_event_from_row(existing_row)
-                if persisted != event:
-                    raise ValueError("任务事件 ID 已存在，且领域字段不一致")
-                return persisted
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO task_events
-                        (id, workspace_id, task_id, job_id, event_type,
-                         payload_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        event.id,
-                        event.workspace_id,
-                        event.task_id,
-                        event.job_id,
-                        event.event_type,
-                        _json_object(event.payload),
-                        event.created_at.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raced = conn.execute(
-                    "SELECT * FROM task_events WHERE id = ?", (event.id,)
-                ).fetchone()
-                if raced is not None:
-                    persisted = self._task_event_from_row(raced)
-                    if persisted != event:
-                        raise ValueError("任务事件 ID 已存在，且领域字段不一致") from exc
-                    return persisted
-                raise ValueError("任务事件 ID 已存在") from exc
-        return event if connection is not None else self.get_task_event(event.workspace_id, event.id)
 
-    def get_task_event(self, workspace_id: str, event_id: str, *,
-                       connection: sqlite3.Connection | None = None) -> _TaskEvent:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            row = conn.execute(
-                "SELECT * FROM task_events WHERE workspace_id = ? AND id = ?",
-                (workspace_id, event_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(event_id)
-        return self._task_event_from_row(row)
 
-    def latest_task_resource_admission(self, workspace_id: str, task_id: str, job_id: str,
-                                       request_id: str, *,
-                                       connection: sqlite3.Connection | None = None) -> _TaskEvent | None:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                "SELECT * FROM task_events WHERE workspace_id=? AND task_id=? AND job_id=? "
-                "AND event_type='task_media_resource_admission' "
-                "AND json_extract(payload_json, '$.device_request_id')=? "
-                "ORDER BY json_extract(payload_json, '$.attempt_number') DESC, "
-                "COALESCE(json_extract(payload_json, '$.last_grant_generation'), -1) DESC, "
-                "created_at DESC, rowid DESC LIMIT 1",
-                (workspace_id, task_id, job_id, request_id),
-            ).fetchone()
-        return self._task_event_from_row(row) if row is not None else None
 
-    def list_task_events(self, workspace_id: str, task_id: str) -> list[_TaskEvent]:
-        with self._connect() as conn:
-            self._require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM task_events
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._task_event_from_row(row) for row in rows]
 
 
 
@@ -6277,7 +6114,7 @@ class ProductionRepository:
                     or normalized != operation):
                 raise ValueError("封面原提案已经变化")
             job = self.create_job_run(run, connection=conn)
-            self.append_task_event(_TaskEvent(id=f"event_{job.id}_cover_start", workspace_id=job.workspace_id,
+            self.execution_records.append_task_event(_TaskEvent(id=f"event_{job.id}_cover_start", workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type="cover_submitted", payload=payload,
                 created_at=job.created_at), connection=conn)
         return job
@@ -6292,7 +6129,7 @@ class ProductionRepository:
             if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
                 raise PermissionError("当前成员不能安排此任务的媒体处理")
             job = self.create_job_run(run, connection=conn)
-            self.append_task_event(_TaskEvent(id=f"event_{job.id}_start", workspace_id=job.workspace_id,
+            self.execution_records.append_task_event(_TaskEvent(id=f"event_{job.id}_start", workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type="task_media_submitted", payload=payload,
                 created_at=job.created_at), connection=conn)
         return job
@@ -6300,7 +6137,7 @@ class ProductionRepository:
     def record_task_media_publication(self, artifact: _ArtifactRecord, transform: _TransformRun, edges: list[_DependencyEdge]):
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self.create_artifact_record(artifact, connection=conn)
+            self.execution_records.create_artifact_record(artifact, connection=conn)
             self.lineage_records.create_transform_run(transform, connection=conn)
             for edge in edges:
                 self.lineage_records.create_dependency_edge(edge, connection=conn)
@@ -6719,20 +6556,20 @@ class ProductionRepository:
                 if previous["input_digest"] != digest:
                     raise ValueError("请求身份已绑定不同编辑输入")
                 return event_id, False
-            self.append_task_event(_TaskEvent(id=event_id, workspace_id=task.workspace_id,
+            self.execution_records.append_task_event(_TaskEvent(id=event_id, workspace_id=task.workspace_id,
                 task_id=task.id, job_id=None, event_type="edit_request_claimed",
                 payload={"member_id": member_id, "request_id": str(request_id), "phase": phase,
                          "input_digest": digest, "inputs": inputs}, created_at=utc_now()), connection=conn)
         return event_id, True
 
     def save_edit_request_result(self, task, event_id, *, status_code, response):
-        return self.append_task_event(_TaskEvent(id=event_id + "_result", workspace_id=task.workspace_id,
+        return self.execution_records.append_task_event(_TaskEvent(id=event_id + "_result", workspace_id=task.workspace_id,
             task_id=task.id, job_id=None, event_type="edit_request_result",
             payload={"status_code": status_code, "response": response}, created_at=utc_now()))
 
     def read_edit_request_result(self, task, event_id):
         try:
-            event = self.get_task_event(task.workspace_id, event_id + "_result")
+            event = self.execution_records.get_task_event(task.workspace_id, event_id + "_result")
         except KeyError:
             return None
         return event.payload
@@ -7464,14 +7301,6 @@ class ProductionRepository:
         ).fetchone()
         return row is not None and str(row["task_id"]) == task_id
 
-    @staticmethod
-    def _lineage_output_producers(connection, workspace_id, task_id, references):
-        placeholders = ", ".join("?" for _ in references)
-        rows = connection.execute(
-            f"SELECT logical_ref, producer_job_id FROM artifact_records WHERE workspace_id = ? AND task_id = ? AND logical_ref IN ({placeholders})",
-            (workspace_id, task_id, *references),
-        ).fetchall()
-        return {str(row["logical_ref"]): str(row["producer_job_id"]) for row in rows}
 
     def _write_topic_task(self, connection, task):
         if not connection.in_transaction:
@@ -7847,7 +7676,7 @@ class ProductionRepository:
                 "previous_voice": previous_voice, "selected_voice": asdict(selected_voice),
                 "pronunciation_references": [asdict(item) for item in pronunciation_references],
                 "confirmed_script_id": task.confirmed_script_id}
-            self.append_task_event(_TaskEvent(event_id, workspace_id, task_id, None, "task_narration_voice_selected",
+            self.execution_records.append_task_event(_TaskEvent(event_id, workspace_id, task_id, None, "task_narration_voice_selected",
                 {"fingerprint": fingerprint, "member_id": member_id, "receipt": receipt}), connection=conn)
             if active_jobs:
                 queued_job_rebind(conn, self._job_run_from_row(active_jobs[0]), previous_plan, event_id)
@@ -8601,20 +8430,6 @@ class ProductionRepository:
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
-    @staticmethod
-    def _artifact_record_from_row(row: sqlite3.Row) -> _ArtifactRecord:
-        return _ArtifactRecord(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            kind=str(row["kind"]),
-            logical_ref=str(row["logical_ref"]),
-            sha256=str(row["sha256"]),
-            size_bytes=int(row["size_bytes"]),
-            producer_job_id=str(row["producer_job_id"]),
-            input_refs=_string_list_from_text(str(row["input_refs_json"])),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-        )
 
     @staticmethod
     def _narration_segment_from_row(row: sqlite3.Row) -> _NarrationSegment:
@@ -8639,17 +8454,6 @@ class ProductionRepository:
         payload = _json_object_from_text(str(row["payload_json"]))
         return _CoverAsset(**_with_datetime(payload, "created_at", "updated_at"))
 
-    @staticmethod
-    def _task_event_from_row(row: sqlite3.Row) -> _TaskEvent:
-        return _TaskEvent(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            job_id=str(row["job_id"]) if row["job_id"] is not None else None,
-            event_type=str(row["event_type"]),
-            payload=_json_object_from_text(str(row["payload_json"])),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-        )
 
 
 
@@ -9093,27 +8897,6 @@ def _validate_new_job_run(run: _JobRun) -> None:
         raise ValueError("新任务运行记录不能预先包含输出或失败结果")
 
 
-def _validate_artifact_record(artifact: _ArtifactRecord) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            artifact.id,
-            artifact.workspace_id,
-            artifact.task_id,
-            artifact.kind,
-            artifact.logical_ref,
-            artifact.sha256,
-            artifact.producer_job_id,
-        )
-    ):
-        raise ValueError("产物记录缺少必要标识、逻辑引用或摘要")
-    _validate_logical_reference(artifact.logical_ref, "产物逻辑引用")
-    if not re.fullmatch(r"[0-9a-f]{64}", artifact.sha256):
-        raise ValueError("产物摘要必须是小写 SHA-256")
-    if artifact.size_bytes < 0:
-        raise ValueError("产物大小不能为负数")
-    for reference in artifact.input_refs:
-        _validate_logical_reference(reference, "产物输入引用")
 
 
 def _validate_narration_segment(segment: _NarrationSegment) -> None:
@@ -9263,20 +9046,6 @@ def _validate_cover_asset(cover: _CoverAsset) -> None:
         raise ValueError("封面状态无效")
 
 
-def _validate_task_event(event: _TaskEvent) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            event.id,
-            event.workspace_id,
-            event.task_id,
-            event.event_type,
-        )
-    ):
-        raise ValueError("任务事件缺少必要标识或类型")
-    if event.job_id is not None and not event.job_id.strip():
-        raise ValueError("任务事件的运行记录 ID 不能为空")
-    _json_object(event.payload)
 
 
 

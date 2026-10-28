@@ -608,7 +608,7 @@ def _complete_presenter_fixture(case, context=None):
     logical_ref = "artifacts/task/person-job/person-render.mp4"
     inner = JobRun("person-job", WORKSPACE, task.id, "person_render", "person-job", cache)
     def work(job_context):
-        case.repo.create_artifact_record(ArtifactRecord("person-artifact", WORKSPACE, task.id, "person_render",
+        case.repo.execution_records.create_artifact_record(ArtifactRecord("person-artifact", WORKSPACE, task.id, "person_render",
             logical_ref, hashlib.sha256(output.read_bytes()).hexdigest(), output.stat().st_size,
             job_context.job_id, [segment.audio_reference]))
         case.repo.lineage_records.create_transform_run(TransformRun("person-transform", WORKSPACE, task.id, job_context.job_id,
@@ -823,7 +823,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         assert len(rendered) == 1 and rendered[0].status == "ready"
         assert store.resolve_file(rendered[0].artifact_ref).read_bytes() == b"synthetic-person"
         assert case.repo.get_job_run(WORKSPACE, case.job.id).status == "queued"
-        events = case.repo.list_task_events(WORKSPACE, case.task.id)
+        events = case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)
         assert any(event.payload.get("stage") == "person_render" and event.payload.get("status") == "running" for event in events)
     finally:
         scheduler.close()
@@ -1011,7 +1011,7 @@ def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(pre
         assert case.repo.get_job_run(WORKSPACE, case.job.id).status == 'interrupted'
         rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
         assert len(rendered) == 1 and rendered[0].status == 'ready'
-        assert not [event for event in case.repo.list_task_events(WORKSPACE, case.task.id)
+        assert not [event for event in case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)
             if event.job_id == case.job.id and event.event_type == 'creation_execution_stage'
             and event.payload.get('stage') == 'person_render' and event.payload.get('status') == 'completed']
     finally:

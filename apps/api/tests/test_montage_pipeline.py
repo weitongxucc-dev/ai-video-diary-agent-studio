@@ -1093,7 +1093,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     published = main_module.artifact_store.publish_file(f"artifacts/{task.id}/synthetic-presenter.mp4", path)
     job = state.production.create_job_run(JobRun(id="synthetic-presenter-job", workspace_id=state.workspace_id,
         task_id=task.id, kind="person_render", idempotency_key=key, input_digest=key))
-    state.production.create_artifact_record(ArtifactRecord(id="synthetic-presenter-artifact", workspace_id=state.workspace_id,
+    state.production.execution_records.create_artifact_record(ArtifactRecord(id="synthetic-presenter-artifact", workspace_id=state.workspace_id,
         task_id=task.id, kind="person_render", logical_ref=published.logical_ref, sha256=published.sha256,
         size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=[segment.audio_reference]))
     state.production.lineage_records.create_transform_run(TransformRun(id="synthetic-presenter-transform", workspace_id=state.workspace_id,
@@ -2353,13 +2353,13 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
     _assert_retired_montage_endpoint(client, production, workspace_id, task.id, "render")
     # Existing helper remains diagnostic-only: no public execution fallback or real FFmpeg here.
-    original_create_artifact_record = production.create_artifact_record
+    original_create_artifact_record = production.execution_records.create_artifact_record
 
     class SimulatedProcessExit(BaseException):
         pass
 
     monkeypatch.setattr(
-        production,
+        production.execution_records,
         "create_artifact_record",
         lambda _artifact: (_ for _ in ()).throw(SimulatedProcessExit()),
     )
@@ -2368,12 +2368,12 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
 
     interrupted_job = production.list_job_runs(workspace_id, task.id)[0]
     assert interrupted_job.status == "running"
-    assert production.list_artifact_records(workspace_id, task.id) == []
+    assert production.execution_records.list_artifact_records(workspace_id, task.id) == []
     assert (output_root / "artifacts" / task.id / interrupted_job.id / "preview.mp4").is_file()
     assert (output_root / "artifacts" / task.id / interrupted_job.id / "subtitles.srt").is_file()
 
     monkeypatch.setattr(
-        production, "create_artifact_record", original_create_artifact_record
+        production.execution_records, "create_artifact_record", original_create_artifact_record
     )
     assert main_module.video_job_runner.recover_after_restart() == 1
 
@@ -2388,7 +2388,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert response.status == "rendered"
     jobs = production.list_job_runs(workspace_id, task.id)
     assert len(jobs) == 1 and jobs[0].status == "succeeded"
-    artifacts = production.list_artifact_records(workspace_id, task.id)
+    artifacts = production.execution_records.list_artifact_records(workspace_id, task.id)
     assert {artifact.kind for artifact in artifacts} == {
         "rendered_video",
         "subtitle_track",
@@ -5605,7 +5605,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
         kind="person_render", idempotency_key="v3-person-lineage", input_digest=state.old_render.cache_key,
     ))
     state.production.claim_job_run(state.workspace_id, person_job.id)
-    state.production.create_artifact_record(ArtifactRecord(
+    state.production.execution_records.create_artifact_record(ArtifactRecord(
         id="artifact_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
         kind="person_render", logical_ref=person_artifact_ref, sha256=published_person.sha256,
         size_bytes=published_person.size_bytes, producer_job_id=person_job.id, input_refs=person_input_refs,
@@ -5654,7 +5654,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
         task_id=state.task.id, kind="creation_task_montage_render", idempotency_key="v3-fixture",
         input_digest=render_input_digest))
     state.production.claim_job_run(state.workspace_id, job.id)
-    state.production.create_artifact_record(ArtifactRecord(id="artifact_v3_fixture", workspace_id=state.workspace_id,
+    state.production.execution_records.create_artifact_record(ArtifactRecord(id="artifact_v3_fixture", workspace_id=state.workspace_id,
         task_id=state.task.id, kind="rendered_video", logical_ref=published.logical_ref,
         sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs))
     state.production.finish_job_run(state.workspace_id, job.id, status="succeeded", output_refs=[published.logical_ref])
@@ -5749,7 +5749,7 @@ def _queued_person_edit(state, *, exact=False, change=False):
         response = state.client.post(base + "/edits/exact", json={
             "operation_type": "ChangePersonSegment" if change else "RegeneratePersonRender",
             "clip_id": "clip-person-target"})
-        proposal = state.production.get_task_event(state.workspace_id,
+        proposal = state.production.execution_records.get_task_event(state.workspace_id,
             f"event_{response.json()['job_id']}_start").payload["edit_proposal_id"] if response.status_code == 202 else None
     else:
         preview = state.client.post(base + "/edits/preview", json={

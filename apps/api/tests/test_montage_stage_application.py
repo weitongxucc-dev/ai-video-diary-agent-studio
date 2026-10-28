@@ -150,7 +150,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert len(versions) == 1 and versions[0].id == task.current_timeline_version_id
         assert versions[0].snapshot['montage']['id'] == montage['id'] == task.montage_plan_id
         assert versions[0].snapshot['narration_segments'][0]['id'] == segment.id
-        event = repo.get_task_event('local', f'event_{job_id}_montage_plan_queued')
+        event = repo.execution_records.get_task_event('local', f'event_{job_id}_montage_plan_queued')
         assert event.payload == {'stage': 'montage_plan', 'status': 'completed', 'output': montage['id'], 'reason': 'waiting_for_user'}
         assert repo.get_job_run('local', job_id).status == 'queued'
         assert [call['port'] for call in calls] == ['planner', 'save_montage', 'save_montage', 'ensure_base']
@@ -163,7 +163,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert not runtime.run_once()
         assert calls == before_queries and len(repo.list_timeline_versions('local', task_id)) == 1
         assert not repo.list_person_renders('local', task_id) and not repo.lineage_records.list_transform_runs('local', task_id)
-        assert not repo.list_artifact_records('local', task_id)
+        assert not repo.execution_records.list_artifact_records('local', task_id)
         stopped = client.post(url + '/execution/cancel')
         assert stopped.status_code == 200, stopped.text
         assert calls == before_queries and repo.get_creation_task_montage_plan('local', task_id)['id'] == montage['id']

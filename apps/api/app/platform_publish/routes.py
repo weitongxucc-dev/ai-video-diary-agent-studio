@@ -122,7 +122,7 @@ def build_platform_publish_router(
         # current artifact/version validity rules before exposing job history.
         jobs = [job for job in repository.list_job_runs(workspace_id, task_id)
                 if job.kind == "platform_publish"]
-        events = repository.list_task_events(workspace_id, task_id)
+        events = repository.execution_records.list_task_events(workspace_id, task_id)
         event_by_job = {}
         for event in events:
             if event.job_id and event.event_type.startswith("platform_publish_"):
@@ -191,7 +191,7 @@ def build_platform_publish_router(
 
         # A different key must not repeat a prior non-terminal or successful
         # send for the same confirmed account, version and body.
-        events = repository.list_task_events(workspace_id, task_id)
+        events = repository.execution_records.list_task_events(workspace_id, task_id)
         for event in events:
             if event.event_type == "platform_publish_prepared" and event.payload.get("content_digest") == digest:
                 previous = repository.get_job_run(workspace_id, event.job_id)
@@ -217,7 +217,7 @@ def build_platform_publish_router(
         with repository._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             repository.create_job_run(job, connection=conn)
-            repository.append_task_event(prepared, connection=conn)
+            repository.execution_records.append_task_event(prepared, connection=conn)
         intent = SubmissionIntent(
             workspace_id=workspace_id, owner_type="platform_publish", owner_id=job_id,
             input_digest=digest, unit_key=f"publish:{payload.timeline_version_id}:{digest}",
@@ -237,7 +237,7 @@ def build_platform_publish_router(
                     impact="发布尚未提交到平台。",
                     repair_action="修复本地发布队列后由用户重新确认并提交。",
                 )
-                repository.append_task_event(TaskEvent(
+                repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job_id}_queue_failure", workspace_id=workspace_id,
                     task_id=task_id, job_id=job_id, event_type="platform_publish_queue_failure",
                     payload={"detail": type(exc).__name__}, created_at=datetime.now(UTC),
@@ -256,7 +256,7 @@ def attach_and_login(adapter, driver):
 
 
 def serialize_job(repository, job: JobRun, *, known_events=None) -> dict[str, object]:
-    events = [event for event in repository.list_task_events(job.workspace_id, job.task_id)
+    events = [event for event in repository.execution_records.list_task_events(job.workspace_id, job.task_id)
               if event.job_id == job.id and event.event_type.startswith("platform_publish_")] if known_events is None else known_events
     with repository._connect() as conn:
         row = conn.execute(

@@ -40,7 +40,7 @@ def _delivery_case(tmp_path, monkeypatch):
         manifest = audio.render_assembly(job, montage, actor=case.actor, budget=case.owner.narration_audio_budget,
             prepare=True, connection=kwargs.get('connection'))
         try:
-            repository.get_artifact_record('local', f'artifact_audio_assembly_{manifest.final.id}')
+            repository.execution_records.get_artifact_record('local', f'artifact_audio_assembly_{manifest.final.id}')
         except KeyError:
             return original_next(repository, scheduler, job, **kwargs)
         return None
@@ -167,7 +167,7 @@ def test_audio_encode_original_parent_quota_and_unknown_boundaries(tmp_path, mon
         case.executor.execute(grant, case.scheduler)
         assert case.scheduler._get(grant.request_id).state == 'failed'
         assert '完整SHA' in case.repo.get_job_run('local', case.job.id).failure_reason
-        measured = case.repo.get_task_event('local', delivery.measured_event_id(grant))
+        measured = case.repo.execution_records.get_task_event('local', delivery.measured_event_id(grant))
         assert measured.payload['consumption_known'] and measured.payload['output_bytes'] == 0
     else:
         def unknown(*a, **kw):
@@ -175,7 +175,7 @@ def test_audio_encode_original_parent_quota_and_unknown_boundaries(tmp_path, mon
         monkeypatch.setattr(store, 'publish_file', unknown)
         with pytest.raises(RecoveryBlocked, match='真实新文件字节未知'):
             case.executor.execute(grant, case.scheduler)
-        measured = case.repo.get_task_event('local', delivery.measured_event_id(grant))
+        measured = case.repo.execution_records.get_task_event('local', delivery.measured_event_id(grant))
         assert measured.payload['consumption_known'] is False and measured.payload['output_bytes'] is None
         usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
         assert usage['unknown_unit_count'] == 1 and usage['reserved_bytes'] > 0

@@ -101,7 +101,7 @@ def test_unknown_survives_revision_and_late_receipt_is_counted_once(scope_case):
     assert measured['execution_seconds'] == 5 and measured['generated_bytes'] == 30
     assert measured['reserved_seconds'] == 0 and measured['reserved_bytes'] == 60
     assert settle(repo, jobs[1], 'second', 3, 30) == measured
-    assert repo.get_task_event('local', second.id).payload['revision'] == 1
+    assert repo.execution_records.get_task_event('local', second.id).payload['revision'] == 1
     with pytest.raises(BudgetScopeConflict):
         settle(repo, jobs[1], 'second', 4, 30)
 

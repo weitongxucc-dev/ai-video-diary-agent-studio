@@ -166,21 +166,21 @@ class ExactPreviewUseCase:
             conn.execute('BEGIN IMMEDIATE')
             if self.metadata.write_guard is not None:
                 self.metadata.write_guard(conn)
-            claim=self.repository.get_task_event(task.workspace_id,event_id,connection=conn)
+            claim=self.repository.execution_records.get_task_event(task.workspace_id,event_id,connection=conn)
             self.validate_origin(source,actor,connection=conn)
             if source.get('assistant_turn_id'):
                 self.conversations._task_turn_source(conn,source['assistant_turn_id'],task.workspace_id,
                     source['member_id'],task.id)
             value={'request_event_id':event_id,'input_digest':claim.payload['input_digest'],'source':source}
-            self.repository.append_task_event(TaskEvent(event_id+'_source',task.workspace_id,task.id,None,
+            self.repository.execution_records.append_task_event(TaskEvent(event_id+'_source',task.workspace_id,task.id,None,
                 'edit_request_source',value),connection=conn)
 
     def read_request_source(self, task, event_id, actor):
-        claim=self.repository.get_task_event(task.workspace_id,event_id)
+        claim=self.repository.execution_records.get_task_event(task.workspace_id,event_id)
         if claim.task_id != task.id or claim.payload.get('phase') not in {'apply','preview'}:
             raise EditPreviewRejected(409,'该来源读回只适用于原 exact apply/preview 请求')
         try:
-            anchor=self.repository.get_task_event(task.workspace_id,event_id+'_source')
+            anchor=self.repository.execution_records.get_task_event(task.workspace_id,event_id+'_source')
         except KeyError as exc:
             raise EditPreviewRejected(409,{'error':'edit_request_source_unavailable',
                 'reason':'原请求已存在，但缺少可信来源锚点，不能推定未提交或自动重试',

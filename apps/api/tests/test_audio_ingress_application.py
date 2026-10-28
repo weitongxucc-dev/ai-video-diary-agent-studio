@@ -107,8 +107,8 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
     assert duplicate.status_code==202 and duplicate.json()['job_id']==original['job_id']
     imported=settled(client,runtime,original)
     assert imported['status']=='succeeded' and imported['result']=={
-        'source_ref':repo.list_artifact_records('local','task')[0].logical_ref,'name':'input.wav','duration_ms':200}
-    fixed=repo.get_task_event('local','event_'+original['job_id']+'_result').payload
+        'source_ref':repo.execution_records.list_artifact_records('local','task')[0].logical_ref,'name':'input.wav','duration_ms':200}
+    fixed=repo.execution_records.get_task_event('local','event_'+original['job_id']+'_result').payload
     assert client.get(original['result_url']).json()['result']==fixed['result']
     # The old recorded rejection becomes a finite domain fact, then the same persistent label.
     bad=client.post('/api/creation-tasks/task/audio/recordings',files={'audio':('bad-stage.wav',data,'audio/wav')})
@@ -131,15 +131,15 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
     recorded=settled(client,runtime,recording.json())
     assert recorded['status']=='succeeded', recorded
     result=recorded['result'];assert result['applied'] is False and result['duration_ms']==200
-    artifact=repo.get_artifact_record('local',result['artifact_id'])
+    artifact=repo.execution_records.get_artifact_record('local',result['artifact_id'])
     assert artifact.kind=='task_recording' and artifact.logical_ref.endswith('.mp4')
     assert artifact.sha256==hashlib.sha256(mp4.read_bytes()).hexdigest()
-    verified=repo.get_task_event('local','event_'+artifact.producer_job_id+'_verified').payload['outputs']
+    verified=repo.execution_records.get_task_event('local','event_'+artifact.producer_job_id+'_verified').payload['outputs']
     assert [v['reference'] for v in verified]==[artifact.logical_ref]
     assert repo.get_creation_task('local','task').narration_cache_key is None
     assert repo.get_creation_task('local','task').current_timeline_version_id is None
     reopened=ProductionRepository(repo.database_path,repo.video_library_path)
-    assert reopened.get_task_event('local','event_'+artifact.producer_job_id+'_result').payload['result']==result
+    assert reopened.execution_records.get_task_event('local','event_'+artifact.producer_job_id+'_result').payload['result']==result
     assert len(executions)==3 and all(request_id!=job_id for _,job_id,request_id in executions)
     assert not list((tmp_path/'temporary').rglob('*.part'))
     assert TASK_MEDIA_CONTEXT.get() is None
@@ -154,7 +154,7 @@ def seed_narration(repo, media, tmp_path):
     ref='artifacts/task/fixture-voice.wav';publication=store.publish_file(ref,source)
     job=repo.create_job_run(JobRun('fixture-source-job','local','task','fixture_input','fixture-source-input',publication.sha256))
     running=repo.claim_job_run('local',job.id)
-    artifact=repo.create_artifact_record(ArtifactRecord('fixture-source-artifact','local','task','task_recording',ref,
+    artifact=repo.execution_records.create_artifact_record(ArtifactRecord('fixture-source-artifact','local','task','task_recording',ref,
         publication.sha256,publication.size_bytes,job.id,[]))
     repo.lineage_records.create_transform_run(TransformRun('fixture-source-transform','local','task',job.id,'task_recording',publication.sha256,
         [],[ref],'synthetic-fixture-input/v1',{'duration_ms':200,'sample_rate':16000,'channels':1,'script_id':script.id,'script_digest':digest},'succeeded',running.started_at,utc_now()))
@@ -188,7 +188,7 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
     assert unbound.status_code==202,unbound.text
     refused=settled(client,runtime,unbound.json())
     assert refused['status']=='failed' and refused['failure_reason']=='ValueError' and refused['result'] is None
-    assert not any(row.producer_job_id==unbound.json()['job_id'] for row in repo.list_artifact_records('local','task'))
+    assert not any(row.producer_job_id==unbound.json()['job_id'] for row in repo.execution_records.list_artifact_records('local','task'))
     media.audio_ingress=owner
     endpoint='/api/creation-tasks/task/audio/listen'
     stale=client.post(endpoint,json={'base_version_id':'stale','start_seconds':0,'end_seconds':.2,'solo_track_ids':[]})
@@ -201,7 +201,7 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
     playable=client.get(result['result']['audio_url']);assert playable.status_code==200
     with wave.open(io.BytesIO(playable.content)) as output:
         assert output.getframerate()==48000 and output.getnchannels()==2
-    records_before=repo.list_artifact_records('local','task')
+    records_before=repo.execution_records.list_artifact_records('local','task')
     waveforms=[]
     for url in ('/api/creation-tasks/task/audio/waveform/'+graph.tracks[0].clips[0].id,
                 '/api/creation-tasks/task/narration/waveform'):
@@ -212,13 +212,13 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
         assert waveform['status']=='succeeded',waveform
         assert set(waveform['result'])=={'source_id','duration_seconds','seconds_per_peak','peaks'}
         assert waveform['result']['duration_seconds']==.2 and max(waveform['result']['peaks'])==0
-        assert repo.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
+        assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
         assert repo.get_job_run('local',receipt['job_id']).output_refs==[]
         waveforms.append(waveform['result'])
         fixed=client.get(url).json();assert fixed['job_id']==receipt['job_id'] and fixed['result'] is None
         assert client.get(fixed['result_url']).json()['result']==waveform['result']
     assert waveforms[0]==waveforms[1]
-    assert repo.list_artifact_records('local','task')==records_before
+    assert repo.execution_records.list_artifact_records('local','task')==records_before
     assert len(list((tmp_path/'temporary'/'audio-waveforms'/'local').glob('*.json')))==1
     assert repo.get_creation_task('local','task').current_timeline_version_id==version.id
     assert errors==[] and len(executions)==3 and TASK_MEDIA_CONTEXT.get() is None

@@ -77,7 +77,7 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
             image = Path(folder) / "preview.png"
             _write_subtitle_image(caption, image, size=size)
             publication = store.publish_file(f"artifacts/{task_id}/{job.id}/preview.png", image)
-        record = repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
+        record = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind="subtitle_style_preview",logical_ref=publication.logical_ref,sha256=publication.sha256,
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=input_refs))
         transform = repository.lineage_records.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,

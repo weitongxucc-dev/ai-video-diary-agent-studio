@@ -105,7 +105,7 @@ class ScriptContextUseCase:
         retained_draft = None
         if draft and not self.repository.script_knowledge_inputs_current(workspace_id, task.id, draft['id']):
             retained_draft, draft = draft, None
-        reply_event = next((event for event in self.repository.list_task_events(workspace_id, task.id)
+        reply_event = next((event for event in self.repository.execution_records.list_task_events(workspace_id, task.id)
                             if event.event_type == "assistant_reply_plan_confirmed"
                             and event.payload.get("plan_id") == plan.id), None)
         reply_reference = reply_event.payload.get("reply_reference") if reply_event else None

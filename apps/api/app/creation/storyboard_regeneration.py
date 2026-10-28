@@ -208,7 +208,7 @@ class StoryboardRegeneration:
         job = self.repository.storyboard_regeneration_job(workspace_id, task_id, inputs["request_id"])
         if job is None:
             return None
-        event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start").payload
+        event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start").payload
         if any(event.get(key) != value for key, value in actor.identity_payload().items()):
             raise PermissionError("故事板原请求属于其他制作身份")
         if event["request_inputs"] != inputs:
@@ -301,6 +301,6 @@ class StoryboardRegeneration:
         result = {"request_id": event["request_id"], "montage_plan_id": prepared.change.montage_plan_id,
             "timeline_version_id": prepared.change.version.id, "timeline_sequence": prepared.change.version.sequence,
             "operation_id": prepared.change.operation.id}
-        self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_storyboard_result", workspace_id=job.workspace_id,
+        self.repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_storyboard_result", workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type="storyboard_regenerated", payload=result), connection=conn)
         return prepared.change.montage_plan_id

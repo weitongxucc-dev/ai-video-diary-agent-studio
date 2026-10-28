@@ -102,7 +102,7 @@ class TaskBusiness:
             raise TaskBusinessRejected('原目标成员与任务授权不一致')
         if self.authorizations.verdict(actor,task_id,'task_goal',check_scope=False)!='ready':
             raise TaskBusinessRejected('原任务授权已撤销、到期或目标已变化')
-        scope=self.production.get_task_event(ws,self.authorizations.business_context_id(goal)).payload
+        scope=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(goal)).payload
         if scope['authorization_id']!=authorization.id or scope['identity']!=authorization.identity:
             raise TaskBusinessRejected('原目标封存范围与任务授权不一致')
         task=self.production.get_creation_task(ws,task_id)
@@ -136,7 +136,7 @@ class TaskBusiness:
             snapshot=binding.get('task_version')
             if check_version and snapshot is not None and (snapshot.get('timeline_version_id'),snapshot.get('timeline_sequence',0)) != (task.current_timeline_version_id,version[0] if version else 0):
                 raise TaskBusinessRejected('原目标的预期作品版本已变化',kind='conflict')
-            sealed=self.production.get_task_event(ws,self.authorizations.business_context_id(root['goal']),connection=conn).payload
+            sealed=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(root['goal']),connection=conn).payload
             if sealed['authorization_id']!=authorization.id or sealed['identity']!=authorization.identity:
                 raise TaskBusinessRejected('原目标封存范围不匹配')
             row=conn.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?',(ws,task.plan_id)).fetchone()
@@ -184,11 +184,11 @@ class TaskBusiness:
             return any(event.job_id==job_id for event in self.execution_sources(goal))
         if job.kind!='creation_task_segment_revision':
             return False
-        start=self.production.get_task_event(goal['workspace_id'],f'event_{job_id}_start')
+        start=self.production.execution_records.get_task_event(goal['workspace_id'],f'event_{job_id}_start')
         if CreationExecutionActor.from_event(job.workspace_id,start.payload)!=actor:
             return False
         command=start.payload['command']
-        review=self.production.get_task_event(job.workspace_id,command['semantic_review_ref'])
+        review=self.production.execution_records.get_task_event(job.workspace_id,command['semantic_review_ref'])
         if review.task_id!=goal['task_id'] or review.event_type!='narration_semantic_review':
             return False
         source=review.payload['source']
@@ -222,7 +222,7 @@ class TaskBusiness:
     def execution_sources(self,goal):
         from app.assistant_goal_continuation import GoalResultProjection
         projection=GoalResultProjection(self.production,self.conversations)
-        return [event for event in self.production.list_task_events(goal['workspace_id'],goal['task_id'])
+        return [event for event in self.production.execution_records.list_task_events(goal['workspace_id'],goal['task_id'])
             if event.event_type=='assistant_execution_located' and projection.source_belongs_to_goal(goal,event.payload['source'])]
 
     def invoke(self, operation, arguments, *, call_id, tool_call_id, source_binding, cancel_event, deadline_monotonic, invocation: TaskInvocation):
@@ -378,7 +378,7 @@ class TaskBusiness:
         claim.update(goal=goal,request_context=goal['request_context'])
         ws,task_id=goal['workspace_id'],goal['task_id']
         actor,task,_sealed=self.original(goal)
-        events=self.production.list_task_events(ws,task_id)
+        events=self.production.execution_records.list_task_events(ws,task_id)
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
         if quality_continuation is not None:
@@ -727,7 +727,7 @@ class TaskBusiness:
             # failed conversation projection or queue acknowledgement.
             event_id=f"event_assistant_execution_locator_{source['assistant_turn_id']}"+(f"_{source['input_id']}" if source.get('input_id') else '')
             try:
-                located=self.production.get_task_event(ws,event_id)
+                located=self.production.execution_records.get_task_event(ws,event_id)
             except KeyError:
                 raise exc
             if located.payload['source']!=source:

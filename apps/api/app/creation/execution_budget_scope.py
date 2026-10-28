@@ -46,9 +46,9 @@ class ExecutionBudgetScopes:
 
     def _append(self, connection, event_id, workspace_id, task_id, job_id, event_type, payload):
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
-            return self.repository.append_task_event(TaskEvent(event_id, workspace_id, task_id, job_id,
+            return self.repository.execution_records.append_task_event(TaskEvent(event_id, workspace_id, task_id, job_id,
                 event_type, payload), connection=connection)
         if (existing.task_id, existing.job_id, existing.event_type, existing.payload) != (task_id, job_id, event_type, payload):
             raise BudgetScopeConflict('原累计授权请求已绑定不同内容')
@@ -61,7 +61,7 @@ class ExecutionBudgetScopes:
             (workspace_id, scope_id)).fetchone()
         if row is None:
             raise KeyError(scope_id)
-        return self.repository._task_event_from_row(row)
+        return self.repository.execution_records.task_event_from_row(row)
 
     def authorize(self, connection, workspace_id, origin_task_id, actor, *, scope_id, expected_revision,
                   request_id, source_ref, target_task_ids, limits, policy_kind, authorization_guard, revoked=False):
@@ -92,7 +92,7 @@ class ExecutionBudgetScopes:
             'request_id': request_id, 'actor': actor.identity_payload(), 'target_task_ids': targets,
             'limits': limits, 'policy_kind': policy_kind, 'revoked': revoked}
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
             existing = None
         if existing is not None:
@@ -117,7 +117,7 @@ class ExecutionBudgetScopes:
         self._owner(connection, workspace_id, job.task_id, actor)
         event_id = self._id('binding', workspace_id, job_id)
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
             existing = None
         if existing is not None:
@@ -157,7 +157,7 @@ class ExecutionBudgetScopes:
             raise PermissionError('原执行输入已变化，须先核验原绑定版本')
 
     def binding(self, connection, workspace_id, job_id):
-        return self.repository.get_task_event(workspace_id, self._id('binding', workspace_id, job_id), connection=connection)
+        return self.repository.execution_records.get_task_event(workspace_id, self._id('binding', workspace_id, job_id), connection=connection)
 
     def for_task(self, connection, workspace_id, task_id, actor):
         self._owner(connection, workspace_id, task_id, actor)
@@ -224,7 +224,7 @@ class ExecutionBudgetScopes:
                     or value < 0 or value == 0 and not (key == 'generated_bytes' and zero_media)
                     or key == 'generated_bytes' and not isinstance(value, int)):
                 raise ValueError('单元最大占用须有限且为正，仅原许可的只读采用可声明零生成')
-        started = self.repository.get_task_event(workspace_id, started_event_id, connection=connection)
+        started = self.repository.execution_records.get_task_event(workspace_id, started_event_id, connection=connection)
         usage_id = f'{request_id}:{permit_generation}'
         if (started.job_id != job_id or started.payload.get('usage_id') != usage_id
                 or started.event_type not in {'creation_narration_unit_started', 'task_execution_unit_started'}):
@@ -235,7 +235,7 @@ class ExecutionBudgetScopes:
             'authorization_ref': current.id, 'binding_ref': binding.id, 'usage_id': usage_id,
             'started_event_id': started_event_id, 'receipt_id': receipt_id, 'maximum': maximum}
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
             existing = None
         if existing is not None:
@@ -258,9 +258,9 @@ class ExecutionBudgetScopes:
     def settle(self, connection, workspace_id, job_id, *, request_id, permit_generation, receipt_id):
         self._transaction(connection)
         usage_id = f'{request_id}:{permit_generation}'
-        reservation = self.repository.get_task_event(workspace_id,
+        reservation = self.repository.execution_records.get_task_event(workspace_id,
             self._id('reservation', workspace_id, usage_id), connection=connection)
-        receipt = self.repository.get_task_event(workspace_id, receipt_id, connection=connection)
+        receipt = self.repository.execution_records.get_task_event(workspace_id, receipt_id, connection=connection)
         if (reservation.job_id != job_id or reservation.payload['receipt_id'] != receipt_id or receipt.job_id != job_id
                 or receipt.payload.get('usage_id') != usage_id
                 or receipt.event_type not in {'creation_narration_unit_settled', 'task_execution_unit_settled'}):

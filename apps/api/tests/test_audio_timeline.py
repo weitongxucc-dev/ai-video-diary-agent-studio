@@ -35,7 +35,7 @@ def registered_audio(repository, service, workspace, task_id, logical_ref, input
     record = ArtifactRecord(id=logical_ref, workspace_id=workspace, task_id=task_id,
         kind="audio_source", logical_ref=logical_ref, sha256=published.sha256,
         size_bytes=published.size_bytes, producer_job_id=job_id, input_refs=list(input_refs))
-    repository.create_artifact_record(record)
+    repository.execution_records.create_artifact_record(record)
     return record
 
 

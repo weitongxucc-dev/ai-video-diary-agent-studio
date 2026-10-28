@@ -81,7 +81,7 @@ def narration_preparation(tmp_path):
     def no_write(*args,**kwargs):
         pytest.fail('preparation must leave the business checkpoint to its owner')
     repository=SimpleNamespace(
-        get_job_run=lambda _ws,_job:job,get_task_event=lambda _ws,_event:start,
+        get_job_run=lambda _ws,_job:job,execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
         creation_execution_input=lambda *_:start.payload,
         get_creation_task=read_task,get_creation_plan=lambda *_:plan,get_creation_task_script=lambda *_:script,
         effective_creation_script=lambda *_:script,
@@ -418,7 +418,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     initial_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in sections}
     for fact in [*initial_files.values(),_file_fact(combined.audio_path)]:
         with wave.open(fact['path']) as stream:assert stream.getnchannels()==1 and stream.getframerate()==24000
-    event=repo.get_task_event('local',f'event_{full_job}_narration_queued')
+    event=repo.execution_records.get_task_event('local',f'event_{full_job}_narration_queued')
     assert event.payload['output']==task.narration_cache_key
     assert s.client.get(url+'/execution',params={'job_id':full_job}).status_code==200
     # Stop the queued downstream stage at the public boundary; only narration is this normal's execution target.

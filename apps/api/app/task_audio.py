@@ -81,7 +81,7 @@ class TaskAudio:
         audible = [clip for track in timeline.tracks if not track.muted for clip in track.clips if not clip.muted]
         uses = Counter(clip.source_ref for clip in audible)
         inputs, files = [], []
-        records = {record.logical_ref: record for record in self.repository.list_artifact_records(workspace_id, task_id)}
+        records = {record.logical_ref: record for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id)}
         for reference in dict.fromkeys(clip.source_ref for track in timeline.tracks for clip in track.clips):
             path = self.source(workspace_id, task_id, reference, actor=actor).resolve()
             stat = path.stat()
@@ -129,7 +129,7 @@ class TaskAudio:
         if montage.audio_timeline is None:
             if not force_master:
                 try:
-                    self.repository.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=connection)
+                    self.repository.execution_records.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=connection)
                 except KeyError:
                     return None
             from dataclasses import replace
@@ -141,7 +141,7 @@ class TaskAudio:
             for clip in track.clips if not clip.muted]
         event_id = self._assembly_plan_id(job, montage)
         try:
-            event = self.repository.get_task_event(job.workspace_id, event_id, connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, event_id, connection=connection)
         except KeyError:
             if len(audible) <= budget.max_input_count and not force_master:
                 return None
@@ -156,7 +156,7 @@ class TaskAudio:
                     for item in sources['sources'] if item['reference'] in refs},
                 max_input_count=budget.max_input_count,
                 normalize_voice_sources=montage.narration_linkage_created_audio_timeline)
-            event = self.repository.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
+            event = self.repository.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type='creation_audio_assembly_plan',
                 payload={'input_digest': job.input_digest, 'manifest': manifest.payload()}), connection=connection)
         if (event.job_id != job.id or event.task_id != job.task_id or event.payload['input_digest'] != job.input_digest):
@@ -175,7 +175,7 @@ class TaskAudio:
             unit_id = None
             for unit in manifest.units:
                 try:
-                    self.repository.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
+                    self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
                 except KeyError:
                     unit_id = unit.id
                     break
@@ -191,7 +191,7 @@ class TaskAudio:
         if manifest is None:
             return None
         unit = manifest.final
-        record = self.repository.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
+        record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
         transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
         if (record.task_id != job.task_id or record.producer_job_id != job.id or transform.job_id != job.id
                 or transform.task_id != job.task_id or record.logical_ref != unit.output_ref(job.task_id)
@@ -211,14 +211,14 @@ class TaskAudio:
         from app.creation.assembly_manifest import AudioAssemblyManifest
         import stat
         with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-            event = self.repository.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=conn)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=conn)
             if (event.job_id != job.id or event.task_id != job.task_id
                     or event.payload['input_digest'] != job.input_digest):
                 raise PermissionError('唯一音频master不属于原Job输入')
             manifest = AudioAssemblyManifest.from_payload(event.payload['manifest'])
             manifest.validate_scope(job.workspace_id, job.task_id, job.id)
             unit = manifest.final
-            record = self.repository.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_audio_assembly_{unit.id}')
             transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_audio_assembly_{unit.id}')
             if (not unit.master or record.task_id != job.task_id or record.producer_job_id != job.id
                     or record.logical_ref != unit.output_ref(job.task_id) or transform.job_id != job.id
@@ -287,7 +287,7 @@ class TaskAudio:
             raise ValueError('组装单元不属于原不可变清单')
         manifest.validate_unit(unit)
         for dependency in unit.dependencies:
-            record = self.repository.get_artifact_record(workspace_id, f'artifact_audio_assembly_{dependency}')
+            record = self.repository.execution_records.get_artifact_record(workspace_id, f'artifact_audio_assembly_{dependency}')
             transform = self.repository.lineage_records.get_transform_run(workspace_id, f'transform_audio_assembly_{dependency}')
             if (record.task_id != task_id or record.producer_job_id != job_id or transform.task_id != task_id
                     or transform.parameters.get('manifest_digest') != manifest.digest or transform.status != 'succeeded'
@@ -313,7 +313,7 @@ class TaskAudio:
             raise PermissionError('音频组装许可与原任务数据库不一致')
         job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
         def measured_output(size, *, reused_ref=None):
-            self.repository.append_task_event(TaskEvent(id=f'event_{job.id}_audio_assembly_measured_{context.grant.generation}',
+            self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_audio_assembly_measured_{context.grant.generation}',
                 workspace_id=workspace_id, task_id=task_id, job_id=job.id, event_type='audio_assembly_output_measured',
                 payload={'usage_id': f'{context.grant.request_id}:{context.grant.generation}',
                     'unit_id': unit_id, 'generated_bytes': size, 'reused_artifact_ref': reused_ref}))
@@ -324,7 +324,7 @@ class TaskAudio:
             raise PermissionError('音频组装单元与本次原许可不一致')
         artifact_id = f'artifact_audio_assembly_{unit.id}'
         try:
-            existing = self.repository.get_artifact_record(workspace_id, artifact_id)
+            existing = self.repository.execution_records.get_artifact_record(workspace_id, artifact_id)
         except KeyError:
             existing = None
         if existing is not None:
@@ -387,7 +387,7 @@ class TaskAudio:
             return self.repository.resolve_authorized_narration_audio_reference(workspace_id, reference)
         if reference.startswith("workspace://"):
             return self.repository.resolve_workspace_media_reference(workspace_id, reference, require_registered=True)
-        records = self.repository.list_artifact_records(workspace_id, task_id)
+        records = self.repository.execution_records.list_artifact_records(workspace_id, task_id)
         if not any(record.logical_ref == reference and record.kind in {"audio_source", "audio_preview", "task_recording", "audio_assembly_fragment"} for record in records):
             raise ValueError("音频产物不属于当前任务")
         return self.artifact_store.resolve_file(reference)
@@ -395,7 +395,7 @@ class TaskAudio:
     def validate_source_access(self, workspace_id, task_id, reference, actor):
         from app.creation_execution import CreationExecutionActor
         from app.source_policy import knowledge_item_readable as content_readable
-        records = {item.logical_ref: item for item in self.repository.list_artifact_records(workspace_id, task_id)}
+        records = {item.logical_ref: item for item in self.repository.execution_records.list_artifact_records(workspace_id, task_id)}
         pending, visited = [reference], set()
         while pending:
             current = pending.pop()
@@ -414,7 +414,7 @@ class TaskAudio:
                 record = records[current]
                 job = self.repository.get_job_run(workspace_id, record.producer_job_id)
                 if job.kind == TASK_MEDIA_KIND:
-                    event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+                    event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
                     if CreationExecutionActor.from_event(workspace_id, event.payload) != actor:
                         raise PermissionError("当前成员不能读取此音频产物")
                 pending.extend(record.input_refs)
@@ -422,7 +422,7 @@ class TaskAudio:
     def recording(self, workspace_id: str, task_id: str, reference: str,
                   *, verify_digest: bool = False, actor=None, context=None) -> tuple[ArtifactRecord, int]:
         """Return a persisted recording and its server-measured duration."""
-        record = next((item for item in self.repository.list_artifact_records(workspace_id, task_id)
+        record = next((item for item in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                        if item.logical_ref == reference and item.kind == "task_recording"), None)
         if record is None:
             raise ValueError("当前任务没有这条电脑录音")
@@ -466,7 +466,7 @@ class TaskAudio:
         return record, duration_ms
 
     def validate_material_use(self, workspace_id: str, task_id: str, reference: str) -> None:
-        records = {item.logical_ref: item for item in self.repository.list_artifact_records(workspace_id, task_id)}
+        records = {item.logical_ref: item for item in self.repository.execution_records.list_artifact_records(workspace_id, task_id)}
         pending, visited = [reference], set()
         while pending:
             current = pending.pop()
@@ -490,7 +490,7 @@ class TaskAudio:
                         producing_job = job if context is not None else active[1] if active is not None else None
                         produced_here = producing_job is not None and any(
                             record.logical_ref == clip.source_ref and record.producer_job_id == producing_job.id
-                            for record in self.repository.list_artifact_records(workspace_id, task_id))
+                            for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id))
                         durations[clip.source_ref] = self.probe(path, output=produced_here, context=context)
                     elif clip.source_ref.startswith("narration://artifact/"):
                         artifact = self.repository.get_narration_artifact(
@@ -503,7 +503,7 @@ class TaskAudio:
                                 (workspace_id, str(path))).fetchone()
                         durations[clip.source_ref] = json.loads(row["payload"]).get("duration_seconds") if row else None
                     else:
-                        record = next(item for item in self.repository.list_artifact_records(workspace_id, task_id)
+                        record = next(item for item in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                                       if item.logical_ref == clip.source_ref)
                         transform = self._transform_for(workspace_id, task_id, record)
                         measured_ms = transform.parameters.get("duration_ms")
@@ -548,7 +548,7 @@ class TaskAudio:
             if row is not None:
                 data["duration_seconds"] = json.loads(row["payload"]).get("duration_seconds")
         else:
-            record = next((item for item in self.repository.list_artifact_records(workspace_id, task_id)
+            record = next((item for item in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                            if item.logical_ref == reference), None)
             if record is not None:
                 parameters = self._transform_for(workspace_id, task_id, record).parameters
@@ -574,7 +574,7 @@ class TaskAudio:
     def validate_publications(self, job, event, result, context):
         from app.canvas import canvas_size
         outputs = []
-        for record in self.repository.list_artifact_records(job.workspace_id, job.task_id):
+        for record in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id):
             if record.producer_job_id != job.id:
                 continue
             context.check()
@@ -620,7 +620,7 @@ class TaskAudio:
         if (workspace_id, task_id) != (job.workspace_id, job.task_id):
             raise PermissionError("媒体许可不属于当前任务")
         context.check()
-        consumed = sum(record.size_bytes for record in self.repository.list_artifact_records(workspace_id, task_id)
+        consumed = sum(record.size_bytes for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                        if record.producer_job_id == job.id)
         if operation not in {"audio_mix", "audio_stretch", "picture_preview", "clip_preview", "upload"}:
             raise ValueError("未知任务媒体操作")
@@ -636,16 +636,16 @@ class TaskAudio:
         identity = media_digest([job.id, kind, input_refs, operation, media_render_canonical(identity_parameters)])
         input_event_id = f"event_{job.id}_{identity}_input"
         try:
-            input_event = self.repository.get_task_event(workspace_id, input_event_id)
+            input_event = self.repository.execution_records.get_task_event(workspace_id, input_event_id)
         except KeyError:
             # Persist the exact compiled candidate before starting any media.
             snapshot = json.loads(json.dumps({"operation": operation, "parameters": parameters,
                 "input_refs": input_refs, "media_input": media_input, "suffix": suffix, "engine": engine}, default=str))
-            input_event = self.repository.append_task_event(TaskEvent(id=input_event_id, workspace_id=workspace_id,
+            input_event = self.repository.execution_records.append_task_event(TaskEvent(id=input_event_id, workspace_id=workspace_id,
                 task_id=task_id, job_id=job.id, event_type="task_media_input", payload=snapshot, created_at=job.created_at))
         parameters, media_input = input_event.payload["parameters"], input_event.payload["media_input"]
         logical_ref = f"artifacts/{task_id}/{job.id}/{identity}{suffix}"
-        previous = next((record for record in self.repository.list_artifact_records(workspace_id, task_id)
+        previous = next((record for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                          if record.logical_ref == logical_ref), None)
         if previous is not None:
             publication = self.artifact_store.describe(logical_ref)
@@ -674,7 +674,7 @@ class TaskAudio:
                     with bounded_audio_context(context) as audio_context:
                         options.update(max_output_bytes=min(options["max_output_bytes"], audio_context.max_output_bytes),
                             threads=audio_context.threads, deadline_monotonic=audio_context.deadline_monotonic)
-                        produced = {record.logical_ref for record in self.repository.list_artifact_records(workspace_id, task_id)
+                        produced = {record.logical_ref for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                                     if record.producer_job_id == job.id}
                         render_audio_mix(graph, media_input["duration_seconds"],
                             lambda ref: self.source(workspace_id, task_id, ref, actor=actor), path,
@@ -966,7 +966,7 @@ class TaskMediaJobs:
         kind = "first_unknown" if decision.verdict is None else "first_refused"
         event_id = self._admission_event_id(binding, kind)
         try:
-            existing = self.repository.get_task_event(job.workspace_id, event_id, connection=conn)
+            existing = self.repository.execution_records.get_task_event(job.workspace_id, event_id, connection=conn)
         except KeyError:
             existing = None
         if existing is not None:
@@ -990,7 +990,7 @@ class TaskMediaJobs:
             context="history", admitted=decision.verdict, checks=checks,
             summary=f"该请求首次检查（{timestamp.isoformat()}）记录：{detail}。这是当时的准入观察，不是实时资源或执行许可。",
             repair_action="请结合当前作业状态查询原请求；检查记录不会重新提交或启动媒体。")
-        self.repository.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
+        self.repository.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type="task_media_resource_admission",
             payload={**binding, **receipt.model_dump(mode="json")}, created_at=timestamp), connection=conn)
 
@@ -1003,11 +1003,11 @@ class TaskMediaJobs:
         if pending:
             kind = "first_refused" if request.wait_reason == "resource_busy" else "first_unknown"
             try:
-                saved = self.repository.get_task_event(job.workspace_id, self._admission_event_id(binding, kind))
+                saved = self.repository.execution_records.get_task_event(job.workspace_id, self._admission_event_id(binding, kind))
             except KeyError:
                 return None
         else:
-            saved = self.repository.latest_task_resource_admission(job.workspace_id, job.task_id, job.id, request.id)
+            saved = self.repository.execution_records.latest_task_resource_admission(job.workspace_id, job.task_id, job.id, request.id)
         if saved is None:
             return None
         if (saved.task_id != job.task_id or saved.job_id != job.id
@@ -1067,7 +1067,7 @@ class TaskMediaJobs:
                 if write_guard is not None:
                     write_guard(conn)
                 job = self.repository.create_job_run(run, connection=conn)
-                self.repository.append_task_event(TaskEvent(
+                self.repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_start", workspace_id=job.workspace_id, task_id=task_id, job_id=job.id,
                     event_type="task_media_submitted", payload=payload, created_at=job.created_at), connection=conn)
         if job.status in {"queued", "interrupted"}:
@@ -1275,7 +1275,7 @@ class TaskMediaJobs:
             if status == "succeeded":
                 context.check_execution_limits()
             if status == "succeeded":
-                self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_verified", workspace_id=job.workspace_id,
+                self.repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_verified", workspace_id=job.workspace_id,
                     task_id=job.task_id,job_id=job.id,event_type="task_media_verified",payload={"outputs":verification_facts},created_at=job.created_at),connection=conn)
             records = conn.execute("SELECT logical_ref FROM artifact_records WHERE workspace_id=? AND producer_job_id=?",
                                    (job.workspace_id, job.id)).fetchall()
@@ -1304,7 +1304,7 @@ class TaskMediaJobs:
             direct_clip = "_clip_preview" in event["arguments"]
             context.check()
             try:
-                result_event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result")
+                result_event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
                 if direct_command:
                     if self.command_preview is None:
@@ -1343,7 +1343,7 @@ class TaskMediaJobs:
                 else:
                     raise ValueError('未知任务媒体处理类型')
                 # Persist the receipt before validation; retry validates this same output.
-                self.repository.append_task_event(TaskEvent(
+                self.repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_result", workspace_id=job.workspace_id, task_id=job.task_id,
                     job_id=job.id, event_type="task_media_result", payload={"result": result}, created_at=job.created_at))
             else:

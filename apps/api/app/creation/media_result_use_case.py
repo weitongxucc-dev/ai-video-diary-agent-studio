@@ -39,7 +39,7 @@ class MediaResultUseCase:
         if result_invalid:
             status = "failed"
         if status == "succeeded":
-            result = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
+            result = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_result").payload["result"]
         device_request_id = waiting_reason = None
         device_request, view = scheduler.task_media_result_request(job.workspace_id, job.id, job.input_digest, actor)
         if device_request is not None:

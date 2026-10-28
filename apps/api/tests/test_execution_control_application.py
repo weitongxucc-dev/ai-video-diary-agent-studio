@@ -90,11 +90,11 @@ def test_bounded_execution_preview_replays_the_original_job_and_keeps_full_valid
     task = repo.get_creation_task('workspace_a', task_id)
     old_digest = revision_digest(repo.get_creation_task_script('workspace_a', script_id), repo.get_creation_plan('workspace_a', task.plan_id))
     original = execution.start('workspace_a', task_id, script_id, old_digest)
-    original_event = repo.get_task_event('workspace_a', f'event_{original.id}_start')
+    original_event = repo.execution_records.get_task_event('workspace_a', f'event_{original.id}_start')
     preview = control.preview('workspace_a', task_id)
     replay = execution.start('workspace_a', task_id, preview['script_id'], preview['input_digest'])
     assert replay.id == original.id and replay.input_digest == old_digest
-    assert repo.get_task_event('workspace_a', f'event_{original.id}_start') == original_event
+    assert repo.execution_records.get_task_event('workspace_a', f'event_{original.id}_start') == original_event
     assert len(execution.jobs('workspace_a', task_id)) == 1
     script, plan = execution.validate_input('workspace_a', task, script_id, old_digest)
     assert len(script.sections) == 45 and script.sections[-1].id == 'part-45'
@@ -238,7 +238,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         # Explicit projection fixture: interrupted durable job plus original historical running event.
         with repo._connect() as conn:
             conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=?",('local',first_job))
-        repo.append_task_event(TaskEvent(id='declared-control-running-history',workspace_id='local',task_id=task_id,
+        repo.execution_records.append_task_event(TaskEvent(id='declared-control-running-history',workspace_id='local',task_id=task_id,
             job_id=first_job,event_type='creation_execution_stage',payload={'stage':'narration','status':'running'}))
         interrupted=client.get(url+'/execution',params={'job_id':first_job})
         assert interrupted.status_code==200 and interrupted.json()['job']['status']=='interrupted',interrupted.text
@@ -247,7 +247,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         assert len(repo.list_creation_job_request_states('local',first_job))==1
         local=repo.create_job_run(JobRun(id='declared-local-edit-job',workspace_id='local',task_id=task_id,
             kind=PERSON_EDIT_KIND,idempotency_key='declared-local-edit-job',input_digest=request['input_digest']))
-        repo.append_task_event(TaskEvent(id=f'event_{local.id}_start',workspace_id='local',task_id=task_id,job_id=local.id,
+        repo.execution_records.append_task_event(TaskEvent(id=f'event_{local.id}_start',workspace_id='local',task_id=task_id,job_id=local.id,
             event_type='declared_local_start',payload={**actor.identity_payload(),'input_digest':local.input_digest}))
         local_query=client.get(url+'/execution',params={'job_id':local.id})
         assert local_query.status_code==409 and '原制作作业已被新的制作请求替代' in local_query.text,local_query.text

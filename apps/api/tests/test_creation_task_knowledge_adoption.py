@@ -69,7 +69,7 @@ def test_append_is_atomic_replayable_and_preserves_old_script_and_run(state, mon
     assert task.stage == 'script' and task.stage_status == 'not_started'
     assert rows(state, historical) == historical
     assert main._creation_plan_preview_response(state.repository.get_creation_plan('local', 'plan')).updated_at == task.updated_at
-    events = [event for event in state.repository.list_task_events('local', 'task') if event.event_type == 'task_knowledge_adopted']
+    events = [event for event in state.repository.execution_records.list_task_events('local', 'task') if event.event_type == 'task_knowledge_adopted']
     assert len(events) == 1
     assert datetime.fromisoformat(events[0].payload['receipt']['task_updated_at']) == datetime.fromisoformat(receipt['task_updated_at'])
     committed = rows(state)
@@ -173,7 +173,7 @@ def test_concurrent_replay_returns_one_committed_receipt(state):
         responses = list(workers.map(lambda _: adopt(state, body), range(2)))
     assert [response.status_code for response in responses] == [200, 200]
     assert responses[0].json() == responses[1].json()
-    assert len([event for event in state.repository.list_task_events('local', 'task')
+    assert len([event for event in state.repository.execution_records.list_task_events('local', 'task')
         if event.event_type == 'task_knowledge_adopted']) == 1
 
 

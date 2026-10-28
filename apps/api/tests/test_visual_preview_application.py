@@ -132,7 +132,7 @@ def test_short_and_full_tail_visual_preview_use_real_native_media(visual_applica
         assert event['operation']=='visual_edit_preview'
         assert ('_clip_preview' in event['arguments']) == (label=='short')
         assert TASK_MEDIA_CONTEXT.get() is None
-        records = [item for item in state.production.list_artifact_records(state.workspace_id,state.task.id)
+        records = [item for item in state.production.execution_records.list_artifact_records(state.workspace_id,state.task.id)
                    if item.producer_job_id==job_id]
         assert len(records)==2 and {r.kind for r in records}=={'color_preview'}
         side_records = {}

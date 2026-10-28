@@ -320,7 +320,7 @@ def test_real_repository_device_runtime_persists_result_and_never_replays_unknow
     persisted = ProductionRepository(repository.database_path, repository.video_library_path)
     job = persisted.get_job_run("local", job_id)
     assert job.status == expected
-    events = [event for event in persisted.list_task_events("local", "task-1")
+    events = [event for event in persisted.execution_records.list_task_events("local", "task-1")
               if event.job_id == job_id]
     assert any(event.event_type == "platform_publish_submission_started" for event in events)
     if expected == "succeeded":

@@ -82,7 +82,7 @@ def test_script_turn_rejects_missing_authorized_sources_before_pi(tmp_path, monk
     foreign = client.post("/api/creation-tasks/foreign-task/assistant/turn", headers={"X-Local-Member-Token": token},
                           json=_task_turn_payload(conversations, member_id, conversation, "请写开头", "montage"))
     assert foreign.status_code == 404
-    assert repo.list_task_events("local", "task-one") == []
+    assert repo.execution_records.list_task_events("local", "task-one") == []
 
 
 def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeypatch):
@@ -106,7 +106,7 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
     )
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "knowledge_reference_stale"
-    assert repo.list_task_events("local", "task-one") == []
+    assert repo.execution_records.list_task_events("local", "task-one") == []
 
 
 def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_path, monkeypatch):
@@ -177,7 +177,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
             job = material_repo.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
                 kind="creation_task_execution", idempotency_key="scope-execution", input_digest="actual-scope-input"))
             actor = CreationExecutionActor("local", member_id)
-            material_repo.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",
+            material_repo.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",
                 task_id=task.id, job_id=job.id, event_type="creation_execution_started",
                 payload={"input_digest": job.input_digest, **actor.identity_payload()}))
             status = main_module._bind_assistant_execution_result(task.id, bound_request, kwargs["turn_id"],
@@ -243,7 +243,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     assert selection["asset_id"] == material.id and selection["segment_id"] == material.segments[0].id
     assert selection["expected_updated_at"] == material.updated_at.isoformat()
     assert selection["expected_segment_updated_at"] == material.segments[0].updated_at.isoformat()
-    assert {item.event_type for item in material_repo.list_task_events("local", task.id)} == {
+    assert {item.event_type for item in material_repo.execution_records.list_task_events("local", task.id)} == {
         "creation_execution_started", "assistant_execution_located"}  # Actual binding facts; no legacy chat rows.
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["status"]) for item in saved_turns] == [
@@ -380,7 +380,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert turn.json()["script_draft"]["id"] == script_id
     assert turn.json()["edit_preview"] is None
     persisted = ProductionRepository(tmp_path / "isolated.sqlite3", tmp_path / "library")
-    events = persisted.list_task_events("local", "task-one")
+    events = persisted.execution_records.list_task_events("local", "task-one")
     assert not [item for item in events if item.event_type == "assistant_turn"]
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["assistant_text"], item["status"]) for item in saved_turns] == [
@@ -394,7 +394,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
                                   _task_turn_payload(conversations, member_id, conversation,
                                                      "api_key=private-test-key 请加到文案", "script"))
     assert rejected_secret.status_code == 422
-    assert not [item for item in repo.list_task_events("local", "task-one") if item.event_type == "assistant_turn"]
+    assert not [item for item in repo.execution_records.list_task_events("local", "task-one") if item.event_type == "assistant_turn"]
 
     saved = repo.get_creation_task_script("local", script_id)
     repo.confirm_creation_task_script("local", "task-one", script_id,
@@ -412,7 +412,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert narration_turn.json()["script_draft"] is None
     assert narration_turn.json()["edit_preview"] is None
     persisted_after_narration = ProductionRepository(tmp_path / "isolated.sqlite3", tmp_path / "library")
-    events = persisted_after_narration.list_task_events("local", "task-one")
+    events = persisted_after_narration.execution_records.list_task_events("local", "task-one")
     assert not [item for item in events if item.event_type == "assistant_turn"]
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["assistant_text"], item["status"]) for item in saved_turns] == [

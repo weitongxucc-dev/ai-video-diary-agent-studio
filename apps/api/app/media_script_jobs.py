@@ -108,7 +108,7 @@ class MediaScriptPreviewUseCase:
 
     def validate_result(self, job, event, result, context):
         outputs = []
-        for record in self.repository.list_artifact_records(job.workspace_id, job.task_id):
+        for record in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id):
             if record.producer_job_id != job.id:
                 continue
             context.check()
@@ -172,7 +172,7 @@ def script_limits(budget):
 def script_inputs(repository, store, task, payload):
     inputs, revisions, facts = {}, [], []
     for item in payload.input_refs:
-        record = repository.get_artifact_record(task.workspace_id, item.expected_artifact_id)
+        record = repository.execution_records.get_artifact_record(task.workspace_id, item.expected_artifact_id)
         if (record.task_id != task.id or record.kind != "graphic_source" or record.logical_ref != item.source_ref
                 or record.sha256 != item.expected_sha256):
             raise MediaScriptError("输入图片不属于当前任务或登记修订已变化")
@@ -215,13 +215,13 @@ def execute_script(repository, store, temporary_root, task, payload, toolchain, 
     sealed, inputs, _facts = seal_script(repository, store, task, payload, toolchain)
     if sealed.digest != event["input_facts"]["script_digest"]:
         raise MediaScriptError("封存脚本或输入修订发生变化")
-    previous = [item for item in repository.list_artifact_records(task.workspace_id, task.id)
+    previous = [item for item in repository.execution_records.list_artifact_records(task.workspace_id, task.id)
                 if item.producer_job_id == job.id and item.kind == "graphic_source"]
     if previous:
         if len(previous) != 1:
             raise MediaScriptError("原作业出现不确定的图片登记，不能重执行")
         record, = previous
-        started = repository.get_task_event(task.workspace_id, f"event_{job.id}_script_started")
+        started = repository.execution_records.get_task_event(task.workspace_id, f"event_{job.id}_script_started")
         contract, = sealed.requested_outputs
         if (started.payload["script_digest"] != sealed.digest
                 or record.logical_ref != f"artifacts/{task.id}/{job.id}/{contract.name}"):
@@ -242,9 +242,9 @@ def execute_script(repository, store, temporary_root, task, payload, toolchain, 
         context.check()
     else:
         try:
-            repository.get_task_event(task.workspace_id, f"event_{job.id}_script_started")
+            repository.execution_records.get_task_event(task.workspace_id, f"event_{job.id}_script_started")
         except KeyError:
-            repository.append_task_event(TaskEvent(id=f"event_{job.id}_script_started", workspace_id=task.workspace_id,
+            repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_script_started", workspace_id=task.workspace_id,
                 task_id=task.id, job_id=job.id, event_type="media_script_started",
                 payload={"script_digest": sealed.digest}, created_at=job.created_at))
         else:
@@ -263,14 +263,14 @@ def execute_script(repository, store, temporary_root, task, payload, toolchain, 
                 raise MediaScriptError("发布图片与Leaf实测结果不一致")
     input_refs = [item.source_ref for item in payload.input_refs]
     if not previous:
-        record = repository.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_graphic", workspace_id=task.workspace_id,
+        record = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_graphic", workspace_id=task.workspace_id,
             task_id=task.id, kind="graphic_source", logical_ref=published.logical_ref, sha256=published.sha256,
             size_bytes=published.size_bytes, producer_job_id=job.id, input_refs=input_refs, created_at=job.created_at))
     definition = script_definition(sealed, payload)
     if len(definition) != event["resources"]["definition_bytes"]:
         raise MediaScriptError("成功程序定义与封存元数据预算不一致")
     published_definition = store.publish_bytes(f"artifacts/{task.id}/{job.id}/definition.json", definition)
-    definition_record = repository.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_definition", workspace_id=task.workspace_id,
+    definition_record = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_definition", workspace_id=task.workspace_id,
         task_id=task.id, kind="media_script_definition", logical_ref=published_definition.logical_ref,
         sha256=published_definition.sha256, size_bytes=published_definition.size_bytes, producer_job_id=job.id, input_refs=input_refs,
         created_at=job.created_at))

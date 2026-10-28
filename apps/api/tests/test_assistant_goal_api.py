@@ -521,7 +521,7 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
         job_id = started.json()["job"]["id"]
         job_ids.append(job_id)
         # The real route already owns the locator/proof while this model is still running.
-        located = state.production.get_task_event(state.workspace_id, "event_assistant_execution_locator_" + turn_id)
+        located = state.production.execution_records.get_task_event(state.workspace_id, "event_assistant_execution_locator_" + turn_id)
         assert located.job_id == job_id and located.payload["input_digest"] == preview["input_digest"]
         assert state.conversations.get_task_goal(turn_id)["status"] == "waiting_result"
         assert state.conversations.get_turn(turn_id)["result"]["goal_business_actions"] == [{"kind":"execution_status", "id":job_id}]
@@ -626,7 +626,7 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
         assert turn["result"]["goal_business_actions"] == []
         assert state.conversations.get_task_goal(turn["id"]) is None
         with pytest.raises(KeyError):
-            state.production.get_task_event(state.workspace_id,"event_assistant_execution_locator_"+turn["id"])
+            state.production.execution_records.get_task_event(state.workspace_id,"event_assistant_execution_locator_"+turn["id"])
         assert main._project_assistant_execution_results() == 0
     else:
         assert result["execution_action"] == "start" and "本轮未提交" not in result["reply"]
@@ -698,7 +698,7 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
     assert response.json()["execution_action"] is None
     goal=state.conversations.get_task_goal(root_id)
     assert goal["source_input_id"] == input_ids[0] and goal["revision"] == 1
-    located=state.production.get_task_event(state.workspace_id,execution_locator_id(root_id,input_ids[0]))
+    located=state.production.execution_records.get_task_event(state.workspace_id,execution_locator_id(root_id,input_ids[0]))
     assert located.payload["source"]["action"] == "observe" and located.job_id == job_ids[0]
     state.production.claim_job_run(state.workspace_id,job_ids[0])
     state.production.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
@@ -753,7 +753,7 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
         else:
             payload = {'source':source,'locator':{'status':'unknown','request_id':str(uuid4()),'phase':'preview'}}
             connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('unknown','workspace','task',None,'assistant_edit_request_located',json.dumps(payload)))
-    repository=SimpleNamespace(_connect=lambda:connection,get_task_event=lambda *_:SimpleNamespace(payload=start))
+    repository=SimpleNamespace(_connect=lambda:connection,execution_records=SimpleNamespace(get_task_event=lambda *_:SimpleNamespace(payload=start)))
     from types import MethodType
     from app.production import ProductionRepository
     repository.goal_output_provenance_rows=MethodType(ProductionRepository.goal_output_provenance_rows,repository)
@@ -911,7 +911,7 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
         result=case.apply(task,actor,payload,identity={'member_id':actor.member_id,'local_diagnostic':False})
         assert result.status_code==202,result
         job=repo.get_job_run('local',result.value['job_id'])
-        event=repo.get_task_event('local',f'event_{job.id}_start').payload
+        event=repo.execution_records.get_task_event('local',f'event_{job.id}_start').payload
         assert event['source']['workspace_id']=='local' and event['source']['task_id']==task.id
         assert event['source']['actor_identity']==actor.identity_payload()
         assert event['source']['request_id']==str(payload.request_id)
@@ -937,7 +937,7 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
             with conversations._connect() as conn:
                 conversations._write_goal(conn,{'id':turn['id']},{**goal,'status':'stopped'})
             with pytest.raises(ValueError): registration.owner.verify_submission(intent,actor)
-            assert repo.get_task_event('local',f'event_{job.id}_start').payload==event
+            assert repo.execution_records.get_task_event('local',f'event_{job.id}_start').payload==event
 
         assert s.provider.output_cache_keys==calls
         assert repo.get_creation_task('local',task.id).current_timeline_version_id==base.id
@@ -1039,7 +1039,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
             assert resumed.status_code==200 and resumed.json()['queue']['replayed'],resumed.text
         else:
             assert response.status_code in {403,409},response.text
-            assert case.segments.video_preparation_id(case.job,'section_1') not in [e.id for e in case.repo.list_task_events('local',case.task_id)]
+            assert case.segments.video_preparation_id(case.job,'section_1') not in [e.id for e in case.repo.execution_records.list_task_events('local',case.task_id)]
         assert audio_path.read_bytes()==before_audio
         assert case.repo.list_narration_segments('local',case.task_id,case.script_id)==before_segments
         assert case.repo.creation_narration_usage('local',job.id)==before_usage
@@ -1064,10 +1064,10 @@ def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_b
         'task_id':case.task_id,'member_id':case.actor.member_id,'status':'waiting_result'}
     with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
     source={'assistant_turn_id':turn['id'],'input_id':turn['id'],'conversation_id':chat['id']}
-    case.repo.append_task_event(TaskEvent('visual-review','local',case.task_id,None,'narration_semantic_review',{'source':source}))
+    case.repo.execution_records.append_task_event(TaskEvent('visual-review','local',case.task_id,None,'narration_semantic_review',{'source':source}))
     job=case.repo.create_job_run(JobRun('visual-revision','local',case.task_id,'creation_task_segment_revision','visual-revision','original-digest'))
     task=case.repo.get_creation_task('local',case.task_id)
-    case.repo.append_task_event(TaskEvent(f'event_{job.id}_start','local',case.task_id,job.id,'segment_revision_requested',
+    case.repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start','local',case.task_id,job.id,'segment_revision_requested',
         {**case.actor.identity_payload(),'input_digest':job.input_digest,'script_id':case.script_id,'plan_id':task.plan_id,
             'command':{'input_id':turn['id'],'semantic_review_ref':'visual-review'}}))
     business=object.__new__(TaskBusiness)
@@ -1188,14 +1188,14 @@ def test_execution_binding_repairs_conversation_after_original_locator_commit(ex
         with pytest.raises(RuntimeError, match='after durable locator'):
             main._bind_assistant_execution_result(state.task.id, state.request, state.turn_id,
                 {'job':{'id':state.job.id}}, source=source)
-    located = state.production.get_task_event(state.workspace_id, execution_locator_id(state.turn_id))
+    located = state.production.execution_records.get_task_event(state.workspace_id, execution_locator_id(state.turn_id))
     assert located.job_id == state.job.id and wakes == []
     assert state.conversations.get_turn(state.turn_id)['result'] is None
     assert state.conversations.record_task_execution == original_record
     result = main._bind_assistant_execution_result(state.task.id, state.request,
         state.turn_id, {'job':{'id':state.job.id}})
     assert result['job']['id'] == state.job.id and wakes == ['wake']
-    assert state.production.get_task_event(state.workspace_id, located.id) == located
+    assert state.production.execution_records.get_task_event(state.workspace_id, located.id) == located
     assert state.conversations.get_turn(state.turn_id)['result']['goal_business_actions'] == [
         {'kind':'execution_status', 'id':state.job.id}]
     assert main._assistant_execution_source(state.task.id, state.request, state.turn_id,
@@ -1238,7 +1238,7 @@ def test_execution_binding_late_input_and_version_gate_precede_actor_and_write(e
     assert main._bind_assistant_execution_observation(state.task.id, state.request, state.turn_id,
         {'input_id':new_input, 'input_turn_id':state.turn_id}, result) is result
     assert actor_calls == ['actor']
-    assert not [e for e in state.production.list_task_events(state.workspace_id, state.task.id)
+    assert not [e for e in state.production.execution_records.list_task_events(state.workspace_id, state.task.id)
         if e.event_type == 'assistant_execution_located']
     assert state.conversations.task_turn_source(state.turn_id, state.workspace_id,
         state.member.member_id, state.task.id)['input_id'] == new_input
@@ -1392,7 +1392,7 @@ def test_edit_result_unknown_preserves_old_source_without_new_request(edit_resul
         'input_id':old_input, 'input_turn_id':turn_id}
     locator = main._resolve_assistant_edit_request(state.task.id, state.request, turn_id, details)
     assert locator.status == 'unknown' and locator.result is None
-    stored = state.repo.get_task_event('ws', f'event_edit_locator_{turn_id}_{request_id}')
+    stored = state.repo.execution_records.get_task_event('ws', f'event_edit_locator_{turn_id}_{request_id}')
     assert stored.payload['source']['input_id'] == old_input
     with state.repo._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='edit_request_claimed'").fetchone()[0] == 0
@@ -1401,12 +1401,12 @@ def test_edit_result_unknown_preserves_old_source_without_new_request(edit_resul
         replay.setattr(main, 'auth_context', SimpleNamespace(enabled=True))
         replay.setattr(main, '_request_permit_actor', lambda *a:pytest.fail('restored source must not resolve actor'))
         assert main._resolve_assistant_edit_request(state.task.id, state.request, turn_id, details) == locator
-    assert state.repo.get_task_event('ws', stored.id) == stored
+    assert state.repo.execution_records.get_task_event('ws', stored.id) == stored
     # Applied verification follows the durable locator, even on rejection.
     with pytest.raises(main.HTTPException) as not_applied:
         main._assistant_applied_edit_receipt(state.task.id, state.request, turn_id, details)
     assert not_applied.value.status_code == 502
-    assert state.repo.get_task_event('ws', stored.id) == stored
+    assert state.repo.execution_records.get_task_event('ws', stored.id) == stored
     assert state.repo.list_edit_operations('ws', state.task.id) == []
 
 
@@ -1426,7 +1426,7 @@ def test_edit_result_does_not_swallow_reader_permission_or_conflict(edit_result_
             with pytest.raises(main.HTTPException) as error:
                 main._resolve_assistant_edit_request(state.task.id, state.request, state.turn['id'], details)
             assert error.value.status_code == code
-    assert not [event for event in state.repo.list_task_events('ws', state.task.id)
+    assert not [event for event in state.repo.execution_records.list_task_events('ws', state.task.id)
         if event.event_type in {'assistant_edit_request_located', 'edit_request_claimed'}]
 
 
@@ -1468,7 +1468,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
     blob = state.store.publish_bytes('artifacts/declared-result.png', b'declared existing PNG publication')
     stat = state.store.resolve_file(blob.logical_ref).stat()
     revision = {'size_bytes':stat.st_size, 'mtime_ns':stat.st_mtime_ns, 'ctime_ns':stat.st_ctime_ns}
-    record = repo.create_artifact_record(ArtifactRecord('declared-result-png','local',state.task.id,
+    record = repo.execution_records.create_artifact_record(ArtifactRecord('declared-result-png','local',state.task.id,
         'graphic_source',blob.logical_ref,blob.sha256,blob.size_bytes,job.id,[]))
     repo.lineage_records.create_transform_run(TransformRun('declared-result-transform','local',state.task.id,
         job.id,'media_script',job.input_digest,[],[record.logical_ref],'declared metadata',
@@ -1476,8 +1476,8 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
         'succeeded',running.started_at,utc_now()))
     result = {'source_ref':record.logical_ref, 'artifact_id':record.id, 'sha256':record.sha256,
         'size_bytes':record.size_bytes, 'width':16, 'height':16, 'name':'card.png', 'applied':False}
-    repo.append_task_event(TaskEvent('event_'+job.id+'_result','local',state.task.id,job.id,'task_media_result',{'result':result}))
-    repo.append_task_event(TaskEvent('event_'+job.id+'_verified','local',state.task.id,job.id,'task_media_verified',
+    repo.execution_records.append_task_event(TaskEvent('event_'+job.id+'_result','local',state.task.id,job.id,'task_media_result',{'result':result}))
+    repo.execution_records.append_task_event(TaskEvent('event_'+job.id+'_verified','local',state.task.id,job.id,'task_media_verified',
         {'outputs':[{'reference':record.logical_ref, **revision}]}))
     repo.finish_job_run('local',job.id,status='succeeded',output_refs=[record.logical_ref])
     receipt = main._media_result_receipt(media,job,actor,runtime)

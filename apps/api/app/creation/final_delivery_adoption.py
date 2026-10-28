@@ -160,7 +160,7 @@ def apply_delivery_adoption(repo, conn, job, candidate):
         repo.create_subtitle_track(track, connection=conn)
     if candidate['cover'] is not None:
         repo.create_cover_asset(candidate['cover'], connection=conn)
-    repo.append_task_event(candidate['event'], connection=conn)
+    repo.execution_records.append_task_event(candidate['event'], connection=conn)
     return version
 
 
@@ -175,7 +175,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
             or job.output_refs != version.snapshot['output_refs'] or transform.output_refs != job.output_refs
             or transform.input_digest != job.input_digest or transform.engine != 'original-job-delivery/v1'):
         return False
-    event = repository.get_task_event(task.workspace_id, saved['manifest_event_id'])
+    event = repository.execution_records.get_task_event(task.workspace_id, saved['manifest_event_id'])
     manifest = event.payload
     if (event.event_type != 'audio_delivery_manifest' or event.job_id != job.id or event.task_id != task.id or manifest['input_digest'] != job.input_digest
             or manifest['digest'] != saved['manifest_digest'] or manifest['digest'] != media_digest({
@@ -191,7 +191,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
             or version.parent_version_id != original_input['timeline_version_id']):
         return False
     final_transform = repository.lineage_records.get_transform_run(task.workspace_id, saved['video_parent']['binding']['transform_id'])
-    video = repository.get_artifact_record(task.workspace_id, saved['video_artifact_id'])
+    video = repository.execution_records.get_artifact_record(task.workspace_id, saved['video_artifact_id'])
     if (video.producer_job_id != job.id or video.task_id != task.id or video.kind != 'rendered_video'
             or video.logical_ref != plan['output_path'] or video.sha256 != saved['video_parent']['binding']['sha256']
             or final_transform.status != 'succeeded' or final_transform.job_id != job.id
@@ -216,7 +216,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
                 or resources['unit_id'] != final_transform.input_digest):
             return False
     else:
-        plan_event = repository.get_task_event(task.workspace_id, recovery['event_id'])
+        plan_event = repository.execution_records.get_task_event(task.workspace_id, recovery['event_id'])
         recovery_plan = plan_event.payload
         if (plan_event.event_type != 'delivery_adoption_prepared' or plan_event.job_id != job.id or plan_event.task_id != task.id
                 or recovery_plan['unit_id'] != recovery['unit_id'] or recovery_plan['new_request_id'] != request['id']
@@ -252,7 +252,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     if _identity(video_path) != saved['video_file_identity'] or video_path.stat().st_size != video.size_bytes:
         return False
     if saved['subtitle_artifact_id'] is not None:
-        subtitle = repository.get_artifact_record(task.workspace_id, saved['subtitle_artifact_id'])
+        subtitle = repository.execution_records.get_artifact_record(task.workspace_id, saved['subtitle_artifact_id'])
         st = repository.lineage_records.get_transform_run(task.workspace_id, f'transform_{subtitle.id}')
         if (subtitle.producer_job_id != job.id or subtitle.task_id != task.id or subtitle.logical_ref != plan['subtitle_path']
                 or st.status != 'succeeded' or st.job_id != job.id or st.output_refs != [subtitle.logical_ref]
@@ -261,14 +261,14 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     elif plan.get('subtitle_path') is not None:
         return False
     from app.creation_execution import CreationExecutionActor
-    leaf_event = repository.get_task_event(task.workspace_id, saved['picture_fragment_manifest_event_id'])
+    leaf_event = repository.execution_records.get_task_event(task.workspace_id, saved['picture_fragment_manifest_event_id'])
     leaf = leaf_event.payload
     if (leaf_event.event_type != 'picture_fragment_manifest' or leaf_event.job_id != job.id or leaf_event.task_id != task.id
             or leaf['digest'] != media_digest({key: value for key, value in leaf.items() if key != 'digest'})
             or leaf['input_digest'] != job.input_digest):
         return False
     original = CreationExecutionActor.from_event(task.workspace_id,
-        repository.get_task_event(task.workspace_id, f'event_{job.id}_start').payload)
+        repository.execution_records.get_task_event(task.workspace_id, f'event_{job.id}_start').payload)
     actual_plan = creation_task_montage_plan_from_payload(plan)
     files, _images = metadata.picture_renderer.qualified_picture_sources(task.workspace_id, task, actual_plan, [actual_plan], original)
     if json.loads(json.dumps(files)) != leaf['qualified_files']:

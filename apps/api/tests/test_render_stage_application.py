@@ -188,7 +188,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         assert version.snapshot['render_input_digest']==child.input_digest==transform.input_digest
         assert version.snapshot['render_input_subtitles_visible'] and version.snapshot['render_input_subtitle_tracks'][0]['cues'][0]['text']==segment.text
         assert child.output_refs==transform.output_refs==version.snapshot['output_refs']==[rendered['output_path'],rendered['subtitle_path']]
-        artifacts=[a for a in repo.list_artifact_records('local',task_id) if a.producer_job_id==child.id]
+        artifacts=[a for a in repo.execution_records.list_artifact_records('local',task_id) if a.producer_job_id==child.id]
         assert {a.kind for a in artifacts}=={'rendered_video','subtitle_track'}
         facts={a.kind:file_fact(main.artifact_store.resolve_file(a.logical_ref)) for a in artifacts}
         assert all(a.sha256==facts[a.kind]['sha256'] and a.size_bytes==facts[a.kind]['size_bytes'] for a in artifacts)
@@ -200,7 +200,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         assert hashlib.sha256(audio.read_bytes()).hexdigest() == voice_hash
         edges=[e for e in repo.lineage_records.list_dependency_edges('local',task_id) if e.created_by_transform_id==transform.id]
         assert {(e.upstream_ref,e.downstream_ref) for e in edges}=={(u,d) for u in transform.input_refs for d in transform.output_refs}
-        event=repo.get_task_event('local',f'event_{outer.id}_render_succeeded')
+        event=repo.execution_records.get_task_event('local',f'event_{outer.id}_render_succeeded')
         assert event.payload['stage']=='render' and event.payload['status']=='completed'
         assert event.payload['output']==version.id+':'+rendered['output_path']
         assert len(observations['renders'])==len(observations['paired_publications'])==len(observations['grant_validity'])==len(observations['qc_triggers'])==1

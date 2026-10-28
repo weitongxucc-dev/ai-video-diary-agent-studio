@@ -138,7 +138,7 @@ class CoverUseCase:
         self.on_settled = on_settled
 
     def _source_record(self, workspace_id, task_id, logical_ref):
-        records = self.repository.list_artifact_records(workspace_id, task_id)
+        records = self.repository.execution_records.list_artifact_records(workspace_id, task_id)
         source = next((item for item in records if item.logical_ref == logical_ref), None)
         if source is None:
             raise ValueError("封面源成片缺少原任务已登记摘要，不能无许可重扫文件")
@@ -361,7 +361,7 @@ class CoverUseCase:
             if checked != receipt:
                 raise ValueError("封面采用前固定回执发生变化")
             context.check()
-            self.repository.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_cover",
+            self.repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_cover",
                 workspace_id=command.workspace_id, task_id=command.task_id, kind="cover_image",
                 logical_ref=evidence.output_ref, sha256=evidence.output_sha256,
                 size_bytes=evidence.output_size_bytes, producer_job_id=job.id,
@@ -375,7 +375,7 @@ class CoverUseCase:
                 workspace_id=command.workspace_id, task_id=command.task_id,
                 upstream_ref=cover.source_video_ref, downstream_ref=evidence.output_ref,
                 created_by_transform_id=transform_id, created_at=receipt.generated_at), connection=connection)
-            self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_cover_adopted",
+            self.repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_cover_adopted",
                 workspace_id=command.workspace_id, task_id=command.task_id, job_id=job.id,
                 event_type="cover_adopted", payload={"edit_proposal_id": command.proposal_id,
                     "request_id": command.request_id, "receipt_ref": self.receipt_ref(job),
@@ -408,7 +408,7 @@ class CoverUseCase:
     def _start(self, workspace_id, job_id, connection=None):
         job = self.repository.get_job_run(workspace_id, job_id)
         try:
-            event = self.repository.get_task_event(workspace_id, f"event_{job.id}_cover_start", connection=connection)
+            event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_cover_start", connection=connection)
         except KeyError as exc:
             raise CoverUnresolved(job, "原封面Job缺少封存输入事件，结果保持未确定，不重生成") from exc
         command = CoverCommand.from_payload(event.payload["command"])
@@ -450,7 +450,7 @@ class CoverUseCase:
                         "preview_dependency", payload["resources"], ())):
                 return "unauthorized"
             try:
-                started = self.repository.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started", connection=connection)
+                started = self.repository.execution_records.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started", connection=connection)
             except KeyError:
                 return "ready" if job.status == "queued" else "unknown"
             if (request.state in {"granted", "yield_requested"} and job.status == "running"
@@ -585,7 +585,7 @@ class CoverUseCase:
             receipt = self.read_staged(command, job, max_receipt_bytes=budget.max_receipt_bytes)
             if receipt is None:
                 try:
-                    self.repository.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started")
+                    self.repository.execution_records.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started")
                 except KeyError:
                     if job.status != "queued":
                         raise RecoveryBlocked("原封面副作用未知，缺少回执，不重claim或重生成")
@@ -600,7 +600,7 @@ class CoverUseCase:
                 if len(encoded) > budget.max_receipt_bytes:
                     raise ValueError("封面封存输入超过profile控制文件上限")
                 self.artifact_store.publish_bytes(control_ref, encoded)
-                self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_cover_worker_started",
+                self.repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_cover_worker_started",
                     workspace_id=command.workspace_id, task_id=command.task_id, job_id=job.id,
                     event_type="cover_worker_started", payload={"request_id": grant.request_id,
                         "generation": grant.generation, "input_digest": command.input_digest}, created_at=job.created_at))
@@ -645,7 +645,7 @@ class CoverUseCase:
             else:
                 # Includes late adoption SQL failure. Preserve the concrete
                 # cause without turning an unknown side effect into a failure.
-                self.repository.append_task_event(TaskEvent(
+                self.repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_cover_deferred_{grant.generation}",
                     workspace_id=command.workspace_id, task_id=command.task_id, job_id=job.id,
                     event_type="cover_adoption_deferred", payload={"request_id": grant.request_id,

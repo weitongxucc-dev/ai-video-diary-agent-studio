@@ -133,7 +133,7 @@ class PictureFragmentAssembly:
                 conn.execute('BEGIN IMMEDIATE')
             write_guard(conn)
             from app.creation_execution import CreationExecutionActor
-            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
             if actor != CreationExecutionActor.from_event(job.workspace_id, event.payload):
                 raise PermissionError('画面窗口原Job身份不匹配')
             for source in sources.values():
@@ -143,13 +143,13 @@ class PictureFragmentAssembly:
             if (current.current_timeline_version_id != payload['head']
                     or self.packet.recipe(job, connection=conn) != payload['picture_recipe']):
                 raise ValueError('原任务画面配方在manifest封存期间已变化')
-            self.repository.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
+            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
                 job.id, 'picture_fragment_manifest', payload), connection=conn)
         return payload
 
     def manifest(self, job, *, actor, connection=None):
         try:
-            event = self.repository.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
         except KeyError:
             return None
         payload = event.payload
@@ -281,14 +281,14 @@ class PictureFragmentAssembly:
                 conn.execute('BEGIN IMMEDIATE')
                 publication_guard(conn)
                 self.manifest(job, actor=actor, connection=conn)
-                self.repository.create_artifact_record(record, connection=conn)
+                self.repository.execution_records.create_artifact_record(record, connection=conn)
                 self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 if published_subtitles is not None:
                     subtitle_id = f'artifact_subtitles_{unit["id"]}'
                     subtitle_record = ArtifactRecord(subtitle_id, job.workspace_id, job.task_id, 'subtitle_track',
                         subtitle_logical, published_subtitles.sha256, published_subtitles.size_bytes, job.id,
                         [f'montage-plan://{job.task_id}/{self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn)["id"]}'])
-                    self.repository.create_artifact_record(subtitle_record, connection=conn)
+                    self.repository.execution_records.create_artifact_record(subtitle_record, connection=conn)
                     self.repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{subtitle_id}',
                         workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                         transform_type='subtitle_render', input_digest=unit['id'], input_refs=subtitle_record.input_refs,
@@ -326,7 +326,7 @@ class PictureFragmentAssembly:
             except (OSError, ValueError):
                 known = False
             with self.repository._connect() as conn:
-                self.repository.append_task_event(TaskEvent(self.measured_event_id(context.grant), job.workspace_id,
+                self.repository.execution_records.append_task_event(TaskEvent(self.measured_event_id(context.grant), job.workspace_id,
                     job.task_id, job.id, 'picture_fragment_output_measured', {'request_id': context.grant.request_id,
                         'permit_generation': context.grant.generation, 'consumption_known': known,
                         'output_bytes': total if known else None}), connection=conn)
@@ -350,7 +350,7 @@ class PictureFragmentAssembly:
         if unit['subtitle_bytes'] == 0:
             return None
         self.packet._parent(job, unit['artifact_id'], manifest['picture_recipe'], connection=connection)
-        record = self.repository.get_artifact_record(job.workspace_id, f'artifact_subtitles_{unit["id"]}')
+        record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_subtitles_{unit["id"]}')
         transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         if (record.producer_job_id != job.id or record.task_id != job.task_id or record.kind != 'subtitle_track'
                 or record.sha256 != unit['subtitle_sha256'] or record.size_bytes != unit['subtitle_bytes']

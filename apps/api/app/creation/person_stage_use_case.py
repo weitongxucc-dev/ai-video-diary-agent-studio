@@ -108,9 +108,9 @@ class PersonStageUseCase:
                         published = self.metadata.artifact_store.publish_file(logical_ref, source)
                     artifact_id = f'artifact_{context.job_id}_person_render'
                     try:
-                        self.repository.get_artifact_record(context.workspace_id, artifact_id)
+                        self.repository.execution_records.get_artifact_record(context.workspace_id, artifact_id)
                     except KeyError:
-                        self.repository.create_artifact_record(ArtifactRecord(id=artifact_id, workspace_id=context.workspace_id, task_id=task_id, kind='person_render', logical_ref=logical_ref, sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=context.job_id, input_refs=input_refs))
+                        self.repository.execution_records.create_artifact_record(ArtifactRecord(id=artifact_id, workspace_id=context.workspace_id, task_id=task_id, kind='person_render', logical_ref=logical_ref, sha256=published.sha256, size_bytes=published.size_bytes, producer_job_id=context.job_id, input_refs=input_refs))
                     transform_id = f'transform_{context.job_id}'
                     try:
                         transform = self.repository.lineage_records.get_transform_run(context.workspace_id, transform_id)

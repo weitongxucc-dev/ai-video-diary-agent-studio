@@ -185,7 +185,7 @@ class TimelineRestoreUseCase:
             receipt = self.read_request(workspace_id, task_id, request_id, actor)
             if receipt['status'] == 'applied':
                 return self.replay(workspace_id, task_id, receipt)
-            self.repository.append_task_event(TaskEvent(event_id+'_refusal', workspace_id, task_id, None,
+            self.repository.execution_records.append_task_event(TaskEvent(event_id+'_refusal', workspace_id, task_id, None,
                 'timeline_restore_refused', {'code': 'timeline_restore_refused', 'effect': 'refused',
                     'reason': str(exc)[:512], 'retryable': False}))
             raise
@@ -224,7 +224,7 @@ class TimelineRestoreUseCase:
             raise EditConflict("timeline undo operation is unavailable") from exc
         history = changed_operation.payload if changed_operation.operation_type == 'ReviseScriptSection' else changed_operation.payload.get('section_history')
         if isinstance(history,dict) and 'before_publication' in history:
-            expected = (history['before_dependencies'] if command.redo else self.repository.get_task_event(
+            expected = (history['before_dependencies'] if command.redo else self.repository.execution_records.get_task_event(
                 workspace_id,f'event_{history["operation_id"]}_dependencies').payload['dependencies'])
             # A prior scoped control version records the exact composed dependencies it created.
             cursor = task.current_timeline_version_id
@@ -234,7 +234,7 @@ class TimelineRestoreUseCase:
                     control = self.repository.get_edit_operation(workspace_id,recent.created_by_operation_id)
                     if (control.payload.get('section_history',{}).get('after_publication') == history['after_publication']
                             and control.payload.get('section_restore_side') == ('before' if command.redo else 'after')):
-                        expected = self.repository.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
+                        expected = self.repository.execution_records.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
                         break
                     if control.operation_type == 'ReviseScriptSection':
                         break
@@ -418,7 +418,7 @@ class TimelineRestoreUseCase:
                 values[key] = datetime.fromisoformat(values[key])
             segment = NarrationSegment(**values)
             desired_version = self.repository.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
-            publication = self.repository.get_task_event(workspace_id,history[f'{side}_publication'])
+            publication = self.repository.execution_records.get_task_event(workspace_id,history[f'{side}_publication'])
             job = self.repository.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
                 kind='section_timeline_restore',idempotency_key=f'section_restore:{uuid4().hex}',
                 input_digest=hashlib.sha256(json.dumps([history,command.redo,prepared.section_dependencies],sort_keys=True).encode()).hexdigest()))

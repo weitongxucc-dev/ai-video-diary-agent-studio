@@ -112,7 +112,7 @@ def test_short_preview_replay_cancel_and_changed_base_do_not_execute(tmp_path, m
         assert replay.status_code == 202 and replay.json()['job_id'] == second.json()['job_id']
         assert client.get(second.json()['result_url']).json()['status'] == 'stale'
         assert not runtime.run_once()
-        assert not [item for item in repo.list_artifact_records('local', 'task') if item.kind == 'color_preview']
+        assert not [item for item in repo.execution_records.list_artifact_records('local', 'task') if item.kind == 'color_preview']
     finally:
         runtime.stop(0)
 
@@ -343,7 +343,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     assert runtime.run_once()
     done=client.get(queued.json()['result_url']).json()
     assert done['status']=='succeeded',done
-    records=[record for record in repo.list_artifact_records('local','task') if record.producer_job_id==queued.json()['job_id']]
+    records=[record for record in repo.execution_records.list_artifact_records('local','task') if record.producer_job_id==queued.json()['job_id']]
     assert len(records)==2
     for record in records:
         probe=subprocess.run(['ffprobe','-v','error','-show_entries','stream=codec_type,width,height:format=duration',

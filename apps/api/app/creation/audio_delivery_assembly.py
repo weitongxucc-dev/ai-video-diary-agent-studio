@@ -141,13 +141,13 @@ class AudioDeliveryAssembly:
             if existing != payload:
                 raise ValueError('原音画交付manifest已绑定其他来源、时钟或配方')
             return existing
-        self.repository.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id, job.id,
+        self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id, job.id,
             'audio_delivery_manifest', payload), connection=connection)
         return payload
 
     def manifest(self, job, *, actor, connection=None):
         try:
-            event = self.repository.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
         except KeyError:
             return None
         payload = event.payload
@@ -167,7 +167,7 @@ class AudioDeliveryAssembly:
     def _artifact(self, job, manifest, phase, *, connection=None):
         identity = self._unit(manifest, phase)
         try:
-            record = self.repository.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}')
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}')
         except KeyError:
             return None
         transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
@@ -231,7 +231,7 @@ class AudioDeliveryAssembly:
             paths = {key: str(Path(path).parent) for key, path in files.items()}
             event_id = f'event_{job.id}_{phase}_resources_{identity}'
             try:
-                sealed = self.repository.get_task_event(job.workspace_id, event_id, connection=connection).payload
+                sealed = self.repository.execution_records.get_task_event(job.workspace_id, event_id, connection=connection).payload
             except KeyError:
                 sealed = None
             if sealed is None and not prepare:
@@ -259,7 +259,7 @@ class AudioDeliveryAssembly:
             if sealed is not None and sealed != resources:
                 raise ValueError('音画单元原封存声明已变化')
             if sealed is None:
-                self.repository.append_task_event(TaskEvent(event_id, job.workspace_id, job.task_id, job.id,
+                self.repository.execution_records.append_task_event(TaskEvent(event_id, job.workspace_id, job.task_id, job.id,
                     'audio_delivery_resources', resources), connection=connection)
             return f'render:{phase.replace("_", "-")}:v1:{identity}', resources
         return None
@@ -366,7 +366,7 @@ class AudioDeliveryAssembly:
                 conn.execute('BEGIN IMMEDIATE')
                 publication_guard(conn)
                 self.manifest(job, actor=actor, connection=conn)
-                self.repository.create_artifact_record(record, connection=conn)
+                self.repository.execution_records.create_artifact_record(record, connection=conn)
                 self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 for index, reference in enumerate(record.input_refs):
                     self.repository.lineage_records.create_dependency_edge(DependencyEdge(f'edge_{record.id}_{index}', job.workspace_id,
@@ -388,7 +388,7 @@ class AudioDeliveryAssembly:
             except (OSError, ValueError):
                 known = False
             with self.repository._connect() as conn:
-                self.repository.append_task_event(TaskEvent(self.measured_event_id(context.grant), job.workspace_id,
+                self.repository.execution_records.append_task_event(TaskEvent(self.measured_event_id(context.grant), job.workspace_id,
                     job.task_id, job.id, 'audio_delivery_output_measured', {'request_id': context.grant.request_id,
                         'permit_generation': context.grant.generation, 'consumption_known': known,
                         'output_bytes': total if known else None}), connection=conn)

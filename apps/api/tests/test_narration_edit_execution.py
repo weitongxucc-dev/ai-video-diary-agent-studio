@@ -334,7 +334,7 @@ def fixture(tmp_path):
         "input_digest": digest,
         "edit_proposal_id": proposal.id,
     }
-    repo.append_task_event(
+    repo.execution_records.append_task_event(
         TaskEvent(
             "event_job_start",
             "local",
@@ -427,7 +427,7 @@ def fixture(tmp_path):
 
 def submit(f):
     key, _ = f.owner.narration_edit_facts(
-        f.job, f.task, f.repo.get_task_event("local", "event_job_start").payload, f.plan
+        f.job, f.task, f.repo.execution_records.get_task_event("local", "event_job_start").payload, f.plan
     )
     return f.runtime.scheduler.submit(
         SubmissionIntent(
@@ -469,7 +469,7 @@ def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
         and changed["subtitle_tracks"] == f.montage["subtitle_tracks"]
     )
     assert (
-        f.repo.get_task_event("local", "event_job_narration_edit_succeeded").payload[
+        f.repo.execution_records.get_task_event("local", "event_job_narration_edit_succeeded").payload[
             "request_id"
         ]
         == request.id

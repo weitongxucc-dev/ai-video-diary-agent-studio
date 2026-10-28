@@ -125,7 +125,7 @@ class ScriptGenerationIntent:
                 prompt_schema_version="creation-task-script/v2", input_references=frozen["input_references"],
             )
             self.repository.start_script_generation(run, connection=conn)
-            self.repository.append_task_event(TaskEvent(
+            self.repository.execution_records.append_task_event(TaskEvent(
                 id=event_id, workspace_id=workspace_id, task_id=task_id, job_id=None,
                 event_type="script_generation_requested", payload={
                     "request_id": request_id, "conversation_id": conversation["id"], "turn_id": turn["id"],
@@ -156,7 +156,7 @@ class ScriptGenerationIntent:
         if receipt is None:
             raise KeyError(request_id)
         context = receipt["request_context"]
-        event = self.repository.get_task_event(
+        event = self.repository.execution_records.get_task_event(
             workspace_id, self._event_id(workspace_id, task_id, request_id), connection=conn,
         )
         facts = event.payload
@@ -209,7 +209,7 @@ class ScriptGenerationIntent:
 
     def _optional_event(self, conn, workspace_id, event_id):
         try:
-            return self.repository.get_task_event(workspace_id, event_id, connection=conn)
+            return self.repository.execution_records.get_task_event(workspace_id, event_id, connection=conn)
         except KeyError:
             return None
 
@@ -241,7 +241,7 @@ class ScriptGenerationIntent:
         if facts["turn_status"] != "running" or facts["run_id"] != run_id or facts["script_id"] != script_id:
             raise PermissionError("文案结果不属于原生成请求的活动回合")
         receipt = self.conversations.read_user_action_request(conn, workspace_id, task_id, request_id, member_id)
-        event = self.repository.get_task_event(workspace_id, self._event_id(workspace_id, task_id, request_id), connection=conn)
+        event = self.repository.execution_records.get_task_event(workspace_id, self._event_id(workspace_id, task_id, request_id), connection=conn)
         task = self.repository.get_creation_task(workspace_id, task_id, connection=conn)
         self._require_current_input(conn, task, member_id, receipt, event.payload)
         script = facts["script"]
@@ -254,7 +254,7 @@ class ScriptGenerationIntent:
         result = {"run_id": run_id, "script_id": script_id, "updated_at": str(script["updated_at"]),
                   "status": "draft_ready" if draft_ready else "draft_partial", "requested_effect": "draft"}
         self.conversations.bind_user_action_result(conn, workspace_id, task_id, request_id, member_id, result)
-        self.repository.append_task_event(TaskEvent(
+        self.repository.execution_records.append_task_event(TaskEvent(
             id=self._event_id(workspace_id, task_id, request_id, "ready" if draft_ready else "draft"),
             workspace_id=workspace_id, task_id=task_id, job_id=None,
             event_type="script_generation_draft_ready" if draft_ready else "script_generation_draft_bound",
@@ -283,7 +283,7 @@ class ScriptGenerationIntent:
                 return self.public_projection(record)
             if record["turn_status"] != "running" or record["status"] == "draft_ready":
                 raise ValueError("原生成请求已结束，未追加停止动作")
-            self.repository.append_task_event(TaskEvent(
+            self.repository.execution_records.append_task_event(TaskEvent(
                 id=self._event_id(workspace_id, task_id, request_id, "stop"),
                 workspace_id=workspace_id, task_id=task_id, job_id=None,
                 event_type="script_generation_stop_requested",
@@ -362,7 +362,7 @@ class ScriptGenerationIntent:
             if self._optional_event(conn, workspace_id,
                     self._event_id(workspace_id, task_id, request_id, "unknown")) is not None:
                 return self.public_projection(record)
-            self.repository.append_task_event(TaskEvent(
+            self.repository.execution_records.append_task_event(TaskEvent(
                 id=self._event_id(workspace_id, task_id, request_id, "unknown"),
                 workspace_id=workspace_id, task_id=task_id, job_id=None,
                 event_type="script_generation_outcome_unknown",
@@ -390,7 +390,7 @@ class ScriptGenerationIntent:
                 if record["turn_status"] != "running" or self._optional_event(conn, workspace_id, dispatch_id) is not None:
                     return self.public_projection(record)
                 record = self.read_generation_request(conn, workspace_id, task_id, request_id, member_id)
-                self.repository.append_task_event(TaskEvent(
+                self.repository.execution_records.append_task_event(TaskEvent(
                     id=dispatch_id, workspace_id=workspace_id, task_id=task_id, job_id=None,
                     event_type="script_generation_dispatched",
                     payload={"request_id": request_id, "run_id": record["run_id"], "turn_id": record["turn_id"]}), connection=conn)

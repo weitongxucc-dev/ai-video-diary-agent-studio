@@ -23,7 +23,7 @@ class DeliveryAdoptionRecovery:
         return f'event_{job.id}_delivery_adoption_{unit_id}'
 
     def _authorize(self, job, actor, owner, conn):
-        event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
+        event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
         if actor != CreationExecutionActor.from_event(job.workspace_id, event.payload):
             raise PermissionError('仅原作业成员可接续采用已知成片')
         task = self.repository.get_creation_task(job.workspace_id, job.task_id, connection=conn)
@@ -54,7 +54,7 @@ class DeliveryAdoptionRecovery:
             raise ValueError('原失败单元不是已知最终封装')
         receipt_id, receipt = self._settled(job, original, conn)
         try:
-            measured = self.repository.get_task_event(job.workspace_id,
+            measured = self.repository.execution_records.get_task_event(job.workspace_id,
                 f'event_{original["id"]}_{original["last_grant_generation"]}_delivery_output', connection=conn)
         except KeyError as exc:
             raise RecoveryBlocked('原最终媒体计量回执缺失，仅可查询，不能采用或重做') from exc
@@ -68,7 +68,7 @@ class DeliveryAdoptionRecovery:
         if resources['unit_id'] != unit_id or original['unit_key'] != f'render:final-mux:v1:{unit_id}':
             raise ValueError('原封装单元身份不匹配')
         try:
-            record = self.repository.get_artifact_record(job.workspace_id, f'artifact_final_mux_{unit_id}')
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_final_mux_{unit_id}')
             transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
         except KeyError as exc:
             raise RecoveryBlocked('原最终媒体登记未完成，仅可查询原回执，不能采用或重做') from exc
@@ -143,7 +143,7 @@ class DeliveryAdoptionRecovery:
             'narration': owner.picture_fragments.metadata.current_narration_snapshot(job.workspace_id, task),
             'cover': asdict(cover) if cover is not None else None}, default=str))
         if sealed is None:
-            record = self.repository.get_artifact_record(job.workspace_id, video['parent']['binding']['artifact_id'])
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, video['parent']['binding']['artifact_id'])
             candidate = compile_delivery_adoption(self.delivery, conn, job, actor=actor,
                 grant=SimpleNamespace(request_id='0'*32, generation=9223372036854775807), record=record,
                 picture_fragments=owner.picture_fragments, manifest=manifest, completed=video,
@@ -160,7 +160,7 @@ class DeliveryAdoptionRecovery:
         return payload
 
     def read_plan(self, job, unit_id, conn):
-        event = self.repository.get_task_event(job.workspace_id, self.plan_event_id(job, unit_id), connection=conn)
+        event = self.repository.execution_records.get_task_event(job.workspace_id, self.plan_event_id(job, unit_id), connection=conn)
         plan = event.payload
         if (event.event_type != 'delivery_adoption_prepared' or event.job_id != job.id or event.task_id != job.task_id
                 or plan['unit_id'] != unit_id or plan['job_id'] != job.id or plan['input_digest'] != job.input_digest
@@ -225,7 +225,7 @@ class DeliveryAdoptionRecovery:
                 raise RecoveryBlocked('原采用接续的来源或有限策略已变化')
             self.repository.reopen_failed_job_run(job.workspace_id, job.id, expected_updated_at=current_job.updated_at,
                 expected_attempt=current_job.attempt, connection=conn)
-            self.repository.append_task_event(TaskEvent(self.plan_event_id(job, plan['unit_id']), job.workspace_id,
+            self.repository.execution_records.append_task_event(TaskEvent(self.plan_event_id(job, plan['unit_id']), job.workspace_id,
                 job.task_id, job.id, 'delivery_adoption_prepared', {**plan, 'new_request_id': new_id, 'resources': resources}), connection=conn)
             return owner.verify_submission(intent, actor, connection=conn)
         return scheduler.continue_failed_unit(prior.id, intent, actor, expected_failed_generation=prior.last_grant_generation,
@@ -286,7 +286,7 @@ class DeliveryAdoptionRecovery:
     def adopt(self, conn, job, *, actor, context, plan, picture_fragments):
         from app.creation.final_delivery_adoption import adopt_delivery
         self.unit_facts(job, actor, self._owner(context.scheduler), request=context.scheduler._get(context.grant.request_id), connection=conn)
-        record = self.repository.get_artifact_record(job.workspace_id, plan['video']['parent']['binding']['artifact_id'])
+        record = self.repository.execution_records.get_artifact_record(job.workspace_id, plan['video']['parent']['binding']['artifact_id'])
         return adopt_delivery(self.delivery, conn, job, actor=actor, grant=context.grant, record=record,
             picture_fragments=picture_fragments, recovery_plan=plan)
 

@@ -125,7 +125,7 @@ def test_missing_audio_budget_marks_registered_job_rejected_without_queue(tmp_pa
         assert saved.impact and saved.repair_action
         with repo._connect() as conn:
             assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 0
-        event = repo.get_task_event('local', f'event_{job.id}_admission_failed')
+        event = repo.execution_records.get_task_event('local', f'event_{job.id}_admission_failed')
         assert event.payload['status'] == 'failed'
     finally:
         scheduler.close()
@@ -139,7 +139,7 @@ def test_unknown_submission_does_not_invent_failed_state(tmp_path, monkeypatch):
         with pytest.raises(OSError, match='transport unknown'):
             submit_creation_stage(execution, scheduler, job, actor)
         assert repo.get_job_run('local', job.id).status == 'queued'
-        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.list_task_events('local', task_id))
+        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.execution_records.list_task_events('local', task_id))
     finally:
         scheduler.close()
 
@@ -312,7 +312,7 @@ def test_existing_blocked_request_is_not_invented_as_never_submitted_failure(tmp
         with pytest.raises(ValueError, match='audio input changed'):
             submit_creation_stage(execution, scheduler, job, actor)
         assert repo.get_job_run('local', job.id).status == 'queued'
-        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.list_task_events('local', task_id))
+        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.execution_records.list_task_events('local', task_id))
         with repo._connect() as conn:
             pending = conn.execute('SELECT state,wait_reason FROM device_work_requests WHERE id=?',(request_id,)).fetchone()
         assert dict(pending) == {'state':'blocked', 'wait_reason':'worker_interrupted'}
@@ -397,7 +397,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         transform = service._transform_for('local', task_id, analysis)
         cuts = [[300,600]]
         after, tracks = remove_time_ranges(before, [], graph, cuts)
-        repo.append_task_event(TaskEvent(id=f'event_{job.id}_{analysis.id}_silence_detected', workspace_id='local',
+        repo.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_{analysis.id}_silence_detected', workspace_id='local',
             task_id=task_id, job_id=job.id, event_type='silence_analysis_result', payload={
                 'base_version_id':'timeline_silence', 'clip_id':'clip_1', 'analysis_ref':analysis.logical_ref,
                 'analysis_sha256':analysis.sha256, 'transform_id':transform.id, 'removed_ranges_ms':cuts}))
@@ -406,7 +406,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         actual = {'operation':'picture_preview', 'parameters':{'side':'after','removed_ranges_ms':cuts,
                   'analysis_ref':analysis.logical_ref if mutation != 'missing_analysis' else 'artifacts/absent.wav'},
                   'media_input':{'plan':creation_task_montage_plan_to_payload(after), 'subtitle_tracks':[]}}
-        repo.append_task_event(TaskEvent(id='actual-after-input', workspace_id='local', task_id=task_id, job_id=job.id,
+        repo.execution_records.append_task_event(TaskEvent(id='actual-after-input', workspace_id='local', task_id=task_id, job_id=job.id,
                                         event_type='task_media_input', payload=actual))
         if mutation in {'uses', 'video_uses'}:
             # The existing calibrated profile remains three; a smaller sealed

@@ -28,7 +28,7 @@ def _declared_result(repo, job, result):
     # Input facts for read projection only, never proof of a worker run.
     from app.creation.contracts import TaskEvent
     repo.claim_job_run(job.workspace_id, job.id)
-    repo.append_task_event(TaskEvent(f'event_{job.id}_result', job.workspace_id, job.task_id, job.id,
+    repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_result', job.workspace_id, job.task_id, job.id,
         'task_media_result', {'result': result}))
     repo.finish_job_run(job.workspace_id, job.id, status='succeeded')
 
@@ -371,7 +371,7 @@ def test_owner_media_pages_reject_foreign_cursor_without_execution(tmp_path):
     media=TaskMediaJobs(s.repo,facts=lambda *args:None,verify_identity=lambda actor:'ready')
     def add(job_id,who,task_id=s.task.id):
         s.repo.create_job_run(JobRun(job_id,'ws',task_id,TASK_MEDIA_KIND,job_id,'fixture'))
-        s.repo.append_task_event(TaskEvent('event_'+job_id+'_start','ws',task_id,job_id,'task_media_started',who.identity_payload()))
+        s.repo.execution_records.append_task_event(TaskEvent('event_'+job_id+'_start','ws',task_id,job_id,'task_media_started',who.identity_payload()))
     for n in range(3): add('own-'+str(n),actor)
     other=replace(actor,member_id='other')
     add('foreign',other)

@@ -209,7 +209,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     saved_artifact = repo.get_narration_artifact("local", task.narration_cache_key)
     assert saved_artifact is not None and saved_artifact.source_artifact_ref == saved["source_ref"]
     assert saved_artifact.source_sha256 == next(
-        item.sha256 for item in repo.list_artifact_records("local", task_id)
+        item.sha256 for item in repo.execution_records.list_artifact_records("local", task_id)
         if item.logical_ref == saved["source_ref"]
     )
     segment = repo.list_narration_segments("local", task_id)[0]
@@ -264,7 +264,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     job = execution.start("local", task_id, current_script.id,
                           revision_digest(current_script, current_plan), actor=actor)
     assert job.status == "queued"
-    start_event = restarted.get_task_event("local", f"event_{job.id}_start")
+    start_event = restarted.execution_records.get_task_event("local", f"event_{job.id}_start")
     assert start_event.payload["script_id"] == current_script.id
     owner = CreationJobOwnerVerifier(restarted)
     scheduler = SimpleNamespace(owners=owner)
@@ -693,14 +693,14 @@ def recording_metadata(tmp_path, monkeypatch):
     blob = store.publish_bytes('artifacts/declared-recording.webm', b'declared saved recording bytes; not media acceptance')
     job = repo.create_job_run(JobRun('declared-recording-job','local',task.id,TASK_MEDIA_KIND,'declared-recording',hashlib.sha256(b'declared').hexdigest()))
     running = repo.claim_job_run('local',job.id)
-    source = repo.create_artifact_record(ArtifactRecord('declared-recording-source','local',task.id,'task_recording',
+    source = repo.execution_records.create_artifact_record(ArtifactRecord('declared-recording-source','local',task.id,'task_recording',
         blob.logical_ref,blob.sha256,blob.size_bytes,job.id,[]))
     repo.lineage_records.create_transform_run(TransformRun('declared-recording-transform','local',task.id,job.id,
         'task_recording',job.input_digest,[],[source.logical_ref],'declared metadata',
         {'duration_ms':1000,'script_id':script['id'],'script_digest':digest,'montage_plan_id':None},
         'succeeded',running.started_at,utc_now()))
     stat = store.resolve_file(source.logical_ref).stat()
-    repo.append_task_event(TaskEvent('event_'+job.id+'_verified','local',task.id,job.id,'task_media_verified',
+    repo.execution_records.append_task_event(TaskEvent('event_'+job.id+'_verified','local',task.id,job.id,'task_media_verified',
         {'outputs':[{'reference':source.logical_ref,'size_bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns}]}))
     repo.finish_job_run('local',job.id,status='succeeded',output_refs=[source.logical_ref])
     monkeypatch.setattr(main_module,'production_repo',repo)

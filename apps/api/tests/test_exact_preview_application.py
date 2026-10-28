@@ -117,7 +117,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     expected_actor = CreationExecutionActor.from_event(state.workspace_id,start).identity_payload()
     assert saved_source == {**source, 'media_job_id': job_id, 'actor_identity': expected_actor}
     assert saved_source['request_id'] == request_id and saved_source['action'] == source['action']
-    records = [r for r in state.production.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
+    records = [r for r in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
     assert len(records) == 2 and {r.kind for r in records} == {'graphic_preview'}
     sides = {case.metadata.audio_service._transform_for(state.workspace_id,state.task.id,r).parameters['graphic_overlays'][0]['x']: r for r in records}
     assert set(sides) == {.5, .25}

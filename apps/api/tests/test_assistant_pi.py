@@ -934,7 +934,7 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "_assistant_turn_scope",
                         lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
     monkeypatch.setattr(main_module, "_assistant_task_clip_material_selection", lambda *_args: None)
-    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event, list_subtitle_tracks=lambda *_: []))
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(execution_records=SimpleNamespace(append_task_event=lambda event: event), list_subtitle_tracks=lambda *_: []))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
     message = "请检查镜头"

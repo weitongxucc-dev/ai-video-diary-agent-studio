@@ -10,7 +10,7 @@ def test_library_draft_sources_use_current_permissions_without_topic_or_body(lib
     task = repo.get_creation_task('local', task_id)
     assert task.selected_topic_id is None
     before = repo.script_records.read_creation_task_script_header('local', script_id)
-    before_events = repo.list_task_events('local', task_id)
+    before_events = repo.execution_records.list_task_events('local', task_id)
 
     def forbidden(*args, **kwargs):
         raise AssertionError('source choices must not load script bodies or call a model')
@@ -31,4 +31,4 @@ def test_library_draft_sources_use_current_permissions_without_topic_or_body(lib
     refused = client.get(url)
     assert refused.status_code == 409, refused.text
     assert repo.script_records.read_creation_task_script_header('local', script_id) == before
-    assert repo.list_task_events('local', task_id) == before_events
+    assert repo.execution_records.list_task_events('local', task_id) == before_events

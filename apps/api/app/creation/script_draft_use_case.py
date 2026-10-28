@@ -545,7 +545,7 @@ class ScriptDraftUseCase:
         request_digest=hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
         result_write=None
         if source_binding is not None:
-            previous=[event for event in self.repository.list_task_events(workspace_id,task_id)
+            previous=[event for event in self.repository.execution_records.list_task_events(workspace_id,task_id)
                 if event.event_type=='assistant_script_saved' and event.payload['source']==source_binding
                 and event.payload['request_digest']==request_digest]
             if previous:

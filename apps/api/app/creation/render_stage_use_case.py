@@ -191,7 +191,7 @@ class RenderStageUseCase:
                     or snapshot.get("output_refs") != output_refs):
                 raise ValueError("成片恢复输入或已发布产物不匹配")
             render_context.scheduler.assert_grant(render_context.grant)
-            subtitle_record = self.repository.get_artifact_record(workspace_id, f"artifact_{inner_id}_subtitles")
+            subtitle_record = self.repository.execution_records.get_artifact_record(workspace_id, f"artifact_{inner_id}_subtitles")
             published_subtitle = self.metadata.artifact_store.describe(plan.subtitle_path)
             if (subtitle_record.producer_job_id != inner_id or subtitle_record.logical_ref != plan.subtitle_path
                     or subtitle_record.sha256 != published_subtitle.sha256
@@ -220,7 +220,7 @@ class RenderStageUseCase:
                 and latest_matching_job.status == "succeeded"):
             reusable_records = [
                 record
-                for record in self.repository.list_artifact_records(workspace_id, task.id)
+                for record in self.repository.execution_records.list_artifact_records(workspace_id, task.id)
                 if record.producer_job_id == latest_matching_job.id
                 and record.logical_ref in latest_matching_job.output_refs
             ]
@@ -299,7 +299,7 @@ class RenderStageUseCase:
                             )
                             if initial_track is not None:
                                 self.repository.create_subtitle_track(initial_track)
-                    self.repository.append_task_event(
+                    self.repository.execution_records.append_task_event(
                         TaskEvent(
                             id=f"event_{version.id}_render_reused",
                             workspace_id=workspace_id,
@@ -398,9 +398,9 @@ class RenderStageUseCase:
                     ),
                 ):
                     try:
-                        self.repository.get_artifact_record(workspace_id, artifact_id)
+                        self.repository.execution_records.get_artifact_record(workspace_id, artifact_id)
                     except KeyError:
-                        self.repository.create_artifact_record(
+                        self.repository.execution_records.create_artifact_record(
                             ArtifactRecord(
                                 id=artifact_id,
                                 workspace_id=workspace_id,
@@ -512,9 +512,9 @@ class RenderStageUseCase:
                 )
                 event_id = f"event_{context.job_id}_render_succeeded"
                 try:
-                    self.repository.get_task_event(workspace_id, event_id)
+                    self.repository.execution_records.get_task_event(workspace_id, event_id)
                 except KeyError:
-                    self.repository.append_task_event(
+                    self.repository.execution_records.append_task_event(
                         TaskEvent(
                             id=event_id,
                             workspace_id=workspace_id,
@@ -726,7 +726,7 @@ class RenderStageUseCase:
                                 or not self.person_preview.render_matches_narration(person_render, segment, person_transforms)):
                             return False
             registered = next(
-                (artifact for artifact in self.repository.list_artifact_records(workspace_id, task_id)
+                (artifact for artifact in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                  if artifact.logical_ref == ref and artifact.kind == "rendered_video"),
                 None,
             )

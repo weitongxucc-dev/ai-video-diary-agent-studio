@@ -120,7 +120,7 @@ def test_original_job_packet_tree_restarts_with_original_parents_and_real_limits
     assert first is not None
     case.executor.execute(first, case.scheduler)
     assert case.scheduler._get(first.request_id).state == 'done', case.repo.get_job_run('local', case.job.id).failure_reason
-    completed = case.repo.get_artifact_record('local', plan['units'][0]['artifact_id'])
+    completed = case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
     old_path = store.resolve_file(completed.logical_ref)
     old_sha, old_mtime = completed.sha256, old_path.stat().st_mtime_ns
     case.scheduler.close()
@@ -160,7 +160,7 @@ def test_packet_copy_before_start_rechecks_original_parent_and_quota(tmp_path, m
     assert grant is not None
     baseline = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
     if attack == 'parent_bytes':
-        record = case.repo.get_artifact_record('local', plan['leaf_artifact_ids'][0])
+        record = case.repo.execution_records.get_artifact_record('local', plan['leaf_artifact_ids'][0])
         with store.resolve_file(record.logical_ref).open('r+b') as file:
             file.write(b'changed')
         error = PermissionError
@@ -198,10 +198,10 @@ def test_packet_publication_unknown_keeps_original_reservation_and_receipt(tmp_p
         case.executor.execute(grant, case.scheduler)
     usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
     assert usage['reserved_bytes'] > 0 and usage['unknown_unit_count'] == 1
-    event = case.repo.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_output')
+    event = case.repo.execution_records.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_output')
     assert event.payload['consumption_known'] is False and event.payload['output_bytes'] is None
     with pytest.raises(KeyError):
-        case.repo.get_artifact_record('local', plan['units'][0]['artifact_id'])
+        case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
     case.scheduler.close()
 
 
@@ -216,7 +216,7 @@ def test_packet_parent_admission_reads_only_stats_and_sha_runs_in_original_grant
     allowed = [False]
     verified_grants, copied = [], []
     def guard_before_prepare(case, service, store, artifact_ids):
-        parent_paths = {store.resolve_file(case.repo.get_artifact_record('local', identity).logical_ref)
+        parent_paths = {store.resolve_file(case.repo.execution_records.get_artifact_record('local', identity).logical_ref)
             for identity in artifact_ids}
         if corrupt:
             with next(iter(parent_paths)).open('r+b') as file:
@@ -265,13 +265,13 @@ def test_packet_parent_admission_reads_only_stats_and_sha_runs_in_original_grant
     if corrupt:
         assert not copied and request.state == 'failed'
         assert '完整SHA' in case.repo.get_job_run('local', case.job.id).failure_reason
-        measured = case.repo.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_output')
+        measured = case.repo.execution_records.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_output')
         assert measured.payload['consumption_known'] is True and measured.payload['output_bytes'] == 0
         with pytest.raises(KeyError):
-            case.repo.get_artifact_record('local', plan['units'][0]['artifact_id'])
+            case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
     else:
         assert copied == [True] and request.state == 'done'
-        checkpoint = case.repo.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_parents_verified')
+        checkpoint = case.repo.execution_records.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_parents_verified')
         assert len(checkpoint.payload['parents']) == 2
         assert service.master(case.repo.get_job_run('local', case.job.id)) is None
     case.scheduler.close()

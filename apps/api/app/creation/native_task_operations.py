@@ -381,7 +381,7 @@ class NativeTaskOperations:
             f'native:{origin["task_id"]}:{actor.member_id}:{request_id}')
         if job is None:
             return None
-        event = self.repository.get_task_event(actor.workspace_id,f'event_{job.id}_start').payload
+        event = self.repository.execution_records.get_task_event(actor.workspace_id,f'event_{job.id}_start').payload
         expected = {key:value for key,value in event['arguments'].items() if not key.startswith('_')}
         if (event['operation']!=operation or expected!=arguments or any(event['origin'].get(key)!=origin.get(key)
                 for key in ('task_id','conversation_id','assistant_turn_id','input_id','session_id'))):
@@ -417,7 +417,7 @@ class NativeTaskOperations:
         job = self.repository.get_job_run(job.workspace_id,job.id)
         result = self.repository.native_operation_result(job.workspace_id,job.id) or {}
         requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
-        return {'job_id':job.id,'request_id':self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start').payload['request_id'],
+        return {'job_id':job.id,'request_id':self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload['request_id'],
             'task_id':job.task_id,'status':job.status,'stdout':''.join(item['text'] for item in messages if item['stream']=='stdout'),
             'stderr':''.join(item['text'] for item in messages if item['stream']=='stderr'),'output':''.join(item['text'] for item in messages),
             'offset':offset,'next_offset':next_offset,'truncated':log.exists() and next_offset<log.stat().st_size,
@@ -431,7 +431,7 @@ class NativeTaskOperations:
 
     def verify_submission(self,intent,actor,owner,*,connection=None):
         job = self.repository.get_job_run(intent.workspace_id,intent.owner_id,connection=connection)
-        event = self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start',connection=connection).payload
+        event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start',connection=connection).payload
         from app.creation_execution import CreationExecutionActor
         task = self.require_actor(actor,job.task_id)
         if (job.kind!=KIND or job.status not in {'queued','running','interrupted'} or
@@ -447,7 +447,7 @@ class NativeTaskOperations:
 
     def capture_local(self,request,conn,owner):
         job = self.repository.get_job_run(request.workspace_id,request.owner_id,connection=conn)
-        event = self.repository.get_task_event(request.workspace_id,f'event_{job.id}_start',connection=conn).payload
+        event = self.repository.execution_records.get_task_event(request.workspace_id,f'event_{job.id}_start',connection=conn).payload
         from app.creation_execution import CreationExecutionActor
         actor = CreationExecutionActor.from_event(request.workspace_id,event)
         def check(current):
@@ -462,7 +462,7 @@ class NativeTaskOperations:
     def check_current(self,request,conn,owner):
         from app.creation_execution import CreationExecutionActor
         try:
-            event = self.repository.get_task_event(request.workspace_id,f'event_{request.owner_id}_start',connection=conn).payload
+            event = self.repository.execution_records.get_task_event(request.workspace_id,f'event_{request.owner_id}_start',connection=conn).payload
             actor = CreationExecutionActor.from_event(request.workspace_id,event)
             trusted = self.verify_submission(SubmissionIntent(request.workspace_id,'creation_job',request.owner_id,
                 request.input_digest,request.unit_key,request.policy),actor,owner,connection=conn)
@@ -557,7 +557,7 @@ class NativeTaskOperations:
         from app.granted_subprocess import run_granted_command,GrantedCommandCancelled,GrantedCommandTimeout
         from app.creation_execution import CreationExecutionActor
         job = self.repository.get_job_run(grant.workspace_id,grant.owner_id)
-        event = self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
+        event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
         actor = CreationExecutionActor.from_event(job.workspace_id,event)
         root = self.task_root(actor,job.task_id)
         if job.attempt:
@@ -720,7 +720,7 @@ class NativeTaskOperations:
         jobs,total = self.repository.list_native_jobs(actor.workspace_id,task_id,offset=offset,limit=limit)
         values = []
         for job in jobs:
-            event = self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
+            event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
             result = self.repository.native_operation_result(job.workspace_id,job.id) or {}
             requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
             values.append({'job_id':job.id,'request_id':event['request_id'],'operation':event['operation'],'status':job.status,
@@ -732,7 +732,7 @@ class NativeTaskOperations:
 
     def artifact_path(self,actor,task_id,artifact_id):
         self.require_actor(actor,task_id)
-        artifact = self.repository.get_artifact_record(actor.workspace_id,artifact_id)
+        artifact = self.repository.execution_records.get_artifact_record(actor.workspace_id,artifact_id)
         if artifact.task_id!=task_id:
             raise PermissionError('产物不属于原任务')
         job = self.repository.get_job_run(actor.workspace_id,artifact.producer_job_id)
@@ -799,7 +799,7 @@ class NativeTaskOperations:
             if published.sha256!=sha or published.size_bytes!=source_output['size_bytes']:
                 raise ValueError('登记期间工作文件已变化，未采用新内容')
             source_job = self.repository.get_job_run(job.workspace_id,arguments['execution_job_id'])
-            source_event = self.repository.get_task_event(job.workspace_id,f'event_{source_job.id}_start').payload
+            source_event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{source_job.id}_start').payload
             input_refs = [*source_job.output_refs,*source_event['arguments'].get('_input_refs',[])]
             artifact = ArtifactRecord(id=f'artifact_{job.id}_{index}',workspace_id=job.workspace_id,task_id=job.task_id,
                 kind=kind,logical_ref=published.logical_ref,sha256=published.sha256,size_bytes=published.size_bytes,

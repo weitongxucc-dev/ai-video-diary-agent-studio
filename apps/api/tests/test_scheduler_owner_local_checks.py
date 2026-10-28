@@ -44,7 +44,7 @@ def test_creation_owner_ignores_unrelated_task_text_but_refuses_changed_source_r
     repo, task_id, script_id, digest = _seed(tmp_path, voice=False)
     job = repo.create_job_run(JobRun(id="job", workspace_id="workspace_a", task_id=task_id,
         kind="creation_task_narration", idempotency_key="job", input_digest=digest))
-    repo.append_task_event(TaskEvent(id="event_job_start", workspace_id=job.workspace_id,
+    repo.execution_records.append_task_event(TaskEvent(id="event_job_start", workspace_id=job.workspace_id,
         task_id=task_id, job_id=job.id, event_type="creation_execution_started",
         payload={"script_id": script_id, "member_id": "member"}))
     asset = _asset(repo, job.workspace_id, "source.mp4")
@@ -252,7 +252,7 @@ def test_cover_local_check_uses_original_binding_without_reading_source_or_recei
         published.size_bytes, file_identity(store.resolve_file(ref)))
     job = repo.create_job_run(JobRun(id="cover-job", workspace_id=workspace, task_id=task_id,
         kind=COVER_JOB_KIND, idempotency_key=command.idempotency_key, input_digest=command.input_digest))
-    repo.create_artifact_record(ArtifactRecord("source-artifact", workspace, task_id, "rendered_video",
+    repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", workspace, task_id, "rendered_video",
         ref, published.sha256, published.size_bytes, job.id, []))
     repo.create_timeline_version(TimelineVersion("base", workspace, task_id, None, 1,
         {"output_refs": [ref]}, None))
@@ -265,7 +265,7 @@ def test_cover_local_check_uses_original_binding_without_reading_source_or_recei
     resources = owner.resources(command)
     payload = {"command": asdict(command), "resources": resources, **actor.identity_payload(),
                "deadline_utc": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
-    repo.append_task_event(TaskEvent(id="event_cover-job_cover_start", workspace_id=workspace,
+    repo.execution_records.append_task_event(TaskEvent(id="event_cover-job_cover_start", workspace_id=workspace,
         task_id=task_id, event_type="cover_generation_submitted", payload=payload, job_id=job.id))
     request = SimpleNamespace(workspace_id=workspace, owner_id=job.id, owner_type="creation_job",
         member_id=actor.member_id, input_digest=command.input_digest, unit_key=command.unit_key,

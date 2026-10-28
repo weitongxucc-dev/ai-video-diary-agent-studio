@@ -218,7 +218,7 @@ def test_recovery_terminal_request_update_rolls_back_and_retries_same_receipt(tm
         assert repository.get_job_run("local", job_id).status == "succeeded"
         assert checks.get_check("local", "task", check_id)["result_status"] == "unavailable"
         assert checks.get("local", "task")["check_id"] == check_id
-        assert repository.get_task_event("local", event_id).payload == {"check_id": check_id, "status": "succeeded"}
+        assert repository.execution_records.get_task_event("local", event_id).payload == {"check_id": check_id, "status": "succeeded"}
         with repository._connect() as conn:
             request = dict(conn.execute("SELECT * FROM device_work_requests WHERE owner_id=? AND unit_key LIKE '%:finalize'", (job_id,)).fetchone())
             events = [dict(row) for row in conn.execute("SELECT * FROM device_request_events WHERE request_id=?", (request["id"],))]

@@ -75,7 +75,7 @@ def test_submission_replay_is_persistent_and_does_not_start_work(tmp_path):
     assert repo.get_job_run('local', job.id).status == 'succeeded'
     assert state['calls'] == 1
     assert media.read('local', job.id)[1]['arguments'] == {'payload': {'start': 0}}
-    assert repo.get_task_event('local', f'event_{job.id}_result').payload['result']['audio_url'] == '/saved-output'
+    assert repo.execution_records.get_task_event('local', f'event_{job.id}_result').payload['result']['audio_url'] == '/saved-output'
     rebuilt.stop(0)
 
 
@@ -212,7 +212,7 @@ def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_re
             assert not runtime.run_once()
         repeated = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request.id), 'queued')
         assert repeated == refused
-        assert len([item for item in repo.list_task_events('local','task')
+        assert len([item for item in repo.execution_records.list_task_events('local','task')
                     if item.event_type == 'task_media_resource_admission']) == 2
         for receipt in (unknown, refused):
             assert 'PRIVATE' not in json.dumps(receipt) and str(tmp_path) not in json.dumps(receipt)
@@ -233,18 +233,18 @@ def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_re
 def test_resource_receipt_write_failure_rolls_back_without_grant(tmp_path, monkeypatch):
     repo, actor, state, _, _, media, runtime, _ = _resource_admission_case(tmp_path, monkeypatch)
     job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
-    original = repo.append_task_event
+    original = repo.execution_records.append_task_event
     def fail(event, *, connection=None):
         if event.event_type == 'task_media_resource_admission':
             assert connection is not None and connection.in_transaction
             original(event, connection=connection)
             raise RuntimeError('fixture persistence failure')
         return original(event, connection=connection)
-    monkeypatch.setattr(repo, 'append_task_event', fail)
+    monkeypatch.setattr(repo.execution_records, 'append_task_event', fail)
     try:
         with pytest.raises(RuntimeError, match='fixture persistence failure'):
             runtime.run_once()
-        assert not [item for item in repo.list_task_events('local','task')
+        assert not [item for item in repo.execution_records.list_task_events('local','task')
                     if item.event_type == 'task_media_resource_admission']
         with repo._connect() as conn:
             row = conn.execute('SELECT state,wait_reason FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()
@@ -337,7 +337,7 @@ def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_
     assert runtime.run_once()
     saved = repo.get_job_run('local', job.id)
     assert saved.status == 'succeeded' and len(saved.output_refs) == 1
-    record = repo.list_artifact_records('local','task')[0]
+    record = repo.execution_records.list_artifact_records('local','task')[0]
     with wave.open(str(store.resolve_file(record.logical_ref))) as wav:
         assert wav.getnframes() == 4800
     with repo._connect() as conn:
@@ -622,7 +622,7 @@ def test_color_preview_on_21_shots_renders_only_representative_silent_window(tmp
         assert set(proposal['operation']['payload']['expected_clips']) == {'clip_1', 'clip_20'}
         assert '代表镜头 2' in proposal['preview']['after']['detail']
         assert '静音画面' in proposal['preview']['after']['detail'] and '未覆盖相邻转场' in proposal['preview']['after']['detail']
-        records = [record for record in repo.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
+        records = [record for record in repo.execution_records.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
         assert len(records) == 2
         for record in records:
             metadata = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries',
@@ -683,10 +683,10 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
         assert done['status'] == 'succeeded', done
         assert '完整区间' in done['result']['proposal']['preview']['after']['detail']
         assert '未覆盖相邻转场' in done['result']['proposal']['preview']['after']['detail']
-        inputs = [item for item in repo.list_task_events('local', 'task')
+        inputs = [item for item in repo.execution_records.list_task_events('local', 'task')
                   if item.job_id == job_id and item.event_type == 'task_media_input']
         assert len(inputs) == 2
-        records = [record for record in repo.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
+        records = [record for record in repo.execution_records.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
         assert len(records) == 2
         for event_input in inputs:
             candidate = event_input.payload['media_input']['plan']
@@ -776,13 +776,13 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
     assert repo.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
-    assert repo.list_artifact_records('local','task') == []
+    assert repo.execution_records.list_artifact_records('local','task') == []
     assert repo.lineage_records.list_transform_runs('local','task') == []
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
     assert runtime.run_once()
     assert repo.get_job_run('local',job.id).status=='succeeded' and state['render_calls']==1
-    assert len(repo.list_artifact_records('local','task'))==1
+    assert len(repo.execution_records.list_artifact_records('local','task'))==1
     assert len(repo.lineage_records.list_transform_runs('local','task'))==1
     runtime.stop(0)

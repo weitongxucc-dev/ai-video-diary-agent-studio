@@ -114,7 +114,7 @@ def montage_output_digest(payload):
 def verify_saved_montage_preparation(repository, task, payload, request, *, connection):
     event_id = f"event_montage_prepared_{payload['id']}"
     try:
-        event = repository.get_task_event(task.workspace_id, event_id, connection=connection)
+        event = repository.execution_records.get_task_event(task.workspace_id, event_id, connection=connection)
     except KeyError as exc:
         raise ValueError('原故事板缺少可核验的保存来源，已存候选保留，不能自动补认基础版本') from exc
     binding = event.payload
@@ -173,7 +173,7 @@ class MontageStageUseCase:
             def seal_inputs(conn, current):
                 verify_inputs(conn, current)
                 grant = grant_context.grant if grant_context is not None else None
-                self.repository.append_task_event(TaskEvent(
+                self.repository.execution_records.append_task_event(TaskEvent(
                     f'event_montage_prepared_{montage.id}', workspace_id, task.id,
                     grant.owner_id if grant is not None else None, 'creation_montage_prepared', {
                         'request_id': grant.request_id if grant is not None else None,

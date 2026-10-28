@@ -55,7 +55,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     source = {"workspace_id": "ws", "task_id": state.task.id, "member_id": state.member.member_id,
         "conversation_id": chat["id"], "assistant_turn_id": turn["id"], "expected_timeline_version_id": edit_version.id,
         "expected_timeline_sequence": edit_version.sequence}
-    state.repo.append_task_event(TaskEvent("located-render", "ws", state.task.id, job.id, "assistant_execution_located", {"source": source, "job_id": job.id}))
+    state.repo.execution_records.append_task_event(TaskEvent("located-render", "ws", state.task.id, job.id, "assistant_execution_located", {"source": source, "job_id": job.id}))
     def actual(*_):
         return jsonable_encoder({"task_id": state.task.id, "job": asdict(state.repo.get_job_run("ws", job.id)), "video_ready": state.repo.get_job_run("ws", job.id).status == "succeeded"})
     monkeypatch.setattr(main, "_read_bound_execution_result", actual)

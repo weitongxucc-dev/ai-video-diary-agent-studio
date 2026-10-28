@@ -205,11 +205,11 @@ class PlatformPublishExecutor:
             ).fetchone()
         if row is None or event is None:
             raise ValueError("持久发布作业或用户确认已丢失")
-        return self.repository._job_run_from_row(row), self.repository._task_event_from_row(event)
+        return self.repository._job_run_from_row(row), self.repository.execution_records.task_event_from_row(event)
 
     def _event(self, conn, *, job, event_type: str, payload: dict[str, object]):
         event_id = f"event_{job.id}_{event_type.removeprefix('platform_publish_')}"
-        self.repository.append_task_event(TaskEvent(
+        self.repository.execution_records.append_task_event(TaskEvent(
             id=event_id, workspace_id=job.workspace_id, task_id=job.task_id,
             job_id=job.id, event_type=event_type, payload=payload, created_at=datetime.now(UTC),
         ), connection=conn)
@@ -320,7 +320,7 @@ def recover_platform_publish_jobs(repository, runtime, *, actor_from_event,
         ).fetchall()
     for row in rows:
         job = repository._job_run_from_row(row)
-        events = repository.list_task_events(job.workspace_id, job.task_id)
+        events = repository.execution_records.list_task_events(job.workspace_id, job.task_id)
         prepared = next((event for event in events
                          if event.job_id == job.id and event.event_type == "platform_publish_prepared"), None)
         if prepared is None:
@@ -338,7 +338,7 @@ def recover_platform_publish_jobs(repository, runtime, *, actor_from_event,
                     "UPDATE job_runs SET status='interrupted',failure_reason=?,impact=?,repair_action=?,finished_at=?,updated_at=? WHERE workspace_id=? AND id=? AND status=?",
                     (reason, impact, repair, now, now, job.workspace_id, job.id, job.status),
                 )
-                repository.append_task_event(TaskEvent(
+                repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_restart_recovered", workspace_id=job.workspace_id,
                     task_id=job.task_id, job_id=job.id,
                     event_type="platform_publish_recovered",

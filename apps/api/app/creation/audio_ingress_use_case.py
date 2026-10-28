@@ -57,7 +57,7 @@ class AudioIngressUseCase:
                     and current_narration.source_artifact_ref):
                 current_narration_refs.add(current_narration.source_artifact_ref)
         items = []
-        for record in reversed(self.repository.list_artifact_records(workspace_id, task_id)):
+        for record in reversed(self.repository.execution_records.list_artifact_records(workspace_id, task_id)):
             if record.kind != "task_recording":
                 continue
             try:
@@ -360,7 +360,7 @@ class AudioIngressUseCase:
 
     def validate_result(self, job, event, result, context):
         outputs = []
-        for record in self.repository.list_artifact_records(job.workspace_id,job.task_id):
+        for record in self.repository.execution_records.list_artifact_records(job.workspace_id,job.task_id):
             if record.producer_job_id != job.id:
                 continue
             context.check()

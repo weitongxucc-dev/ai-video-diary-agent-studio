@@ -53,8 +53,8 @@ class AssistantMediaResultBinding:
                 if facts["artifact_id"] != item["expected_artifact_id"] or facts["sha256"] != item["expected_sha256"]:
                     raise ValueError("原固定输入登记修订已变化")
             job = self.repository.get_job_run(task.workspace_id, slot["job_id"])
-            start = self.repository.get_task_event(task.workspace_id, f"event_{job.id}_start").payload
-            result = self.repository.get_task_event(task.workspace_id, f"event_{job.id}_result").payload["result"]
+            start = self.repository.execution_records.get_task_event(task.workspace_id, f"event_{job.id}_start").payload
+            result = self.repository.execution_records.get_task_event(task.workspace_id, f"event_{job.id}_result").payload["result"]
         except PermissionError as exc:
             raise MediaResultRejected(403, str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:

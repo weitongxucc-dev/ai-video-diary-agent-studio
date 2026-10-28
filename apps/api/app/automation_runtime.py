@@ -213,7 +213,7 @@ class AutomationRuntime:
 
     def project_run(self, actor, run):
         projection = self.project_state(actor, run)
-        events = self.production.list_task_events(actor.workspace_id,run["task_id"])
+        events = self.production.execution_records.list_task_events(actor.workspace_id,run["task_id"])
         confirmation = dict(run["confirmation"])
         task = self.production.get_creation_task(actor.workspace_id,run["task_id"])
         if task.selected_topic_id:

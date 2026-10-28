@@ -196,11 +196,11 @@ class CreationExecutionControl:
                     "ORDER BY j.created_at DESC,j.id DESC LIMIT 1",(workspace_id,task_id,actor.member_id)).fetchone()
             if row is not None:
                 revision=self.repository._job_run_from_row(row)
-                start=self.repository.get_task_event(workspace_id,f'event_{revision.id}_start').payload
+                start=self.repository.execution_records.get_task_event(workspace_id,f'event_{revision.id}_start').payload
                 if CreationExecutionActor.from_event(workspace_id,start)==actor and (job is None or revision.created_at>job.created_at):
                     job=revision
 
-        task_events=self.repository.list_task_events(workspace_id,task_id) if job else []
+        task_events=self.repository.execution_records.list_task_events(workspace_id,task_id) if job else []
         events = (
             [
                 {"stage": event.payload.get("stage"), "status": event.payload.get("status"),
@@ -220,7 +220,7 @@ class CreationExecutionControl:
         waiting_reason = None
         status_updated_at = job.updated_at.isoformat() if job else None
         if job and job.status in {"queued", "interrupted"}:
-            start_event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+            start_event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
             queued_member_id = start_event.payload.get("member_id")
             if queued_member_id:
                 row = self.repository.creation_execution_wait_row(workspace_id, queued_member_id, job.id, job.input_digest)
@@ -405,7 +405,7 @@ class CreationExecutionControl:
             if job.status=='cancelled':
                 continue
             try:
-                start=self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
+                start=self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
                 original=CreationExecutionActor.from_event(job.workspace_id,start)
                 task=self.repository.get_creation_task(job.workspace_id,job.task_id)
                 if owner.task_authorizations is not None:
@@ -450,7 +450,7 @@ class CreationExecutionControl:
         # its device request is cancelled. Reconcile from both durable rows.
         cancelled_requests = self.repository.list_cancelled_creation_execution_requests()
         for row in cancelled_requests:
-            event = self.repository.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
+            event = self.repository.execution_records.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
             # 撤销方向不需要重新核成员：即使成员已被移除，撤销也必须能落下去。
             try:
                 original = CreationExecutionActor.from_event(row["workspace_id"], event.payload)
@@ -462,7 +462,7 @@ class CreationExecutionControl:
                 raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
             runtime.scheduler.cancel(row["id"], original)
         for job in self.repository.list_pending_creation_executions():
-            event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
+            event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
             try:
                 original = CreationExecutionActor.from_event(job.workspace_id, event.payload)
             except (ValueError, KeyError, TypeError, AttributeError):
@@ -551,13 +551,13 @@ class CreationExecutionControl:
                     (workspace_id,task.id,PERSON_EDIT_KIND,digest,actor.member_id)).fetchone()
                 if active is not None:
                     job=self.repository._job_run_from_row(active)
-                    saved=self.repository.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
+                    saved=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
                     if saved.get('source')!=source:
                         raise ValueError('原人物编辑属于另一输入，请查询原请求')
                 else:
                     job=self.repository.create_job_run(candidate,connection=conn)
                     created=True
-                    self.repository.append_task_event(TaskEvent(f'event_{job.id}_start',workspace_id,task.id,job.id,
+                    self.repository.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start',workspace_id,task.id,job.id,
                         'person_edit_requested',payload,created_at=job.created_at),connection=conn)
                 owner.verify_submission(SubmissionIntent(workspace_id,'creation_job',job.id,digest,key,SchedulePolicy()),
                     actor,connection=conn)
@@ -609,7 +609,7 @@ class CreationExecutionControl:
                 active = existing(conn)
                 if active is not None:
                     job = self.repository._job_run_from_row(active)
-                    saved=self.repository.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
+                    saved=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
                     if saved.get('source')!=source:
                         raise ValueError('原配音编辑属于另一输入，请查询原请求')
                 else:
@@ -618,7 +618,7 @@ class CreationExecutionControl:
                     job = self.repository.create_job_run(candidate, connection=conn)
                     source_id = self.repository.seal_creation_narration_source(job, prepared,
                         input_digest=digest, origin_event_id=f'event_{job.id}_start', connection=conn)
-                    self.repository.append_task_event(TaskEvent(f'event_{job.id}_start', workspace_id, task.id, job.id,
+                    self.repository.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start', workspace_id, task.id, job.id,
                         'narration_edit_requested', {**payload, 'source_binding_event_id': source_id}), connection=conn)
                     owner.verify_submission(SubmissionIntent(workspace_id, 'creation_job', job.id, digest,
                         owner.narration_edit_facts(job, task, payload, plan, connection=conn, pcm_preparation=preparation)[0],
@@ -747,7 +747,7 @@ class CreationExecutionControl:
     def read_bound(self, workspace_id, task_id, job_id, actor, *, verify_media: bool):
         job=self.repository.get_job_run(workspace_id,job_id)
         if job.kind=='creation_task_segment_revision':
-            start=self.repository.get_task_event(workspace_id,f'event_{job.id}_start').payload
+            start=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start').payload
         else:
             start=self.repository.creation_execution_input(workspace_id,job.id)
             latest=self.execution.latest(workspace_id,task_id)

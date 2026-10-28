@@ -351,16 +351,16 @@ class TaskAuthorizationUseCase:
                     revision=authorization.revision+1,allowed_operations=TASK_OPERATIONS),
                     expected_revision=authorization.revision,connection=conn)
             try:
-                return self.repository.get_task_event(task.workspace_id,event_id,connection=conn)
+                return self.repository.execution_records.get_task_event(task.workspace_id,event_id,connection=conn)
             except KeyError:
-                return self.repository.append_task_event(TaskEvent(event_id,task.workspace_id,task.id,None,
+                return self.repository.execution_records.append_task_event(TaskEvent(event_id,task.workspace_id,task.id,None,
                     "task_business_scope",payload),connection=conn)
 
     def inherit_business_context(self, old_goal, goal, context, *, connection):
         """Same writer as input consumption; copy only the original sealed authority."""
         from app.creation.contracts import TaskEvent
         ws,task_id=goal['workspace_id'],goal['task_id']
-        previous=self.repository.get_task_event(ws,self.business_context_id(old_goal),connection=connection).payload
+        previous=self.repository.execution_records.get_task_event(ws,self.business_context_id(old_goal),connection=connection).payload
         authorization=self.repository.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
         if (authorization is None or authorization.id!=previous['authorization_id']
                 or authorization.identity!=previous['identity']
@@ -371,7 +371,7 @@ class TaskAuthorizationUseCase:
             raise TaskAuthorizationDenied('原任务固定资料已变化；需要重新授权')
         payload={**previous,'goal_revision':goal['revision'],'source_input_id':goal.get('source_input_id'),
             'selected_references':context['target_snapshot'].get('selected_references',[])}
-        self.repository.append_task_event(TaskEvent(self.business_context_id(goal),ws,task_id,None,
+        self.repository.execution_records.append_task_event(TaskEvent(self.business_context_id(goal),ws,task_id,None,
             'task_business_scope',payload),connection=connection)
         return payload
 
@@ -383,7 +383,7 @@ class TaskAuthorizationUseCase:
                 or self.status(ws,task_id,identity=authorization.identity,operation='task_goal',connection=connection)!='valid'):
             return False
         try:
-            event=self.repository.get_task_event(ws,self.business_context_id(goal),connection=connection)
+            event=self.repository.execution_records.get_task_event(ws,self.business_context_id(goal),connection=connection)
         except KeyError:
             return False  # Ordinary consumed input has no atomic goal adoption.
         sealed=event.payload

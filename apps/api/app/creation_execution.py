@@ -878,7 +878,7 @@ class CreationJobOwnerVerifier:
             'unit_key':request.unit_key,'attempt_number':request.attempt_number,'last_grant_generation':request.last_grant_generation}
         event_id='event_creation_input_refused_'+hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()
         try:
-            existing=self.repository.get_task_event(job.workspace_id,event_id,connection=conn)
+            existing=self.repository.execution_records.get_task_event(job.workspace_id,event_id,connection=conn)
         except KeyError:
             existing=None
         if existing is not None:
@@ -1423,7 +1423,7 @@ class CreationJobOwnerVerifier:
 
     def _snapshot_facts(self, conn, workspace_id, job_id):
         job = self.repository.get_job_run(workspace_id, job_id, connection=conn)
-        event = self.repository.get_task_event(workspace_id, f'event_{job.id}_start', connection=conn)
+        event = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start', connection=conn)
         if event.task_id != job.task_id or event.job_id != job.id:
             raise KeyError('创作任务或开始记录不存在')
         snapshot = self.repository.read_creation_execution_snapshot(workspace_id, job.task_id, connection=conn)
@@ -2017,7 +2017,7 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
     from app.creation.narration_pcm import prepare_narration_source
     with prepare_narration_source(repository, task, plan, actor, binding=source.payload) as prepared:
         def audit(conn, previous, replacement):
-            repository.append_task_event(TaskEvent(f'event_{replacement.id}_source_revalidated', job.workspace_id,
+            repository.execution_records.append_task_event(TaskEvent(f'event_{replacement.id}_source_revalidated', job.workspace_id,
                 job.task_id, job.id, 'creation_narration_source_revalidated',
                 {'source_binding_event_id': source.id, 'old_request_id': previous.id,
                     'new_request_id': replacement.id, 'input_digest': job.input_digest,
@@ -2112,7 +2112,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
     else:
         stage = "render"
     if stage == "render":
-        event = repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        event = repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
         actor = CreationExecutionActor.from_event(job.workspace_id, event.payload) if event.payload.get("member_id") else None
         with nullcontext(connection) if connection is not None else repository._connect() as conn:
             stage, _resources = owner.render_facts(conn, task, plan, actor=actor, job=job, prepare_assembly=True)
@@ -2351,7 +2351,7 @@ class CreationJobUnitExecutor:
             return False
         generation = request.last_grant_generation
         settled_id = f'event_{job.id}_narration_settled_{generation}'
-        settled = self.repository.get_task_event(job.workspace_id, settled_id)
+        settled = self.repository.execution_records.get_task_event(job.workspace_id, settled_id)
         if settled.payload.get('output_file') is not None or settled.payload['output_bytes'] == 0:
             return False
         if self.segments is None or self.narration_stage is None:
@@ -2363,7 +2363,7 @@ class CreationJobUnitExecutor:
             original_job, snapshot, event = owner._snapshot_facts(reader, job.workspace_id, job.id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
-            started = self.repository.get_task_event(job.workspace_id,
+            started = self.repository.execution_records.get_task_event(job.workspace_id,
                 f'event_{job.id}_narration_started_{generation}', connection=reader)
             selected = self.repository.read_creation_section_input(task, script, request.resources['section_id'], connection=reader)
             section, pending = selected['section'], selected['audio']
@@ -2464,7 +2464,7 @@ class CreationJobUnitExecutor:
                             or tuple(permit) != ('free', free_generation)
                             or current_request is None or tuple(current_request)[:2] != ('failed', generation)
                             or json.loads(current_request['resources_json']) != resources
-                            or self.repository.get_task_event(job.workspace_id, settled_id, connection=conn) != settled
+                            or self.repository.execution_records.get_task_event(job.workspace_id, settled_id, connection=conn) != settled
                             or identity(os.fstat(fd)) != identity(info) or identity(path.stat()) != identity(info)
                             or self.repository.stage_section_version(job.workspace_id, job.task_id, section.id, connection=conn) != version):
                         raise RecoveryBlocked('原单段恢复提交前状态、文件或许可已变化')
@@ -2487,7 +2487,7 @@ class CreationJobUnitExecutor:
                     self.segments._validate_visual_decision(self.repository.get_job_run(job.workspace_id, job.id, connection=conn),
                         current_task, actor, owner, prepared.payload, connection=conn)
                     self.segments.persist_video_preparation_for_request(prepared, request_id, connection=conn)
-                    self.repository.append_task_event(TaskEvent(id=f'event_{job.id}_narration_recovered_{generation}',
+                    self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_narration_recovered_{generation}',
                         workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                         event_type='creation_narration_segment_recovered', payload={'request_id': request_id,
                             'permit_generation': generation, 'settled_event_id': settled_id,
@@ -2525,7 +2525,7 @@ class CreationJobUnitExecutor:
                     or owner.authorization_verdict(task,actor,request.unit_key.split(':',1)[0],connection=conn)!='ready'):
                 raise PermissionError('原PCM恢复的身份、授权或任务已变化')
             baseline=owner.pcm_assembly_baseline(request,conn,original_recovery=True)
-            started_event=self.repository.get_task_event(job.workspace_id,
+            started_event=self.repository.execution_records.get_task_event(job.workspace_id,
                 f'event_{job.id}_narration_started_{request.last_grant_generation}',connection=conn)
         resources=request.resources
         receipt_path=Path(baseline['receipt_path'])
@@ -2648,7 +2648,7 @@ class CreationJobUnitExecutor:
             min(remaining_bytes, resources['max_output_bytes']), resources['threads'], cancellation,
             started_monotonic=started, narration_output_usage=[0])
         self.register_cancellation(grant.request_id, cancellation)
-        event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start')
+        event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start')
         actor = CreationExecutionActor.from_event(job.workspace_id, event.payload)
         result_bytes = 0
         output_file = None
@@ -2804,7 +2804,7 @@ class CreationJobUnitExecutor:
                     conn.execute("UPDATE job_runs SET status='interrupted' WHERE workspace_id=? AND id=? AND status='running'", (job.workspace_id, job.id))
             job = self.repository.claim_job_run(job.workspace_id, job.id)
             if stage == 'person_render':
-                self.repository.append_task_event(TaskEvent(id=f'event_{job.id}_person_render_running_{grant.request_id}_{grant.generation}', workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage', payload={'stage': stage, 'status': 'running'}, created_at=datetime.now(timezone.utc)))
+                self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_person_render_running_{grant.request_id}_{grant.generation}', workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage', payload={'stage': stage, 'status': 'running'}, created_at=datetime.now(timezone.utc)))
             current_task = self.repository.get_creation_task(job.workspace_id, job.task_id)
             owner = scheduler.owners
             if hasattr(owner, 'registrations'):
@@ -2861,7 +2861,7 @@ class CreationJobUnitExecutor:
             task = self.repository.get_creation_task(job.workspace_id, job.task_id)
             if not valid(task):
                 raise ValueError('制作阶段未产生匹配当前文案的可用结果')
-            original = CreationExecutionActor.from_event(job.workspace_id, self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start').payload)
+            original = CreationExecutionActor.from_event(job.workspace_id, self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start').payload)
             next_intent = next_creation_intent(self.repository, scheduler, job)
             output = task.narration_cache_key if stage == 'narration' else ','.join((item.id for item in self.repository.list_person_renders(task.workspace_id, task.id) if item.status == 'ready')) if stage == 'person_render' else task.montage_plan_id
             def checkpoint(conn, current):
@@ -2924,7 +2924,7 @@ class CreationJobUnitExecutor:
         if status == "succeeded":
             job = self.repository.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
             task = self.repository.get_creation_task(grant.workspace_id, job.task_id, connection=conn)
-            event = self.repository.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
+            event = self.repository.execution_records.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
             if event.task_id != task.id or event.job_id != job.id:
                 raise PermissionError('编辑开始记录不属于原作业')
             _verify_edit_origin(job, task, event.payload,
@@ -2970,7 +2970,7 @@ class CreationJobUnitExecutor:
             if job.status != 'cancelled':
                 job = self.repository.claim_job_run(job.workspace_id, job.id)
             context.check()
-            event = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_start')
+            event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start')
             commit = self.person_stage.prepare_edit(job.workspace_id, job.task_id, context, event.payload['edit_proposal_id'])
             context.check()
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path, checkpoint_write=lambda conn, current: self._person_edit_checkpoint(conn, current, 'succeeded', commit=commit))
@@ -3005,7 +3005,7 @@ class CreationJobUnitExecutor:
         if status == "succeeded":
             job = self.repository.get_job_run(grant.workspace_id, grant.owner_id, connection=conn)
             task = self.repository.get_creation_task(grant.workspace_id, job.task_id, connection=conn)
-            event = self.repository.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
+            event = self.repository.execution_records.get_task_event(grant.workspace_id, f'event_{job.id}_start', connection=conn)
             if event.task_id != task.id or event.job_id != job.id:
                 raise PermissionError('编辑开始记录不属于原作业')
             _verify_edit_origin(job, task, event.payload,
@@ -3213,7 +3213,7 @@ class CreationJobUnitExecutor:
             started_id = f'event_{job.id}_{family}_started_{grant.generation}'
             receipt_id = (f'event_{job.id}_{family}_usage_{grant.generation}' if packet_copy or delivery or picture_leaf or adoption else
                 f'event_{job.id}_audio_assembly_settled_{grant.generation}')
-            self.repository.append_task_event(TaskEvent(started_id, job.workspace_id, job.task_id, job.id,
+            self.repository.execution_records.append_task_event(TaskEvent(started_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_started', {'usage_id': f'{grant.request_id}:{grant.generation}',
                     'request_id': grant.request_id, 'permit_generation': grant.generation,
                     'unit_key': grant.unit_key, 'phase': family if picture_leaf or adoption else 'audio_delivery' if delivery else 'picture_packet_copy' if packet_copy else 'audio_assembly'}), connection=conn)
@@ -3241,7 +3241,7 @@ class CreationJobUnitExecutor:
                 generated = 0  # This unit reads immutable media and writes only original checkpoint metadata.
             else:
                 try:
-                    measured = self.repository.get_task_event(job.workspace_id,
+                    measured = self.repository.execution_records.get_task_event(job.workspace_id,
                         (assembly.measured_event_id(grant) if delivery or picture_leaf else
                          f'event_{grant.request_id}_{grant.generation}_picture_output' if packet_copy else
                          f'event_{job.id}_audio_assembly_measured_{grant.generation}'), connection=conn)
@@ -3257,7 +3257,7 @@ class CreationJobUnitExecutor:
                     if (packet_copy or delivery or picture_leaf) and not measured.payload['consumption_known']:
                         raise RecoveryBlocked('画面归约真实新文件字节未知，保留原预留与started')
                     generated = measured.payload['output_bytes'] if packet_copy or delivery or picture_leaf else measured.payload['generated_bytes']
-            self.repository.append_task_event(TaskEvent(receipt_id, job.workspace_id, job.task_id, job.id,
+            self.repository.execution_records.append_task_event(TaskEvent(receipt_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_settled', {'usage_id': f'{current.request_id}:{current.generation}',
                     'request_id': current.request_id, 'permit_generation': current.generation, 'unit_key': current.unit_key,
                     'elapsed_seconds': max(0, time.monotonic() - started), 'output_bytes': generated,
@@ -3291,7 +3291,7 @@ class CreationJobUnitExecutor:
             context.check()
             if adoption:
                 recovery_plan = assembly.execute(job, actor=actor, context=context, owner=owner)
-                record = self.repository.get_artifact_record(job.workspace_id,
+                record = self.repository.execution_records.get_artifact_record(job.workspace_id,
                     recovery_plan['video']['parent']['binding']['artifact_id'])
             elif packet_copy or delivery or picture_leaf:
                 def publication_guard(conn):
@@ -3612,7 +3612,7 @@ class CreationExecution:
             if actor is not None and task.stage == 'narration' and plan.selected_voice is not None and narration is None and not existing
             else nullcontext(None))
         original = next((job for job in self.jobs(workspace_id, task_id) if job.idempotency_key == key), None)
-        policy = (self.repository.get_task_event(workspace_id, f'event_{original.id}_start').payload.get('execution_budget_policy')
+        policy = (self.repository.execution_records.get_task_event(workspace_id, f'event_{original.id}_start').payload.get('execution_budget_policy')
             if original is not None else self.budget_policy_for(workspace_id, task_id, actor, digest, operation='creation')
             if self.budget_policy_for is not None else None)
         def verify_start(conn):
@@ -3634,7 +3634,7 @@ class CreationExecution:
                     **(actor.identity_payload() if actor is not None else {"member_id":member_id} if member_id is not None else {})},
                 write_guard=verify_start,execution_source=execution_source,source_preparation=source_preparation, budget_scope_actor=actor)
         if member_id is not None:
-            start_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
+            start_event = self.repository.execution_records.get_task_event(workspace_id, f"event_{run.id}_start")
             if start_event.payload.get("member_id") != member_id:
                 raise PermissionError("已有制作任务的创建者身份与当前成员不同")
             if actor is not None and CreationExecutionActor.from_event(workspace_id, start_event.payload) != actor:
@@ -3643,7 +3643,7 @@ class CreationExecution:
 
     def _has_start_event(self, workspace_id: str, job_id: str) -> bool:
         try:
-            self.repository.get_task_event(workspace_id, f"event_{job_id}_start")
+            self.repository.execution_records.get_task_event(workspace_id, f"event_{job_id}_start")
         except KeyError:
             return False
         return True
@@ -3696,7 +3696,7 @@ class CreationExecution:
         latest = self.latest(workspace_id, task_id)
         if latest is None:
             raise ValueError("请先明确开始制作")
-        event = self.repository.get_task_event(workspace_id, f"event_{latest.id}_start")
+        event = self.repository.execution_records.get_task_event(workspace_id, f"event_{latest.id}_start")
         if member_id is not None and event.payload.get("member_id") != member_id:
             raise PermissionError("当前成员不能继续其他成员创建的制作任务")
         if latest.status in {"queued", "running"}:
@@ -3712,7 +3712,7 @@ class CreationExecution:
         task, plan = snapshot.task, snapshot.plan
         if task.stage == 'narration' and task.narration_cache_key is None and plan.selected_voice is not None:
             self.repository.creation_narration_source_binding(workspace_id, latest.id)
-        rejection=creation_input_rejection(self.repository.list_task_events(workspace_id,task_id),latest.id)
+        rejection=creation_input_rejection(self.repository.execution_records.list_task_events(workspace_id,task_id),latest.id)
         if rejection is not None and (admission_recheck is None or not admission_recheck(rejection)):
             raise CreationInputRejected(rejection)
         same_input = [
@@ -3739,7 +3739,7 @@ class CreationExecution:
 , start_payload=resumed_payload,event_type="creation_execution_resumed",
             write_guard=verify_retry,execution_source=execution_source)
         if member_id is not None:
-            resume_event = self.repository.get_task_event(workspace_id, f"event_{run.id}_start")
+            resume_event = self.repository.execution_records.get_task_event(workspace_id, f"event_{run.id}_start")
             if resume_event.payload.get("member_id") != member_id:
                 raise PermissionError("已有继续任务的创建者身份与当前成员不同")
         return run
@@ -3755,7 +3755,7 @@ class CreationExecution:
         job = self.repository.get_job_run(workspace_id, job_id)
         if job.kind != KIND:
             raise ValueError("不是连续制作作业")
-        event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+        event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
         if event.payload.get("operation") == "regenerate_storyboard":
             raise PermissionError("故事板重算必须由现有设备队列取得许可后执行")
         token = set_workspace_context(workspace_id)
@@ -3769,7 +3769,7 @@ class CreationExecution:
         if job is None:
             raise ValueError("尚未开始制作")
         if member_id is not None:
-            event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+            event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
             if event.payload.get("member_id") != member_id:
                 raise PermissionError("当前成员不能停止其他成员创建的制作任务")
         if write_guard is not None:
@@ -3785,7 +3785,7 @@ class CreationExecution:
 
     def _work(self, context: JobContext) -> JobResult:
         job = self.repository.get_job_run(context.workspace_id, context.job_id)
-        event = self.repository.get_task_event(context.workspace_id, f"event_{job.id}_start")
+        event = self.repository.execution_records.get_task_event(context.workspace_id, f"event_{job.id}_start")
         script_id = str(event.payload["script_id"])
         workspace_id, task_id = context.workspace_id, job.task_id
         for stage in STAGES:
@@ -3866,7 +3866,7 @@ class CreationExecution:
             and event.payload.get("stage") == stage
             and event.payload.get("status") in {"completed", "reused"}
             and event.payload.get("output") == current_output
-            for event in self.repository.list_task_events(job.workspace_id, job.task_id)
+            for event in self.repository.execution_records.list_task_events(job.workspace_id, job.task_id)
         )
 
     def _output_identity(self, workspace_id: str, task: CreationTask, stage: str) -> str | None:
@@ -3884,7 +3884,7 @@ class CreationExecution:
         self, context: JobContext, stage: str, status: str,
         *, reason: str | None = None, output: str | None = None,
     ) -> None:
-        self.repository.append_task_event(
+        self.repository.execution_records.append_task_event(
             TaskEvent(
                 id=f"event_{uuid4().hex}", workspace_id=context.workspace_id,
                 task_id=self.repository.get_job_run(context.workspace_id, context.job_id).task_id,

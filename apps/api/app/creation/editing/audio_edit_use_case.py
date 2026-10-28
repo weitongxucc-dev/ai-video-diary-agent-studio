@@ -95,7 +95,7 @@ class AudioEditUseCase:
                         raise ValueError('当前旁白引用与任务版本不一致，请刷新后重试')
                     before_url = f'/api/creation-tasks/{task_id}/narration/audio'
                 else:
-                    original = next((record for record in self.repository.list_artifact_records(workspace_id, task_id) if record.logical_ref == original_ref))
+                    original = next((record for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id) if record.logical_ref == original_ref))
                     before_url = f'/api/creation-tasks/{task_id}/audio/artifacts/{original.id}'
                 preview_media = {'before': {'ref': original_ref, 'label': '当前旁白', 'detail': '当前版本的完整旁白', 'audio_url': before_url}, 'after': {'ref': source_ref, 'label': '本次电脑录音', 'detail': '确认后替换整条旁白；画面时长不变', 'audio_url': f'/api/creation-tasks/{task_id}/audio/artifacts/{recording.id}'}}
                 start = 0.0

@@ -67,7 +67,7 @@ def artifact(repo, task_id, identity, kind="person_render"):
         id="job-" + identity, workspace_id="ws", task_id=task_id, kind="person_render",
         idempotency_key="job-" + identity, input_digest="c" * 64,
     ))
-    return repo.create_artifact_record(ArtifactRecord(
+    return repo.execution_records.create_artifact_record(ArtifactRecord(
         id=identity, workspace_id="ws", task_id=task_id, kind=kind,
         logical_ref="artifacts/" + identity + ".mp4", sha256="d" * 64, size_bytes=13,
         producer_job_id=job.id, input_refs=[],
