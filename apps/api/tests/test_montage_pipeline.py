@@ -2163,7 +2163,7 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
     assert restored_task.stage == "review"
     assert restored_task.stage_status == "waiting_for_user"
     assert restored_task.output_ready is True
-    assert production.list_edit_operations(workspace_id, task.id) == []
+    assert production.edit_records.list_edit_operations(workspace_id, task.id) == []
 
 
 @pytest.mark.parametrize("language", ["zh-CN", "en-US"])
@@ -2441,7 +2441,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert legacy_base_response.status_code == 409
     assert legacy_base_response.json()["detail"]["error"] == "edit_base_not_migrated"
-    assert production.list_edit_intents(workspace_id, task.id) == []
+    assert production.edit_records.list_edit_intents(workspace_id, task.id) == []
     with production._connect() as conn:
         task_payload = json.loads(
             conn.execute(
@@ -2491,7 +2491,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
             arbitrary_path_response.json()["detail"]["error"]
             == "edit_path_input_forbidden"
         )
-        assert production.list_edit_intents(workspace_id, task.id) == []
+        assert production.edit_records.list_edit_intents(workspace_id, task.id) == []
 
     scope_required_response = client.post(
         f"/api/creation-tasks/{task.id}/edits/preview",
@@ -2511,7 +2511,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     })
     assert unchanged.status_code == 409
     assert unchanged.json()["detail"]["error"] == "edit_no_change"
-    assert production.list_edit_intents(workspace_id, task.id) == []
+    assert production.edit_records.list_edit_intents(workspace_id, task.id) == []
 
     preview_response = client.post(
         f"/api/creation-tasks/{task.id}/edits/" + ("exact/preview" if exact_replacement else "preview"),
@@ -2536,7 +2536,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert unchanged_plan.clips[0].asset_id == asset.id
     assert unchanged_plan.output_path == migrated_plan.output_path
     assert len(production.list_timeline_versions(workspace_id, task.id)) == 1
-    assert production.list_edit_operations(workspace_id, task.id) == []
+    assert production.edit_records.list_edit_operations(workspace_id, task.id) == []
     assert preview_payload["proposal"]["operation"]["operation_type"] == "ReplaceClip"
     replacement_payload = preview_payload["proposal"]["operation"]["payload"]
     assert (replacement_payload["asset_id"], replacement_payload["segment_id"]) != (
@@ -2566,9 +2566,9 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert updated_plan.clips[1].asset_id == asset.id
     assert len(production.list_timeline_versions(workspace_id, task.id)) == 2
-    assert len(production.list_edit_intents(workspace_id, task.id)) == 1
-    assert len(production.list_edit_proposals(workspace_id, task.id)) == 1
-    assert len(production.list_edit_operations(workspace_id, task.id)) == 1
+    assert len(production.edit_records.list_edit_intents(workspace_id, task.id)) == 1
+    assert len(production.edit_records.list_edit_proposals(workspace_id, task.id)) == 1
+    assert len(production.edit_records.list_edit_operations(workspace_id, task.id)) == 1
     assert client.post(
         f"/api/creation-tasks/{task.id}/edits/{preview_payload['proposal']['id']}/confirm"
     ).status_code == 409
@@ -2592,7 +2592,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_undo"] is True
     before_trim_start = rerendered_plan.clips[0].source_start_seconds
     before_trim_version = production.task_records.get_creation_task(workspace_id, task.id).current_timeline_version_id
-    proposal_count = len(production.list_edit_proposals(workspace_id, task.id))
+    proposal_count = len(production.edit_records.list_edit_proposals(workspace_id, task.id))
     original_resolve = production.resolve_clip_media_reference
     monkeypatch.setattr(
         production, "resolve_clip_media_reference",
@@ -2604,7 +2604,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert unavailable_preview.status_code == 422
     assert production.task_records.get_creation_task(workspace_id, task.id).current_timeline_version_id == before_trim_version
-    assert len(production.list_edit_proposals(workspace_id, task.id)) == proposal_count
+    assert len(production.edit_records.list_edit_proposals(workspace_id, task.id)) == proposal_count
     monkeypatch.setattr(production, "resolve_clip_media_reference", original_resolve)
 
     trim_preview = client.post(
@@ -3024,7 +3024,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert saved.output_path is None and saved.subtitle_path is None
     assert production.task_records.get_creation_task(workspace_id, task.id).narration_cache_key == "whole-cache"
     assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
-    assert any(operation.id == response.json()["operation"]["id"] and operation.operation_type == "UpdateSubtitleCue" for operation in production.list_edit_operations(workspace_id, task.id))
+    assert any(operation.id == response.json()["operation"]["id"] and operation.operation_type == "UpdateSubtitleCue" for operation in production.edit_records.list_edit_operations(workspace_id, task.id))
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
 
@@ -3406,10 +3406,10 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
         response.json()["detail"]["error"]
         == "person_expression_control_unavailable"
     )
-    assert state.production.list_edit_intents(
+    assert state.production.edit_records.list_edit_intents(
         state.workspace_id, state.task.id
     ) == []
-    assert state.production.list_edit_proposals(
+    assert state.production.edit_records.list_edit_proposals(
         state.workspace_id, state.task.id
     ) == []
     assert state.production.list_timeline_versions(
@@ -3631,7 +3631,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     assert proposal["preview"]["after"]["detail"] == "已确认"
     persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
     assert persisted["clips"][0]["needs_confirmation"] is True
-    assert production.list_edit_operations(workspace_id, task.id) == []
+    assert production.edit_records.list_edit_operations(workspace_id, task.id) == []
     confirmed = client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm")
     assert confirmed.status_code == 200, confirmed.text
     persisted = production.get_creation_task_montage_plan(workspace_id, task.id)
@@ -3917,7 +3917,7 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
     regenerated = [replace(segment, duration_seconds=6, updated_at=main_module.utc_now())
         for segment in state.production.list_narration_segments(
             state.workspace_id, state.task.id, state.task.confirmed_script_id)]
-    proposal = state.production.get_edit_proposal(state.workspace_id, preview.json()["proposal"]["id"])
+    proposal = state.production.edit_records.get_edit_proposal(state.workspace_id, preview.json()["proposal"]["id"])
     current_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     base_version = state.production.get_timeline_version(state.workspace_id, base_version_id)
     main_module._persist_typed_montage_edit(
@@ -4007,7 +4007,7 @@ def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_re
     confirmed = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
     assert confirmed.status_code == 200, confirmed.text
     # 白名单真的生效：操作确实存进了 edit_operations，而不是被冻结集合挡在门外。
-    recorded = state.production.list_edit_operations(state.workspace_id, state.task.id)
+    recorded = state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id)
     assert [operation.operation_type for operation in recorded] == ["InsertClip"]
     assert recorded[0].status == "applied"
     edited = state.client.get(base).json()["montage"]
@@ -4743,7 +4743,7 @@ def test_local_subtitle_alignment_preview_confirm_undo(person_render_edit_state,
     assert response.status_code == 503
     assert "独立模型资源预算" in response.text
     assert state.client.get(base).json() == before
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
 
 
 def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_edit_state,monkeypatch):
@@ -4854,7 +4854,7 @@ def test_person_preview_rejects_partial_or_negated_request(person_render_edit_st
         'selected_object_refs': ['clip:clip-person-target'],
     })
     assert response.status_code in (409, 422), response.text
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert state.provider.output_cache_keys == []
 
 
@@ -4893,7 +4893,7 @@ def test_person_preview_rejects_unsupported_narration_language(person_render_edi
     })
     assert response.status_code == 503, response.text
     assert response.json()['detail']['error'] == 'language_unavailable'
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert state.provider.output_cache_keys == []
 
 
@@ -5067,7 +5067,7 @@ def test_person_preview_respects_locked_clip_before_generation(person_render_edi
     assert response.status_code==409,response.text
     assert '锁定' in response.text
     assert state.provider.output_cache_keys==[]
-    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id,state.task.id)==[]
 
 
 def _save_fixture_narration_duration(state, duration_seconds):
@@ -5172,7 +5172,7 @@ def test_extract_original_audio_rejects_silent_video_without_timeline_change(per
     assert state.preview_runtime.run_once()
     assert state.production.job_records.get_job_run(state.workspace_id,response.json()['job_id']).status=='failed'
     assert state.client.get(base).json()['montage']==before['montage']
-    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id,state.task.id)==[]
 
 
 
@@ -5189,7 +5189,7 @@ def test_extract_original_audio_rejects_generated_or_locked_clip(person_render_e
         'raw_command':'保留这个镜头的原声','context_stage':'review','selected_object_refs':[f'clip:{clip.id}']})
     assert response.status_code==409,response.text
     assert ('生成口型' if person else '锁定') in response.text
-    assert state.production.list_edit_proposals(state.workspace_id,state.task.id)==[]
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id,state.task.id)==[]
 
 
 def test_silence_edit_real_preview_confirm_and_undo(permitted_media_state, granted_media):
@@ -5782,7 +5782,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
     narration_before = state.production.list_narration_segments(state.workspace_id, state.task.id)
     queued, proposal_id = _queued_person_edit(state, exact=exact, change=change)
     assert len(_person_edit_versions(state)) == 1
-    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
     duplicate = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal_id}/confirm")
     assert duplicate.status_code == 202 and duplicate.json() == queued
     assert state.runtime.run_once()
@@ -5803,7 +5803,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
     assert (tracks[0].status, tracks[0].artifact_ref, tracks[0].transform_id) == (track.status, track.artifact_ref, track.transform_id)
     assert (tracks[0].failure_reason, tracks[0].impact, tracks[0].repair_action) == (track.failure_reason, track.impact, track.repair_action)
     assert Path(main_module._person_render_media_path(state.old_render)).read_bytes() == b"old-person-render"
-    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "confirmed"
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "confirmed"
     duplicate = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/{proposal_id}/confirm")
     assert duplicate.status_code == 409
     assert not state.runtime.run_once()
@@ -5830,7 +5830,7 @@ def test_person_edit_blocked_before_grant_never_calls_provider(permitted_person_
     assert not state.runtime.run_once()
     assert state.provider.output_cache_keys == []
     assert [asdict(version) for version in _person_edit_versions(state)] == before
-    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
     assert state.production.job_records.get_job_run(state.workspace_id, queued["job_id"]).status != "succeeded"
     with state.production._connect() as conn:
         assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] in {"blocked", "cancelled"}
@@ -5865,7 +5865,7 @@ def test_person_edit_loses_permission_or_fails_without_committing_version(permit
     assert len(versions) == len(before) + (1 if block == "stale" else 0)
     plan = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id))
     assert plan.clips[0].person_render_id == state.old_render.id
-    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
     with state.production._connect() as conn:
         assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"
         assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued["request_id"],)).fetchone()[0] in {"failed", "cancelled"}
@@ -5884,7 +5884,7 @@ def test_person_edit_publication_rolls_back_with_failed_job(permitted_person_edi
     assert state.runtime.run_once()
     assert len(state.provider.output_cache_keys) == 1
     assert [asdict(version) for version in _person_edit_versions(state)] == before
-    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
     assert state.production.job_records.get_job_run(state.workspace_id, queued["job_id"]).status == "failed"
     with state.production._connect() as conn:
         assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] == "free"

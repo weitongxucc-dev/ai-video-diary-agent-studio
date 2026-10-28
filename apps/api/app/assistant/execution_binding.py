@@ -106,14 +106,14 @@ class AssistantExecutionBinding:
         if (version is None or version.parent_version_id != snapshot.get('timeline_version_id')
                 or version.sequence != snapshot.get('timeline_sequence', 0) + 1):
             return None
-        operations = [item for item in self.production.list_edit_operations(task.workspace_id, task.id)
+        operations = [item for item in self.production.edit_records.list_edit_operations(task.workspace_id, task.id)
                       if item.status == 'applied' and item.result_version_id == version.id
                       and item.base_version_id == snapshot['timeline_version_id']]
         if len(operations) != 1:
             return None
         operation = operations[0]
-        proposal = self.production.get_edit_proposal(task.workspace_id, operation.proposal_id)
-        source = self.production.get_edit_intent(
+        proposal = self.production.edit_records.get_edit_proposal(task.workspace_id, operation.proposal_id)
+        source = self.production.edit_records.get_edit_intent(
             task.workspace_id, proposal.intent_id).constraints.get('request_source') or {}
         if any(source.get(key) != value for key, value in {
             'workspace_id': task.workspace_id, 'task_id': task.id, 'member_id': member_id,

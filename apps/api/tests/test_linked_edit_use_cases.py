@@ -81,8 +81,8 @@ def change_set(state, prepared):
     from app.subtitle_tracks import render_srt
 
     repo, task, plan, track, identity, verifier = state
-    repo.create_edit_intent(prepared.intent)
-    repo.create_edit_proposal(prepared.proposal)
+    repo.edit_records.create_edit_intent(prepared.intent)
+    repo.edit_records.create_edit_proposal(prepared.proposal)
     captions = []
     for item in prepared.subtitle_tracks:
         reference, transform = main._publish_subtitle_text(
@@ -144,8 +144,8 @@ def test_linked_commit_rechecks_moved_neighbour_inside_same_transaction(linked_s
     with pytest.raises(PermissionError):
         commit_change_set(repo, change, verify_sources=lambda conn: verifier.verify(prepared.command, conn))
     assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
-    assert repo.get_edit_proposal("local", prepared.proposal.id).status == "proposed"
-    assert repo.list_edit_operations("local", "task") == []
+    assert repo.edit_records.get_edit_proposal("local", prepared.proposal.id).status == "proposed"
+    assert repo.edit_records.list_edit_operations("local", "task") == []
     assert len(repo.list_timeline_versions("local", "task")) == 2
 
 
@@ -156,7 +156,7 @@ def test_linked_command_rejects_stale_version_before_candidate_or_persistence(li
     with pytest.raises(EditConflict, match="时间线已经变化"):
         prepare_linked_splice(task, plan, [track], plan.audio_timeline, command,
             verifier=verifier, output_refs=[])
-    assert repo.list_edit_proposals("local", "task") == []
+    assert repo.edit_records.list_edit_proposals("local", "task") == []
 
 
 def test_actual_linked_http_adoption_rechecks_neighbour_revoked_at_commit(linked_state, monkeypatch):
@@ -170,7 +170,7 @@ def test_actual_linked_http_adoption_rechecks_neighbour_revoked_at_commit(linked
     })
     assert preview.status_code == 200, preview.text
     proposal = preview.json()["proposal"]
-    intent = repo.get_edit_intent("local", proposal["intent_id"])
+    intent = repo.edit_records.get_edit_intent("local", proposal["intent_id"])
     assert "clip_2" in intent.constraints["affected_source_scope"]["clip_ids"]
     commit = repo.edit_adoption.confirm
 
@@ -184,8 +184,8 @@ def test_actual_linked_http_adoption_rechecks_neighbour_revoked_at_commit(linked
     result = client.post(f"/api/creation-tasks/task/edits/{proposal['id']}/confirm")
     assert result.status_code == 403, result.text
     assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
-    assert repo.get_edit_proposal("local", proposal["id"]).status == "proposed"
-    assert repo.list_edit_operations("local", "task") == []
+    assert repo.edit_records.get_edit_proposal("local", proposal["id"]).status == "proposed"
+    assert repo.edit_records.list_edit_operations("local", "task") == []
     assert len(repo.list_timeline_versions("local", "task")) == 2
 
 
@@ -209,7 +209,7 @@ def test_linked_preview_sql_refusal_rolls_back_intent_and_proposal_together(link
     assert response.status_code == 500, response.text
     with repo._connect() as conn:
         assert tuple(conn.iterdump()) == before
-    assert repo.list_edit_intents("local", "task") == repo.list_edit_proposals("local", "task") == []
+    assert repo.edit_records.list_edit_intents("local", "task") == repo.edit_records.list_edit_proposals("local", "task") == []
     assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
 
 
@@ -232,7 +232,7 @@ def test_linked_preview_cas_refuses_version_advanced_at_repository_save(linked_s
         "operation_type": "DeleteClip", "clip_id": "clip_1",
     })
     assert response.status_code == 409, response.text
-    assert repo.list_edit_intents("local", "task") == repo.list_edit_proposals("local", "task") == []
+    assert repo.edit_records.list_edit_intents("local", "task") == repo.edit_records.list_edit_proposals("local", "task") == []
     assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "concurrent-version"
 
 
@@ -260,8 +260,8 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     values = {'base_version_id': base.id, 'removed_ranges_ms': [[1000, 1500]]}
     command = metadata_edit_command(task, state.identity, 'RemoveSilence', values)
     intent, proposal = make_metadata_proposal(command, ['clip:clip'], '采用既有固定停顿范围', values)
-    state.repo.create_edit_intent(intent)
-    state.repo.create_edit_proposal(proposal)
+    state.repo.edit_records.create_edit_intent(intent)
+    state.repo.edit_records.create_edit_proposal(proposal)
     source_identity = (state.source.stat().st_size, state.source.stat().st_mtime_ns)
     before = len(state.repo.list_timeline_versions('ws', task.id))
     case = LinkedTimelineEditUseCase(state.repo, state.case)
@@ -269,7 +269,7 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
     current = fresh.task_records.get_creation_task('ws', task.id)
     version = fresh.get_timeline_version('ws', current.current_timeline_version_id)
-    operations = fresh.list_edit_operations('ws', task.id)
+    operations = fresh.edit_records.list_edit_operations('ws', task.id)
     tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
     assert len(fresh.list_timeline_versions('ws', task.id)) == before + 1
     assert len(operations) == 1 and operations[0].proposal_id == proposal.id
@@ -282,9 +282,9 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     assert result.montage.audio_timeline.tracks == []
     assert result.montage.narration_audio_path == state.plan.narration_audio_path
     assert fresh.get_timeline_version('ws', base.id).snapshot == base.snapshot
-    assert fresh.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    assert fresh.edit_records.get_edit_proposal('ws', proposal.id).status == 'confirmed'
     assert source_identity == (state.source.stat().st_size, state.source.stat().st_mtime_ns)
-    assert len(fresh.list_edit_operations('ws', task.id)) == 1
+    assert len(fresh.edit_records.list_edit_operations('ws', task.id)) == 1
     evidence = os.environ.get('LEGACY_CONFIRM_EVIDENCE_DIR')
     if evidence:
         Path(evidence, 'SILENCE_NORMAL_FACTS.json').write_text(json.dumps({'proposal': proposal.id,

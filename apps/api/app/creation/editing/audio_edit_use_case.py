@@ -117,12 +117,12 @@ class AudioEditUseCase:
         if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
             raise AudioEditRejected(status_code=409, detail='试听生成期间时间线发生变化，请重新预览')
         base = self.montage_edits.ensure_montage_base(workspace_id, task, plan, source=source)
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=payload.raw_command, context_stage='montage', selected_object_refs=[f'audio:{payload.target_id}'], playhead_ms=round(start * 1000), intent_type='edit_audio', scope={'kind': 'audio', 'target_id': payload.target_id}, constraints={'preserve_video': True, 'audio_source_facts': self.source_facts(task, before, after, actor)}, confidence=1, status='interpreted'), source=source)
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=payload.raw_command, context_stage='montage', selected_object_refs=[f'audio:{payload.target_id}'], playhead_ms=round(start * 1000), intent_type='edit_audio', scope={'kind': 'audio', 'target_id': payload.target_id}, constraints={'preserve_video': True, 'audio_source_facts': self.source_facts(task, before, after, actor)}, confidence=1, status='interpreted'), source=source)
         labels = {'add': '添加音频片段', 'update': '修改音频片段', 'delete': '删除音频片段（保留时间空隙）', 'split': '分割音频片段', 'duplicate': '复制音频片段', 'track': '修改音轨设置', 'replace_narration': '用本机录音替换整条旁白'}
         summary = labels[payload.action]
         if payload.action == 'add' and any((track.id == payload.target_id and track.role == 'original' for track in before.tracks)):
             summary = '添加原声，与现有音轨混合；画面和配音不变'
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'audio:{payload.target_id}'], operation={'operation_type': 'EditAudioTimeline', 'payload': {'base_version_id': base.id, 'audio_timeline': after.model_dump(), 'edit': edit.model_dump(), 'expected_audio_timeline': before.model_dump(), **({'recording_duration_ms': measured_ms, 'recording_sha256': recording.sha256, 'recording_file_signature': recording_file_signature} if payload.action == 'replace_narration' else {})}}, invalidated_refs=logical_montage_output_refs(plan), preview=preview_media, external_effects=['新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。'] if payload.action == 'replace_narration' else []))
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'audio:{payload.target_id}'], operation={'operation_type': 'EditAudioTimeline', 'payload': {'base_version_id': base.id, 'audio_timeline': after.model_dump(), 'edit': edit.model_dump(), 'expected_audio_timeline': before.model_dump(), **({'recording_duration_ms': measured_ms, 'recording_sha256': recording.sha256, 'recording_file_signature': recording_file_signature} if payload.action == 'replace_narration' else {})}}, invalidated_refs=logical_montage_output_refs(plan), preview=preview_media, external_effects=['新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。'] if payload.action == 'replace_narration' else []))
         return AudioEditPreviewResult(intent, proposal)
 
     def source_facts(self, task, before, after, actor):
@@ -142,7 +142,7 @@ class AudioEditUseCase:
             raise AudioEditRejected(409,'音频提案不再适用，请检查源文件并重新预览')
         edit = AudioEditRequest.model_validate(payload['edit'])
         after = AudioTimeline.model_validate(payload['audio_timeline'])
-        intent = self.repository.get_edit_intent(task.workspace_id,proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(task.workspace_id,proposal.intent_id)
         expected = intent.constraints.get('audio_source_facts')
         if expected is None:
             raise AudioEditRejected(409,'原音频提案未绑定完整来源，请重新预览')

@@ -134,9 +134,9 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == before
     assert state.production.list_timeline_versions(state.workspace_id, state.task.id) == versions
     if phase == "preview":
-        assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+        assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     else:
-        assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+        assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
 
 
 @pytest.mark.parametrize("command", ["把第0个镜头和第2个镜头交换", "1↔4", "1↔2，然后删除配音", "那你把镜头1和镜头2的位置互换一下，然后删除配音"])
@@ -144,7 +144,7 @@ def test_invalid_or_extra_reorder_does_not_create_partial_proposal(storyboard, c
     state = storyboard
     before = current(state)
     assert preview(state, command).status_code == 422
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert _plan(current(state)) == _plan(before)
 
 
@@ -219,7 +219,7 @@ def test_untyped_replacement_keeps_objective_description_search(material_edit_st
     response = preview(state, "把这个镜头换成完全不存在的景象", selected_object_refs=[f"clip:{state.clip.id}"])
     assert response.status_code == 409, response.text
     assert queries == ["完全不存在的景象"]
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert _plan(current(state)) == _plan(before)
 
 
@@ -230,7 +230,7 @@ def test_typed_replacement_cannot_override_other_action_or_path(material_edit_st
     response = preview(state, command, selected_object_refs=[f"clip:{state.clip.id}"],
         replacement_asset_id=state.asset.id, replacement_segment_id=state.asset.segments[0].id)
     assert response.status_code == 409, response.text
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert _plan(current(state)) == _plan(before)
 
 

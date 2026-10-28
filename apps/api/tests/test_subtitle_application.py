@@ -103,4 +103,4 @@ def test_style_preparation_keeps_original_ids_and_save_uses_original_base_CAS(tm
     with pytest.raises(ValueError, match='版本|变化|version'):
         state.application.save_preview(prepared)
     assert (prepared.intent.id, prepared.proposal.id) == before_ids
-    assert not state.repo.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)

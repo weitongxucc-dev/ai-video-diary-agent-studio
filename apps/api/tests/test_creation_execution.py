@@ -295,9 +295,9 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
         edited = json.loads(json.dumps(original))
         edited.update(status="ready", output_path=None, subtitle_path=None)
         edited["clips"][0]["crop_x"] = 0
-        intent = repo.create_edit_intent(EditIntent("intent_crop", "local", task_id, "crop", "review",
+        intent = repo.edit_records.create_edit_intent(EditIntent("intent_crop", "local", task_id, "crop", "review",
             ["clip_1"], None, "ChangeCrop", {}, {}, 1, "parsed"))
-        proposal = repo.create_edit_proposal(EditProposal("proposal_crop", "local", task_id, intent.id,
+        proposal = repo.edit_records.create_edit_proposal(EditProposal("proposal_crop", "local", task_id, intent.id,
             "crop", ["clip_1"], {"operation_type": "ChangeCrop"}, [], {}, []))
         version = TimelineVersion("timeline_crop", "local", task_id, base.id, 2, {"montage": edited}, "operation_crop")
         now = datetime.now(timezone.utc)
@@ -317,7 +317,7 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
         task = repo.task_records.get_creation_task("local", task_id)
         assert task.narration_cache_key == "cache_1" and task.montage_plan_id == "montage_1"
         assert not task.output_ready and task.current_timeline_version_id == version.id
-        assert repo.get_edit_proposal("local", proposal.id).status == "confirmed"
+        assert repo.edit_records.get_edit_proposal("local", proposal.id).status == "confirmed"
         if mutation == "version":
             repo.create_timeline_version(replace(version, id="timeline_concurrent", parent_version_id=version.id, sequence=3))
         elif mutation == "source":
@@ -453,8 +453,8 @@ def test_failed_inner_render_does_not_overwrite_concurrently_confirmed_crop(tmp_
         original = repo.get_creation_task_montage_plan("local", task_id)
         cropped = json.loads(json.dumps(original))
         cropped["clips"][0]["crop_x"] = 0
-        proposal = repo.create_edit_proposal(EditProposal("concurrent_proposal", "local", task_id,
-            repo.create_edit_intent(EditIntent("concurrent_intent", "local", task_id, "crop", "montage",
+        proposal = repo.edit_records.create_edit_proposal(EditProposal("concurrent_proposal", "local", task_id,
+            repo.edit_records.create_edit_intent(EditIntent("concurrent_intent", "local", task_id, "crop", "montage",
                 ["clip_1"], None, "ChangeCrop", {}, {}, 1, "parsed")).id,
             "crop", ["clip_1"], {"operation_type": "ChangeCrop"}, [], {}, []))
         version = replace(base, id="timeline_concurrent_crop", parent_version_id=base.id,
@@ -1886,8 +1886,8 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
     repo.save_creation_task_montage_plan('local',task_id,plan.id,payload)
     base=repo.create_timeline_version(TimelineVersion('base','local',task_id,None,1,{'montage':payload},None))
     edits=MetadataEditUseCase(repo,ArtifactStore(tmp_path/'artifacts'),output_root=tmp_path/'restore',audio_service=None)
-    intent=repo.create_edit_intent(EditIntent('crop-intent','local',task_id,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
-    proposal=repo.create_edit_proposal(EditProposal('crop-proposal','local',task_id,intent.id,'crop',['clip:clip'],
+    intent=repo.edit_records.create_edit_intent(EditIntent('crop-intent','local',task_id,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
+    proposal=repo.edit_records.create_edit_proposal(EditProposal('crop-proposal','local',task_id,intent.id,'crop',['clip:clip'],
         {'operation_type':'ChangeCrop','payload':{}},[],{},[]))
     edited=edits.persist_montage_edit(workspace_id='local',task=repo.task_records.get_creation_task('local',task_id),proposal=proposal,
         base_version=base,updated_plan=replace(plan,clips=[replace(plan.clips[0],crop_x=.2)]),
@@ -1907,7 +1907,7 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
         restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
     assert repo.task_records.get_creation_task('local',task_id).current_timeline_version_id==later.id
     assert repo.get_creation_task_montage_plan('local',task_id)['clips'][0]['crop_x']==.2
-    assert len(repo.list_edit_operations('local',task_id))==1
+    assert len(repo.edit_records.list_edit_operations('local',task_id))==1
     # The refused production result is retained above. A separate task checks
     # A/B -> undo B -> undo A without unrelated production facts.
     clean_root=tmp_path/'continuous';clean_root.mkdir()
@@ -1922,8 +1922,8 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
     clean_base=clean_repo.create_timeline_version(TimelineVersion('clean-base','local',clean_task,None,1,{'montage':clean_payload},None))
     clean_edits=MetadataEditUseCase(clean_repo,ArtifactStore(clean_root/'artifacts'),output_root=clean_root/'restore',audio_service=None)
     for name,position in [('A',.2),('B',.3)]:
-        intent=clean_repo.create_edit_intent(EditIntent(f'intent-{name}','local',clean_task,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
-        proposal=clean_repo.create_edit_proposal(EditProposal(f'proposal-{name}','local',clean_task,intent.id,'crop',['clip:clip'],
+        intent=clean_repo.edit_records.create_edit_intent(EditIntent(f'intent-{name}','local',clean_task,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
+        proposal=clean_repo.edit_records.create_edit_proposal(EditProposal(f'proposal-{name}','local',clean_task,intent.id,'crop',['clip:clip'],
             {'operation_type':'ChangeCrop','payload':{}},[],{},[]))
         outcome=clean_edits.persist_montage_edit(workspace_id='local',task=clean_repo.task_records.get_creation_task('local',clean_task),
             proposal=proposal,base_version=clean_base,updated_plan=replace(clean_plan,clips=[replace(clean_plan.clips[0],crop_x=position)]),
@@ -3090,9 +3090,9 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
         {'montage':payload,'narration_cache_key':task.narration_cache_key,'subtitle_track_ids':[]},None))
     task=case.repo.task_records.get_creation_task('local',task.id)
     case.stage.metadata=MetadataEditUseCase(case.repo,ArtifactStore(tmp_path/'outputs'),output_root=tmp_path/'outputs',audio_service=None)
-    intent=case.repo.create_edit_intent(EditIntent('regenerate-intent','local',task.id,'重新配音','narration',[],None,
+    intent=case.repo.edit_records.create_edit_intent(EditIntent('regenerate-intent','local',task.id,'重新配音','narration',[],None,
         'regenerate_narration',{}, {},1,'interpreted'))
-    proposal=case.repo.create_edit_proposal(EditProposal('regenerate-proposal','local',task.id,intent.id,'重新生成首段配音',
+    proposal=case.repo.edit_records.create_edit_proposal(EditProposal('regenerate-proposal','local',task.id,intent.id,'重新生成首段配音',
         ['narration:'+segments[0].id],{'operation_type':'RegenerateNarrationSegment','payload':{
             'base_version_id':base.id,'narration_segment_id':segments[0].id,
             'expected_audio_reference':segments[0].audio_reference}},[],{},[]))
@@ -3160,7 +3160,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
             current = case.repo.task_records.get_creation_task('local', task.id)
             assert current.current_timeline_version_id == base.id
             assert case.repo.job_records.get_job_run('local', job.id).status == 'interrupted'
-            assert case.repo.list_edit_operations('local', task.id) == []
+            assert case.repo.edit_records.list_edit_operations('local', task.id) == []
             usage = case.repo.creation_narration_usage('local', job.id)
             assert not usage['unsettled'] and usage['used_output_bytes'] == 192096
             reconciled = [event for event in case.repo.execution_records.list_task_events('local', task.id)
@@ -3180,7 +3180,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     assert case.repo.get_narration_segment('local',task.id,segments[1].id)==segments[1]
     usage=case.repo.creation_narration_usage('local',job.id)
     assert not usage['unsettled'] and usage['used_output_bytes']==192096
-    assert len(case.repo.list_edit_operations('local',task.id))==1
+    assert len(case.repo.edit_records.list_edit_operations('local',task.id))==1
     assert wav_reads
 
 
@@ -3423,7 +3423,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     _before,request,_runtime=_submit_section_revision(case)
     for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     task=case.repo.task_records.get_creation_task('local',case.task_id)
-    a=case.repo.get_edit_operation('local',case.repo.get_timeline_version('local',task.current_timeline_version_id).created_by_operation_id)
+    a=case.repo.edit_records.get_edit_operation('local',case.repo.get_timeline_version('local',task.current_timeline_version_id).created_by_operation_id)
     current=creation_task_montage_plan_from_payload(case.repo.get_creation_task_montage_plan('local',case.task_id))
     second_id=current.clips[1].id
     actor_identity={'member_id':case.actor.member_id,'local_diagnostic':False}
@@ -4710,9 +4710,9 @@ def _edit_source_boundary_case(tmp_path, monkeypatch, kind):
     source = {**conversations.task_turn_source(turn['id'], 'local', case.actor.member_id, case.task_id),
         'workspace_id': 'local', 'task_id': case.task_id, 'member_id': case.actor.member_id,
         'actor_identity': case.actor.identity_payload(), 'assistant_turn_id': turn['id']}
-    intent = case.repo.create_edit_intent(EditIntent('source-intent', 'local', case.task_id,
+    intent = case.repo.edit_records.create_edit_intent(EditIntent('source-intent', 'local', case.task_id,
         '修改原作品', 'person', [], None, 'edit', {}, {}, 1, 'interpreted'))
-    proposal = case.repo.create_edit_proposal(EditProposal('source-proposal', 'local', case.task_id,
+    proposal = case.repo.edit_records.create_edit_proposal(EditProposal('source-proposal', 'local', case.task_id,
         intent.id, '修改原作品', ['clip:original'], {'operation_type': 'RegeneratePersonRender',
             'payload': {'person_profile_id': 'person', 'person_version': 'v1'}}, [], {}, []))
     with case.repo._connect() as conn:
@@ -4768,7 +4768,7 @@ def test_edit_source_rechecked_in_submission_grant_and_success_transaction(tmp_p
         assert case.repo.execution_records.get_task_event('local', ref, connection=conn).payload['status'] == terminal
     original = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
     assert original.payload['source'] == case.source
-    assert case.repo.list_edit_operations('local', case.task_id) == []
+    assert case.repo.edit_records.list_edit_operations('local', case.task_id) == []
 
 
 @pytest.mark.parametrize('kind,blocker', [
@@ -6037,9 +6037,9 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
     task = repo.task_records.get_creation_task('local', task.id)
     case.stage.metadata = MetadataEditUseCase(repo, ArtifactStore(tmp_path/'outputs'),
         output_root=tmp_path/'outputs', audio_service=None)
-    intent = repo.create_edit_intent(EditIntent('paid-intent', 'local', task.id, '重新配音', 'narration', [],
+    intent = repo.edit_records.create_edit_intent(EditIntent('paid-intent', 'local', task.id, '重新配音', 'narration', [],
         None, 'regenerate_narration', {}, {}, 1, 'interpreted'))
-    proposal = repo.create_edit_proposal(EditProposal('paid-proposal', 'local', task.id, intent.id, '局部配音',
+    proposal = repo.edit_records.create_edit_proposal(EditProposal('paid-proposal', 'local', task.id, intent.id, '局部配音',
         ['narration:'+rows[0].id], {'operation_type': 'RegenerateNarrationSegment', 'payload': {
             'base_version_id': base.id, 'narration_segment_id': rows[0].id,
             'expected_audio_reference': rows[0].audio_reference}}, [], {}, []))
@@ -6122,7 +6122,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
                 case.executor.execute(final, case.scheduler)
             assert repo.task_records.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
             assert repo.get_narration_segment('local', case.task.id, case.rows[0].id) == case.rows[0]
-            assert not repo.list_edit_operations('local', case.task.id)
+            assert not repo.edit_records.list_edit_operations('local', case.task.id)
             assert repo.creation_narration_usage('local', job.id)['unsettled']
             if outcome in {'unknown', 'source_blocked'}:
                 monkeypatch.setattr(repo.edit_adoption, 'confirm', original_commit)
@@ -6140,7 +6140,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
             assert repo.get_narration_segment('local', case.task.id, case.rows[-1].id) == case.rows[-1]
             assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
             assert case.scheduler._get(final.request_id).state == 'done'
-            assert len(repo.list_edit_operations('local', case.task.id)) == 1
+            assert len(repo.edit_records.list_edit_operations('local', case.task.id)) == 1
         elif outcome == 'source_blocked':
             assert repo.task_records.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
             assert repo.job_records.get_job_run('local', job.id).status == 'interrupted'
@@ -6859,7 +6859,7 @@ def _publish_paid_section_change(case):
         assert conn.in_transaction
     task = case.repo.task_records.get_creation_task('local',case.task_id)
     version = case.repo.get_timeline_version('local',task.current_timeline_version_id)
-    return task,version,case.repo.get_edit_operation('local',version.created_by_operation_id)
+    return task,version,case.repo.edit_records.get_edit_operation('local',version.created_by_operation_id)
 
 
 def test_section_change_publish_restore_preserves_later_facts_without_full_inputs(tmp_path,monkeypatch):
@@ -7062,7 +7062,7 @@ def test_restore_receipt_metadata_unknown_conflict_refusal_and_identity(tmp_path
     with repo._connect() as conn:
         assert conn.execute("SELECT count(*) FROM task_events WHERE id=?",
             (records.request_id(task.workspace_id,actor.member_id,refused_id)+'_refusal',)).fetchone()[0]==1
-    assert repo.list_edit_operations(task.workspace_id,task.id)==[]
+    assert repo.edit_records.list_edit_operations(task.workspace_id,task.id)==[]
     assert repo.job_records.list_job_runs(task.workspace_id,task.id)==[]
 
 
@@ -7077,11 +7077,11 @@ def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path
     event_id,fresh = records.claim(task,actor.member_id,request_id,inputs)
     assert fresh
     base = repo.create_timeline_version(TimelineVersion('restore-base',task.workspace_id,task.id,None,1,{},None))
-    intent = repo.create_edit_intent(EditIntent('restore-intent',task.workspace_id,task.id,'declared undo','montage',[],None,
+    intent = repo.edit_records.create_edit_intent(EditIntent('restore-intent',task.workspace_id,task.id,'declared undo','montage',[],None,
         'undo_timeline',{}, {},1,'interpreted'))
     payload = {'restore_request_id':request_id,'restore_member_id':actor.member_id,
         'target_operation_id':'declared-original-operation','changed_version_id':base.id,'restore_version_id':base.id}
-    proposal = repo.create_edit_proposal(EditProposal('restore-proposal',task.workspace_id,task.id,intent.id,
+    proposal = repo.edit_records.create_edit_proposal(EditProposal('restore-proposal',task.workspace_id,task.id,intent.id,
         'declared restore adoption',['operation:declared-original-operation'],
         {'operation_type':'UndoTimelineVersion','payload':payload},[],{},[]))
     now = datetime.now(timezone.utc)
@@ -7094,8 +7094,8 @@ def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path
     with pytest.raises(sqlite3.IntegrityError,match='restore tail refused'):
         repo.edit_adoption.confirm(task.workspace_id,task.id,proposal.id,operation=operation,result_version=version)
     assert restore.read_request(task.workspace_id,task.id,request_id,actor)['status']=='result_unknown'
-    assert repo.get_edit_proposal(task.workspace_id,proposal.id).status=='proposed'
-    assert repo.list_edit_operations(task.workspace_id,task.id)==[]
+    assert repo.edit_records.get_edit_proposal(task.workspace_id,proposal.id).status=='proposed'
+    assert repo.edit_records.list_edit_operations(task.workspace_id,task.id)==[]
     with pytest.raises(RecoveryBlocked):
         restore.execute(command,actor=actor,request_id=request_id)
     with repo._connect() as conn:

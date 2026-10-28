@@ -508,11 +508,11 @@ class GoalResultProjection:
         return bool(rendered and rendered["owner_id"] == bound[1].id and rendered["state"] == "done")
 
     def owned_edit_version(self, goal, version):
-        for operation in self.production.list_edit_operations(goal["workspace_id"], goal["task_id"]):
+        for operation in self.production.edit_records.list_edit_operations(goal["workspace_id"], goal["task_id"]):
             if operation.status != "applied" or operation.result_version_id != version.id or operation.base_version_id != version.parent_version_id:
                 continue
-            proposal = self.production.get_edit_proposal(goal["workspace_id"], operation.proposal_id)
-            source = self.production.get_edit_intent(goal["workspace_id"], proposal.intent_id).constraints.get("request_source") or {}
+            proposal = self.production.edit_records.get_edit_proposal(goal["workspace_id"], operation.proposal_id)
+            source = self.production.edit_records.get_edit_intent(goal["workspace_id"], proposal.intent_id).constraints.get("request_source") or {}
             if ((source.get("workspace_id"), source.get("task_id"), source.get("member_id"), source.get("conversation_id"))
                     == (goal["workspace_id"], goal["task_id"], goal["member_id"], goal["conversation_id"])
                     and source.get("expected_timeline_version_id") == version.parent_version_id
@@ -621,8 +621,8 @@ class GoalResultProjection:
     def adopted_operation(self, goal, event, task, removed):
         if not event.get("proposal_id") or event.get("status") != "confirmed":
             return None, None, removed
-        proposal = self.production.get_edit_proposal(goal["workspace_id"], event["proposal_id"])
-        operation = next((item for item in self.production.list_edit_operations(goal["workspace_id"], goal["task_id"])
+        proposal = self.production.edit_records.get_edit_proposal(goal["workspace_id"], event["proposal_id"])
+        operation = next((item for item in self.production.edit_records.list_edit_operations(goal["workspace_id"], goal["task_id"])
             if item.proposal_id == proposal.id and item.id == event.get("operation_id") and item.status == "applied"), None)
         current = task.current_timeline_version_id == (operation.result_version_id if operation else None)
         if not current and operation is not None:
@@ -949,9 +949,9 @@ class GoalResultProjection:
             if job.status == "succeeded":
                 media_result = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
                 if media_result.get("proposal"):
-                    proposal = self.production.get_edit_proposal(workspace_id, media_result["proposal"]["id"])
+                    proposal = self.production.edit_records.get_edit_proposal(workspace_id, media_result["proposal"]["id"])
         else:
-            proposal = self.production.get_edit_proposal(workspace_id, candidate["id"])
+            proposal = self.production.edit_records.get_edit_proposal(workspace_id, candidate["id"])
             if proposal.status != candidate["status"]:
                 self.mark(candidate)
                 return True
@@ -976,7 +976,7 @@ class GoalResultProjection:
                 self.mark(candidate)
                 return True
             if proposal.status == "confirmed":
-                operation = next((item for item in self.production.list_edit_operations(workspace_id, task_id)
+                operation = next((item for item in self.production.edit_records.list_edit_operations(workspace_id, task_id)
                                   if item.proposal_id == proposal.id and item.status == "applied"), None)
                 if operation is not None:
                     result_version = operation.result_version_id
@@ -1000,7 +1000,7 @@ class GoalResultProjection:
         patch = {"edit_preview": None} if proposal is not None and status != "proposed" else {}
         preview = None
         if event["actionable"]:
-            intent = self.production.get_edit_intent(workspace_id, proposal.intent_id)
+            intent = self.production.edit_records.get_edit_intent(workspace_id, proposal.intent_id)
             preview = intent, proposal
             event["waiting_reason"] = "请查看实际修改预览，再采用或拒绝。"
             message = "修改预览已完成，可以查看并决定是否采用；当前草稿尚未改变。"
@@ -1079,9 +1079,9 @@ class GoalResultProjection:
         if recorded is not None and recorded["status_code"] < 400:
             actual = recorded["response"]
             if locator["phase"] == "apply" and "operation_type" in claim.payload["inputs"] and actual.get("operation"):
-                operation = self.production.get_edit_operation(workspace_id, actual["operation"]["id"])
-                proposal = self.production.get_edit_proposal(workspace_id, operation.proposal_id)
-                intent = self.production.get_edit_intent(workspace_id, proposal.intent_id)
+                operation = self.production.edit_records.get_edit_operation(workspace_id, actual["operation"]["id"])
+                proposal = self.production.edit_records.get_edit_proposal(workspace_id, operation.proposal_id)
+                intent = self.production.edit_records.get_edit_intent(workspace_id, proposal.intent_id)
                 origin = intent.constraints.get("request_source") or {}
                 if (operation.task_id != task_id or operation.status != "applied"
                         or not operation.result_version_id
@@ -1094,12 +1094,12 @@ class GoalResultProjection:
                     return True
                 result.applied = operation
             elif actual.get("proposal"):
-                proposal = self.production.get_edit_proposal(workspace_id, actual["proposal"]["id"])
+                proposal = self.production.edit_records.get_edit_proposal(workspace_id, actual["proposal"]["id"])
                 if proposal.task_id != task_id:
                     self.mark(candidate)
                     return True
                 if current and proposal.status == "proposed" and proposal.operation["payload"].get("base_version_id") == task.current_timeline_version_id:
-                    result.preview = self.production.get_edit_intent(workspace_id, proposal.intent_id), proposal
+                    result.preview = self.production.edit_records.get_edit_intent(workspace_id, proposal.intent_id), proposal
             elif actual.get("job_id"):
                 if not runtime_available:
                     return False

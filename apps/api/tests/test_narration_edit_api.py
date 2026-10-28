@@ -105,7 +105,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
     state.repo.save_creation_task_montage_plan("local", state.task.id, montage.id, payload)
     state.base = state.repo.create_timeline_version(TimelineVersion("full-base", "local", state.task.id,
         "base", 2, {"montage": payload}, None))
-    state.proposal = state.repo.create_edit_proposal(replace(state.proposal, id="full-proposal",
+    state.proposal = state.repo.edit_records.create_edit_proposal(replace(state.proposal, id="full-proposal",
         operation={"operation_type": "RegenerateNarrationSegment",
                    "payload": {**state.proposal.operation["payload"], "base_version_id": state.base.id}}))
     state.task = state.repo.task_records.get_creation_task("local", state.task.id)
@@ -219,7 +219,7 @@ def test_draft_narration_confirm_retimes_audio_without_confirming_low_confidence
     assert updated["low_confidence_clip_count"] == 1 and updated["status"] == "waiting_for_user"
     current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id != state.base.id and not current.output_ready
-    assert state.repo.get_edit_proposal("local", proposal["id"]).status == "confirmed"
+    assert state.repo.edit_records.get_edit_proposal("local", proposal["id"]).status == "confirmed"
     assert state.runtime.scheduler._get(receipt.json()["request_id"]).state == "done"
 
 

@@ -74,9 +74,9 @@ def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, m
         expression='neutral', base_version_id=state.base.id,
         expected_audio_reference=state.segments[0].audio_reference,
         source_start_seconds=0, source_end_seconds=4)
-    intent = state.repo.create_edit_intent(EditIntent('person-intent', 'ws', state.task.id,
+    intent = state.repo.edit_records.create_edit_intent(EditIntent('person-intent', 'ws', state.task.id,
         '换人物', 'montage', [], None, 'person', {}, {}, 1, 'interpreted'))
-    proposal = state.repo.create_edit_proposal(EditProposal('person-proposal', 'ws', state.task.id,
+    proposal = state.repo.edit_records.create_edit_proposal(EditProposal('person-proposal', 'ws', state.task.id,
         intent.id, '换人物', ['clip:clip'], {'operation_type':'ChangePersonSegment', 'payload':payload},
         [], {}, []))
 
@@ -115,7 +115,7 @@ def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, m
         complete()
         current = state.repo.get_creation_task_montage_plan('ws', state.task.id)
         assert current['clips'][0]['person_render_id'] == render.id
-        assert state.repo.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+        assert state.repo.edit_records.get_edit_proposal('ws', proposal.id).status == 'confirmed'
     else:
         expected = {'timeline':PersonStageRejected, 'cancel':GrantedCommandCancelled, 'revoked':PermissionError}[change]
         with pytest.raises(expected):

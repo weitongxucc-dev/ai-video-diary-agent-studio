@@ -98,9 +98,9 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     if fast_render:
         finish_render()
     owner = GoalResultProjection(state.repo, repo)
-    op = state.repo.get_edit_operation("ws", operation["id"])
-    proposal = state.repo.get_edit_proposal("ws", operation["proposal_id"])
-    typed_source = state.repo.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
+    op = state.repo.edit_records.get_edit_operation("ws", operation["id"])
+    proposal = state.repo.edit_records.get_edit_proposal("ws", operation["proposal_id"])
+    typed_source = state.repo.edit_records.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
     current_task = state.repo.task_records.get_creation_task("ws", state.task.id)
     projection = owner.business_projection(SimpleNamespace(
         candidate={"kind": "proposal", "event_id": "proposal-applied", "workspace_id": "ws", "task_id": state.task.id, "status": "confirmed"},

@@ -359,7 +359,7 @@ def test_rejected_direct_request_replays_original_error_without_business_writes(
         assert receipt.json()["result_status_code"] == expected
         assert receipt.json()["submitted_input"]["cue_id"] == payload["cue_id"]
     assert state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.list_edit_operations("ws",state.task.id) == []
+    assert state.repo.edit_records.list_edit_operations("ws",state.task.id) == []
 
 
 def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_state,monkeypatch):
@@ -426,7 +426,7 @@ def test_common_exact_rechecks_guard_in_real_commit(metadata_http_state,monkeypa
         case.apply(s.task,actor,payload,identity=s.identity)
     assert error.value.status_code==403
     assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
-    assert s.repo.list_edit_operations('ws',s.task.id)==[]
+    assert s.repo.edit_records.list_edit_operations('ws',s.task.id)==[]
 
 
 def test_business_original_read_survives_head_but_rejects_foreign_input_and_revocation(metadata_http_state,monkeypatch):

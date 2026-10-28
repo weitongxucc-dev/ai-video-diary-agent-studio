@@ -76,6 +76,7 @@ from app.creation.contracts import (
 )
 from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
 from app.creation.task_records import TaskRecordStore
+from app.creation.editing.records import EditRecordStore, validate_edit_operation
 from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload, narration_segment_from_row,
     narration_segment_row, narration_segment_rows,
@@ -423,7 +424,6 @@ from app.creation.contracts import (
     EditProposal as _EditProposal,
     EditOperationStatus as _EditOperationStatus,
     EditOperationType as _EditOperationType,
-    SUPPORTED_EDIT_OPERATION_TYPES as _SUPPORTED_EDIT_OPERATION_TYPES,
     EditOperation as _EditOperation
 )
 
@@ -523,15 +523,18 @@ class ProductionRepository:
     def _initialize_profile_stores(self) -> None:
         """Bind record owners; do not open connections or provision schema."""
         self.task_records = TaskRecordStore(self._connect)
+        self.edit_records = EditRecordStore(self._connect,
+            current_source=EXACT_EDIT_SOURCE.get, decode_reference_list=_string_list_from_text,
+            decode_object=_json_object_from_text, decode_timeline_version=self._timeline_version_from_row)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
-            require_task=require_creation_task, decode_proposal=self._edit_proposal_from_row,
-            read_task=self.task_records.get_creation_task, read_proposal=self.get_edit_proposal,
-            read_operation=self.get_edit_operation, read_version=self.get_timeline_version,
+            require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
+            read_task=self.task_records.get_creation_task, read_proposal=self.edit_records.get_edit_proposal,
+            read_operation=self.edit_records.get_edit_operation, read_version=self.get_timeline_version,
             read_narration_segment=self.get_narration_segment,
             iter_narration_edit_segments=self.iter_narration_edit_segments,
             replace_adopted_narration_segment=self.replace_adopted_narration_segment,
             upsert_narration_segments=self._upsert_narration_segments,
-            validate_operation=_validate_edit_operation, validate_version=_validate_timeline_version,
+            validate_operation=validate_edit_operation, validate_version=_validate_timeline_version,
             validate_track=_validate_subtitle_track, validate_cover=_validate_cover_asset)
         self.preview_records = PreviewRecordStore(self._connect)
         self._media_authorizations = MediaAuthorizationStore(self._connect)
@@ -572,7 +575,7 @@ class ProductionRepository:
         self.restore_requests = TimelineRestoreRecordStore(self._connect,
             append_event=self.execution_records.append_task_event,
             get_event=self.execution_records.get_task_event,
-            decode_operation=self._edit_operation_from_row, read_readiness=self.edit_execution_readiness)
+            decode_operation=self.edit_records.edit_operation_from_row, read_readiness=self.edit_execution_readiness)
         self.lineage_records = LineageRecordStore(self._connect,
             require_task=require_creation_task,
             job_belongs=self.job_records.job_belongs, output_producers=self.execution_records.output_producers,
@@ -3877,11 +3880,11 @@ class ProductionRepository:
                     raw_command='受约束局部文案修订',context_stage='narration',selected_object_refs=[f'section:{payload["section_id"]}'],
                     playhead_ms=None,intent_type='revise_script_section',scope={'section_id':payload['section_id']},
                     constraints={},confidence=1.0,status='interpreted')
-                self.create_edit_intent(intent,connection=connection,source=None)
+                self.edit_records.create_edit_intent(intent,connection=connection,source=None)
                 proposal = _EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=task.workspace_id,task_id=task.id,
                     intent_id=intent.id,summary='更新目标段的正文、配音、字幕及镜头',target_refs=[f'section:{payload["section_id"]}'],
                     operation={'operation_type':'ReviseScriptSection','payload':history},invalidated_refs=[],preview={},external_effects=[])
-                self.create_edit_proposal(proposal,connection=connection)
+                self.edit_records.create_edit_proposal(proposal,connection=connection)
                 applied_at = utc_now()
                 operation = _EditOperation(id=operation_id,workspace_id=task.workspace_id,task_id=task.id,proposal_id=proposal.id,
                     operation_type='ReviseScriptSection',payload=history,base_version_id=task.current_timeline_version_id,
@@ -4010,13 +4013,13 @@ class ProductionRepository:
                 version_id,job,conn,source_version=source_version,desired_version=desired_version)
             action = '重做' if redo else '撤销'
             operation_type = 'RedoTimelineVersion' if redo else 'UndoTimelineVersion'
-            intent = self.create_edit_intent(_EditIntent(id=f'intent_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
+            intent = self.edit_records.create_edit_intent(_EditIntent(id=f'intent_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
                 raw_command=f'{action}目标段修改',context_stage='narration',selected_object_refs=[f'section:{section_id}'],
                 playhead_ms=None,intent_type='redo_timeline' if redo else 'undo_timeline',scope={'section_id':section_id},
                 constraints={},confidence=1.0,status='interpreted'),connection=conn,source=None)
             payload = {'changed_version_id':changed_version_id,'restore_version_id':restore_version_id,
                 'base_version_id':current.id,'section_history':history,'section_restore_side':side,**(control_payload or {})}
-            proposal = self.create_edit_proposal(_EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=workspace_id,
+            proposal = self.edit_records.create_edit_proposal(_EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=workspace_id,
                 task_id=task_id,intent_id=intent.id,summary=f'{action}目标段修改，保留其他片段的后续成果',
                 target_refs=[f'section:{section_id}'],operation={'operation_type':operation_type,'payload':payload},
                 invalidated_refs=[],preview={},external_effects=[]),connection=conn)
@@ -5225,8 +5228,8 @@ class ProductionRepository:
                 raise TimelineVersionConflict("预览期间时间线发生变化，请重新预览")
             if (proposal.workspace_id, proposal.task_id, proposal.intent_id) != (intent.workspace_id, intent.task_id, intent.id):
                 raise ValueError("预览提案不属于原编辑意图")
-            self.create_edit_intent(intent, connection=conn, source=None)
-            self.create_edit_proposal(proposal, connection=conn)
+            self.edit_records.create_edit_intent(intent, connection=conn, source=None)
+            self.edit_records.create_edit_proposal(proposal, connection=conn)
         return intent, proposal
 
     def create_cover_generation_job(self, run: _JobRun, payload: dict, *, expected_version_id: str) -> _JobRun:
@@ -5247,7 +5250,7 @@ class ProductionRepository:
                 raise TimelineVersionConflict("提交封面前时间线发生变化，请重新预览")
             if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
                 raise PermissionError("当前成员不能安排此任务的封面")
-            proposal = self.get_edit_proposal(run.workspace_id, command["proposal_id"])
+            proposal = self.edit_records.get_edit_proposal(run.workspace_id, command["proposal_id"])
             original = proposal.operation.get("payload", {})
             normalized = {**original, "title_position": original.get("title_position", "bottom")}
             if (proposal.task_id != run.task_id or proposal.status != "proposed"
@@ -5284,64 +5287,7 @@ class ProductionRepository:
                 self.lineage_records.create_dependency_edge(edge, connection=conn)
         return artifact
 
-    def create_edit_intent(self, intent: _EditIntent, *, connection: sqlite3.Connection | None = None, source: dict | None | Literal[False] = False) -> _EditIntent:
-        source = EXACT_EDIT_SOURCE.get() if source is False else source
-        if source is not None:
-            if (source["workspace_id"], source["task_id"]) != (intent.workspace_id, intent.task_id):
-                raise ValueError("类型化编辑来源不属于当前任务")
-            intent = replace(intent, raw_command=source.get("raw_command") or intent.raw_command,
-                             constraints={**intent.constraints, "request_source": source})
-        _validate_edit_intent(intent)
-        if connection is None:
-            with self._connect() as conn:
-                self.create_edit_intent(intent, connection=conn, source=None)
-            return self.get_edit_intent(intent.workspace_id, intent.id)
-        conn = connection
-        require_creation_task(conn, intent.workspace_id, intent.task_id)
-        existing_row = conn.execute(
-            "SELECT * FROM edit_intents WHERE id = ?",
-            (intent.id,),
-        ).fetchone()
-        if existing_row is not None:
-            persisted = self._edit_intent_from_row(existing_row)
-            if persisted != intent:
-                raise ValueError("编辑意图 ID 已存在，不能覆盖")
-            return persisted
-        conn.execute(
-            """
-            INSERT INTO edit_intents
-                (id, workspace_id, task_id, raw_command, context_stage,
-                 selected_object_refs_json, playhead_ms, intent_type,
-                 scope_json, constraints_json, confidence, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                intent.id,
-                intent.workspace_id,
-                intent.task_id,
-                intent.raw_command,
-                intent.context_stage,
-                json.dumps(intent.selected_object_refs, ensure_ascii=False),
-                intent.playhead_ms,
-                intent.intent_type,
-                _json_object(intent.scope),
-                _json_object(intent.constraints),
-                intent.confidence,
-                intent.status,
-                intent.created_at.isoformat(),
-            ),
-        )
-        return intent
 
-    def get_edit_intent(self, workspace_id: str, intent_id: str) -> _EditIntent:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM edit_intents WHERE workspace_id = ? AND id = ?",
-                (workspace_id, intent_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(intent_id)
-        return self._edit_intent_from_row(row)
 
     def goal_completed_source_rows(self, workspace_id, task_id, conversation_id, member_id):
         with self._connect() as conn:
@@ -5479,148 +5425,10 @@ class ProductionRepository:
                 "event_id": f"event_assistant_request_{row['id']}"} for row in requests)
         return candidates
 
-    def list_edit_intents(
-        self, workspace_id: str, task_id: str
-    ) -> list[_EditIntent]:
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM edit_intents
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._edit_intent_from_row(row) for row in rows]
 
-    def create_edit_proposal(self, proposal: _EditProposal, *, connection: sqlite3.Connection | None = None) -> _EditProposal:
-        _validate_new_edit_proposal(proposal)
-        if connection is None:
-            with self._connect() as conn:
-                self.create_edit_proposal(proposal, connection=conn)
-            return self.get_edit_proposal(proposal.workspace_id, proposal.id)
-        conn = connection
-        require_creation_task(conn, proposal.workspace_id, proposal.task_id)
-        intent_row = conn.execute(
-            """
-            SELECT 1 FROM edit_intents
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
-            """,
-            (proposal.workspace_id, proposal.task_id, proposal.intent_id),
-        ).fetchone()
-        if intent_row is None:
-            raise ValueError("编辑提案关联的意图不属于当前工作区与任务")
-        existing_row = conn.execute(
-            "SELECT * FROM edit_proposals WHERE id = ?",
-            (proposal.id,),
-        ).fetchone()
-        if existing_row is not None:
-            persisted = self._edit_proposal_from_row(existing_row)
-            if persisted != proposal:
-                raise ValueError("编辑提案 ID 已存在，且领域字段不一致")
-            return persisted
-        conn.execute(
-            """
-            INSERT INTO edit_proposals
-                (id, workspace_id, task_id, intent_id, summary,
-                 target_refs_json, operation_json, invalidated_refs_json,
-                 preview_json, external_effects_json, status, created_at,
-                 updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                proposal.id,
-                proposal.workspace_id,
-                proposal.task_id,
-                proposal.intent_id,
-                proposal.summary,
-                json.dumps(proposal.target_refs, ensure_ascii=False),
-                _json_object(proposal.operation),
-                json.dumps(proposal.invalidated_refs, ensure_ascii=False),
-                _json_object(proposal.preview),
-                json.dumps(
-                    proposal.external_effects,
-                    ensure_ascii=False,
-                    default=_json_default,
-                ),
-                proposal.status,
-                proposal.created_at.isoformat(),
-                proposal.updated_at.isoformat(),
-            ),
-        )
-        return proposal
 
-    def get_edit_proposal(
-        self, workspace_id: str, proposal_id: str, *, connection=None
-    ) -> _EditProposal:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            row = conn.execute(
-                "SELECT * FROM edit_proposals WHERE workspace_id = ? AND id = ?",
-                (workspace_id, proposal_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(proposal_id)
-        return self._edit_proposal_from_row(row)
 
-    def list_edit_proposals(
-        self, workspace_id: str, task_id: str, *,
-        base_version_id: str | None | Literal[False] = False, limit: int | None = None,
-    ) -> list[_EditProposal]:
-        if limit is not None and not 1 <= limit <= 100:
-            raise ValueError("编辑提案读取数量需为1至100")
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            current_clause = " AND status='proposed' AND json_extract(operation_json,'$.payload.base_version_id') IS ?" if base_version_id is not False else ""
-            order = "DESC" if limit is not None else "ASC"
-            rows = conn.execute(
-                f"""
-                SELECT * FROM edit_proposals
-                WHERE workspace_id = ? AND task_id = ?{current_clause} ORDER BY created_at {order}, id {order}{' LIMIT ?' if limit is not None else ''}
-                """,
-                (workspace_id, task_id, *([base_version_id] if base_version_id is not False else []), *([limit] if limit is not None else [])),
-            ).fetchall()
-        return [self._edit_proposal_from_row(row) for row in rows]
 
-    def transition_edit_proposal(
-        self,
-        workspace_id: str,
-        task_id: str,
-        proposal_id: str,
-        *,
-        status: Literal["confirmed", "rejected", "expired"],
-    ) -> _EditProposal:
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                """
-                SELECT * FROM edit_proposals
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (workspace_id, task_id, proposal_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(proposal_id)
-            current = self._edit_proposal_from_row(row)
-            if current.status != "proposed":
-                raise ValueError("只有 proposed 编辑提案可以确认、拒绝或过期")
-            now = utc_now()
-            changed = conn.execute(
-                """
-                UPDATE edit_proposals SET status = ?, updated_at = ?
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                  AND status = 'proposed'
-                """,
-                (
-                    status,
-                    now.isoformat(),
-                    workspace_id,
-                    task_id,
-                    proposal_id,
-                ),
-            ).rowcount
-            if changed != 1:
-                raise ValueError("编辑提案已被其他操作转换")
-        return self.get_edit_proposal(workspace_id, proposal_id)
 
     def resolve_edit_clip_source(self, workspace_id, task_id, clip, values, *, user_id, local_diagnostic):
         replacing = values.get("asset_id") is not None or values.get("segment_id") is not None
@@ -5732,197 +5540,16 @@ class ProductionRepository:
         if (intent.workspace_id, intent.task_id, proposal.intent_id, change.operation.proposal_id) != (command.workspace_id, command.task_id, intent.id, proposal.id):
             raise ValueError('直接编辑命令与变更谱系不一致')
         verify_sources(command, conn)
-        self.create_edit_intent(intent, connection=conn, source=None)
-        self.create_edit_proposal(proposal, connection=conn)
+        self.edit_records.create_edit_intent(intent, connection=conn, source=None)
+        self.edit_records.create_edit_proposal(proposal, connection=conn)
         result = self.edit_adoption.confirm(command.workspace_id, command.task_id, proposal.id, operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id, montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks, cover_asset=change.cover_asset, narration_segments=change.narration_segments, narration_replacement=change.narration_replacement, narration_artifact=change.narration_artifact, connection=conn)
         return result
 
 
-    def create_edit_operation(self, operation: _EditOperation) -> _EditOperation:
-        _validate_edit_operation(operation)
-        with self._connect() as conn:
-            require_creation_task(
-                conn, operation.workspace_id, operation.task_id
-            )
-            proposal_row = conn.execute(
-                """
-                SELECT status FROM edit_proposals
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (
-                    operation.workspace_id,
-                    operation.task_id,
-                    operation.proposal_id,
-                ),
-            ).fetchone()
-            if proposal_row is None or str(proposal_row["status"]) != "confirmed":
-                raise ValueError("编辑操作必须关联同源且已确认的提案")
-            self._require_operation_timeline_lineage(conn, operation)
-            existing_row = conn.execute(
-                "SELECT * FROM edit_operations WHERE id = ?",
-                (operation.id,),
-            ).fetchone()
-            if existing_row is None:
-                existing_row = conn.execute(
-                    """
-                    SELECT * FROM edit_operations
-                    WHERE workspace_id = ? AND task_id = ? AND proposal_id = ?
-                    """,
-                    (
-                        operation.workspace_id,
-                        operation.task_id,
-                        operation.proposal_id,
-                    ),
-                ).fetchone()
-            if existing_row is not None:
-                persisted = self._edit_operation_from_row(existing_row)
-                if persisted != operation:
-                    raise ValueError("编辑操作 ID 或提案已存在，不能覆盖")
-                return persisted
-            conn.execute(
-                """
-                INSERT INTO edit_operations
-                    (id, workspace_id, task_id, proposal_id, operation_type,
-                     payload_json, base_version_id, result_version_id, status,
-                     failure_reason, created_at, applied_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    operation.id,
-                    operation.workspace_id,
-                    operation.task_id,
-                    operation.proposal_id,
-                    operation.operation_type,
-                    _json_object(operation.payload),
-                    operation.base_version_id,
-                    operation.result_version_id,
-                    operation.status,
-                    operation.failure_reason,
-                    operation.created_at.isoformat(),
-                    operation.applied_at.isoformat() if operation.applied_at else None,
-                ),
-            )
-        return self.get_edit_operation(operation.workspace_id, operation.id)
 
-    def finish_edit_operation(
-        self,
-        workspace_id: str,
-        task_id: str,
-        operation_id: str,
-        *,
-        status: Literal["applied", "failed"],
-        result_version_id: str | None = None,
-        failure_reason: str | None = None,
-        applied_at: datetime | None = None,
-    ) -> _EditOperation:
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            row = conn.execute(
-                """
-                SELECT * FROM edit_operations
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (workspace_id, task_id, operation_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(operation_id)
-            current = self._edit_operation_from_row(row)
-            if current.status != "running":
-                raise ValueError("只有 running 编辑操作可以进入终态")
-            terminal = replace(
-                current,
-                status=status,
-                result_version_id=result_version_id,
-                failure_reason=failure_reason,
-                applied_at=applied_at,
-            )
-            _validate_edit_operation(terminal)
-            self._require_operation_timeline_lineage(conn, terminal)
-            changed = conn.execute(
-                """
-                UPDATE edit_operations
-                SET result_version_id = ?, status = ?, failure_reason = ?, applied_at = ?
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                  AND status = 'running'
-                """,
-                (
-                    terminal.result_version_id,
-                    terminal.status,
-                    terminal.failure_reason,
-                    terminal.applied_at.isoformat() if terminal.applied_at else None,
-                    workspace_id,
-                    task_id,
-                    operation_id,
-                ),
-            ).rowcount
-            if changed != 1:
-                raise ValueError("编辑操作已被其他操作结束")
-        return self.get_edit_operation(workspace_id, operation_id)
 
-    def get_edit_operation(
-        self, workspace_id: str, operation_id: str
-    ) -> _EditOperation:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM edit_operations WHERE workspace_id = ? AND id = ?",
-                (workspace_id, operation_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(operation_id)
-        return self._edit_operation_from_row(row)
 
-    def list_edit_operations(
-        self, workspace_id: str, task_id: str
-    ) -> list[_EditOperation]:
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM edit_operations
-                WHERE workspace_id = ? AND task_id = ? ORDER BY created_at ASC, id ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._edit_operation_from_row(row) for row in rows]
 
-    @staticmethod
-    def _require_operation_timeline_lineage(
-        conn: sqlite3.Connection, operation: _EditOperation
-    ) -> None:
-        base_row = conn.execute(
-            """
-            SELECT * FROM timeline_versions
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
-            """,
-            (
-                operation.workspace_id,
-                operation.task_id,
-                operation.base_version_id,
-            ),
-        ).fetchone()
-        if base_row is None:
-            raise ValueError("编辑操作基础版本不属于当前工作区与任务")
-        if operation.status != "applied":
-            return
-        result_row = conn.execute(
-            """
-            SELECT * FROM timeline_versions
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
-            """,
-            (
-                operation.workspace_id,
-                operation.task_id,
-                operation.result_version_id,
-            ),
-        ).fetchone()
-        if result_row is None:
-            raise ValueError("已应用编辑操作的结果版本不属于当前任务")
-        result = ProductionRepository._timeline_version_from_row(result_row)
-        if (
-            result.parent_version_id != operation.base_version_id
-            or result.created_by_operation_id != operation.id
-        ):
-            raise ValueError("编辑操作与时间线版本谱系不一致")
 
 
     def _upsert_narration_segments(
@@ -7120,80 +6747,8 @@ class ProductionRepository:
 
 
 
-    @staticmethod
-    def _edit_intent_from_row(row: sqlite3.Row) -> _EditIntent:
-        return _EditIntent(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            raw_command=str(row["raw_command"]),
-            context_stage=str(row["context_stage"]),
-            selected_object_refs=_string_list_from_text(
-                str(row["selected_object_refs_json"])
-            ),
-            playhead_ms=(
-                int(row["playhead_ms"])
-                if row["playhead_ms"] is not None
-                else None
-            ),
-            intent_type=str(row["intent_type"]),
-            scope=_json_object_from_text(str(row["scope_json"])),
-            constraints=_json_object_from_text(str(row["constraints_json"])),
-            confidence=float(row["confidence"]),
-            status=str(row["status"]),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-        )
 
-    @staticmethod
-    def _edit_proposal_from_row(row: sqlite3.Row) -> _EditProposal:
-        return _EditProposal(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            intent_id=str(row["intent_id"]),
-            summary=str(row["summary"]),
-            target_refs=_string_list_from_text(str(row["target_refs_json"])),
-            operation=_json_object_from_text(str(row["operation_json"])),
-            invalidated_refs=_string_list_from_text(
-                str(row["invalidated_refs_json"])
-            ),
-            preview=_json_object_from_text(str(row["preview_json"])),
-            external_effects=_json_list_from_text(
-                str(row["external_effects_json"])
-            ),
-            status=str(row["status"]),  # type: ignore[arg-type]
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            updated_at=datetime.fromisoformat(str(row["updated_at"])),
-        )
 
-    @staticmethod
-    def _edit_operation_from_row(row: sqlite3.Row) -> _EditOperation:
-        return _EditOperation(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            proposal_id=str(row["proposal_id"]),
-            operation_type=str(row["operation_type"]),
-            payload=_json_object_from_text(str(row["payload_json"])),
-            base_version_id=str(row["base_version_id"]),
-            result_version_id=(
-                str(row["result_version_id"])
-                if row["result_version_id"] is not None
-                else None
-            ),
-            status=str(row["status"]),  # type: ignore[arg-type]
-            failure_reason=(
-                str(row["failure_reason"])
-                if row["failure_reason"] is not None
-                else None
-            ),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-            applied_at=(
-                datetime.fromisoformat(str(row["applied_at"]))
-                if row["applied_at"] is not None
-                else None
-            ),
-        )
 
 
 
@@ -7447,11 +7002,6 @@ def _string_list_from_text(value: str) -> list[str]:
     return decoded
 
 
-def _json_list_from_text(value: str) -> list[object]:
-    decoded = json.loads(value)
-    if not isinstance(decoded, list):
-        raise ValueError("持久化 JSON 列表无效")
-    return decoded
 
 
 
@@ -7664,98 +7214,12 @@ def _validate_cover_asset(cover: _CoverAsset) -> None:
 
 
 
-def _validate_edit_intent(intent: _EditIntent) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            intent.id,
-            intent.workspace_id,
-            intent.task_id,
-            intent.raw_command,
-            intent.context_stage,
-            intent.intent_type,
-            intent.status,
-        )
-    ):
-        raise ValueError("编辑意图缺少必要标识、命令、上下文或状态")
-    for reference in intent.selected_object_refs:
-        _validate_logical_reference(reference, "编辑意图选中对象引用")
-    if intent.playhead_ms is not None and intent.playhead_ms < 0:
-        raise ValueError("播放位置不能为负数")
-    if not 0.0 <= intent.confidence <= 1.0:
-        raise ValueError("编辑意图置信度必须在 0 到 1 之间")
-    _json_object(intent.scope)
-    _json_object(intent.constraints)
 
 
 
 
-def _validate_new_edit_proposal(proposal: _EditProposal) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            proposal.id,
-            proposal.workspace_id,
-            proposal.task_id,
-            proposal.intent_id,
-            proposal.summary,
-        )
-    ):
-        raise ValueError("编辑提案缺少必要标识或摘要")
-    if proposal.status != "proposed":
-        raise ValueError("新编辑提案必须从 proposed 状态开始")
-    if not proposal.target_refs:
-        raise ValueError("编辑提案必须包含目标引用")
-    for reference in (*proposal.target_refs, *proposal.invalidated_refs):
-        _validate_logical_reference(reference, "编辑提案对象引用")
-    if not proposal.operation:
-        raise ValueError("编辑提案必须包含类型化操作")
-    _json_object(proposal.operation)
-    _json_object(proposal.preview)
-    json.dumps(proposal.external_effects, ensure_ascii=False, default=_json_default)
-    if proposal.updated_at < proposal.created_at:
-        raise ValueError("编辑提案更新时间不能早于创建时间")
 
 
-def _validate_edit_operation(operation: _EditOperation) -> None:
-    if not all(
-        value.strip()
-        for value in (
-            operation.id,
-            operation.workspace_id,
-            operation.task_id,
-            operation.proposal_id,
-            operation.operation_type,
-            operation.base_version_id,
-        )
-    ):
-        raise ValueError("编辑操作缺少必要标识、提案或基础版本")
-    if operation.operation_type not in _SUPPORTED_EDIT_OPERATION_TYPES:
-        raise ValueError("编辑操作类型不在当前冻结集合中")
-    if not operation.payload:
-        raise ValueError("编辑操作必须包含类型化 payload")
-    _json_object(operation.payload)
-    if operation.status == "running":
-        if (
-            operation.result_version_id is not None
-            or operation.failure_reason is not None
-            or operation.applied_at is not None
-        ):
-            raise ValueError("运行中编辑操作不能已有终态字段")
-    elif operation.status == "applied":
-        if not (operation.result_version_id or "").strip() or operation.applied_at is None:
-            raise ValueError("已应用编辑操作必须包含结果版本和应用时间")
-        if operation.failure_reason is not None:
-            raise ValueError("已应用编辑操作不能包含失败原因")
-        if operation.applied_at < operation.created_at:
-            raise ValueError("编辑操作应用时间不能早于创建时间")
-    elif operation.status == "failed":
-        if not (operation.failure_reason or "").strip():
-            raise ValueError("失败编辑操作必须包含原因")
-        if operation.result_version_id is not None or operation.applied_at is not None:
-            raise ValueError("失败编辑操作不能包含成功结果")
-    else:
-        raise ValueError("编辑操作状态无效")
 
 
 

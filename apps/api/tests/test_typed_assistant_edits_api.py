@@ -226,7 +226,7 @@ def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http
     assert recovered.json()["operation"] == saved["operation"]
     assert state.repo.task_records.get_creation_task('ws', state.task.id).narration_cache_key == state.narration.cache_key
     assert state.repo.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
-    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 1
+    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
 
 
 def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tmp_path, monkeypatch):
@@ -258,14 +258,14 @@ def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tm
     assert montage['narration_audio_path'] == original['narration_audio_path']
     assert task.narration_cache_key == before.narration_cache_key
     versions = state.repo.list_timeline_versions('ws', state.task.id)
-    operations = state.repo.list_edit_operations('ws', state.task.id)
+    operations = state.repo.edit_records.list_edit_operations('ws', state.task.id)
     with monkeypatch.context() as replay:
         replay.setattr(CreationTaskExactEditRequest, 'action_values',
             lambda self: pytest.fail('recorded replay must not normalize or save another graphic'))
         repeated = state.client.post(url + '/edits/exact', json=payload)
     assert repeated.status_code == 200 and repeated.json() == saved
     assert state.repo.list_timeline_versions('ws', state.task.id) == versions
-    assert state.repo.list_edit_operations('ws', state.task.id) == operations
+    assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == operations
     assert state.repo.get_creation_task_montage_plan('ws', state.task.id)['graphic_overlays'] == [layer]
     journal = state.client.get(url + f"/assistant/edit-requests/{payload['request_id']}?phase=apply")
     assert journal.status_code == 200, journal.text
@@ -297,7 +297,7 @@ def test_metadata_patch_preserves_no_change_and_missing_target_responses(metadat
     missing = state.client.patch(state.url + '/montage/cues/missing', json={'text': '新字幕'})
     assert missing.status_code == 404, missing.text
     assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.list_edit_operations('ws', state.task.id) == []
+    assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == []
 
 
 def test_metadata_patch_routes_consume_use_case_without_route_reentry(metadata_http_state, monkeypatch):
@@ -328,7 +328,7 @@ def test_metadata_http_refuses_stale_or_foreign_inputs(metadata_http_state):
     denied = state.client.post(state.url + "/edits/exact", headers={"X-Local-Member-Token": token}, json=metadata_payload(state))
     assert denied.status_code in {403, 404}, denied.text
     assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.list_edit_operations('ws', state.task.id) == []
+    assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == []
 
 
 def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(material_edit_state):
@@ -376,7 +376,7 @@ def test_typed_replace_replay_lost_receipt_and_undo_keep_narration(material_edit
     assert recovered.status_code == 200, recovered.text
     assert recovered.json()["operation"] == confirmed.json()["operation"]
     assert state.client.get(result_url).json()["result"]["operation"] == confirmed.json()["operation"]
-    assert len([op for op in state.production.list_edit_operations(state.workspace_id, state.task.id) if op.proposal_id == proposal["id"]]) == 1
+    assert len([op for op in state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id) if op.proposal_id == proposal["id"]]) == 1
     assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
     assert state.client.get(state.base_url).json()["montage"]["clips"] == before["montage"]["clips"]
     assert state.client.post(url, json=apply).json()["operation"] == confirmed.json()["operation"]
@@ -395,7 +395,7 @@ def test_exact_typed_actions_use_existing_domain_preview(material_edit_state, ac
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=request)
     assert response.status_code == 200, response.text
     assert response.json()["proposal"]["operation"]["operation_type"] == action["operation_type"]
-    intent = state.production.get_edit_intent(state.workspace_id, response.json()["intent"]["id"])
+    intent = state.production.edit_records.get_edit_intent(state.workspace_id, response.json()["intent"]["id"])
     assert intent.constraints["request_source"]["request_id"] == request["request_id"]
 
 
@@ -650,7 +650,7 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
     read = state.client.get(result_url)
     assert read.status_code == 200 and read.json()['result']['operation']['result_version_id'] == operation['result_version_id']
     assert read.json()['result']['montage']['duration_seconds'] == 3
-    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 2
+    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 2
 
 
 def test_linked_speed_direct_and_natural_consumers_call_real_application(linked_speed_http_state, monkeypatch):
@@ -714,7 +714,7 @@ def test_linked_clip_public_preview_confirm_and_fixed_read(linked_speed_http_sta
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result']['operation'] == accepted.json()['operation']
     assert fixed.json()['result']['montage']['duration_seconds'] == duration
-    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 1
+    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
 
 
 @pytest.mark.parametrize('operation,command', [('DeleteClip', '删除这个镜头'),
@@ -778,7 +778,7 @@ def test_linked_clip_recovery_keeps_original_version_and_does_not_wake(linked_sp
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result']['operation'] == operation
     assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == later_head
-    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 2
+    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 2
     changed = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json={**request,
         'expected_input_digest': fixed.json()['input_digest']})
     assert changed.status_code == 409 and len(wakes) == before_wakes
@@ -793,7 +793,7 @@ def test_linked_insert_permission_and_range_keep_original_error_projection(linke
     state.repo._save_asset(state.neighbour)
     out_of_range = state.client.post(state.url + '/edits/exact/preview', json={**action, 'source_start_seconds': 4})
     assert out_of_range.status_code == 400 and out_of_range.json()['detail'] == '插入起点须在 0.0–4.0 秒之间。'
-    assert not state.repo.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)
 
 
 @pytest.fixture
@@ -948,7 +948,7 @@ def test_subtitle_unknown_claim_and_HTTP_projection_are_not_application_facts(su
     state.repo.save_edit_request_result(state.task, event, status_code=200, response={'only': 'a transport projection'})
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
-    assert not state.repo.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)
 
 
 @pytest.fixture
@@ -1001,8 +1001,8 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
     proposal = restored.json()['proposal']
     assert [step['enabled'] for step in proposal['operation']['payload']['steps']] == [True, True, True]
     assert proposal['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
-    assert state.repo.get_edit_proposal('ws', original['id']).status == 'proposed'
-    assert state.repo.get_edit_proposal('ws', selected['id']).status == 'proposed'
+    assert state.repo.edit_records.get_edit_proposal('ws', original['id']).status == 'proposed'
+    assert state.repo.edit_records.get_edit_proposal('ws', selected['id']).status == 'proposed'
     assert state.repo.get_creation_task_montage_plan('ws', state.task.id) == before
     result_url = state.url + f"/edits/{proposal['id']}/result"
     fixed = state.client.get(result_url)
@@ -1014,7 +1014,7 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
     assert accepted.status_code == 200, accepted.text
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
     version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
-    assert version.sequence == 4 and len(state.repo.list_edit_operations('ws', state.task.id)) == 1
+    assert version.sequence == 4 and len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
     after = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     assert after['clips'][0]['visual_effects']['exposure'] == .25 and after['clips'][1] == before['clips'][1]
     assert after['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
@@ -1045,4 +1045,4 @@ def test_compound_unknown_claim_with_projection_has_no_durable_edit_and_no_exact
     state.repo.save_edit_request_result(state.task, event, status_code=200, response={'only': 'transport projection'})
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
-    assert not state.repo.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)

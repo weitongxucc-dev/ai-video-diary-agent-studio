@@ -7249,8 +7249,8 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         if edit_preview.proposal.task_id != task_id or edit_preview.proposal.workspace_id != workspace_id:
             raise HTTPException(status_code=502, detail="对话工具返回了不属于当前任务的编辑提案。")
         try:
-            actual_proposal = production_repo.get_edit_proposal(workspace_id, edit_preview.proposal.id)
-            actual_intent = production_repo.get_edit_intent(workspace_id, actual_proposal.intent_id)
+            actual_proposal = production_repo.edit_records.get_edit_proposal(workspace_id, edit_preview.proposal.id)
+            actual_intent = production_repo.edit_records.get_edit_intent(workspace_id, actual_proposal.intent_id)
         except KeyError as exc:
             raise HTTPException(status_code=502, detail="工具提案没有真实持久结果") from exc
         if actual_proposal.task_id != task_id:
@@ -8125,7 +8125,7 @@ def _confirm_cover_response(task, proposal, request, *, request_id=None):
         if previous is not None:
             return _cover_confirm_response(previous)
         owner.require_budget()
-        source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get('request_source')
+        source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get('request_source')
         if source is not None and source['source_facts'] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
             raise ValueError('预览后的源文件或片段修订已变化，请重新预览')
         runtime = _creation_runtime()
@@ -8175,7 +8175,7 @@ def _linked_timeline_command(task,request,operation_type,values,*,source=None):
 
 
 def _linked_timeline_apply_command(task, proposal, request, payload=None):
-    source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
+    source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
     command = _linked_timeline_command(task, request, proposal.operation["operation_type"], proposal.operation["payload"], source=source)
     requesting = payload is not None and payload.request_id is not None
     return LinkedEditApplyCommand(task.workspace_id, task.id, proposal.id, command.actor_identity,
@@ -8579,8 +8579,8 @@ def get_creation_task_edit_preview(task_id: str, proposal_id: str, request: Requ
     if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
         raise HTTPException(status_code=404, detail="没有找到当前任务。")
     try:
-        proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
-        intent = production_repo.get_edit_intent(workspace_id, proposal.intent_id)
+        proposal = production_repo.edit_records.get_edit_proposal(workspace_id, proposal_id)
+        intent = production_repo.edit_records.get_edit_intent(workspace_id, proposal.intent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到所选修改方案。") from exc
     if proposal.task_id != task_id or proposal.status != "proposed":
@@ -8597,7 +8597,7 @@ def get_creation_task_edit_controls(task_id: str, request: Request):
     if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
         raise HTTPException(status_code=404, detail="没有找到当前任务。")
     summary = project_task_summary(production_repo, task).summary
-    proposals = production_repo.list_edit_proposals(workspace_id, task_id, base_version_id=task.current_timeline_version_id, limit=8)
+    proposals = production_repo.edit_records.list_edit_proposals(workspace_id, task_id, base_version_id=task.current_timeline_version_id, limit=8)
     return {"task_id": task_id, "timeline_version_id": summary["current_timeline_version_id"],
         "timeline_sequence": summary["timeline_sequence"], "can_undo": summary["can_undo"], "can_redo": summary["can_redo"],
         "proposals": [{"id": item.id, "summary": item.summary, "operation_type": item.operation["operation_type"],
@@ -8648,13 +8648,13 @@ def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: 
     task = _creation_task_or_404(workspace_id, task_id)
     _assistant_edit_control_instruction(task, request, payload, "reject")
     try:
-        proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
-        if production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source") is not None:
+        proposal = production_repo.edit_records.get_edit_proposal(workspace_id, proposal_id)
+        if production_repo.edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints.get("request_source") is not None:
             _edit_proposal_binding(task_id, proposal_id, request)
         if proposal.task_id != task_id or proposal.operation["payload"].get("base_version_id") != task.current_timeline_version_id:
             raise HTTPException(status_code=409, detail="这份修改的任务或基础版本已变化。")
         if proposal.status != "rejected":
-            proposal = production_repo.transition_edit_proposal(workspace_id, task_id, proposal_id, status="rejected")
+            proposal = production_repo.edit_records.transition_edit_proposal(workspace_id, task_id, proposal_id, status="rejected")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="没有找到这份修改方案。") from exc
     except ValueError as exc:
@@ -8667,8 +8667,8 @@ def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: 
 def _edit_proposal_binding(task_id, proposal_id, request):
     task, member_id = _exact_edit_access(task_id, request, write=True)
     try:
-        proposal = production_repo.get_edit_proposal(task.workspace_id, proposal_id)
-        intent = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id)
+        proposal = production_repo.edit_records.get_edit_proposal(task.workspace_id, proposal_id)
+        intent = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="编辑提案不存在") from exc
     if proposal.task_id != task_id:
@@ -8683,7 +8683,7 @@ def _edit_proposal_binding(task_id, proposal_id, request):
 
 
 def _original_edit_result(task, proposal):
-    operations = [item for item in production_repo.list_edit_operations(task.workspace_id, task.id) if item.proposal_id == proposal.id]
+    operations = [item for item in production_repo.edit_records.list_edit_operations(task.workspace_id, task.id) if item.proposal_id == proposal.id]
     if operations:
         operation = operations[0]
         version = production_repo.get_timeline_version(task.workspace_id, operation.result_version_id)
@@ -8749,10 +8749,10 @@ def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request,
                               payload: CreationTaskEditApplyRequest | None = None):
     if payload is None or payload.request_id is None:
         try:
-            proposal = production_repo.get_edit_proposal(current_workspace_id(request), proposal_id)
+            proposal = production_repo.edit_records.get_edit_proposal(current_workspace_id(request), proposal_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="creation task edit proposal not found") from exc
-        intent = production_repo.get_edit_intent(proposal.workspace_id, proposal.intent_id)
+        intent = production_repo.edit_records.get_edit_intent(proposal.workspace_id, proposal.intent_id)
         if intent.constraints.get("request_source") is not None:
             _edit_proposal_binding(task_id, proposal_id, request)
         if proposal.operation.get("operation_type") in LINKED_EDIT_OPERATIONS:
@@ -8813,7 +8813,7 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     try:
-        proposal = production_repo.get_edit_proposal(workspace_id, proposal_id)
+        proposal = production_repo.edit_records.get_edit_proposal(workspace_id, proposal_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='creation task edit proposal not found') from exc
     if proposal.task_id == task_id and proposal.operation.get('operation_type') == COVER_OPERATION:
@@ -8826,7 +8826,7 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
         return _confirm_subtitle_response(task, proposal, request)
     if proposal.operation.get('operation_type') == 'EditCompoundTimeline':
         return _confirm_compound_response(task, proposal, request)
-    source = production_repo.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source')
+    source = production_repo.edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source')
     if source is not None and source['source_facts'] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
         raise HTTPException(status_code=409, detail='预览后的源文件或片段修订已变化，请重新预览')
     operation_draft = proposal.operation
@@ -9036,7 +9036,7 @@ def _compound_edit_use_case(repository=None):
 
 
 def _compound_proposal_command(task, proposal, request):
-    source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
+    source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
     return _metadata_edit_command(task, request, "EditCompoundTimeline", proposal.operation["payload"], source=source)
 
 
@@ -9110,7 +9110,7 @@ def _subtitle_values(payload):
 
 
 def _subtitle_proposal_command(task, proposal, request):
-    source = production_repo.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
+    source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
     return _metadata_edit_command(task, request, proposal.operation["operation_type"], proposal.operation["payload"], source=source)
 
 
@@ -13631,7 +13631,7 @@ def _assistant_goal_action_proofs(workspace_id, task_id, turn_id, *, media_job, 
         start = production_repo.execution_records.get_task_event(workspace_id, f"event_{media_job.job_id}_start").payload
         append("media_job", media_job.job_id, start["arguments"].get("_typed_source", {}))
     if edit_preview:
-        intent = production_repo.get_edit_intent(workspace_id, edit_preview.proposal.intent_id)
+        intent = production_repo.edit_records.get_edit_intent(workspace_id, edit_preview.proposal.intent_id)
         append("edit_preview", edit_preview.proposal.id, intent.constraints.get("request_source", {}))
     if edit_request or execution_status:
         for event in production_repo.execution_records.list_task_events(workspace_id, task_id):

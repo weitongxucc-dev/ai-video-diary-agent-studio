@@ -264,7 +264,7 @@ class PersonStageUseCase:
 
     def prepare_edit(self, workspace_id, task_id, context, proposal_id):
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
-        proposal = self.repository.get_edit_proposal(workspace_id, proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(workspace_id, proposal_id)
         generated = self.apply_segment_edit(workspace_id, task, proposal, grant_context=context)
 
         def commit(connection):

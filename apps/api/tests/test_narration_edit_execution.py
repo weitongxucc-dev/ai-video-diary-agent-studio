@@ -266,7 +266,7 @@ def fixture(tmp_path):
     base = repo.create_timeline_version(
         TimelineVersion("base", "local", task.id, None, 1, {"montage": montage}, None)
     )
-    intent = repo.create_edit_intent(
+    intent = repo.edit_records.create_edit_intent(
         EditIntent(
             "intent",
             "local",
@@ -282,7 +282,7 @@ def fixture(tmp_path):
             "interpreted",
         )
     )
-    proposal = repo.create_edit_proposal(
+    proposal = repo.edit_records.create_edit_proposal(
         EditProposal(
             "proposal",
             "local",
@@ -444,7 +444,7 @@ def unchanged(f):
         == f.base.id
     )
     assert f.repo.list_narration_segments("local", f.task.id, "script") == f.segments
-    assert f.repo.get_edit_proposal("local", f.proposal.id).status == "proposed"
+    assert f.repo.edit_records.get_edit_proposal("local", f.proposal.id).status == "proposed"
 
 
 def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
@@ -604,7 +604,7 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
         f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
         == f.base.id
     )
-    assert f.repo.get_edit_proposal("local", f.proposal.id).status == "proposed"
+    assert f.repo.edit_records.get_edit_proposal("local", f.proposal.id).status == "proposed"
     assert f.repo.job_records.get_job_run("local", f.job.id).status == (
         "cancelled" if kind == "cancel" else "failed"
     )

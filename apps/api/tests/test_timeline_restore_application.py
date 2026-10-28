@@ -175,9 +175,9 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
 def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_path, monkeypatch):
     state = restore_http_state(tmp_path, monkeypatch, empty=True)
     now = utc_now()
-    intent = state.repo.create_edit_intent(EditIntent('fixture-canvas-intent', 'ws', state.task.id,
+    intent = state.repo.edit_records.create_edit_intent(EditIntent('fixture-canvas-intent', 'ws', state.task.id,
         '修改画布', 'montage', [], None, 'canvas', {'kind': 'timeline'}, {}, 1, 'interpreted', now))
-    proposal = state.repo.create_edit_proposal(EditProposal('fixture-canvas-proposal', 'ws', state.task.id,
+    proposal = state.repo.edit_records.create_edit_proposal(EditProposal('fixture-canvas-proposal', 'ws', state.task.id,
         intent.id, '修改画布', ['timeline:' + state.base.id],
         {'operation_type': 'ChangeCanvas', 'payload': {'base_version_id': state.base.id}}, [], {}, [],
         created_at=now, updated_at=now))
@@ -198,7 +198,7 @@ def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_p
     assert state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id) == []
     assert len(state.repo.list_narration_segments('ws', state.task.id, 'fixed-script')) == 1
     assert undone.montage.message == '草稿已恢复；原成片依赖或产物已失效，请明确重新生成。'
-    assert set(state.repo.get_edit_proposal('ws', undone.operation.proposal_id).invalidated_refs) == {
+    assert set(state.repo.edit_records.get_edit_proposal('ws', undone.operation.proposal_id).invalidated_refs) == {
         tracks[0].artifact_ref, cover.artifact_ref}
     _prepared, redone = restore(state, monkeypatch, redo=True)
     restored = state.repo.get_timeline_version('ws', redone.operation.result_version_id)

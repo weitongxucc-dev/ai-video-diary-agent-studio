@@ -145,7 +145,7 @@ def test_fine_edits_reject_invalid_request_without_version_or_media_effect(fine_
     assert response.status_code in {409, 422}, response.text
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id == payload["expected_timeline_version_id"] or failure == "old_version"
-    assert state.production.list_edit_operations(state.workspace_id, task.id) == []
+    assert state.production.edit_records.list_edit_operations(state.workspace_id, task.id) == []
     assert state.production.job_records.list_job_runs(state.workspace_id, task.id) == []
 
 
@@ -159,7 +159,7 @@ def test_visual_lock_and_full_default_omission_boundaries(fine_state):
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=payload)
     assert response.status_code == 409, response.text
     assert CreationTaskExactEditRequest.model_validate(payload).model_dump(exclude_unset=True)["effects"] == {"exposure": .8}
-    assert state.production.list_edit_operations(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id) == []
 
 
 @pytest.mark.parametrize("audio", [True, False])

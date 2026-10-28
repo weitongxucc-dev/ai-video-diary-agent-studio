@@ -256,9 +256,9 @@ def test_cover_local_check_uses_original_binding_without_reading_source_or_recei
         ref, published.sha256, published.size_bytes, job.id, []))
     repo.create_timeline_version(TimelineVersion("base", workspace, task_id, None, 1,
         {"output_refs": [ref]}, None))
-    repo.create_edit_intent(EditIntent("intent", workspace, task_id, "cover", "review", [], None,
+    repo.edit_records.create_edit_intent(EditIntent("intent", workspace, task_id, "cover", "review", [], None,
         "cover", {}, {}, 1., "proposed"))
-    repo.create_edit_proposal(EditProposal("proposal", workspace, task_id, "intent", "cover",
+    repo.edit_records.create_edit_proposal(EditProposal("proposal", workspace, task_id, "intent", "cover",
         ["timeline:base"], {"operation_type": COVER_OPERATION, "payload": operation}, [], {}, []))
     owner = CoverUseCase(repo, store, None, verify_identity=lambda actor: "ready", output_root=tmp_path,
         budget=CoverBudget(1024, 4096, 32768, 1024, 1024, 1, 10., 1048576, 4, .01, 1048576, 65536))

@@ -104,7 +104,7 @@ class TimelineRestoreUseCase:
         return self.repository.restore_requests.receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
 
     def replay(self, workspace_id, task_id, receipt):
-        operation = self.repository.get_edit_operation(workspace_id, receipt['operation_id'])
+        operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])
         version = self.repository.get_timeline_version(workspace_id, operation.result_version_id)
         payload = version.snapshot.get('montage')
         plan = creation_task_montage_plan_from_payload(payload) if payload else None
@@ -170,7 +170,7 @@ class TimelineRestoreUseCase:
                 changed_version, _ = (redo_target_versions if command.redo else undo_target_versions)(self.repository, workspace_id, task)
                 if changed_version is None:
                     raise TimelineRestoreUnavailable(command.redo)
-                changed = self.repository.get_edit_operation(workspace_id, changed_version.created_by_operation_id)
+                changed = self.repository.edit_records.get_edit_operation(workspace_id, changed_version.created_by_operation_id)
                 resolved = changed.payload.get('target_operation_id')
                 if resolved is None and changed.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}:
                     original_version = self.repository.get_timeline_version(workspace_id, changed.payload['changed_version_id'])
@@ -191,7 +191,7 @@ class TimelineRestoreUseCase:
         workspace_id, task = command.workspace_id, command.task
         task_id = task.id
         if command.target_operation_id is not None:
-            target = self.repository.get_edit_operation(workspace_id, command.target_operation_id)
+            target = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if (target.task_id != task_id or target.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}
                     or not self.repository.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, target.result_version_id)):
                 raise EditConflict('指定原修改不属于当前作品的有效历史')
@@ -214,7 +214,7 @@ class TimelineRestoreUseCase:
         if changed_version is None or target_version is None:
             raise TimelineRestoreUnavailable(command.redo)
         try:
-            changed_operation = self.repository.get_edit_operation(
+            changed_operation = self.repository.edit_records.get_edit_operation(
                 workspace_id, changed_version.created_by_operation_id or ""
             )
         except KeyError as exc:
@@ -228,7 +228,7 @@ class TimelineRestoreUseCase:
             while cursor:
                 recent = self.repository.get_timeline_version(workspace_id,cursor)
                 if recent.created_by_operation_id:
-                    control = self.repository.get_edit_operation(workspace_id,recent.created_by_operation_id)
+                    control = self.repository.edit_records.get_edit_operation(workspace_id,recent.created_by_operation_id)
                     if (control.payload.get('section_history',{}).get('after_publication') == history['after_publication']
                             and control.payload.get('section_restore_side') == ('before' if command.redo else 'after')):
                         expected = self.repository.execution_records.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
@@ -239,7 +239,7 @@ class TimelineRestoreUseCase:
             return PreparedTimelineRestore(command,changed_version,target_version,None,None,None,None,False,
                 operation_type,action_label,history,expected)
         if command.target_operation_id is not None:
-            original = self.repository.get_edit_operation(workspace_id, command.target_operation_id)
+            original = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if original.operation_type in {'AdjustVisualEffects', 'SetClipLock', 'SetClipAudio', 'ReplaceClip',
                     'SetClipTransition', 'EditGraphicOverlay', 'UpdateSubtitleCue', 'ReplaceSubtitleText',
                     'ConfigureSubtitleTrack', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'}:
@@ -522,7 +522,7 @@ class TimelineRestoreUseCase:
                     restored_plan, message="草稿已恢复，可以重新生成。",
                 )
         now = utc_now()
-        intent = self.repository.create_edit_intent(
+        intent = self.repository.edit_records.create_edit_intent(
             EditIntent(
                 id=f"intent_{uuid4().hex}",
                 workspace_id=workspace_id,
@@ -539,7 +539,7 @@ class TimelineRestoreUseCase:
                 created_at=now,
             )
         )
-        proposal = self.repository.create_edit_proposal(
+        proposal = self.repository.edit_records.create_edit_proposal(
             EditProposal(
                 id=f"proposal_{uuid4().hex}",
                 workspace_id=workspace_id,
@@ -614,7 +614,7 @@ class TimelineRestoreUseCase:
         ws, task = command.workspace_id, command.task
         base = self.repository.get_timeline_version(ws, prepared.local_sources['current_version_id'])
         now = utc_now()
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}',workspace_id=ws,
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}',workspace_id=ws,
             task_id=task.id,raw_command=f'{prepared.action_label}指定原修改',context_stage='montage',
             selected_object_refs=[f'operation:{command.target_operation_id}'],playhead_ms=None,
             intent_type='redo_timeline' if command.redo else 'undo_timeline',scope={'operation_id':command.target_operation_id},
@@ -622,7 +622,7 @@ class TimelineRestoreUseCase:
         payload = {'changed_version_id':prepared.changed_version.id,'restore_version_id':prepared.target_version.id,
             'base_version_id':base.id,**command.control_payload(),
             'stage_adoption_restore':prepared.local_sources['stage_adoption_restore']}
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=ws,
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=ws,
             task_id=task.id,intent_id=intent.id,summary=f'{prepared.action_label}指定原修改，保留无关后续编辑',
             target_refs=[f'operation:{command.target_operation_id}'],operation={'operation_type':prepared.operation_type,'payload':payload},
             invalidated_refs=logical_montage_output_refs(prepared.current_plan),preview={},external_effects=[],created_at=now,updated_at=now))

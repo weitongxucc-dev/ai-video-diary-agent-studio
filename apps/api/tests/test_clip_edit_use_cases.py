@@ -107,8 +107,8 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         response = client.post('/api/creation-tasks/task/edits/exact',json=values)
         assert response.status_code == (403 if change=='private' else 409),response.text
         assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='neighbor-base'
-        assert repo.list_edit_intents('local','task')==[] and repo.list_edit_proposals('local','task')==[]
-        assert repo.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
+        assert repo.edit_records.list_edit_intents('local','task')==[] and repo.edit_records.list_edit_proposals('local','task')==[]
+        assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
         assert repo.get_creation_task_montage_plan('local','task')==seed
     finally:
         runtime.stop(0)
@@ -189,7 +189,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
             'operation_type':'SetClipTransition','clip_id':'clip_2','transition_seconds':.1})
         assert prepared.status_code==200,prepared.text
         proposal=prepared.json()['proposal']
-        bound=repo.get_edit_intent('local',proposal['intent_id']).constraints['affected_source_scope']
+        bound=repo.edit_records.get_edit_intent('local',proposal['intent_id']).constraints['affected_source_scope']
         assert bound['clip_ids']==['clip_1','clip_2']
         commit=repo.edit_adoption.confirm
         def revoke_before_commit(*args,**kwargs):
@@ -200,8 +200,8 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         response=client.post('/api/creation-tasks/task/edits/'+proposal['id']+'/confirm')
         assert response.status_code==403,response.text
         assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='transition-base'
-        assert len(repo.list_edit_intents('local','task'))==1 and len(repo.list_edit_proposals('local','task'))==1
-        assert repo.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
+        assert len(repo.edit_records.list_edit_intents('local','task'))==1 and len(repo.edit_records.list_edit_proposals('local','task'))==1
+        assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
     finally:runtime.stop(0)
 
 

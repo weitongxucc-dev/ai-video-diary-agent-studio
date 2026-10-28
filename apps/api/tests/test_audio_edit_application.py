@@ -54,7 +54,7 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     assert submitted.status_code==202,submitted.text
     receipt=submitted.json();result=settled(client,runtime,receipt)
     assert result['status']=='succeeded',result
-    proposal=result['result']['proposal'];intent=repo.get_edit_intent('local',proposal['intent_id'])
+    proposal=result['result']['proposal'];intent=repo.edit_records.get_edit_intent('local',proposal['intent_id'])
     assert intent.constraints['audio_source_facts']
     for side in ('before','after'):
         audio=client.get(proposal['preview'][side]['audio_url']);assert audio.status_code==200
@@ -73,7 +73,7 @@ def test_direct_draft_native_preview_confirm_and_original_result(tmp_path,monkey
     first=applied.json();assert len(confirms)==1
     current=repo.task_records.get_creation_task('local','task');assert current.current_timeline_version_id!=base.id
     replay=client.post(endpoint,json=request);assert replay.status_code==200 and replay.json()['operation']==first['operation']
-    assert len(confirms)==1 and len(repo.list_edit_operations('local','task'))==1
+    assert len(confirms)==1 and len(repo.edit_records.list_edit_operations('local','task'))==1
     fixed=client.get('/api/creation-tasks/task/edits/'+proposal['id']+'/result');assert fixed.status_code==200
     assert fixed.json()['result']['operation']==first['operation']
     assert len(calls)==1 and calls[0][0]=='audio_edit_preview' and calls[0][1]!=calls[0][2]

@@ -158,12 +158,12 @@ class LinkedTimelineEditUseCase:
         task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'LinkedTimeline', {}))
-        proposal = self.repository.get_edit_proposal(command.workspace_id, command.proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(command.workspace_id, command.proposal_id)
         if proposal.task_id != command.task_id:
             raise KeyError(command.proposal_id)
         if proposal.operation.get('operation_type') not in LINKED_EDIT_OPERATIONS:
             raise EditConflict('提案不是关联时轴编辑')
-        intent = self.repository.get_edit_intent(command.workspace_id, proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(command.workspace_id, proposal.intent_id)
         source = intent.constraints.get('request_source')
         if source != command.source:
             raise EditConflict('原提案来源已变化')
@@ -172,7 +172,7 @@ class LinkedTimelineEditUseCase:
         return task, proposal, intent, source
 
     def _saved_result(self, task, proposal):
-        operations = [item for item in self.repository.list_edit_operations(task.workspace_id, task.id)
+        operations = [item for item in self.repository.edit_records.list_edit_operations(task.workspace_id, task.id)
             if item.proposal_id == proposal.id]
         if not operations:
             return None
@@ -338,6 +338,6 @@ class LinkedTimelineEditUseCase:
             raise EditPreviewRejected(status_code=409, detail='预览期间时间线已变化，请重新预览。')
         removed = sum((b - a for a, b in cuts)) / 1000
         detail = '、'.join((f'{a / 1000:.3f}–{b / 1000:.3f}秒' for a, b in cuts))
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=payload.raw_command, context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms, intent_type='remove_silence', scope={'clip_id': clip.id}, constraints={'linked_tracks': True}, confidence=1, status='interpreted'), source=request_source)
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary=f'缩短 {len(cuts)} 处静音候选，共 {removed:.3f} 秒；画面、声音、字幕与叠加同步前移。', target_refs=payload.selected_object_refs, operation={'operation_type': 'RemoveSilence', 'payload': {'base_version_id': base.id, 'clip_id': clip.id, 'removed_ranges_ms': cuts, 'analysis_ref': analysis.logical_ref}}, invalidated_refs=logical_montage_output_refs(plan), preview=previews, external_effects=[f'删除范围：{detail}', '按低于-40dB且持续0.45秒检测，两端至少保留0.12秒。低声讲话也可能被识别为静音，请试听后确认；不改变保留部分的语速。']))
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=payload.raw_command, context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms, intent_type='remove_silence', scope={'clip_id': clip.id}, constraints={'linked_tracks': True}, confidence=1, status='interpreted'), source=request_source)
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary=f'缩短 {len(cuts)} 处静音候选，共 {removed:.3f} 秒；画面、声音、字幕与叠加同步前移。', target_refs=payload.selected_object_refs, operation={'operation_type': 'RemoveSilence', 'payload': {'base_version_id': base.id, 'clip_id': clip.id, 'removed_ranges_ms': cuts, 'analysis_ref': analysis.logical_ref}}, invalidated_refs=logical_montage_output_refs(plan), preview=previews, external_effects=[f'删除范围：{detail}', '按低于-40dB且持续0.45秒检测，两端至少保留0.12秒。低声讲话也可能被识别为静音，请试听后确认；不改变保留部分的语速。']))
         return (intent, proposal)

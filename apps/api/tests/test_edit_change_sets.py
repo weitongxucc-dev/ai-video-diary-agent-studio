@@ -51,9 +51,9 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
         assert response.json()['operation']['operation_type'] == payloads[action]['operation_type']
         saved = repo.get_creation_task_montage_plan('local', 'task')
         assert len(repo.job_records.list_job_runs('local', 'task')) == jobs
-        assert len(repo.list_edit_operations('local', 'task')) == 1
-        assert len(repo.list_edit_proposals('local', 'task')) == 1
-        assert repo.list_edit_proposals('local', 'task')[0].status == 'confirmed'
+        assert len(repo.edit_records.list_edit_operations('local', 'task')) == 1
+        assert len(repo.edit_records.list_edit_proposals('local', 'task')) == 1
+        assert repo.edit_records.list_edit_proposals('local', 'task')[0].status == 'confirmed'
         if action != 'audio':
             assert saved['audio_timeline'] == original['audio_timeline']
         else:
@@ -90,20 +90,20 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
                 return original_commit(command, *args, **kwargs)
             monkeypatch.setattr(repo, 'confirm_direct_edit', commit)
         else:
-            write = repo.create_edit_proposal if failure == 'after_proposal' else repo.edit_adoption.confirm
+            write = repo.edit_records.create_edit_proposal if failure == 'after_proposal' else repo.edit_adoption.confirm
             def crash(*args, **kwargs):
                 write(*args, **kwargs)
                 raise ValueError('injected atomic commit failure')
-            monkeypatch.setattr(repo if failure == 'after_proposal' else repo.edit_adoption,
+            monkeypatch.setattr(repo.edit_records if failure == 'after_proposal' else repo.edit_adoption,
                 'create_edit_proposal' if failure == 'after_proposal' else 'confirm', crash)
         jobs = len(repo.job_records.list_job_runs('local', 'task'))
         response = client.post('/api/creation-tasks/task/edits/exact', json={
             'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}})
         assert response.status_code == 409, response.text
         assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == ('next' if failure == 'version' else 'timeline')
-        assert repo.list_edit_operations('local', 'task') == []
-        assert repo.list_edit_intents('local', 'task') == []
-        assert repo.list_edit_proposals('local', 'task') == []
+        assert repo.edit_records.list_edit_operations('local', 'task') == []
+        assert repo.edit_records.list_edit_intents('local', 'task') == []
+        assert repo.edit_records.list_edit_proposals('local', 'task') == []
         assert repo.get_creation_task_montage_plan('local', 'task') == original
         assert len(repo.job_records.list_job_runs('local', 'task')) == jobs
         assert len(repo.list_subtitle_tracks('local', 'task')) == 1
@@ -125,7 +125,7 @@ def test_direct_request_replay_recovers_a_lost_receipt_without_reapplying(tmp_pa
         recovered = client.post(path, json=payload)
         assert recovered.status_code == 200, recovered.text
         assert recovered.json()['operation'] == saved.json()['operation']
-        assert len(repo.list_edit_operations('local', 'task')) == 1
+        assert len(repo.edit_records.list_edit_operations('local', 'task')) == 1
         assert client.post(path, json={**payload, 'effects':{'exposure':.25}}).status_code == 409
     finally:
         runtime.stop(0)
@@ -193,9 +193,9 @@ def test_source_change_after_binding_before_direct_transaction_creates_no_lineag
         assert called
         assert response.status_code == (403 if change == 'owner' else 409), response.text
         assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
-        assert repo.list_edit_intents('local', 'task') == []
-        assert repo.list_edit_proposals('local', 'task') == []
-        assert repo.list_edit_operations('local', 'task') == []
+        assert repo.edit_records.list_edit_intents('local', 'task') == []
+        assert repo.edit_records.list_edit_proposals('local', 'task') == []
+        assert repo.edit_records.list_edit_operations('local', 'task') == []
         assert len(repo.list_timeline_versions('local', 'task')) == 1
         assert repo.get_creation_task_montage_plan('local', 'task') == original
     finally:
@@ -239,9 +239,9 @@ def test_direct_adoption_tail_failure_preserves_verify_order_and_rolls_back_line
         with pytest.raises(ValueError,match='adoption tail failure'):
             repo.confirm_direct_edit(command,intent,proposal,change,verify_sources=verify)
     assert sources==['before-lineage']
-    assert repo.list_edit_intents('workspace_a','task-a')==[]
-    assert repo.list_edit_proposals('workspace_a','task-a')==[]
-    assert repo.list_edit_operations('workspace_a','task-a')==[]
+    assert repo.edit_records.list_edit_intents('workspace_a','task-a')==[]
+    assert repo.edit_records.list_edit_proposals('workspace_a','task-a')==[]
+    assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
     assert repo.list_timeline_versions('workspace_a','task-a')==[base]
     assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
     confirmed, applied, saved, task = repo.confirm_direct_edit(command,intent,proposal,change,verify_sources=verify)

@@ -232,8 +232,8 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
         repo.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
     try:
         job_count = len(repo.job_records.list_job_runs('local', 'task'))
-        intent_count = len(repo.list_edit_intents('local', 'task'))
-        proposal_count = len(repo.list_edit_proposals('local', 'task'))
+        intent_count = len(repo.edit_records.list_edit_intents('local', 'task'))
+        proposal_count = len(repo.edit_records.list_edit_proposals('local', 'task'))
         if race_at == 'adapter':
             from app.creation.clip_preview import ClipPreviewUseCase
             prepare = ClipPreviewUseCase.prepare
@@ -274,8 +274,8 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
         assert response.status_code == 409, response.text
         assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'next'
         assert len(repo.job_records.list_job_runs('local', 'task')) == job_count
-        assert len(repo.list_edit_intents('local', 'task')) == intent_count
-        assert len(repo.list_edit_proposals('local', 'task')) == proposal_count
+        assert len(repo.edit_records.list_edit_intents('local', 'task')) == intent_count
+        assert len(repo.edit_records.list_edit_proposals('local', 'task')) == proposal_count
         assert repo.get_creation_task_montage_plan('local', 'task') == original
         assert not runtime.run_once()
     finally:

@@ -324,11 +324,11 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", "workspace", task.id, "rendered_video",
         published.logical_ref, published.sha256, published.size_bytes, source_job.id, []))
     repo.job_records.finish_job_run("workspace", source_job.id, status="succeeded", output_refs=[published.logical_ref])
-    intent = repo.create_edit_intent(EditIntent("intent", "workspace", task.id, "选帧封面", "review", [], None,
+    intent = repo.edit_records.create_edit_intent(EditIntent("intent", "workspace", task.id, "选帧封面", "review", [], None,
         "GenerateCoverFromFrame", {}, {}, 1.0, "proposed"))
     operation = {"base_version_id": base.id, "source_video_ref": published.logical_ref,
                  "frame_time_seconds": 0.25, "title": " 声明  封面 ", "title_position": "bottom", "aspect_ratio": "9:16"}
-    proposal = repo.create_edit_proposal(EditProposal("proposal", "workspace", task.id, intent.id, "封面", [published.logical_ref],
+    proposal = repo.edit_records.create_edit_proposal(EditProposal("proposal", "workspace", task.id, intent.id, "封面", [published.logical_ref],
         {"operation_type": "GenerateCoverFromFrame", "payload": operation}, [], {}, []))
     actor = CreationExecutionActor("workspace", "member")
     verify = lambda value: "ready" if value == actor else "unauthorized"
@@ -414,7 +414,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         assert result.job.idempotency_key == "cover:proposal"
         assert result.job.input_digest == hashlib.sha256(json.dumps(operation, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         assert len(repo.job_records.list_job_runs("workspace", task.id)) == 2
-        assert len(repo.list_edit_operations("workspace", task.id)) == 1
+        assert len(repo.edit_records.list_edit_operations("workspace", task.id)) == 1
         states = repo.list_creation_job_request_states("workspace", result.job.id)
         assert len(states) == 1 and states[0]["id"] == calls[0] and states[0]["state"] == "done"
         runtime.scheduler.reconcile_released()

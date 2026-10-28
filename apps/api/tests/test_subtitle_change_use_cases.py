@@ -216,15 +216,15 @@ def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_pat
     assert is_subtitle_edit(payload.operation_type, values) is False
     command = metadata_edit_command(state.task, state.identity, payload.operation_type, values)
     intent, proposal = make_metadata_proposal(command, refs, summary, values)
-    state.repo.create_edit_intent(intent)
-    state.repo.create_edit_proposal(proposal)
+    state.repo.edit_records.create_edit_intent(intent)
+    state.repo.edit_records.create_edit_proposal(proposal)
     before = len(state.repo.list_timeline_versions('ws', state.task.id))
     result = case.confirm_legacy(state.task, proposal, settings=None)
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
     task = fresh.task_records.get_creation_task('ws', state.task.id)
     version = fresh.get_timeline_version('ws', task.current_timeline_version_id)
     tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
-    operations = fresh.list_edit_operations('ws', task.id)
+    operations = fresh.edit_records.list_edit_operations('ws', task.id)
     assert len(fresh.list_timeline_versions('ws', task.id)) == before + 1
     assert len(operations) == 1 and operations[0].proposal_id == proposal.id
     assert result.operation.id == operations[0].id and result.operation.result_version_id == version.id
@@ -236,8 +236,8 @@ def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_pat
     assert state.track.style.get('enabled', True) is True
     assert result.montage.narration_audio_path == state.plan.narration_audio_path
     assert case.montage_edits.cover_asset_for_version('ws', task.id, version) is None
-    assert fresh.get_edit_proposal('ws', proposal.id).status == 'confirmed'
-    assert len(fresh.list_edit_operations('ws', task.id)) == 1
+    assert fresh.edit_records.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    assert len(fresh.edit_records.list_edit_operations('ws', task.id)) == 1
     evidence = os.environ.get('LEGACY_SUBTITLE_EVIDENCE_DIR')
     if evidence:
         Path(evidence, 'NORMAL_FACTS.json').write_text(json.dumps({'proposal': proposal.id,

@@ -108,14 +108,14 @@ class VisualPreviewUseCase:
             raise PicturePreviewRejected(status_code=409,detail="预览期间时间线发生变化，请重新预览")
         base=self.metadata.ensure_montage_base(workspace_id,task,plan,source=source)
         refs=[f"clip:{clip.id}" for clip in clips]
-        intent=self.repository.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        intent=self.repository.edit_records.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
             raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="visual_adjustment",
             scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True,"preserve_audio":True,"preserve_face_geometry":True},confidence=1,status="interpreted"), source=source)
         labels = {"exposure": "曝光", "contrast": "对比度", "saturation": "饱和度", "temperature": "冷暖",
             "beauty_strength": "磨皮", "skin_exposure": "肤色曝光", "zoom": "缩放", "rotation": "旋转",
             "offset_x": "水平位置", "offset_y": "垂直位置", "fade_in_seconds": "黑场淡入秒", "fade_out_seconds": "黑场淡出秒"}
         detail = "只调整 " + " · ".join(f"{labels[key]} {value:g}" for key, value in patch.items())
-        proposal=self.repository.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        proposal=self.repository.edit_records.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
             intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的画面效果",target_refs=refs,
             operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,
                 "effects":patch,"expected_clips":{clip.id:asdict(clip) for clip in clips}}},

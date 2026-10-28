@@ -175,7 +175,7 @@ def test_http_unknown_without_server_record_keeps_verified_original_UUID(chat, m
     receipt = response.json()["storyboard_regeneration"]
     assert receipt["kind"] == kind and receipt["action"] == "submit"
     assert state.client.get(receipt["query_url"]).status_code == 404
-    assert not state.builds and not state.repo.list_edit_operations("ws", state.task.id)
+    assert not state.builds and not state.repo.edit_records.list_edit_operations("ws", state.task.id)
 
 
 def test_query_after_undo_returns_original_version_without_adopting_it_again(chat, monkeypatch):

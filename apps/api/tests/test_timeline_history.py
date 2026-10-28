@@ -254,9 +254,9 @@ def test_history_detail_preserves_original_operation_from_list(history_task):
     snapshot=json.loads(json.dumps(base.snapshot))
     snapshot['montage'].update(graphic_overlays=[overlay],status='ready',output_path=None,subtitle_path=None)
     payload={'base_version_id':base.id,'graphic_overlays':[overlay]}
-    intent=repo.create_edit_intent(EditIntent('history-overlay-intent',WORKSPACE_ID,task_id,'添加图文标题','montage',
+    intent=repo.edit_records.create_edit_intent(EditIntent('history-overlay-intent',WORKSPACE_ID,task_id,'添加图文标题','montage',
         ['overlay:history-overlay'],None,'edit_graphic_overlay',{}, {},1,'parsed'))
-    proposal=repo.create_edit_proposal(EditProposal('history-overlay-proposal',WORKSPACE_ID,task_id,intent.id,
+    proposal=repo.edit_records.create_edit_proposal(EditProposal('history-overlay-proposal',WORKSPACE_ID,task_id,intent.id,
         '添加图文标题',['overlay:history-overlay'],{'operation_type':'EditGraphicOverlay','payload':payload},[],{},[]))
     now=datetime.now(timezone.utc)
     operation=EditOperation('history-overlay-operation',WORKSPACE_ID,task_id,proposal.id,'EditGraphicOverlay',payload,

@@ -25,7 +25,7 @@ def history_edit_head(
         if version.created_by_operation_id is None:
             version_id = version.parent_version_id
             continue
-        operation = repository.get_edit_operation(workspace_id, version.created_by_operation_id)
+        operation = repository.edit_records.get_edit_operation(workspace_id, version.created_by_operation_id)
         follow_restore = operation.operation_type == "RedoTimelineVersion" or (
             not for_redo and operation.operation_type == "UndoTimelineVersion"
         )

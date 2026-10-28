@@ -117,7 +117,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     assert initial.status_code == 409
     assert initial.json()["detail"]["error"] == "timeline_version_required"
     assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
-    assert repository.list_edit_proposals(workspace_id, task_id) == []
+    assert repository.edit_records.list_edit_proposals(workspace_id, task_id) == []
     assert repository.job_records.list_job_runs(workspace_id, task_id) == []
     initialized = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize", headers=member_headers)
     assert initialized.status_code == 200, initialized.text
@@ -141,7 +141,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
             "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
         }, headers=member_headers)
     assert incomplete.status_code == 422, incomplete.text
-    assert repository.list_edit_proposals(workspace_id, task_id) == []
+    assert repository.edit_records.list_edit_proposals(workspace_id, task_id) == []
     assert repository.job_records.list_job_runs(workspace_id, task_id) == []
 
     with monkeypatch.context() as no_media_work:
@@ -180,7 +180,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         assert (red > blue) if dominant == "red" else (blue > red)
 
     assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
-    assert repository.list_edit_operations(workspace_id, task_id) == []
+    assert repository.edit_records.list_edit_operations(workspace_id, task_id) == []
     assert repository.job_records.list_job_runs(workspace_id, task_id) == []
     assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "another-workspace")

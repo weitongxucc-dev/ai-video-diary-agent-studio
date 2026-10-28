@@ -110,16 +110,16 @@ class AssistantEditResultBinding:
             if original is not None:
                 source = original
         elif isinstance(actual_result.get('proposal'), dict):
-            proposal = self.production.get_edit_proposal(workspace_id, actual_result['proposal']['id'])
-            original = self.production.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source')
+            proposal = self.production.edit_records.get_edit_proposal(workspace_id, actual_result['proposal']['id'])
+            original = self.production.edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source')
             if original is not None:
                 source = original
         if locator.phase == 'apply' and 'operation_type' in (locator.submitted_input or {}):
             recorded_operation = (locator.result or {}).get('operation')
             if locator.result_status_code == 200 and isinstance(recorded_operation, dict):
-                operation = self.production.get_edit_operation(workspace_id, recorded_operation['id'])
-                proposal = self.production.get_edit_proposal(workspace_id, operation.proposal_id)
-                intent = self.production.get_edit_intent(workspace_id, proposal.intent_id)
+                operation = self.production.edit_records.get_edit_operation(workspace_id, recorded_operation['id'])
+                proposal = self.production.edit_records.get_edit_proposal(workspace_id, operation.proposal_id)
+                intent = self.production.edit_records.get_edit_intent(workspace_id, proposal.intent_id)
                 original = intent.constraints.get('request_source')
                 if (operation.task_id != task_id or not original
                         or (original.get('workspace_id'), original.get('task_id'), original.get('member_id'), original.get('request_id'))
@@ -171,7 +171,7 @@ class AssistantEditResultBinding:
         if locator.phase != 'apply' or locator.status != 'recorded' or locator.result_status_code != 200:
             raise EditResultRejected('直接编辑尚无可核验的完成回执')
         confirmed = CreationTaskEditConfirmResponse.model_validate(locator.result)
-        actual = self.production.get_edit_operation(workspace_id, confirmed.operation.id)
+        actual = self.production.edit_records.get_edit_operation(workspace_id, confirmed.operation.id)
         submitted = locator.submitted_input or {}
         if (actual.task_id != task_id or actual.status != 'applied' or not actual.result_version_id
                 or submitted.get('assistant_turn_id') != turn_id

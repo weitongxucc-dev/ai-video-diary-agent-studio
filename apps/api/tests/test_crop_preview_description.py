@@ -105,7 +105,7 @@ def assert_failed(state, job_id):
     assert state.preview_runtime.run_once()
     saved = state.production.job_records.get_job_run(state.workspace_id, job_id)
     assert saved.status == "failed"
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
 
 
 @pytest.mark.parametrize("clip_index", [0, 1], ids=["person", "material"])
@@ -120,7 +120,7 @@ def test_crop_preview_rejects_unavailable_source(legal_crop_state, crop_previews
     base, before, _, response = preview_crop(state, clip_index)
     assert response.status_code == (403 if clip_index == 0 else 422), response.text
     assert not crop_previews
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
     assert state.client.get(base).json()["montage"] == before["montage"]
 
 
@@ -151,7 +151,7 @@ def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_
     assert state.production.job_records.get_job_run(state.workspace_id, job_id).status == 'interrupted'
     receipt = state.client.get(f'/api/creation-tasks/{state.task.id}/media-jobs/{job_id}').json()
     assert receipt['status'] == 'stale' and receipt['result'] is None
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
     assert len(crop_previews) == 1
     assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
 

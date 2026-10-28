@@ -30,7 +30,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert original.status_code == 200, original.text
     original_proposal = original.json()['proposal']
     assert len(original_proposal['operation']['payload']['steps']) == 3
-    stored_original = asdict(state.production.get_edit_proposal(state.workspace_id, original_proposal['id']))
+    stored_original = asdict(state.production.edit_records.get_edit_proposal(state.workspace_id, original_proposal['id']))
     payload = {'included_step_indices': [0, 2]}
     route = state.base_url + '/edits/' + original_proposal['id'] + '/selection/preview'
     queued = state.client.post(route, json=payload)
@@ -72,7 +72,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert visuals['after']['frames']['middle']['white_pixels'] > visuals['before']['frames']['middle']['white_pixels']
     assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before_task.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == before_montage
-    assert state.production.get_edit_proposal(state.workspace_id, original_proposal['id']).status == 'proposed'
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, original_proposal['id']).status == 'proposed'
     assert state.client.get(queued.json()['result_url']).json() == completed.json()
     replay = state.client.post(route, json=payload)
     assert replay.status_code == 202 and replay.json()['job_id'] == job_id, replay.text

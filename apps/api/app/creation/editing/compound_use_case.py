@@ -120,7 +120,7 @@ class CompoundEditUseCase:
     def prepare_selection(self, control: CompoundSelectionCommand):
         task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
         try:
-            proposal = self.repository.get_edit_proposal(control.workspace_id, control.proposal_id)
+            proposal = self.repository.edit_records.get_edit_proposal(control.workspace_id, control.proposal_id)
         except KeyError as exc:
             raise CompoundProposalMissing('修改提案不存在') from exc
         if proposal.task_id != task.id:
@@ -136,7 +136,7 @@ class CompoundEditUseCase:
             included = control.included_step_indices if control.raw_command is None else compile_compound_selection(control.raw_command, data['steps'])
         except ValueError as exc:
             raise CompoundSelectionInputError(str(exc)) from exc
-        intent = self.repository.get_edit_intent(control.workspace_id, proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(control.workspace_id, proposal.intent_id)
         return self.prepare_preview(CompoundPreviewCommand(control.workspace_id, task.id, control.actor_identity,
             data['base_version_id'], intent.raw_command, intent.context_stage, intent.scope['context_refs'],
             intent.playhead_ms, included, control.raw_command, control.source))
@@ -145,7 +145,7 @@ class CompoundEditUseCase:
         task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'Compound', {}))
-        proposal = self.repository.get_edit_proposal(command.workspace_id, proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(command.workspace_id, proposal_id)
         if proposal.task_id != command.task_id:
             raise KeyError(proposal_id)
         payload = proposal.operation.get('payload')
@@ -153,7 +153,7 @@ class CompoundEditUseCase:
             raise EditConflict('提案不是复合编辑')
         if command.operation_type != 'EditCompoundTimeline' or command.values != payload:
             raise EditConflict('原复合提案输入已变化')
-        intent = self.repository.get_edit_intent(command.workspace_id, proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(command.workspace_id, proposal.intent_id)
         source = intent.constraints.get('request_source')
         if source != command.source:
             raise EditConflict('原提案来源已变化')
@@ -164,7 +164,7 @@ class CompoundEditUseCase:
 
     def read_result(self, command: EditCommand, proposal_id):
         task, proposal, _intent = self._binding(command, proposal_id)
-        operations = [item for item in self.repository.list_edit_operations(command.workspace_id, task.id)
+        operations = [item for item in self.repository.edit_records.list_edit_operations(command.workspace_id, task.id)
             if item.proposal_id == proposal.id]
         if not operations:
             return None
@@ -254,13 +254,13 @@ class CompoundEditUseCase:
         picture_candidates = [plan] if plan is not None else []
         compound_proposal = None
         if plan is not None and arguments.get('_media_kind') == 'picture_preview':
-            proposal = self.repository.get_edit_proposal(workspace_id, arguments['proposal_id'])
+            proposal = self.repository.edit_records.get_edit_proposal(workspace_id, arguments['proposal_id'])
             selection = CompoundEditSelectionRequest.model_validate(payload)
             data = proposal.operation.get('payload', {})
             if proposal.task_id != task_id or proposal.status != 'proposed' or proposal.operation.get('operation_type') != 'EditCompoundTimeline' or (not data.get('selection_enabled')) or (data.get('base_version_id') != task.current_timeline_version_id):
                 raise ValueError('当前复合修改提案已失效，不能封存预览')
             included = selection.included_step_indices if selection.raw_command is None else compile_compound_selection(selection.raw_command, data['steps'])
-            intent = self.repository.get_edit_intent(workspace_id, proposal.intent_id)
+            intent = self.repository.edit_records.get_edit_intent(workspace_id, proposal.intent_id)
             command_payload = {'raw_command': intent.raw_command, 'selected_object_refs': intent.scope['context_refs'], 'playhead_ms': intent.playhead_ms}
             compound_proposal = json.loads(_json_object(asdict(proposal)))
             compiled = compile_compound_edit(command_payload['raw_command'], plan, effective_audio_timeline(plan), command_payload.get('selected_object_refs', []), task.current_timeline_version_id, command_payload.get('playhead_ms'), included)

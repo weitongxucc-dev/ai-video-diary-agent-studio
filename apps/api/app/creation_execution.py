@@ -1346,7 +1346,7 @@ class CreationJobOwnerVerifier:
         return self.verify_submission(intent, actor, connection=conn,pcm_preparation=preparation,request=request)
 
     def edit_facts(self, job, task, event, plan):
-        proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+        proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
         return person_edit_stage_facts(self.repository, task, proposal, plan,
                                       self.presenter_budget, self.presenter_models)
 
@@ -1354,7 +1354,7 @@ class CreationJobOwnerVerifier:
         with self.repository.creation_execution_read(connection) as conn:
             if pcm_preparation is None and request is not None and request.resources.get('execution_mode')=='cpu_pcm_wav_assembly':
                 pcm_preparation=self.persisted_pcm_sources(request,conn)
-            proposal = self.repository.get_edit_proposal(job.workspace_id,event['edit_proposal_id'], connection=conn)
+            proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id,event['edit_proposal_id'], connection=conn)
             reference = (pcm_preparation or {}).get('_narration_reference')
             if reference is None:
                 if request is not None:
@@ -1518,7 +1518,7 @@ class CreationJobOwnerVerifier:
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             if (verdict == "ready" and self.task_authorizations is not None
                     and connection is None and stage == "person_edit"):
-                proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+                proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
                 target = proposal.operation["payload"]
                 authorization = self.repository.get_task_authorization(task.workspace_id, task.id, connection=conn)
                 if f"{target['person_profile_id']}:{target['person_version']}" not in authorization.resource_scope.get("persons", []):
@@ -1578,7 +1578,7 @@ class CreationJobOwnerVerifier:
                     or plan.creation_task_id != task.id or plan.status != "confirmed"
                     or event.get("revision_digest") != (revision if revision is not None else revision_digest(script, plan))):
                 return "stale"
-            proposal = self.repository.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+            proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
             if job.kind == NARRATION_EDIT_KIND:
                 actor = CreationExecutionActor.from_event(job.workspace_id, event)
                 if task.owner_user_id != (actor.user_id or actor.member_id):
@@ -1741,7 +1741,7 @@ class CreationJobOwnerVerifier:
         if plan.selected_person:
             refs.append(("person", plan.selected_person.profile_id, plan.selected_person.version))
         if stage == "person_edit":
-            target = self.repository.get_edit_proposal(job.workspace_id,event["edit_proposal_id"]).operation["payload"]
+            target = self.repository.edit_records.get_edit_proposal(job.workspace_id,event["edit_proposal_id"]).operation["payload"]
             refs.append(("person", target["person_profile_id"], target["person_version"]))
         pronunciation_scope = None
         if stage == "narration" and plan.selected_voice:
@@ -3089,7 +3089,7 @@ class CreationJobUnitExecutor:
             return intent,owner.verify_submission(intent,actor,connection=conn,pcm_preparation=pcm_preparation)
         try:
             if resources['narration_phase']=='segment_edit':
-                proposal=self.repository.get_edit_proposal(job.workspace_id,event['edit_proposal_id'])
+                proposal=self.repository.edit_records.get_edit_proposal(job.workspace_id,event['edit_proposal_id'])
                 payload=proposal.operation['payload']
                 segment,artifact=self.narration_stage.generate_segment_edit(workspace_id=job.workspace_id,task=task,
                     segment_id=payload['narration_segment_id'],delivery_instruction=payload.get('delivery_instruction'),

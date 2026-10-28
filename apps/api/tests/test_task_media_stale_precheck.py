@@ -189,12 +189,12 @@ def test_old_scan_does_not_hold_write_lock_waiting_for_identity(media_case, monk
     try:
         if expired:
             assert done.wait(1) and not case.entered.is_set()
-            assert case.repo.create_edit_intent(intent, source=None).id == intent.id
+            assert case.repo.edit_records.create_edit_intent(intent, source=None).id == intent.id
             assert case.state["identity_calls"] == 0
         else:
             assert case.entered.wait(1) and not done.is_set()
             with pytest.raises(sqlite3.OperationalError, match="locked"):
-                case.repo.create_edit_intent(intent, source=None)
+                case.repo.edit_records.create_edit_intent(intent, source=None)
     finally:
         case.release.set()
         worker.join(3)

@@ -248,7 +248,7 @@ def test_granted_failure_or_cancellation_preserves_adopted_work(state, monkeypat
     assert state.repo.get_creation_task_montage_plan("ws", state.task.id) == before[1]
     if failure not in {"CAS", "narration"}:
         assert adopted(state) == before
-    assert not state.repo.list_edit_operations("ws", state.task.id)
+    assert not state.repo.edit_records.list_edit_operations("ws", state.task.id)
 
 
 def test_queued_restart_reuses_original_request_and_commits_once(state, tmp_path):
@@ -263,7 +263,7 @@ def test_queued_restart_reuses_original_request_and_commits_once(state, tmp_path
     state.scheduler.assert_released(grant)
     state.control.recover(state.runtime)
     assert state.scheduler.pick_and_grant() is None
-    assert len(state.builds) == len(state.repo.list_edit_operations("ws", state.task.id)) == 1
+    assert len(state.builds) == len(state.repo.edit_records.list_edit_operations("ws", state.task.id)) == 1
     assert state.client.get(receipt["result_url"]).json()["status"] == "succeeded"
 
 
@@ -343,7 +343,7 @@ def test_concurrent_same_UUID_claims_one_job_and_device_request(state):
     assert receipts[0] == receipts[1] == receipts[2]
     assert len(state.repo.list_creation_job_request_states("ws", receipts[0]["job_id"])) == 1
     run(state)
-    assert len(state.builds) == len(state.repo.list_edit_operations("ws", state.task.id)) == 1
+    assert len(state.builds) == len(state.repo.edit_records.list_edit_operations("ws", state.task.id)) == 1
 
 
 def test_original_ready_audio_replans_30_through_existing_storyboard_request(state):
@@ -605,7 +605,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             result = case.control.regenerate_storyboard('local', task.id, payload, case.actor, case.runtime)
             assert result['job_id'] == receipt['job_id'] and result['status'] == 'succeeded'
             assert case.scheduler._get(grant.request_id).state == 'done'
-            assert len(repo.list_edit_operations('local', task.id)) == 1
+            assert len(repo.edit_records.list_edit_operations('local', task.id)) == 1
             after = repo.get_creation_task_montage_plan('local', task.id)
             assert after['audio_timeline'] == before['audio_timeline']
             assert after['graphic_overlays'] == before['graphic_overlays']
@@ -615,7 +615,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             assert changed
             assert current.current_timeline_version_id == base.id
             assert repo.get_creation_task_montage_plan('local', task.id) == before
-            assert not repo.list_edit_operations('local', task.id)
+            assert not repo.edit_records.list_edit_operations('local', task.id)
             assert not [e for e in repo.execution_records.list_task_events('local', task.id)
                 if e.event_type == 'storyboard_regenerated']
     finally:

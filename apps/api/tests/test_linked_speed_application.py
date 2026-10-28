@@ -84,7 +84,7 @@ def speed_command(state, rate=2):
 
 
 def apply_command(state, proposal, *, requesting=True):
-    source = state.repo.get_edit_intent('ws', proposal.intent_id).constraints.get('request_source')
+    source = state.repo.edit_records.get_edit_intent('ws', proposal.intent_id).constraints.get('request_source')
     request_id = str(uuid4()) if requesting else None
     base = proposal.operation['payload']['base_version_id']
     fields = {'request_id': request_id, 'expected_base_version_id': base} if requesting else {}
@@ -119,7 +119,7 @@ def test_public_preview_confirm_replay_recovers_fixed_version_after_lost_project
     saved = state.application.read_result(control)
     assert saved.outcome.operation.result_version_id == original_version.id and saved.outcome.montage.duration_seconds == 3
     assert state.repo.get_timeline_version('ws', original_version.id) == original_version
-    assert len(state.repo.list_edit_operations('ws', state.task.id)) == 2
+    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 2
     changed = replace(control, expected_input_digest=saved.input_digest,
         request_fields={**control.request_fields, 'expected_input_digest': saved.input_digest})
     with pytest.raises(EditConflict, match='同一请求|不同|不一致'):
@@ -190,7 +190,7 @@ def test_late_editorial_write_failure_rolls_back_on_actual_verifier_connection(s
         state.application.confirm(apply_command(state, proposal, requesting=False))
     assert len(connections) == 1
     assert editorial_rows(state.repo) == before
-    assert state.repo.get_edit_proposal('ws', proposal.id).status == 'proposed'
+    assert state.repo.edit_records.get_edit_proposal('ws', proposal.id).status == 'proposed'
 
 
 def test_shared_base_three_branches_and_narration_snapshot_keep_original_rules(state):
@@ -221,4 +221,4 @@ def test_direct_apply_keeps_preview_failure_as_explicit_phase(state):
     with pytest.raises(LinkedEditPreviewFailed) as caught:
         state.application.apply(replace(command, values={**command.values, 'playback_rate': None}))
     assert isinstance(caught.value.original, ValueError)
-    assert state.repo.list_edit_operations('ws', state.task.id) == []
+    assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == []

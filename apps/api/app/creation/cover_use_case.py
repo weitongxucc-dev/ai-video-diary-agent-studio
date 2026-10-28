@@ -162,7 +162,7 @@ class CoverUseCase:
         return task
 
     def _proposal(self, workspace_id: str, task_id: str, proposal_id: str):
-        proposal = self.repository.get_edit_proposal(workspace_id, proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(workspace_id, proposal_id)
         if proposal.task_id != task_id or proposal.operation.get("operation_type") != COVER_OPERATION:
             raise ValueError("封面提案不属于当前任务或操作")
         payload = proposal.operation.get("payload")
@@ -236,7 +236,7 @@ class CoverUseCase:
                                     command.operation_json, self.find_job(command))
 
     def _applied_result(self, workspace_id, task_id, proposal_id, operation_json, job):
-        operations = self.repository.list_edit_operations(workspace_id, task_id)
+        operations = self.repository.edit_records.list_edit_operations(workspace_id, task_id)
         operation = next((item for item in operations if item.proposal_id == proposal_id), None)
         if operation is None:
             return None

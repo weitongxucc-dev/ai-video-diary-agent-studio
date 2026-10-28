@@ -199,7 +199,7 @@ def test_sibling_observation_cannot_advance_goal_past_pending_real_preview_or_ad
         assert state.runtime.run_once()  # An unrelated completed observation must keep the actual preview card.
         wait_until(lambda: state.conversations.get_turn(root_id)["result"].get("continuation", {}).get("phase") == "observation")
         assert state.conversations.get_turn(root_id)["result"]["response"]["edit_preview"]["proposal"]["id"] == preview["proposal"]["id"]
-    proposal = state.production.get_edit_proposal(state.workspace_id, preview["proposal"]["id"])
+    proposal = state.production.edit_records.get_edit_proposal(state.workspace_id, preview["proposal"]["id"])
     assert proposal.status == "proposed" and len(calls) == 1
     assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == state.version.id
     adopted = state.raw_post(state.base_url + f"/edits/{proposal.id}/confirm", json={"request_id": str(uuid4())})
@@ -279,7 +279,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
     if not damaged:
         child_id = models[-1]["turn_id"]
         preview = wait_until(lambda: (state.conversations.get_turn(child_id)["result"] or {}).get("response", {}).get("edit_preview"))
-        assert state.production.get_edit_proposal(state.workspace_id, preview["proposal"]["id"]).status == "proposed"
+        assert state.production.edit_records.get_edit_proposal(state.workspace_id, preview["proposal"]["id"]).status == "proposed"
         adopted = state.raw_post(state.base_url + f"/edits/{preview['proposal']['id']}/confirm", json={"request_id": str(uuid4())})
         assert adopted.status_code == 200, adopted.text
         wait_until(lambda: len(models) == 3)
@@ -1287,16 +1287,16 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
         'conversation_id':origin['conversation_id'], 'assistant_turn_id':state.turn_id,
         'input_id':None, 'input_turn_id':None, 'expected_timeline_version_id':state.version.id,
         'expected_timeline_sequence':state.version.sequence, 'request_id':request_id}
-    repo.create_edit_intent(EditIntent('binding-edit-intent', state.workspace_id, task.id, 'declared crop edit',
+    repo.edit_records.create_edit_intent(EditIntent('binding-edit-intent', state.workspace_id, task.id, 'declared crop edit',
         'review', [], None, 'ChangeCrop', {}, {'request_source':edit_source}, 1, 'ready'))
-    repo.create_edit_proposal(EditProposal('binding-edit-proposal', state.workspace_id, task.id,
+    repo.edit_records.create_edit_proposal(EditProposal('binding-edit-proposal', state.workspace_id, task.id,
         'binding-edit-intent', 'declared committed edit', ['clip://declared-clip'], {'operation_type':'ChangeCrop'}, [], {}, []))
-    repo.transition_edit_proposal(state.workspace_id, task.id, 'binding-edit-proposal', status='confirmed')
+    repo.edit_records.transition_edit_proposal(state.workspace_id, task.id, 'binding-edit-proposal', status='confirmed')
     version = repo.create_timeline_version(TimelineVersion('committed-edit-head', state.workspace_id, task.id,
         state.version.id, 2, {}, 'binding-edit-operation'))
     from app.models import utc_now
     applied_at = utc_now()
-    operation = repo.create_edit_operation(EditOperation('binding-edit-operation', state.workspace_id, task.id,
+    operation = repo.edit_records.create_edit_operation(EditOperation('binding-edit-operation', state.workspace_id, task.id,
         'binding-edit-proposal', 'ChangeCrop', {'clip_id':'declared-clip'}, state.version.id, version.id, 'applied', created_at=applied_at, applied_at=applied_at))
     task = repo.task_records.get_creation_task(state.workspace_id, task.id)
     inputs = {'operation_type':'ChangeCrop', 'assistant_turn_id':state.turn_id,
@@ -1323,7 +1323,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     with pytest.raises(HTTPException) as too_large:
         main._goal_request_result(task.id, large_id, state.request, 'apply')
     assert too_large.value.status_code == 409 and '有界查询范围' in str(too_large.value.detail)
-    assert len(repo.list_edit_operations(state.workspace_id, task.id)) == 1
+    assert len(repo.edit_records.list_edit_operations(state.workspace_id, task.id)) == 1
     # Even a previously checked task/source cannot bypass the former self-HTTP
     # reader's current write gate. Shared visibility exercises owner rejection.
     from dataclasses import asdict
@@ -1438,7 +1438,7 @@ def test_edit_result_unknown_preserves_old_source_without_new_request(edit_resul
         main._assistant_applied_edit_receipt(state.task.id, state.request, turn_id, details)
     assert not_applied.value.status_code == 502
     assert state.repo.execution_records.get_task_event('ws', stored.id) == stored
-    assert state.repo.list_edit_operations('ws', state.task.id) == []
+    assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == []
 
 
 def test_edit_result_does_not_swallow_reader_permission_or_conflict(edit_result_state, monkeypatch):

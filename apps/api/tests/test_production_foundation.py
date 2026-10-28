@@ -4,7 +4,7 @@ import json
 import sqlite3
 import wave
 from dataclasses import asdict, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1228,12 +1228,32 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
         confidence=0.98,
         status="interpreted",
     )
-    assert production.create_edit_intent(intent) == intent
-    assert production.create_edit_intent(intent) == intent
+    source = {"workspace_id": intent.workspace_id, "task_id": intent.task_id,
+              "raw_command": intent.raw_command}
+    intent = replace(intent, constraints={**intent.constraints, "request_source": source})
+    source_reads = []
+    original_source = production.edit_records._current_source
+    def read_source():
+        source_reads.append(True)
+        return original_source()
+    with monkeypatch.context() as binding:
+        binding.setattr(production.edit_records, "_current_source", read_source)
+        token = main_module.EXACT_EDIT_SOURCE.set(source)
+        try:
+            assert production.edit_records.create_edit_intent(
+                replace(intent, raw_command="caller text replaced by the original source")) == intent
+        finally:
+            main_module.EXACT_EDIT_SOURCE.reset(token)
+        assert source_reads == [True]
+        assert production.edit_records.create_edit_intent(intent, source=None) == intent
+        assert source_reads == [True]
     with pytest.raises(ValueError, match="不能覆盖"):
-        production.create_edit_intent(replace(intent, raw_command="不同命令"))
+        production.edit_records.create_edit_intent(replace(intent, raw_command="不同命令"))
+    with pytest.raises(ValueError, match="不能覆盖"):
+        production.edit_records.create_edit_intent(
+            replace(intent, created_at=intent.created_at + timedelta(microseconds=1)))
     with pytest.raises(KeyError):
-        production.get_edit_intent("workspace_b", intent.id)
+        production.edit_records.get_edit_intent("workspace_b", intent.id)
 
     proposal = EditProposal(
         id="proposal-replace-clip",
@@ -1251,8 +1271,11 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
         preview={"before": "clip:clip-1", "after": "clip:clip-2"},
         external_effects=[],
     )
-    assert production.create_edit_proposal(proposal) == proposal
-    rejected = production.create_edit_proposal(
+    assert production.edit_records.create_edit_proposal(proposal) == proposal
+    with pytest.raises(ValueError, match="领域字段不一致"):
+        production.edit_records.create_edit_proposal(
+            replace(proposal, updated_at=proposal.updated_at + timedelta(microseconds=1)))
+    rejected = production.edit_records.create_edit_proposal(
         replace(
             proposal,
             id="proposal-rejected",
@@ -1260,15 +1283,15 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
             updated_at=datetime.now(timezone.utc),
         )
     )
-    rejected = production.transition_edit_proposal(
+    rejected = production.edit_records.transition_edit_proposal(
         "workspace_a", "task-a", rejected.id, status="rejected"
     )
     assert rejected.status == "rejected"
     with pytest.raises(ValueError, match="proposed"):
-        production.transition_edit_proposal(
+        production.edit_records.transition_edit_proposal(
             "workspace_a", "task-a", rejected.id, status="confirmed"
         )
-    expired = production.create_edit_proposal(
+    expired = production.edit_records.create_edit_proposal(
         replace(
             proposal,
             id="proposal-expired",
@@ -1276,11 +1299,15 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
             updated_at=datetime.now(timezone.utc),
         )
     )
-    assert production.transition_edit_proposal(
+    assert production.edit_records.transition_edit_proposal(
         "workspace_a", "task-a", expired.id, status="expired"
     ).status == "expired"
+    all_proposals = production.edit_records.list_edit_proposals("workspace_a", "task-a", base_version_id=False)
+    assert len(all_proposals) == 3
+    assert production.edit_records.list_edit_proposals("workspace_a", "task-a", base_version_id=None) == [proposal]
+    assert production.edit_records.list_edit_proposals("workspace_a", "task-a", limit=1) == [all_proposals[-1]]
     with pytest.raises(ValueError, match="意图不属于"):
-        production.create_edit_proposal(
+        production.edit_records.create_edit_proposal(
             replace(
                 proposal,
                 id="proposal-cross-workspace",
@@ -1371,7 +1398,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
             result_version=result_version,
         )
     with pytest.raises(ValueError, match="不能覆盖"):
-        production.create_edit_operation(
+        production.edit_records.create_edit_operation(
             replace(operation, payload={"target_clip_id": "other"})
         )
     with sqlite3.connect(production.database_path) as conn:
@@ -1393,13 +1420,32 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.get_edit_intent("workspace_a", intent.id) == intent
-    assert reloaded.get_edit_proposal("workspace_a", proposal.id).status == "confirmed"
-    assert reloaded.get_edit_operation("workspace_a", operation.id) == operation
+    assert reloaded.edit_records.get_edit_intent("workspace_a", intent.id) == intent
+    assert reloaded.edit_records.get_edit_proposal("workspace_a", proposal.id).status == "confirmed"
+    assert reloaded.edit_records.get_edit_operation("workspace_a", operation.id) == operation
     assert reloaded.get_timeline_version("workspace_a", result_version.id) == result_version
-    assert reloaded.list_edit_intents("workspace_a", "task-a") == [intent]
-    assert len(reloaded.list_edit_proposals("workspace_a", "task-a")) == 3
-    assert reloaded.list_edit_operations("workspace_a", "task-a") == [operation]
+    assert reloaded.edit_records.list_edit_intents("workspace_a", "task-a") == [intent]
+    assert len(reloaded.edit_records.list_edit_proposals("workspace_a", "task-a")) == 3
+    assert reloaded.edit_records.list_edit_operations("workspace_a", "task-a") == [operation]
+
+    # The original standalone record lifecycle still uses its own transaction;
+    # adoption remains the only owner of the earlier cross-track version write.
+    terminal_proposal = reloaded.edit_records.create_edit_proposal(
+        replace(proposal, id="proposal-standalone-finish"))
+    reloaded.edit_records.transition_edit_proposal(
+        "workspace_a", "task-a", terminal_proposal.id, status="confirmed")
+    running = replace(operation, id="operation-standalone-finish", proposal_id=terminal_proposal.id,
+                      status="running", result_version_id=None, applied_at=None)
+    assert reloaded.edit_records.create_edit_operation(running) == running
+    assert reloaded.edit_records.create_edit_operation(running) == running
+    failed = reloaded.edit_records.finish_edit_operation(
+        "workspace_a", "task-a", running.id, status="failed", failure_reason="declared stop")
+    assert failed == replace(running, status="failed", failure_reason="declared stop")
+    with pytest.raises(ValueError, match="只有 running"):
+        reloaded.edit_records.finish_edit_operation(
+            "workspace_a", "task-a", running.id, status="failed", failure_reason="declared stop")
+    assert reloaded.edit_records.get_edit_operation("workspace_a", running.id) == failed
+    assert reloaded.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == result_version.id
 
 
 def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
@@ -1454,7 +1500,7 @@ def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
         "UndoTimelineVersion",
     )
     for index, operation_type in enumerate(operation_types, start=1):
-        intent = production.create_edit_intent(
+        intent = production.edit_records.create_edit_intent(
             EditIntent(
                 id=f"intent-generic-{index}",
                 workspace_id="workspace_a",
@@ -1470,7 +1516,7 @@ def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
                 status="interpreted",
             )
         )
-        proposal = production.create_edit_proposal(
+        proposal = production.edit_records.create_edit_proposal(
             EditProposal(
                 id=f"proposal-generic-{index}",
                 workspace_id="workspace_a",
@@ -1530,7 +1576,7 @@ def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
     assert [version.sequence for version in versions] == list(range(1, 8))
     assert [
         operation.operation_type
-        for operation in production.list_edit_operations("workspace_a", "task-a")
+        for operation in production.edit_records.list_edit_operations("workspace_a", "task-a")
     ] == list(operation_types)
 
 
@@ -1684,7 +1730,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         sequence: int,
         result_snapshot: dict[str, object],
     ) -> tuple[EditProposal, EditOperation, TimelineVersion]:
-        intent = production.create_edit_intent(
+        intent = production.edit_records.create_edit_intent(
             EditIntent(
                 id=f"intent-{suffix}",
                 workspace_id="workspace_a",
@@ -1700,7 +1746,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
                 status="interpreted",
             )
         )
-        proposal = production.create_edit_proposal(
+        proposal = production.edit_records.create_edit_proposal(
             EditProposal(
                 id=f"proposal-{suffix}",
                 workspace_id="workspace_a",
@@ -1837,7 +1883,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
             montage_payload=subtitle_montage,
             narration_segments=regenerated_segments[:1],
         )
-    assert production.get_edit_proposal(
+    assert production.edit_records.get_edit_proposal(
         "workspace_a", subtitle_proposal.id
     ).status == "proposed"
     with pytest.raises(KeyError):
@@ -4452,8 +4498,8 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
     checked = []
     with repo._connect() as writer:
         writer.execute('BEGIN IMMEDIATE')
-        repo.create_edit_intent(intent,connection=writer)
-        repo.create_edit_proposal(proposal,connection=writer)
+        repo.edit_records.create_edit_intent(intent,connection=writer)
+        repo.edit_records.create_edit_proposal(proposal,connection=writer)
         def verify(connection):
             assert connection is writer and connection.in_transaction
             assert connection.execute('SELECT id FROM edit_proposals WHERE id=?',(proposal.id,)).fetchone() is not None
@@ -4466,20 +4512,20 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
         assert writer.in_transaction and checked==['source']
         assert confirmed.status=='confirmed' and applied==operation and adopted==version and current.current_timeline_version_id==version.id
         assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
-        assert repo.list_edit_operations('workspace_a','task-a')==[]
+        assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
         writer.rollback()
-    assert repo.list_edit_proposals('workspace_a','task-a')==[]
+    assert repo.edit_records.list_edit_proposals('workspace_a','task-a')==[]
     assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
-    repo.create_edit_intent(intent)
-    repo.create_edit_proposal(proposal)
+    repo.edit_records.create_edit_intent(intent)
+    repo.edit_records.create_edit_proposal(proposal)
     with repo._connect() as conn:
         conn.execute("CREATE TRIGGER reject_adoption_task_tail BEFORE UPDATE ON creation_tasks "
             "WHEN NEW.id='task-a' BEGIN SELECT RAISE(ABORT,'adoption task tail refused'); END")
     with pytest.raises(sqlite3.IntegrityError,match='task tail refused'):
         repo.edit_adoption.confirm('workspace_a','task-a',proposal.id,operation=operation,
             result_version=version,subtitle_tracks=[track])
-    assert repo.get_edit_proposal('workspace_a',proposal.id).status=='proposed'
-    assert repo.list_edit_operations('workspace_a','task-a')==[]
+    assert repo.edit_records.get_edit_proposal('workspace_a',proposal.id).status=='proposed'
+    assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
     assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
     assert repo.list_timeline_versions('workspace_a','task-a')==[base]
     assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id

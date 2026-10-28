@@ -97,8 +97,8 @@ class SubtitleEditUseCase:
     def save_preview(self, prepared: PreparedSubtitleEdit):
         if prepared.proposal.operation['operation_type'] == 'UpdateSubtitleCue':
             # This original exact-cue inlet registers intent then proposal separately.
-            intent = self.repository.create_edit_intent(prepared.intent, source=prepared.intent.constraints.get('request_source'))
-            proposal = self.repository.create_edit_proposal(prepared.proposal)
+            intent = self.repository.edit_records.create_edit_intent(prepared.intent, source=prepared.intent.constraints.get('request_source'))
+            proposal = self.repository.edit_records.create_edit_proposal(prepared.proposal)
             return intent, proposal
         return self.repository.save_clip_preview_proposal(prepared.intent, prepared.proposal,
             expected_version_id=prepared.base.id)
@@ -107,7 +107,7 @@ class SubtitleEditUseCase:
         task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'Subtitle', {}))
-        proposal = self.repository.get_edit_proposal(command.workspace_id, proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(command.workspace_id, proposal_id)
         if proposal.task_id != command.task_id:
             raise KeyError(proposal_id)
         operation, payload = proposal.operation.get('operation_type'), proposal.operation.get('payload')
@@ -115,7 +115,7 @@ class SubtitleEditUseCase:
             raise EditConflict('提案不是纯字幕编辑')
         if operation != command.operation_type or payload != command.values:
             raise EditConflict('原字幕提案输入已变化')
-        source = self.repository.get_edit_intent(command.workspace_id, proposal.intent_id).constraints.get('request_source')
+        source = self.repository.edit_records.get_edit_intent(command.workspace_id, proposal.intent_id).constraints.get('request_source')
         if source != command.source:
             raise EditConflict('原提案来源已变化')
         member = command.actor_identity.get('user_id') or command.actor_identity['member_id']
@@ -232,7 +232,7 @@ class SubtitleEditUseCase:
 
     def read_result(self, command: EditCommand, proposal_id):
         task, proposal = self._binding(command, proposal_id)
-        operations = [item for item in self.repository.list_edit_operations(command.workspace_id, task.id)
+        operations = [item for item in self.repository.edit_records.list_edit_operations(command.workspace_id, task.id)
             if item.proposal_id == proposal.id]
         if not operations:
             return None
@@ -558,8 +558,8 @@ class SubtitleEditUseCase:
         task = self.repository.task_records.get_creation_task(workspace_id, task.id)
         subtitle_track = next((track for track in self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage) if any((track_cue.id == cue.id for track_cue in track.cues))), None)
         now = utc_now()
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type='update_subtitle_cue', scope={'kind': 'subtitle_cue', 'cue_id': cue.id}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=0.99, status='interpreted', created_at=now), source=request_source)
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary='只修改所选字幕；配音和镜头保持不变。', target_refs=[selected_ref], operation={'operation_type': 'UpdateSubtitleCue', 'payload': {'cue_id': cue.id, 'text': new_text, 'expected_text': cue.text, 'base_version_id': base_version.id, **({'track_id': subtitle_track.id, 'line_breaks': next((item.line_breaks for item in subtitle_track.cues if item.id == cue.id)), 'emphasis': next((item.emphasis for item in subtitle_track.cues if item.id == cue.id)), 'style': subtitle_track.style} if subtitle_track is not None else {})}}, invalidated_refs=logical_montage_output_refs(montage), preview={'before': {'ref': selected_ref, 'label': '当前字幕', 'detail': cue.text}, 'after': {'ref': selected_ref, 'label': '修改后字幕', 'detail': new_text}}, external_effects=['确认后只更新字幕版本；重新渲染前不会执行媒体进程。'], created_at=now, updated_at=now))
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=[selected_ref], playhead_ms=payload.playhead_ms, intent_type='update_subtitle_cue', scope={'kind': 'subtitle_cue', 'cue_id': cue.id}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=0.99, status='interpreted', created_at=now), source=request_source)
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id, intent_id=intent.id, summary='只修改所选字幕；配音和镜头保持不变。', target_refs=[selected_ref], operation={'operation_type': 'UpdateSubtitleCue', 'payload': {'cue_id': cue.id, 'text': new_text, 'expected_text': cue.text, 'base_version_id': base_version.id, **({'track_id': subtitle_track.id, 'line_breaks': next((item.line_breaks for item in subtitle_track.cues if item.id == cue.id)), 'emphasis': next((item.emphasis for item in subtitle_track.cues if item.id == cue.id)), 'style': subtitle_track.style} if subtitle_track is not None else {})}}, invalidated_refs=logical_montage_output_refs(montage), preview={'before': {'ref': selected_ref, 'label': '当前字幕', 'detail': cue.text}, 'after': {'ref': selected_ref, 'label': '修改后字幕', 'detail': new_text}}, external_effects=['确认后只更新字幕版本；重新渲染前不会执行媒体进程。'], created_at=now, updated_at=now))
         return (intent, proposal)
 
 

@@ -383,7 +383,7 @@ class NarrationStageUseCase:
     def prepare_edit_adoption(self, workspace_id, task_id, proposal_id, candidate, resources, receipt):
         with self.repository.creation_execution_read() as conn:
             task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
-            proposal = self.repository.get_edit_proposal(workspace_id, proposal_id, connection=conn)
+            proposal = self.repository.edit_records.get_edit_proposal(workspace_id, proposal_id, connection=conn)
             payload = proposal.operation['payload']
             if candidate is None or candidate['segment_id'] != payload['narration_segment_id']:
                 raise ValueError('局部配音缺少同一原Job的生成候选')
