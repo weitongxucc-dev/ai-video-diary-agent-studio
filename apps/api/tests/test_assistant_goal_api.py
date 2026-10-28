@@ -25,6 +25,11 @@ script_state = test_media_script_api.state
 
 @pytest.fixture(autouse=True)
 def isolated_local_workspace(request, monkeypatch):
+    if request.node.name.split("[")[0] == "test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending":
+        # This original bounded SQL representative has no dependency on the media/driver fixture.
+        from test_production_foundation import edit_adoption_no_execution
+        edit_adoption_no_execution(monkeypatch)
+        return
     if "media_result_state" in request.fixturenames:
         request.getfixturevalue("media_result_state")
         return
@@ -428,7 +433,7 @@ def test_original_request_correction_requires_actual_422_no_side_effect(edit_res
     goal = main._goal_service().register_turn(state.turn["id"])
     event = {"type": "business_result", "event_id": "validation", "task_id": state.task.id, "phase": "request",
         "base_version_id": state.version.id, "status": "rejected", "edit_request": locator.model_dump(mode="json")}
-    verified = main._verify_current_goal(goal, event)
+    verified = main._goal_readiness_use_case().verify(goal, event)
     assert verified["status"] == ("ready" if code == 422 else "invalidated")
     if code == 422:
         assert verified["no_side_effect"] is True
@@ -709,7 +714,7 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
 
 
 @pytest.mark.parametrize("mutation", ["none", "watched_input", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
-def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending(monkeypatch, mutation):
+def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending(monkeypatch, mutation, tmp_path):
     # Real SQL selection with host/media-reader seams; this is not media acceptance.
     import sqlite3
     monkeypatch.setattr(main,'_workspace_settings_for',lambda _:SimpleNamespace(effective_llm_api_key=''))
@@ -718,19 +723,29 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
     connection.executescript('CREATE TABLE device_work_requests(id,workspace_id,owner_id,state);'
         'CREATE TABLE task_events(id,workspace_id,task_id,job_id,event_type,payload_json);'
         'CREATE TABLE job_runs(id,workspace_id,task_id,kind,status);')
-    goal = {'original_turn_id':'root','conversation_id':'chat','member_id':'member'}
+    from app.conversation_repository import ConversationRepository
+    conversations = ConversationRepository(tmp_path/"output-checkpoint.sqlite3")
+    chat = conversations.create('workspace','member','task','task')
+    chat = conversations.save_draft(chat['id'],'workspace','member','核对当前成片输出',chat['draft_version'])
+    turn,_ = conversations.create_turn_idempotent(chat['id'],'workspace','member',chat['draft_text'],str(uuid4()),
+        chat['draft_version'],request_context={'kind':'task','task_id':'task','stage':'review',
+            'target_snapshot':{'timeline_version_id':'final','timeline_sequence':2}})
+    conversations.finish_turn(turn['id'],'completed','等待实际输出观察',
+        {'kind':'task_turn','response':{'media_job':{'job_id':'observation','status':'queued'}}})
+    assert conversations.register_task_goal(turn['id'])
+    goal = conversations.get_task_goal(turn['id'])
     output = {'artifact_id':'video-artifact','artifact_kind':'rendered_video','sha256':'a'*64,
         'registered_width':1080,'registered_height':1920,'size_bytes':100,'producer_job_id':'render-child',
         'logical_ref':'artifacts/task/video.mp4','mtime_ns':1,'ctime_ns':2}
     source = {'job_id':'execution','input_digest':'b'*64,'source':{'assistant_turn_id':'producer',
-        'expected_timeline_version_id':'base','conversation_id':'chat','member_id':'member'}}
+        'expected_timeline_version_id':'base','conversation_id':chat['id'],'member_id':'member'}}
     connection.execute('INSERT INTO device_work_requests VALUES(?,?,?,?)',('render-request','workspace','execution','done'))
     connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('locator','workspace','task','execution',
         'assistant_execution_located',json.dumps(source)))
     start = {'arguments':{'_typed_source':{'assistant_turn_id':'observer'}},'input_facts':{'output':dict(output)}}
     if mutation == 'watched_input':
-        goal.update(source_input_id='watched-input',source_input_turn_id='root')
-        watched={**source,'source':{**source['source'],'input_id':'watched-input','input_turn_id':'root','action':'observe'}}
+        goal.update(source_input_id='watched-input',source_input_turn_id=goal['original_turn_id'])
+        watched={**source,'source':{**source['source'],'input_id':'watched-input','input_turn_id':goal['original_turn_id'],'action':'observe'}}
         connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('watch-locator','workspace','task','execution',
             'assistant_execution_located',json.dumps(watched)))
         start['arguments']['_typed_source'].update(input_id='watched-input',input_turn_id='root')
@@ -745,7 +760,7 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
     elif mutation == 'preview':
         result['target']['kind'] = 'media_job'
     elif mutation in {'pending','unknown'}:
-        source = {'assistant_turn_id':'pending','conversation_id':'chat','member_id':'member'}
+        source = {'assistant_turn_id':'pending','conversation_id':chat['id'],'member_id':'member'}
         if mutation == 'pending':
             connection.execute('INSERT INTO job_runs VALUES(?,?,?,?,?)',('pending-job','workspace','task',main.TASK_MEDIA_KIND,'queued'))
             payload = {'arguments':{'_typed_source':source}}
@@ -759,20 +774,36 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
     repository.goal_output_provenance_rows=MethodType(ProductionRepository.goal_output_provenance_rows,repository)
     monkeypatch.setattr(main,'production_repo',repository)
     monkeypatch.setattr(main,'conversation_repo',SimpleNamespace(get_task_goal=lambda identifier:
-        {'original_turn_id':'foreign' if mutation=='foreign_goal' and identifier=='producer' else 'root'}))
+        {'original_turn_id':'foreign' if mutation=='foreign_goal' and identifier=='producer' else goal['original_turn_id']}))
     monkeypatch.setattr(main,'_registered_observation_output',lambda *_:(None,output,{'kind':'composed_output'}))
-    monkeypatch.setattr(main,'_read_bound_execution_result',lambda *_:{'job':{'id':'execution','status':'succeeded','input_digest':'b'*64},'video_ready':mutation!='no_video'})
-    monkeypatch.setattr(main,'_goal_request_result',lambda *_:{'status':'unknown'})
+    business = SimpleNamespace(read_execution=lambda *_args, **_kwargs:
+        {'job':{'id':'execution','status':'succeeded','input_digest':'b'*64},'video_ready':mutation!='no_video'})
+    request_reads=[]
+    def read_request(*args):
+        request_reads.append(args)
+        return {'status':'unknown'}
+    monkeypatch.setattr(main,'_goal_request_metadata',read_request)
     task=SimpleNamespace(workspace_id='workspace',id='task')
     version=SimpleNamespace(id='final',sequence=2,parent_version_id='base',snapshot={
         'creation_render_request_id':'render-request','render_input_timeline_version_id':'base'})
-    checkpoint=main._goal_output_checkpoint(goal,{'phase':'observation','status':'succeeded'},
-        {'media_job':{'job_id':'observation','status':'succeeded','result':result}},task,version,None,None)
+    checkpoint=main._goal_readiness_use_case().output_checkpoint(goal,{'phase':'observation','status':'succeeded'},
+        {'media_job':{'job_id':'observation','status':'succeeded','result':result}},task,version,None,business)
     if mutation in {'none','watched_input'}:
         assert checkpoint['scope']=='production_and_output_observation' and checkpoint['sha256']=='a'*64
         assert checkpoint['unavailable']==result['unavailable']
     else:
         assert checkpoint is None
+    expected = conversations.get_task_goal(turn['id'])
+    if checkpoint is not None:
+        assert conversations.record_goal_output_checkpoint(turn['id'],checkpoint,expected_goal=expected)
+        assert ConversationRepository(conversations.database_path).get_task_goal(turn['id'])['completed_output_checkpoint']==checkpoint
+        assert not conversations.record_goal_output_checkpoint(turn['id'],{'status':'untrusted'},
+            expected_goal={**expected,'revision':expected.get('revision',0)+1})
+        assert conversations.get_task_goal(turn['id'])['completed_output_checkpoint']==checkpoint
+    else:
+        assert 'completed_output_checkpoint' not in conversations.get_task_goal(turn['id'])
+    if mutation=='unknown':
+        assert len(request_reads)==1 and connection.execute('SELECT count(*) FROM job_runs').fetchone()[0]==0
     connection.close()
 
 

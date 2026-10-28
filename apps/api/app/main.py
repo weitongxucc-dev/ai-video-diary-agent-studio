@@ -8,6 +8,7 @@ from app.assistant.script_tool_result_binding import (AssistantScriptToolResultB
     ScriptToolReceiptRejected, ScriptToolLookupRejected, tool_metadata)
 from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
+from app.assistant.goal_readiness_use_case import GoalReadinessUseCase, GoalEvidenceUnavailable
 from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.source_errors import SourcePreflightError as _CreationTaskTopicPreflightError
 from app.creation.script_generation_intent import ScriptGenerationIntent
@@ -13374,172 +13375,80 @@ def _goal_script_source_slot(goal, job_id, actor):
     return _goal_projection().script_source_slot(goal, job_id, actor, artifact_store, _output_observation_use_case())
 
 
-def _goal_completed_sources(goal, actor):
+
+
+
+
+
+
+def _goal_readiness_timeline(workspace_id, version_id):
+    return production_repo.get_timeline_version(workspace_id, version_id)
+
+
+def _goal_readiness_script(workspace_id, script_id):
+    return production_repo.script_records.get_creation_task_script(workspace_id, script_id)
+
+
+def _goal_readiness_completed_sources(goal, actor):
     return _goal_projection().completed_sources(goal, actor, artifact_store, _output_observation_use_case())
 
 
-def _goal_pending_preview(goal, timeline_version_id):
-    return _goal_projection().pending_preview(goal, timeline_version_id)
-
-
-def _sealed_goal_reference(scope,item):
-    if item not in scope.get('selected_references',[]):
-        raise AssistantReferenceConflict('原目标引用未在采用时封存，未读取私人资料')
-    return item
-
-
-def _goal_selection_context(goal, task, version, scope, removed_refs):
-    """Rebuild only derived continuation references over this goal's proved chain."""
-    original = goal["request_context"]["target_snapshot"].get("selected_references", [])
-    timeline_kinds = {"shot", "narration", "audio", "subtitle", "effect"}
-    if not any(item["kind"] in timeline_kinds for item in original):
-        return {}, None
-    chain = _goal_projection().selection_version_chain(goal, version)
-    if chain is None:
-        raise AssistantReferenceConflict("接续引用没有同一输入的已核验版本链")
-    prefixes = {"shot": "clip", "narration": "narration", "audio": "audio", "subtitle": "cue", "effect": "overlay"}
-    items = []
-    for item in original:
-        if item["kind"] in timeline_kinds:
-            if f"{prefixes[item['kind']]}:{item['object_id']}" in removed_refs:
-                continue
-            if item["task_id"] != task.id or item["version"] not in chain:
-                raise AssistantReferenceConflict("接续引用不属于原目标的版本链")
-            item = {**item, "version": version.id}
-        items.append(item)
-    # Materialize current subtitle identities through their existing owner;
-    # derive track refs from the same selected cue, never a name/language guess.
-    tracks = _current_subtitle_tracks(task.workspace_id, task, current_version=version) if any(item["kind"] == "subtitle" for item in items) else []
-    items = [validate_timeline_reference(item, task=task, timeline=version, subtitle_tracks=tracks)
-             if item["kind"] in timeline_kinds else _sealed_goal_reference(scope,item) for item in items]
-    reference = normalize_selection({"kind": "selection", "items": items}) if items else None
-    items = reference["items"] if reference else []
-    refs = timeline_object_refs(items, task.id, subtitle_tracks=tracks)
-    return {"selected_references": items}, {"selected_reference": reference, "selected_object_refs": refs}
-
-
-def _verify_current_goal(goal, event):
-    owner = _goal_projection()
-    business=_task_business()
-    workspace_id,task_id=goal['workspace_id'],goal['task_id']
+def _goal_readiness_media(task, actor, job_id):
     try:
-        actor,task,scope=business.original(goal)
-        version=production_repo.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
-    except (KeyError,ValueError,PermissionError):
-        return owner.unavailable_fact('identity')
-    decision = owner.verify_version(goal, event, task)
-    if decision is not None:
-        return decision
-    if event.get("phase") == "script_adoption":
-        if task.confirmed_script_id != event["script_id"]:
-            return {"status": "invalidated", "reason": "adopted_script_changed"}
-        script = production_repo.get_creation_task_script(workspace_id, event["script_id"])
-        if script.updated_at.isoformat() != event["script_version"]:
-            return {"status": "invalidated", "reason": "adopted_script_changed"}
-    try:
-        completed_sources = _goal_completed_sources(goal, actor)
-    except (KeyError, ValueError, PermissionError, OSError):
-        return owner.unavailable_fact("completed_sources")
-    pending = _goal_pending_preview(goal, task.current_timeline_version_id)
-    if pending is not None:
-        return {**pending, "completed_source_slots": completed_sources}
-    facts = {"business_event": event, "task": {"id": task.id, "stage": task.stage, "output_ready": task.output_ready},
-        "completed_source_slots": completed_sources}
-    if event.get('phase')=='creation_resume':
-        def read_media(*args):
-            try:
-                return _goal_media_metadata(*args)
-            except HTTPException as exc:
-                raise ValueError(str(exc.detail)) from exc
-        reconciled=_goal_service().verify_resume_business(goal,task,actor,business,owner,
-            read_request=_goal_request_metadata,read_media=read_media)
-        if reconciled['status']!='ready':
-            return reconciled
-        facts.update(reconciled['facts'])
-    no_side_effect = False
-    removed_refs = owner.removed_references(goal)
-    if event.get("phase") == "request":
-        decision, located = owner.request_locator(event)
-        if decision is not None:
-            return decision
-        actual = _goal_request_metadata(task,actor,located["request_id"],located["phase"])
-        facts["original_request"] = actual
-        decision, no_side_effect = owner.request_verification(goal, event, actual)
-        if decision is not None:
-            return decision
-    if event.get("phase") == "execution":
-        try:
-            facts["execution_status"] = business.read_execution(goal,actor,job_id=event["job_id"])
-        except (KeyError, ValueError, HTTPException):
-            return owner.unavailable_fact("execution")
-        decision = owner.execution_verification(facts["execution_status"])
-        if decision is not None:
-            return decision
-    elif owner.needs_media_receipt(event):
-        try:
-            actual_job = _goal_media_metadata(task,actor,event["job_id"])
-        except HTTPException:
-            return owner.unavailable_fact("media")
-        decision = owner.media_verification(actual_job)
-        if decision is not None:
-            return decision
-        facts["media_job"] = actual_job
-    decision, adopted, removed_refs = owner.adopted_operation(goal, event, task, removed_refs)
-    if decision is not None:
-        return decision
-    if adopted is not None:
-        facts["adopted_operation"] = adopted
-    deferred = owner.deferred_edit_execution(goal, event)
-    if deferred is not None:
-        return deferred
-    facts["observations"] = _task_observation_metadata(task,goal["member_id"])
-    context = goal["request_context"]
-    for key in ('profile_reference','knowledge_reference'):
-        if context.get(key):
-            if key not in scope:
-                return owner.unavailable_fact('reference')
-            facts[key]=scope[key]
-    checkpoint = _goal_output_checkpoint(goal, event, facts, task, version, actor, business)
-    try:
-        reference_snapshot, selection_context = _goal_selection_context(goal, task, version, scope, removed_refs)
-    except (AssistantReferenceConflict, HTTPException):
-        return owner.unavailable_fact("reference")
-    fresh = owner.ready(task, version, actor, facts, no_side_effect, completed_sources, removed_refs, checkpoint)
-    fresh["task_version"].update(reference_snapshot)
-    return {**fresh, "selection_context": selection_context, "business": business}
+        return _goal_media_metadata(task, actor, job_id)
+    except HTTPException as exc:
+        raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
 
 
-def _goal_output_checkpoint(goal, event, facts, task, version, actor, business):
-    owner = _goal_projection()
-    observation = owner.output_observation(goal, event, facts, task, version)
-    if observation is None:
-        return None
+def _goal_readiness_execution(business, goal, actor, *, job_id):
     try:
-        _path, output, _binding = _registered_observation_output(task.workspace_id, task.id,
-            CreationTaskObservationTarget(kind="final"), actor)
-    except (KeyError, OSError, ValueError, PermissionError, HTTPException):
-        return None
-    sources = owner.output_sources(goal, task, version, observation, output)
-    if sources is None:
-        return None
-    for row in sources["unknown_requests"]:
-        located = owner.unknown_request_for_goal(goal, row)
-        if located is not None:
-            original = _goal_request_metadata(task,actor,located["request_id"],located["phase"])
-            if owner.request_still_unknown(original):
-                return None
-    source = owner.output_execution_source(goal, version, sources)
-    if source is None:
-        return None
-    actual = business.read_execution(goal,actor,job_id=source["job_id"])
-    duration_target = (_creation_plan_for_task_or_404(task.workspace_id, task).duration_target_seconds
-        if goal.get("creation_adoption") else None)
-    checkpoint = owner.completed_output(observation, output, version, source, actual,
-        goal=goal, duration_target_seconds=duration_target)
-    if checkpoint is not None:
-        checkpoint["unavailable"] = [{"scope": item["scope"], "reason": _assistant_stream_safe_text(item["reason"], task.workspace_id)}
-            for item in checkpoint["unavailable"]]
-    return checkpoint
+        return business.read_execution(goal, actor, job_id=job_id)
+    except HTTPException as exc:
+        raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
+
+
+def _goal_readiness_observations(task, member_id):
+    try:
+        return _task_observation_metadata(task, member_id)
+    except HTTPException as exc:
+        raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
+
+
+def _goal_readiness_registered_output(workspace_id, task_id, actor):
+    try:
+        return _registered_observation_output(workspace_id, task_id, CreationTaskObservationTarget(kind="final"), actor)
+    except HTTPException as exc:
+        raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
+
+
+def _goal_readiness_plan(task):
+    try:
+        return _creation_plan_for_task_or_404(task.workspace_id, task)
+    except HTTPException as exc:
+        raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
+
+
+def _goal_readiness_subtitles(task, version):
+    try:
+        return _current_subtitle_tracks(task.workspace_id, task, current_version=version)
+    except HTTPException as exc:
+        raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
+
+
+def _goal_readiness_resume(goal, task, actor, business, owner, *, read_request, read_media):
+    return _goal_service().verify_resume_business(goal, task, actor, business, owner,
+        read_request=read_request, read_media=read_media)
+
+
+def _goal_readiness_use_case():
+    # Keep each reader lazy: bootstrap/reload must never retain an old repository or transport.
+    return GoalReadinessUseCase(projection_for=_goal_projection, business_for=_task_business,
+        read_timeline=_goal_readiness_timeline, read_script=_goal_readiness_script,
+        completed_sources=_goal_readiness_completed_sources, read_request=_goal_request_metadata,
+        read_media=_goal_readiness_media, read_execution=_goal_readiness_execution,
+        verify_resume=_goal_readiness_resume, observations=_goal_readiness_observations,
+        registered_output=_goal_readiness_registered_output, read_plan=_goal_readiness_plan,
+        read_subtitles=_goal_readiness_subtitles, safe_text=_assistant_stream_safe_text)
 
 
 def _finish_goal_business_turn(business,claim,reply,preview):
@@ -13663,7 +13572,7 @@ def _goal_request_result(task_id, request_id, request, phase):
 def _goal_service():
     global _goal_continuation_service
     if _goal_continuation_service is None:
-        _goal_continuation_service=GoalContinuationService(conversation_repo,verify_current_goal=_verify_current_goal,run_goal_turn=_run_goal_turn)
+        _goal_continuation_service=GoalContinuationService(conversation_repo,verify_current_goal=_goal_readiness_use_case().verify,run_goal_turn=_run_goal_turn)
     return _goal_continuation_service
 
 

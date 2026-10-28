@@ -16,9 +16,26 @@ from app.creation_execution import CreationExecutionActor
 from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def goal_readiness_no_execution(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
+
+
 @pytest.mark.parametrize("fast_render", [False, True])
 def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(metadata_http_state, tmp_path, monkeypatch, fast_render):
     state = metadata_http_state
+    from app.creation.contracts import ArtifactRecord
+    # The editorial fixture declares an already-produced narration. Give that
+    # opaque input its real metadata provenance; never decode or generate WAV.
+    source_job = state.repo.job_records.create_job_run(JobRun("declared-existing-audio", "ws", state.task.id,
+        "declared_fixture_source", "declared-existing-audio", "a"*64))
+    state.repo.job_records.claim_job_run("ws", source_job.id)
+    blob = state.store.publish_bytes("artifacts/task/fixed-narration.wav", b"opaque prior narration input; not audio execution evidence")
+    state.repo.execution_records.create_artifact_record(ArtifactRecord("declared-existing-audio", "ws", state.task.id,
+        "audio_source", blob.logical_ref, blob.sha256, blob.size_bytes, source_job.id,
+        [state.repo.workspace_media_reference_for_asset("ws", state.asset.id)]))
+    state.repo.job_records.finish_job_run("ws", source_job.id, status="succeeded", output_refs=[blob.logical_ref])
     from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
     script = CreationTaskScript("fixed-script", "ws", state.task.id, "fixed-run", "fixed-topic", "已确认文案", "zh-CN",
         [CreationTaskScriptSection("section", "开头", "原字幕", "既有画面", ["fixture-source"])], selection_status="confirmed")
@@ -26,14 +43,18 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
             (script.id,"ws",state.task.id,script.run_id,json.dumps(asdict(script),default=str),script.updated_at.isoformat()))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(replace(state.task,confirmed_script_id=script.id)),default=str),state.task.id))
-    repo = ConversationRepository(tmp_path / "chat.sqlite3")
+    # TaskBusiness's real borrowed-connection guard reads the same isolated database.
+    repo = ConversationRepository(state.repo.database_path)
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(state.repo.database_path)))
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
+    monkeypatch.setattr(main, "auth_context", SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main, "device_runtime", None)
     monkeypatch.setattr(main, "conversation_repo", repo)
     request = Request({"type": "http", "headers": [(b"x-local-member-token", state.token.encode())]})
-    monkeypatch.setattr(main, "_goal_request", lambda goal: request)
     monkeypatch.setattr(main, "_require_permit_actor", lambda *_: CreationExecutionActor("ws", state.member.member_id))
-    monkeypatch.setattr(main, "_goal_completed_sources", lambda *_: [])
-    monkeypatch.setattr(main, "_task_observation_facts", lambda *_: {})
-    monkeypatch.setattr(main, "_goal_output_checkpoint", lambda *_: None)
+    monkeypatch.setattr(main, "_goal_readiness_completed_sources", lambda *_: [])
+    monkeypatch.setattr(main, "_task_observation_metadata", lambda *_: {})
+    monkeypatch.setattr(main.GoalReadinessUseCase, "output_checkpoint", lambda *_: None)
     chat = repo.create("ws", state.member.member_id, "home", "home")
     selected = {"kind": "selection", "items": [{"kind": "subtitle", "task_id": state.task.id, "object_id": "cue", "version": state.base.id, "label": "字幕1"}]}
     chat = repo.save_reference(chat["id"], "ws", state.member.member_id, selected, 0)
@@ -58,7 +79,8 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     state.repo.execution_records.append_task_event(TaskEvent("located-render", "ws", state.task.id, job.id, "assistant_execution_located", {"source": source, "job_id": job.id}))
     def actual(*_):
         return jsonable_encoder({"task_id": state.task.id, "job": asdict(state.repo.job_records.get_job_run("ws", job.id)), "video_ready": state.repo.job_records.get_job_run("ws", job.id).status == "succeeded"})
-    monkeypatch.setattr(main, "_read_bound_execution_result", actual)
+    # Keep real TaskBusiness provenance checks; declare only the execution read result.
+    monkeypatch.setattr(main.CreationExecutionControl, "read_bound", lambda *_args, **_kwargs: actual())
     # The render-publication fact is isolated; no worker, model or decoding runs.
     monkeypatch.setattr(state.repo, "goal_render_request_row", lambda *_: {"owner_id": job.id, "state": "done"})
     def finish_render():
@@ -107,7 +129,12 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         main._assistant_turn_scope("ws", task, payload)
         children.append(claim["turn_id"])
         repo.finish_turn(claim["turn_id"], "completed", "已回读", {"response": {}})
-    service = GoalContinuationService(repo, verify_current_goal=main._verify_current_goal, run_goal_turn=continue_once)
+    authorizations = main._task_authorizations_for_goal()
+    current = state.repo.task_records.get_creation_task("ws", state.task.id)
+    authorizations.ensure(current, CreationExecutionActor("ws", state.member.member_id), interactive=True)
+    assert authorizations.status("ws", state.task.id) == "valid"
+    main._bind_goal_business_scope(request, repo.get_task_goal(turn["id"]))
+    service = GoalContinuationService(repo, verify_current_goal=main._goal_readiness_use_case().verify, run_goal_turn=continue_once)
     service.reconcile()
     assert children == [] and repo.get_task_goal(turn["id"])["target_snapshot"]["timeline_version_id"] == edit_version.id
     if not fast_render:
