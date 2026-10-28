@@ -407,7 +407,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert not [item for item in repo.execution_records.list_task_events("local", "task-one") if item.event_type == "assistant_turn"]
 
     saved = repo.script_records.get_creation_task_script("local", script_id)
-    repo.confirm_creation_task_script("local", "task-one", script_id,
+    repo.script_records.confirm_creation_task_script("local", "task-one", script_id,
                                       title=saved.title, sections=saved.sections,
                                       expected_updated_at=saved.updated_at)
     assert client.post(base + "/script-draft", json=body).status_code == 409

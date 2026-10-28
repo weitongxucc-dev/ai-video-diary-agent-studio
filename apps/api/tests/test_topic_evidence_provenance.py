@@ -114,7 +114,7 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
         "knowledge:knowledge:1", "source:manual-source",
     ]
     # Reference reading remains available after confirmation, independently of script editing gates.
-    task, saved = production.confirm_creation_task_script('qa',task.id,saved.id,
+    task, saved = production.script_records.confirm_creation_task_script('qa',task.id,saved.id,
         title=saved.title,sections=saved.sections,expected_updated_at=saved.updated_at,verified_owner_user_id='owner')
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     from app.creation_execution import CreationExecutionActor

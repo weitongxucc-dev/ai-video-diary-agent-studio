@@ -5266,18 +5266,6 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
-    def _demote_other_confirmed_scripts(self, conn: sqlite3.Connection, *, workspace_id: str, task_id: str, confirmed_script_id: str, updated_at: datetime) -> None:
-        return self.script_records._demote_other_confirmed_scripts(conn, workspace_id=workspace_id, task_id=task_id, confirmed_script_id=confirmed_script_id, updated_at=updated_at)
-
-    def _script_adoption_context(self, conn, workspace_id, task_id, script_id, expected_updated_at, adoption_kind, member_id):
-        return self.script_records._script_adoption_context(conn, workspace_id, task_id, script_id, expected_updated_at, adoption_kind, member_id)
-
-    def _persist_script_adoption(self, conn, task, script_id, metadata, now):
-        return self.script_records._persist_script_adoption(conn, task, script_id, metadata, now)
-
-    def confirm_creation_task_script(self, workspace_id: str, task_id: str, script_id: str, *, title: str, sections: list[_CreationTaskScriptSection], expected_updated_at: datetime | str | None=None, adoption_kind: Literal['manual', 'delegated_system']='manual', verified_owner_user_id: str | None=None, write_guard=None, result_write=None) -> tuple[_CreationTask, _CreationTaskScript]:
-        return self.script_records.confirm_creation_task_script(workspace_id, task_id, script_id, title=title, sections=sections, expected_updated_at=expected_updated_at, adoption_kind=adoption_kind, verified_owner_user_id=verified_owner_user_id, write_guard=write_guard, result_write=result_write)
-
     def start_creation_task_narration(
         self, workspace_id: str, task_id: str
     ) -> _CreationTask:

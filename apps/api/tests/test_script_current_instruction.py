@@ -150,7 +150,7 @@ def test_discussion_and_draft_only_never_record_an_execution_wakeup(api_state, m
 
 def adopted_before_narration(state):
     old = saved_agent_draft(state)
-    task, script = state.repository.confirm_creation_task_script('local', 'task', old.id,
+    task, script = state.repository.script_records.confirm_creation_task_script('local', 'task', old.id,
         title=old.title, sections=old.sections, expected_updated_at=old.updated_at,
         verified_owner_user_id=state.owner.member_id)
     assert task.stage == 'narration' and task.stage_status == 'not_started' and task.can_revise_script

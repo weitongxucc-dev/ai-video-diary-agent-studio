@@ -3411,7 +3411,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         retryable=False,
         provider_attempted=True,
     )
-    repaired_task, repaired_script = reloaded.confirm_creation_task_script(
+    repaired_task, repaired_script = reloaded.script_records.confirm_creation_task_script(
         "workspace_a",
         task_id,
         saved_script.id,

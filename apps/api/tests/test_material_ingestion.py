@@ -890,7 +890,7 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
             sections=[replace(revised_sections[0], evidence_reference_ids=["unknown"])],
             expected_updated_at=revised.updated_at,
         )
-    restarted.confirm_creation_task_script(
+    restarted.script_records.confirm_creation_task_script(
         "one", "task-one", initial.id, title="用户确认", sections=revised_sections,
         expected_updated_at=revised.updated_at,
     )

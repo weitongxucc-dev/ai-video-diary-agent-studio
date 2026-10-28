@@ -214,7 +214,7 @@ def script_candidate(state, *, locked=False):
 
 
 def confirm(state, script, **changes):
-    return state.repo.confirm_creation_task_script("workspace", "task", script.id,
+    return state.repo.script_records.confirm_creation_task_script("workspace", "task", script.id,
         title=script.title, sections=changes.pop("sections", script.sections),
         expected_updated_at=changes.pop("expected_updated_at", script.updated_at), verified_owner_user_id="owner", **changes)
 

@@ -92,7 +92,7 @@ def test_new_script_consumes_new_fixed_inputs_and_old_draft_cannot_be_adopted(st
     assert context.status_code == 200, context.text
     assert context.json()['draft'] is None and context.json()['retained_draft']['id'] == old.id
     with pytest.raises(ValueError, match='追加资料'):
-        state.repository.confirm_creation_task_script('local', 'task', old.id,
+        state.repository.script_records.confirm_creation_task_script('local', 'task', old.id,
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     with pytest.raises(ValueError, match='旧稿仅保留'):
         state.repository.script_records.update_assistant_script_draft('local', 'task', old.id,
@@ -111,10 +111,10 @@ def test_new_script_consumes_new_fixed_inputs_and_old_draft_cannot_be_adopted(st
     assert state.repository.script_records.get_creation_task_script('local', old.id) == old
     # Even after the task returns to waiting_for_user, the old draft stays stale.
     with pytest.raises(ValueError, match='不能采用旧资料'):
-        state.repository.confirm_creation_task_script('local', 'task', old.id,
+        state.repository.script_records.confirm_creation_task_script('local', 'task', old.id,
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     current = scripts[0]
-    task, confirmed = state.repository.confirm_creation_task_script('local', 'task', current.id,
+    task, confirmed = state.repository.script_records.confirm_creation_task_script('local', 'task', current.id,
         title=current.title, sections=current.sections, expected_updated_at=current.updated_at)
     assert task.confirmed_script_id == confirmed.id == current.id
 
@@ -203,7 +203,7 @@ def test_busy_or_downstream_task_rejects_addition_without_silent_invalidation(st
             plan_id='plan', topic_id='topic', status='running', route_snapshot={}, prompt_schema_version='test', input_references=state.refs))
     elif busy == 'confirmed':
         old = saved_agent_draft(state)
-        state.repository.confirm_creation_task_script('local', 'task', old.id,
+        state.repository.script_records.confirm_creation_task_script('local', 'task', old.id,
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     else:
         state.repository.job_records.create_job_run(JobRun(id='busy', workspace_id='local', task_id='task', kind='script_generation',

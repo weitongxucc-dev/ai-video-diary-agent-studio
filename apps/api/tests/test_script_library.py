@@ -71,7 +71,7 @@ def library(tmp_path, monkeypatch, request):
             "VALUES (?,?,?,?,?,?)", (script.id, "local", task.id, "", repo._script_payload(conn, script),
                                       script.updated_at.isoformat()),
         )
-    repo.confirm_creation_task_script(
+    repo.script_records.confirm_creation_task_script(
         "local", task.id, script.id, title=script.title, sections=script.sections,
         expected_updated_at=script.updated_at,
     )
@@ -310,7 +310,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
                 authorization=versioned.authorization, ownership=versioned.ownership,
             ))]}),),
         )
-    repo.confirm_creation_task_script(
+    repo.script_records.confirm_creation_task_script(
         "local", "task_original", "script_original", title="模块化介绍",
         sections=script.sections,
         expected_updated_at=repo.script_records.get_creation_task_script("local", "script_original").updated_at,

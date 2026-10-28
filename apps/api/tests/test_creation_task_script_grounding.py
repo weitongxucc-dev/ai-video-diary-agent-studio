@@ -2271,7 +2271,7 @@ def test_public_script_repository_reads_updates_and_confirms_all_25_rows(api_sta
     with pytest.raises(ScriptWindowConflict):
         state.repository.script_records.read_creation_task_script_sections('local', 'task', script.id, expected_updated_at=version, after_ordinal=20)
     assert state.repository.script_records.get_creation_task_script('local', script.id).sections == revised
-    _, confirmed = state.repository.confirm_creation_task_script('local', 'task', script.id, title=script.title,
+    _, confirmed = state.repository.script_records.confirm_creation_task_script('local', 'task', script.id, title=script.title,
         sections=revised, expected_updated_at=saved.updated_at, verified_owner_user_id=state.owner.member_id)
     assert confirmed.selection_status == 'confirmed' and len(confirmed.sections) == 25
     assert state.repository.effective_creation_script('local', 'task').sections == revised

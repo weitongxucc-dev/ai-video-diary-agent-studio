@@ -100,7 +100,7 @@ def update(repo: ProductionRepository, script: CreationTaskScript, token: str | 
 
 
 def confirm(repo: ProductionRepository, script: CreationTaskScript, token: str | None):
-    return repo.confirm_creation_task_script(
+    return repo.script_records.confirm_creation_task_script(
         WORKSPACE, script.task_id, script.id, title="确认稿", sections=script.sections,
         expected_updated_at=token,
     )
@@ -156,7 +156,7 @@ def test_confirmation_cas_does_not_bypass_visual_or_evidence_requirements(tmp_pa
     )]
 
     with pytest.raises(ValueError, match="画面建议和来源证据"):
-        repo.confirm_creation_task_script(
+        repo.script_records.confirm_creation_task_script(
             WORKSPACE, script.task_id, script.id, title="不允许确认", sections=incomplete,
             expected_updated_at=script.updated_at,
         )

@@ -399,7 +399,7 @@ def test_exact_final_copy_is_adopted_atomically_locked_and_replayed(client_state
     assert script.locked_body_digest == hashlib.sha256(text.encode()).hexdigest()
     assert script.adoption["kind"] == "delegated_system" and script.adoption["script_id"] == script.id
     with pytest.raises(ValueError, match="定稿锁定"):
-        c.repository.confirm_creation_task_script("request-test", task.id, script.id, title=script.title,
+        c.repository.script_records.confirm_creation_task_script("request-test", task.id, script.id, title=script.title,
             sections=[replace(script.sections[0], content="模型改写版本")], expected_updated_at=script.updated_at,
             verified_owner_user_id=c.member.member_id, adoption_kind="delegated_system")
     assert c.repository.script_records.get_creation_task_script("request-test", script.id).sections[0].content == text
@@ -455,7 +455,7 @@ def test_delegated_script_adoption_records_real_version_without_fake_human_actio
     draft = CreationTaskScript("declared-fixture-script", "request-test", task.id, run.id, task.selected_topic_id,
         "有来源的文案", "zh-CN", [CreationTaskScriptSection("section", "段落", "已核对的正文", "明确画面", ["declared-fixture-source"])])
     _task, _run, draft = c.repository.script_records.complete_script_generation(run.id, draft)
-    task, script = c.repository.confirm_creation_task_script("request-test", task.id, draft.id, title=draft.title,
+    task, script = c.repository.script_records.confirm_creation_task_script("request-test", task.id, draft.id, title=draft.title,
         sections=draft.sections, expected_updated_at=draft.updated_at, adoption_kind="delegated_system",
         verified_owner_user_id=c.member.member_id)
     assert task.confirmed_script_id == script.id and task.stage == "narration"

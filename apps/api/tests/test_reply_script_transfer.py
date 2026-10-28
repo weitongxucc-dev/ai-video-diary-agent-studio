@@ -355,13 +355,13 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
     assert replacement.sections[0].content == REPLY_TEXT
 
     with pytest.raises(ValueError, match="画面建议和来源证据"):
-        repo.confirm_creation_task_script(
+        repo.script_records.confirm_creation_task_script(
             WORKSPACE, task.id, replacement.id,
             title="不能直接确认", sections=replacement.sections,
             expected_updated_at=replacement.updated_at,
         )
     with pytest.raises(ValueError, match="画面建议和来源证据"):
-        repo.confirm_creation_task_script(
+        repo.script_records.confirm_creation_task_script(
             WORKSPACE, task.id, replacement.id,
             title="缺画面建议", sections=[replace(
                 replacement.sections[0],
@@ -390,7 +390,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
     )
 
     before = replacement
-    confirmed_task, confirmed = repo.confirm_creation_task_script(
+    confirmed_task, confirmed = repo.script_records.confirm_creation_task_script(
         WORKSPACE, task.id, replacement.id,
         title="用户确认稿", sections=replacement.sections,
         expected_updated_at=replacement.updated_at,
@@ -407,7 +407,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
     assert read_back.source_run_id == replacement.run_id
     assert read_back.sections[0].content == REPLY_TEXT
     with pytest.raises(ValueError, match="修订已变化"):
-        repo.confirm_creation_task_script(
+        repo.script_records.confirm_creation_task_script(
             WORKSPACE, task.id, replacement.id,
             title="不能覆盖的迟到回复", sections=[replace(before.sections[0], content="迟到覆盖")],
             expected_updated_at=before.updated_at,
@@ -417,7 +417,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
     # A current CAS plus an explicit manual edit is a new revision. This
     # endpoint has no request identity that would make it a replay.
     manual_section = replace(confirmed.sections[0], content="用户明确手工修订后的正文")
-    revised_task, revised_script = repo.confirm_creation_task_script(
+    revised_task, revised_script = repo.script_records.confirm_creation_task_script(
         WORKSPACE, task.id, replacement.id,
         title="用户手工修订稿", sections=[manual_section],
         expected_updated_at=confirmed.updated_at,
