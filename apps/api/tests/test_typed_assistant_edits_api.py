@@ -34,9 +34,13 @@ def replace_action(state):
 
 
 @pytest.fixture
-def metadata_http_state(tmp_path, monkeypatch):
+def metadata_http_state(tmp_path, monkeypatch, request):
     from fastapi.testclient import TestClient
     from test_metadata_edit_use_case import metadata_state
+    if "workspace_metadata_state" in request.fixturenames:
+        from test_production_foundation import edit_adoption_no_execution
+        forbidden = edit_adoption_no_execution(monkeypatch)
+        monkeypatch.setattr(main, "_lipsync_provider", forbidden)
     state = metadata_state(tmp_path)
     monkeypatch.setattr(main, "production_repo", state.repo)
     monkeypatch.setattr(main, "artifact_store", state.store)
@@ -75,9 +79,8 @@ def test_execution_capability_read_is_authorized_and_does_not_start_runtime(meta
     assert state.client.get("/api/creation-tasks/missing/assistant/execution-capabilities").status_code == 404
 
 
-def test_script_section_http_reads_complete_versioned_windows_without_full_hydration(metadata_http_state, monkeypatch):
+def _workspace_row_script(state):
     from app.creation.script_windows import write_script_sections
-    state = metadata_http_state
     version = '2026-10-24T00:00:00+00:00'
     script_id = 'script-window-http'
     sections = [{'id': f'section-{i}', 'title': str(i), 'content': f'content {i}',
@@ -92,6 +95,135 @@ def test_script_section_http_reads_complete_versioned_windows_without_full_hydra
             '(id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
             (script_id, state.task.workspace_id, state.task.id, '', json.dumps(header), version))
         write_script_sections(connection, state.task.workspace_id, script_id, sections)
+
+    return version, script_id, sections
+
+
+@pytest.fixture
+def workspace_metadata_state(metadata_http_state):
+    return metadata_http_state
+
+
+def test_task_workspace_active_headers_do_not_hydrate_body(workspace_metadata_state, monkeypatch):
+    state = workspace_metadata_state
+    _workspace_row_script(state)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("workspace headers must not hydrate a full script or execute media")
+
+    monkeypatch.setattr(state.repo, "get_creation_task_script", forbidden)
+    monkeypatch.setattr(state.repo, "list_creation_task_scripts", forbidden)
+    response = state.client.get(state.url)
+    assert response.status_code == 200, response.text
+    assert response.json()["scripts_scope"] == "active"
+    summary = response.json()["scripts"][0]
+    assert summary["sections"] is None and summary["sections_loaded"] is False
+    assert summary["sections_total_count"] == 45
+
+
+def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(workspace_metadata_state, monkeypatch):
+    from types import SimpleNamespace
+    from app.creation.contracts import TaskEvent
+    state = workspace_metadata_state
+    trace = []
+    provider = SimpleNamespace(ready=True, model_id="declared-model", provider_name="declared-provider",
+                               message="声明的可用能力；本代表不执行翻译")
+    monkeypatch.setattr(main, "subtitle_translation_provider_from_settings", lambda _: provider)
+    monkeypatch.setattr(main, "_portrait_processor", lambda _: SimpleNamespace(available=False))
+    original_events = state.repo.execution_records.list_task_events
+    original_evidence = state.repo.topic_records.list_topic_evidence_references
+    original_headers = state.repo.active_creation_task_script_headers
+    original_plan_dto = main._creation_plan_preview_response
+
+    def events(*args):
+        trace.append("events")
+        return original_events(*args)
+
+    def evidence(*args):
+        trace.append("evidence")
+        return original_evidence(*args)
+
+    def headers(*args):
+        trace.append("headers")
+        return original_headers(*args)
+
+    def plan_dto(plan):
+        trace.append("plan_dto")
+        return original_plan_dto(plan)
+
+    monkeypatch.setattr(state.repo.execution_records, "list_task_events", events)
+    monkeypatch.setattr(state.repo.topic_records, "list_topic_evidence_references", evidence)
+    monkeypatch.setattr(state.repo, "active_creation_task_script_headers", headers)
+    monkeypatch.setattr(main, "_creation_plan_preview_response", plan_dto)
+    # Declared profile facts at the finite profile owner ports, not model/profile-registration evidence.
+    voices = [SimpleNamespace(id=name, version="v1", person_profile_id="person", person_version="v1",
+                              display_name="备用名称", language="zh", model_id="declared-voice")
+              for name in ("hidden", "valid", "missing", "wrong-language")]
+    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _: voices)
+
+    def readable(voice, owner):
+        assert owner == state.task.owner_user_id
+        trace.append("voices")
+        return voice.id != "hidden"
+
+    def person(*_):
+        raise KeyError("absent historical person")
+
+    def reference(ws, profile_id, version, *, viewer_user_id):
+        assert (ws, version, viewer_user_id) == ("ws", "v1", state.task.owner_user_id)
+        assert profile_id != "hidden"
+        if profile_id == "missing":
+            raise OSError("unavailable declared reference")
+        return SimpleNamespace(person_profile_id="person", language="en" if profile_id == "wrong-language" else "zh")
+
+    monkeypatch.setattr(state.repo, "profile_readable", readable)
+    monkeypatch.setattr(state.repo, "get_person_profile", person)
+    monkeypatch.setattr(state.repo, "creation_plan_voice_reference", reference)
+    monkeypatch.setattr(state.repo, "list_applicable_pronunciation_entries", lambda **_: [])
+
+    def returned(event_id, status, *, model="declared-model"):
+        state.repo.execution_records.append_task_event(TaskEvent(event_id, "ws", state.task.id, None,
+            "subtitle_translation_returned", {"model_id": model, "provider_name": provider.provider_name,
+            "status": status, "failure_reason": "声明的旧失败", "repair_action": "原修复建议"}))
+
+    returned("translation-failed", "failed")
+    response = state.client.get(state.url)
+    assert response.status_code == 200, response.text
+    facts = response.json()
+    assert facts["selected_topic"] is None and facts["topic_evidence"] == []
+    assert "evidence" in trace
+    assert trace.index("plan_dto") < trace.index("headers") < trace.index("voices")
+    assert facts["person_render_capability"]["available"] is False
+    assert facts["person_render_capability"]["message"] == "0%人物，本任务不需要口型能力。"
+    assert [(v["profile_id"], v["runnable_reason"]) for v in facts["available_voices"]] == [
+        ("valid", None), ("missing", "voice_reference_unavailable"), ("wrong-language", "voice_language_unavailable")]
+    assert all(v["person_display_name"] == "备用名称" for v in facts["available_voices"])
+    assert facts["subtitle_translation_capability"]["available"] is True
+    assert facts["subtitle_translation_capability"]["message"] == "上次翻译未完成：声明的旧失败"
+    assert facts["subtitle_translation_capability"]["repair_action"] == "原修复建议"
+    # The actual TaskBusiness factory retains the same function-value consumer;
+    # calling its read port does not invoke a turn, driver or runtime.
+    business = main._task_business(generation_case=object())
+    assert business.workspace_facts("ws", state.task).model_dump(mode="json") == facts
+    assert state.client.get(state.url, headers={"x-test-workspace": "outside"}).status_code == 404
+    returned("translation-succeeded", "succeeded")
+    returned("translation-other-provider", "failed", model="other-model")
+    current = state.client.get(state.url)
+    assert current.status_code == 200, current.text
+    assert current.json()["subtitle_translation_capability"]["message"] == provider.message
+    assert current.json()["subtitle_translation_capability"]["repair_action"] is None
+    before = trace.count("events")
+    monkeypatch.setattr(main, "subtitle_translation_provider_from_settings", lambda _: None)
+    absent = state.client.get(state.url)
+    assert absent.status_code == 200, absent.text
+    assert trace.count("events") > before
+    assert absent.json()["subtitle_translation_capability"]["available"] is False
+
+
+def test_script_section_http_reads_complete_versioned_windows_without_full_hydration(metadata_http_state, monkeypatch):
+    from app.creation.script_windows import write_script_sections
+    state = metadata_http_state
+    version, script_id, sections = _workspace_row_script(state)
 
     def forbidden(*args, **kwargs):
         pytest.fail('section reads must not hydrate the full script or start execution')

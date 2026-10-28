@@ -278,6 +278,7 @@ from app.scheduled_tasks import (
 )
 from app.materials.contracts import MediaAuthorityError
 from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase, TaskWorkspaceNotFound, TaskWorkspaceSubtitleInvalid
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.topic_contracts import (
@@ -4575,66 +4576,6 @@ def _creation_task_montage_response(
     )
 
 
-def _resolve_creation_task_voice_selection(*, workspace_id: str, task: CreationTask, plan: CreationPlan,
-                                         voice_profile_id: str, voice_version: str):
-    try:
-        reference = production_repo.creation_plan_voice_reference(workspace_id, voice_profile_id, voice_version,
-            viewer_user_id=task.owner_user_id)
-        entries = production_repo.list_applicable_pronunciation_entries(workspace_id=workspace_id,
-            person_profile_id=reference.person_profile_id, episode_id=task.id)
-    except (KeyError, ValueError, PermissionError, OSError) as exc:
-        raise MediaAuthorityError(reason="voice_reference_unavailable", impact="声音引用未更新，未调用模型。",
-                                  repair_action=str(exc)) from exc
-    if reference.language not in {{"zh-CN":"zh", "en-US":"en", "zh-CN/en-US":"zh-en"}[plan.language], "zh-en"}:
-        raise MediaAuthorityError(reason="voice_language_unavailable", impact="声音语言不匹配。", repair_action="选择匹配方案语言的声音。")
-    return reference, [CreationPlanPronunciationReference(id=e.id, version=e.version, scope=e.scope,
-        scope_reference=e.scope_reference, language=e.language) for e in entries]
-
-
-def _creation_task_voice_options(
-    workspace_id: str,
-    task: CreationTask,
-    plan: CreationPlan,
-) -> list[dict[str, object]]:
-    options: list[dict[str, object]] = []
-    for voice in production_repo.list_versioned_voice_profiles(workspace_id):
-        if not production_repo.profile_readable(voice, task.owner_user_id):
-            continue
-        try:
-            person = production_repo.get_person_profile(
-                workspace_id,
-                voice.person_profile_id,
-                voice.person_version,
-            )
-        except KeyError:
-            person = None
-        reason = None
-        try:
-            _resolve_creation_task_voice_selection(
-                workspace_id=workspace_id,
-                task=task,
-                plan=plan,
-                voice_profile_id=voice.id,
-                voice_version=voice.version,
-            )
-        except MediaAuthorityError as exc:
-            reason = exc.reason
-        options.append(
-            {
-                "profile_id": voice.id,
-                "version": voice.version,
-                "person_display_name": (
-                    person.display_name if person is not None else voice.display_name or "未命名声音"
-                ),
-                "language": voice.language,
-                "model_id": voice.model_id,
-                "runnable": reason is None,
-                "runnable_reason": reason,
-            }
-        )
-    return options
-
-
 def _default_subtitle_style() -> dict[str, object]:
     return metadata_default_subtitle_style()
 
@@ -4674,76 +4615,57 @@ def _current_subtitle_tracks(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
+    return TaskWorkspaceReadUseCase(
+        read_plan=production_repo.plan_records.get_creation_plan,
+        read_topics=production_repo.topic_records.list_topic_candidates,
+        read_topic_evidence=production_repo.topic_records.list_topic_evidence_references,
+        read_narration=production_repo.get_narration_artifact,
+        read_montage=production_repo.get_creation_task_montage_plan,
+        read_summary=lambda task: project_task_summary(production_repo, task),
+        person_provider=_lipsync_provider,
+        read_subtitles=lambda ws, task, **values: _metadata_edit_use_case().current_subtitle_tracks(ws, task, **values),
+        read_covers=production_repo.list_cover_assets,
+        translation_provider=lambda: subtitle_translation_provider_from_settings(settings) if isinstance(settings, Settings) else None,
+        read_events=production_repo.execution_records.list_task_events,
+        find_tool=shutil.which,
+        image_capability=unconfigured_image_generation_capability,
+        read_script_headers=production_repo.active_creation_task_script_headers,
+        read_voices=production_repo.list_versioned_voice_profiles,
+        profile_readable=production_repo.profile_readable,
+        read_person=production_repo.get_person_profile,
+        read_voice_reference=production_repo.creation_plan_voice_reference,
+        read_pronunciations=production_repo.list_applicable_pronunciation_entries,
+        portrait_available=lambda ws: _portrait_processor(ws).available,
+        read_person_renders=production_repo.list_person_renders,
+    )
+
+
 def _creation_task_workspace_response(
     workspace_id: str,
     task: CreationTask,
 ) -> CreationTaskWorkspaceResponse:
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    selected_topic = next(
-        (
-            candidate
-            for candidate in production_repo.topic_records.list_topic_candidates(workspace_id, task.id)
-            if candidate.id == task.selected_topic_id
-        ),
-        None,
-    )
-    topic_evidence = [
-        reference
-        for reference in production_repo.topic_records.list_topic_evidence_references(workspace_id, task.id)
-        if selected_topic is not None and reference.candidate_id == selected_topic.id
-    ]
-    artifact = (
-        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
-        if task.narration_cache_key
-        else None
-    )
+    reader = _task_workspace_read_use_case()
     try:
-        montage = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-        )
-    except KeyError:
-        montage = None
-    task_read = project_task_summary(production_repo, task)
-    current_version = task_read.current_version
-    person_provider = _lipsync_provider(plan.lipsync_quality) if plan.presenter_share_target > 0 else None
-    person_render_available = bool(person_provider and person_provider.ready)
-    subtitle_tracks = _current_subtitle_tracks(
-        workspace_id, task, current_version=current_version, montage=montage
-    )
-    cover_assets = (
-        production_repo.list_cover_assets(
-            workspace_id,
-            task.id,
-            timeline_version_id=current_version.id,
-        )
-        if current_version is not None
-        else []
-    )
-    translation_provider = (
-        subtitle_translation_provider_from_settings(settings)
-        if isinstance(settings, Settings)
-        else None
-    )
-    last_translation = next((
-        event for event in reversed(production_repo.execution_records.list_task_events(workspace_id, task.id))
-        if event.event_type == "subtitle_translation_returned"
-        and translation_provider is not None
-        and event.payload.get("model_id") == translation_provider.model_id
-        and event.payload.get("provider_name") == translation_provider.provider_name
-    ), None)
-    translation_failure = (
-        last_translation.payload
-        if last_translation and last_translation.payload.get("status") != "succeeded"
-        else None
-    )
-    cover_frame_available = bool(
-        montage is not None
-        and montage.status == "rendered"
-        and montage.output_path
-        and shutil.which("ffmpeg")
-        and shutil.which("ffprobe")
-    )
-    image_capability = unconfigured_image_generation_capability()
+        facts = reader.read(workspace_id, task)
+    except TaskWorkspaceNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TaskWorkspaceSubtitleInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    plan = facts.plan
+    selected_topic = facts.selected_topic
+    topic_evidence = facts.topic_evidence
+    artifact = facts.artifact
+    montage = facts.montage
+    task_read = facts.task_read
+    person_provider = facts.person_provider
+    person_render_available = facts.person_render_available
+    subtitle_tracks = facts.subtitle_tracks
+    cover_assets = facts.cover_assets
+    translation_provider = facts.translation_provider
+    translation_failure = facts.translation_failure
+    cover_frame_available = facts.cover_frame_available
+    image_capability = facts.image_capability
     return CreationTaskWorkspaceResponse.model_validate(
         {
             "task": task_read.summary,
@@ -4777,15 +4699,15 @@ def _creation_task_workspace_response(
                 }
                 for reference in topic_evidence
             ],
-            "scripts": production_repo.active_creation_task_script_headers(workspace_id, task.id),
+            "scripts": reader.read_script_headers(workspace_id, task.id),
             "scripts_scope": "active",
-            "available_voices": _creation_task_voice_options(workspace_id, task, plan),
+            "available_voices": reader.voice_options(workspace_id, task, plan),
             "narration": (
                 _creation_task_narration_response(task, artifact).model_dump()
                 if artifact is not None
                 else None
             ),
-            "portrait_available": _portrait_processor(workspace_id).available,
+            "portrait_available": reader.portrait_available(workspace_id),
             "person_render_capability": {
                 "available": person_render_available,
                 "model_id": person_provider.model_id if person_provider else "",
@@ -4798,7 +4720,7 @@ def _creation_task_workspace_response(
             },
             "person_renders": [
                 _person_render_response(render).model_dump()
-                for render in production_repo.list_person_renders(workspace_id, task.id)
+                for render in reader.read_person_renders(workspace_id, task.id)
             ],
             "montage": (
                 _creation_task_montage_response(montage).model_dump()
