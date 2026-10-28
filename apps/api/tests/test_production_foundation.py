@@ -3338,7 +3338,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         video_library_path=production.video_library_path,
     )
     saved_task = reloaded.task_records.get_creation_task("workspace_a", task_id)
-    saved_script = reloaded.get_creation_task_script(
+    saved_script = reloaded.script_records.get_creation_task_script(
         "workspace_a", saved_task.confirmed_script_id
     )
     assert saved_task.stage == "narration"
@@ -3373,7 +3373,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     )
     assert too_long.status_code == 422
     assert reloaded.task_records.get_creation_task("workspace_a", task_id).stage_status == "failed"
-    assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == saved_script.title
+    assert reloaded.script_records.get_creation_task_script("workspace_a", saved_script.id).title == saved_script.title
     direct_repair = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
         json={"title": "直接修订", "sections": [
@@ -3382,8 +3382,8 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     )
     assert direct_repair.status_code == 200, direct_repair.text
     assert direct_repair.json()["task"]["stage_status"] == "not_started"
-    assert reloaded.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
-    saved_script = reloaded.get_creation_task_script("workspace_a", saved_script.id)
+    assert reloaded.script_records.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
+    saved_script = reloaded.script_records.get_creation_task_script("workspace_a", saved_script.id)
     assert len(script_calls) == 1
     assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
     reloaded.start_creation_task_narration("workspace_a", task_id)
@@ -3432,7 +3432,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     assert repaired_script.sections[0].content == "用户在文案失败状态中压缩正文，并重新确认。"
     assert [
         item.id
-        for item in reloaded.list_creation_task_scripts("workspace_a", task_id)
+        for item in reloaded.script_records.list_creation_task_scripts("workspace_a", task_id)
         if item.selection_status == "confirmed"
     ] == [repaired_script.id]
     with reloaded._connect() as conn:

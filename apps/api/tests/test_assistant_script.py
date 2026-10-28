@@ -345,7 +345,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     }]}
     invented = {**body, "sections": [{**body["sections"][0], "evidence_reference_ids": ["made-up"]}]}
     assert client.post(base + "/script-draft", json=invented).status_code == 422
-    assert repo.list_creation_task_scripts("local", "task-one") == []
+    assert repo.script_records.list_creation_task_scripts("local", "task-one") == []
 
     first = client.post(base + "/script-draft", json=body)
     assert first.status_code == 200
@@ -357,7 +357,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         "expected_updated_at": first.json()["updated_at"],
     })
     assert second.status_code == 200 and second.json()["id"] == script_id
-    assert len(repo.list_creation_task_scripts("local", "task-one")) == 1
+    assert len(repo.script_records.list_creation_task_scripts("local", "task-one")) == 1
     stale = client.post(base + "/script-draft", json={
         **body, "edit_mode": "replace_all",
         "sections": [{**body["sections"][0], "content": "迟到的旧版本"}],
@@ -365,7 +365,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     })
     assert stale.status_code == 409
     assert len(review_requests) == 2  # First draft and revision; stale CAS never calls the model.
-    assert repo.get_creation_task_script("local", script_id).sections[0].content == "把开头缩短。"
+    assert repo.script_records.get_creation_task_script("local", script_id).sections[0].content == "把开头缩短。"
 
     def run_turn(_settings, **kwargs):
         if kwargs["stage"] == "script":
@@ -397,7 +397,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert rejected_secret.status_code == 422
     assert not [item for item in repo.execution_records.list_task_events("local", "task-one") if item.event_type == "assistant_turn"]
 
-    saved = repo.get_creation_task_script("local", script_id)
+    saved = repo.script_records.get_creation_task_script("local", script_id)
     repo.confirm_creation_task_script("local", "task-one", script_id,
                                       title=saved.title, sections=saved.sections,
                                       expected_updated_at=saved.updated_at)

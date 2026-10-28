@@ -129,7 +129,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     graph = timeline([segments[i % 2].audio_reference for i in range(20)])
     for clip in graph.tracks[0].clips:
         clip.gain_db = -30
-    script = case.repo.get_creation_task_script('local', case.script_id)
+    script = case.repo.script_records.get_creation_task_script('local', case.script_id)
     cues = [NarrationCue(id=f'cue-{i}', source_section_id=section.id, text=section.content, duration_seconds=1,
         narration_segment_id=segments[i].id, timeline_start_seconds=i) for i, section in enumerate(script.sections)]
     montage = CreationTaskMontagePlan(id='montage-linear-assembly', workspace_id='local', task_id=case.task_id,

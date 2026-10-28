@@ -58,7 +58,7 @@ class NarrationPreviewUseCase:
             try:
                 if not task.confirmed_script_id or not task.current_timeline_version_id:
                     raise ValueError('当前任务缺少确认文案或草稿时间线')
-                script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
+                script = self.repository.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id)
                 current_version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
                 snapshot_segments = self.metadata.narration_segments_from_snapshot(current_version.snapshot)
                 snapshot_montage = creation_task_montage_plan_from_payload(current_version.snapshot['montage'])

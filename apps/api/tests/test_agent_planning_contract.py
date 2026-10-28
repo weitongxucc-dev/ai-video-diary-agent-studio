@@ -189,7 +189,7 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
     conversations=SimpleNamespace(get_task_goal=lambda _:goal,finish_turn=finish_turn)
     def forbidden(*args,**kwargs): raise AssertionError('new window results must not hydrate an old full script')
     event=SimpleNamespace(event_type='assistant_script_saved',payload={'source':{'turn_id':turn},'script_id':'script'})
-    production=SimpleNamespace(execution_records=SimpleNamespace(list_task_events=lambda *_:[event]),get_creation_task_script=forbidden)
+    production=SimpleNamespace(execution_records=SimpleNamespace(list_task_events=lambda *_:[event]),script_records=SimpleNamespace(get_creation_task_script=forbidden))
     receipt={'task_id':'task','script_id':'script','request_id':request_id,'status':'saved',
              'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'submitted_input':{'text':'不复制原文'}}
     case=SimpleNamespace(window_request_result=lambda *args,**kwargs:receipt)

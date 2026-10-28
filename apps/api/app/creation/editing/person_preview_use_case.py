@@ -97,7 +97,7 @@ class PersonPreviewUseCase:
         if clip.locked:
             raise ValueError('所选镜头已锁定，请先解锁。')
         segments = self.repository.narration_records.list_narration_segments(workspace_id, task.id, segment.script_id)
-        script = self.repository.get_creation_task_script(workspace_id, segment.script_id)
+        script = self.repository.script_records.get_creation_task_script(workspace_id, segment.script_id)
         by_section = {item.source_section_id: item for item in segments}
         offset = 0
         for section in script.sections:

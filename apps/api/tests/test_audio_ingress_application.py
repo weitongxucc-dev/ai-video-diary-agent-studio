@@ -148,7 +148,7 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
 
 def seed_narration(repo, media, tmp_path):
     task,script=confirmed_script(repo,cache_key='fixed-recorded')
-    digest=repo.confirmed_creation_task_script_digest('local',task.id,script.id)
+    digest=repo.script_records.confirmed_creation_task_script_digest('local',task.id,script.id)
     data=pcm_bytes();source=tmp_path/'seed.wav';source.write_bytes(data)
     store=media.audio_ingress.task_audio.artifact_store
     ref='artifacts/task/fixture-voice.wav';publication=store.publish_file(ref,source)

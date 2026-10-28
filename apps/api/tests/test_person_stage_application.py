@@ -151,7 +151,7 @@ def person_application(tmp_path,monkeypatch):
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
         payload=json.loads(conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?',(script_id,)).fetchone()[0])
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',(json.dumps(payload),script_id))
-    script=repo.get_creation_task_script('local',script_id);repo.start_creation_task_narration('local',task_id)
+    script=repo.script_records.get_creation_task_script('local',script_id);repo.start_creation_task_narration('local',task_id)
     sections=[]
     for index,section in enumerate(script.sections):
         audio=tmp_path/f'declared-narration-{index}.wav';audio.write_bytes(synthetic_wav_bytes(2))
@@ -214,7 +214,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     s=person_application;repo=s.repo;url='/api/creation-tasks/'+s.task_id
     narration_before=[asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]
     narration_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in s.sections}
-    request={'script_id':s.script_id,'input_digest':revision_digest(repo.get_creation_task_script('local',s.script_id),s.plan),'requirements_confirmed':True}
+    request={'script_id':s.script_id,'input_digest':revision_digest(repo.script_records.get_creation_task_script('local',s.script_id),s.plan),'requirements_confirmed':True}
     first=s.client.post(url+'/execution/start',json=request);assert first.status_code==202,first.text
     assert first.json()['current_stage']=='person_render'
     assert s.client.post(url+'/execution/start',json=request).json()['job']['id']==first.json()['job']['id']

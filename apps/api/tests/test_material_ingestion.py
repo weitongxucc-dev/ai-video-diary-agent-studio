@@ -881,7 +881,7 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
     assert repo.task_records.get_creation_task("one", "task-one").confirmed_script_id is None
     assert repo.task_records.get_creation_task("one", "task-one").stage_status == "waiting_for_user"
     restarted = ProductionRepository(tmp_path / "production.sqlite", repo.video_library_path)
-    assert restarted.get_creation_task_script("one", initial.id).title == "新版草稿"
+    assert restarted.script_records.get_creation_task_script("one", initial.id).title == "新版草稿"
     with pytest.raises(KeyError):
         restarted.update_assistant_script_draft("other", "task-one", initial.id, title="越界", sections=revised_sections)
     with pytest.raises(ValueError, match="模型输入之外"):
@@ -894,7 +894,7 @@ def test_assistant_draft_update_uses_current_run_and_keeps_confirmation_boundary
         "one", "task-one", initial.id, title="用户确认", sections=revised_sections,
         expected_updated_at=revised.updated_at,
     )
-    confirmed = restarted.get_creation_task_script("one", initial.id)
+    confirmed = restarted.script_records.get_creation_task_script("one", initial.id)
     with pytest.raises(ValueError, match="不允许修改"):
         restarted.update_assistant_script_draft(
             "one", "task-one", initial.id, title="越过确认", sections=revised_sections,

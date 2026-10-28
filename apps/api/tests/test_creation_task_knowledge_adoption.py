@@ -104,11 +104,11 @@ def test_new_script_consumes_new_fixed_inputs_and_old_draft_cannot_be_adopted(st
     assert response.status_code == 200, response.text
     model_input = json.loads(calls[0][1]['messages'][1]['content'])
     assert any(source['text'] == item.body for source in model_input['sources'])
-    run = state.repository.latest_script_generation_run('local', 'task')
+    run = state.repository.script_records.latest_script_generation_run('local', 'task')
     assert any(ref['object_id'] == item.id and ref['version_or_identity'] == item.version for ref in run.input_references)
-    scripts = state.repository.list_creation_task_scripts('local', 'task')
+    scripts = state.repository.script_records.list_creation_task_scripts('local', 'task')
     assert len(scripts) == 2 and scripts[0].id != old.id
-    assert state.repository.get_creation_task_script('local', old.id) == old
+    assert state.repository.script_records.get_creation_task_script('local', old.id) == old
     # Even after the task returns to waiting_for_user, the old draft stays stale.
     with pytest.raises(ValueError, match='不能采用旧资料'):
         state.repository.confirm_creation_task_script('local', 'task', old.id,
@@ -297,5 +297,5 @@ def test_reply_transfer_after_adoption_keeps_historical_script_immutable(state, 
     else:
         _, run, script = state.repository.transfer_completed_assistant_reply_to_script('local', 'task', **kwargs)
         assert script.id != old.id and run.input_references == refs
-        assert len(state.repository.list_creation_task_scripts('local', 'task')) == 2
-    assert state.repository.get_creation_task_script('local', old.id) == old
+        assert len(state.repository.script_records.list_creation_task_scripts('local', 'task')) == 2
+    assert state.repository.script_records.get_creation_task_script('local', old.id) == old

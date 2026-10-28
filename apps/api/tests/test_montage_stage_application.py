@@ -48,7 +48,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
-    script = repo.get_creation_task_script('local', script_id)
+    script = repo.script_records.get_creation_task_script('local', script_id)
     repo.start_creation_task_narration('local', task_id)
     audio = tmp_path / 'declared-narration.wav'
     audio.write_bytes(synthetic_wav_bytes(2))
@@ -197,7 +197,7 @@ def _montage_stream_case(tmp_path, monkeypatch):
     from test_device_scheduler import Resources, Processes
     repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=4)
     task = repo.task_records.get_creation_task('local', task_id)
-    script = repo.get_creation_task_script('local', script_id)
+    script = repo.script_records.get_creation_task_script('local', script_id)
     script.sections = [replace(script.sections[0], content='中文 "quoted" café 😺。'),
         CreationTaskScriptSection('second', '尾段', '实际尾段。', '素材画面', [])]
     with repo._connect() as conn:
@@ -265,7 +265,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
     monkeypatch.setattr(MontagePlanner, '_build_creation_plan', observed)
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, case.forbidden)
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, case.forbidden)
     monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
     try:

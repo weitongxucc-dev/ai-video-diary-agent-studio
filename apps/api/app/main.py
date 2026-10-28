@@ -3297,15 +3297,15 @@ def _creation_task_scripts_response(
     task: CreationTask,
     *, include_body: bool = True,
 ) -> CreationTaskScriptsResponse:
-    latest_run = production_repo.latest_script_generation_run(workspace_id, task.id)
+    latest_run = production_repo.script_records.latest_script_generation_run(workspace_id, task.id)
     if latest_run is not None and latest_run.run_kind != "generation":
         latest_run = None
     route_snapshot = _projected_topic_route_snapshot(_topic_route_snapshot(workspace_id), latest_run)
     return CreationTaskScriptsResponse.model_validate(
         {
             "task": project_task_summary(production_repo, task).summary,
-            "scripts": ([asdict(script) for script in production_repo.list_creation_task_scripts(workspace_id, task.id)]
-                        if include_body else production_repo.active_creation_task_script_headers(workspace_id, task.id)),
+            "scripts": ([asdict(script) for script in production_repo.script_records.list_creation_task_scripts(workspace_id, task.id)]
+                        if include_body else production_repo.script_records.active_creation_task_script_headers(workspace_id, task.id)),
             "scripts_scope": "history" if include_body else "active",
             "latest_run": latest_run.__dict__ if latest_run is not None else None,
             "route_preflight": route_snapshot,
@@ -4011,7 +4011,7 @@ def _clip_preview_use_case(repository=None):
             raise ClipPreviewUnavailable(str(exc)) from exc
     def presenter_source(task, clip):
         plan = repo.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
-        script = repo.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+        script = repo.script_records.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
         matches = [current_presenter_render(repo, task, segment, request, _person_render_media_path)
             for segment, request in presenter_inputs(repo, task, script, plan, _presenter_model_ids())]
         if not any(item is not None and item.id == clip.person_render_id for item in matches):
@@ -4633,7 +4633,7 @@ def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
         read_events=production_repo.execution_records.list_task_events,
         find_tool=shutil.which,
         image_capability=unconfigured_image_generation_capability,
-        read_script_headers=production_repo.active_creation_task_script_headers,
+        read_script_headers=production_repo.script_records.active_creation_task_script_headers,
         read_voices=production_repo.list_versioned_voice_profiles,
         profile_readable=production_repo.profile_readable,
         read_person=production_repo.get_person_profile,
@@ -6330,7 +6330,7 @@ def transfer_assistant_reply_to_script(
     )
     if reader_id != member_id:
         raise HTTPException(status_code=403, detail="对话成员身份已变化，请重新打开当前工作区。")
-    scripts = production_repo.list_creation_task_scripts(workspace_id, task_id)
+    scripts = production_repo.script_records.list_creation_task_scripts(workspace_id, task_id)
     latest = scripts[0] if scripts else None
     script_id = latest.id if latest and payload.replace_existing_script_id == latest.id else f"script_{uuid4().hex[:12]}"
     run_id = f"script_run_{uuid4().hex[:12]}"
@@ -7098,7 +7098,7 @@ def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, previ
         if not isinstance(script_id, str):
             raise HTTPException(status_code=502, detail="对话没有返回可核实的文案草稿。")
         try:
-            candidate = production_repo.get_creation_task_script(workspace_id, script_id)
+            candidate = production_repo.script_records.get_creation_task_script(workspace_id, script_id)
         except KeyError as exc:
             raise HTTPException(status_code=502, detail="对话返回的文案草稿不存在。") from exc
         adopted = (candidate.selection_status == "confirmed" and candidate.adoption
@@ -7291,7 +7291,7 @@ def _read_creation_script_edit_sources(request, task_id, script_id):
 
 app.include_router(build_script_sections_router(
     readable_task=_readable_creation_task,
-    read_sections=lambda *args, **kwargs: production_repo.read_creation_task_script_sections(*args, **kwargs),
+    read_sections=lambda *args, **kwargs: production_repo.script_records.read_creation_task_script_sections(*args, **kwargs),
     patch_sections=_patch_creation_script_sections,
     start_window=_start_creation_script_window,
     confirm_saved=_confirm_saved_creation_script,
@@ -7384,7 +7384,7 @@ def confirm_creation_task_script(
     task = _creation_task_or_404(workspace_id, task_id)
     plan = _creation_plan_for_task_or_404(workspace_id, task)
     try:
-        current_script = production_repo.get_creation_task_script(workspace_id, script_id)
+        current_script = production_repo.script_records.get_creation_task_script(workspace_id, script_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="creation task script not found") from exc
     if current_script.task_id != task.id:
@@ -7398,7 +7398,7 @@ def confirm_creation_task_script(
             raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
     elif current_script.run_id:
         try:
-            generation_run = production_repo.get_script_generation_run(workspace_id, current_script.run_id)
+            generation_run = production_repo.script_records.get_script_generation_run(workspace_id, current_script.run_id)
         except KeyError as exc:
             raise HTTPException(status_code=409, detail="文案来源记录已不可用，请重新读取任务。") from exc
         _require_current_script_inputs(request, workspace_id, plan, generation_run.input_references)
@@ -13241,7 +13241,7 @@ def _task_business(*, generation_case=None):
         generation_case=generation_case, creator_memory=_creator_memory_facts,
         execution_status=_creation_execution_summary,
         read_script_sections=lambda task, script_id, **values:
-            production_repo.read_creation_task_script_sections(task.workspace_id, task.id, script_id, **values))
+            production_repo.script_records.read_creation_task_script_sections(task.workspace_id, task.id, script_id, **values))
 
 
 def _submit_goal_observation(task,actor,values,origin,guard):
@@ -13377,7 +13377,7 @@ def _run_goal_turn(claim, fresh):
     stage = context["stage"]
     if stage in {"topic", "script"} and task.confirmed_script_id:
         from app.creation.intent_use_case import CreationIntentUseCase
-        adopted_script = production_repo.get_creation_task_script(workspace_id, task.confirmed_script_id)
+        adopted_script = production_repo.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id)
         adopted_plan = _creation_plan_for_task_or_404(workspace_id, task)
         if CreationIntentUseCase.adopted_for_execution(adopted_plan, adopted_script):
             stage = task.stage

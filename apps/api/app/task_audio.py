@@ -432,7 +432,7 @@ class TaskAudio:
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         saved_script_id = transform.parameters.get("script_id")
         saved_script_digest = transform.parameters.get("script_digest")
-        current_script_digest = self.repository.confirmed_creation_task_script_digest(
+        current_script_digest = self.repository.script_records.confirmed_creation_task_script_digest(
             workspace_id, task_id, task.confirmed_script_id,
         )
         saved_montage_id = transform.parameters.get("montage_plan_id")

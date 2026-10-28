@@ -417,7 +417,7 @@ class TaskBusiness:
             and event.payload['source']['turn_id']==claim['turn_id']
             and event.payload['source'].get('input_id')==goal.get('source_input_id')]
         if drafts and script_window_request is None:
-            response['script_draft']=asdict(self.production.get_creation_task_script(ws,drafts[-1].payload['script_id']))
+            response['script_draft']=asdict(self.production.script_records.get_creation_task_script(ws,drafts[-1].payload['script_id']))
         jobs=[event for event in events if event.event_type=='task_media_submitted'
             and event.payload['arguments'].get('_typed_source',{}).get('assistant_turn_id')==claim['turn_id']
             and event.payload['arguments'].get('_typed_source',{}).get('input_id')==goal.get('source_input_id')]

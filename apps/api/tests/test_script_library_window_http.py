@@ -117,7 +117,7 @@ def test_library_deep_link_reads_header_without_loading_body(library, monkeypatc
 def test_library_http_reads_45_sections_without_full_body_getters(library, monkeypatch):
     client, repo, _ = library
     # Extend the manual fixture before publishing it into the library.
-    script = repo.get_creation_task_script('local', 'script_original')
+    script = repo.script_records.get_creation_task_script('local', 'script_original')
     script.sections = [CreationTaskScriptSection(f'section_{i}', f'特点{i}',
         '模块化结构方便维护。', '产品特写', ['knowledge:knowledge_own:1']) for i in range(45)]
     with repo._connect() as conn:

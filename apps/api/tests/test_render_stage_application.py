@@ -54,7 +54,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
-    script = repo.get_creation_task_script('local', script_id)
+    script = repo.script_records.get_creation_task_script('local', script_id)
     repo.start_creation_task_narration('local', task_id)
     audio = tmp_path / 'declared-narration.wav'
     audio.write_bytes(synthetic_wav_bytes(2))

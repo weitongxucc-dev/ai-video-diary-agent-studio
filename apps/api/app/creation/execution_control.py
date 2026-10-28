@@ -524,7 +524,7 @@ class CreationExecutionControl:
     def submit_person_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         operation=proposal.operation
         source=self._edit_source(task,proposal,actor,source)
-        script=self.repository.get_creation_task_script(workspace_id,task.confirmed_script_id)
+        script=self.repository.script_records.get_creation_task_script(workspace_id,task.confirmed_script_id)
         plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
         digest=person_edit_digest(operation)
         payload={**actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,

@@ -30,7 +30,7 @@ def _bounded_preview_case(tmp_path):
     from app.creation_execution import CreationExecution
     from app.creation.execution_control import CreationExecutionControl
     repo, task_id, script_id, _ = _seed(tmp_path)
-    script = replace(repo.get_creation_task_script('workspace_a', script_id), sections=[
+    script = replace(repo.script_records.get_creation_task_script('workspace_a', script_id), sections=[
         CreationTaskScriptSection(f'part-{index}', f'段{index}', f'正文{index}🙂', '', []) for index in range(1, 46)])
     with repo._connect() as conn:
         conn.execute('PRAGMA journal_mode=WAL')
@@ -47,7 +47,7 @@ def _bounded_preview_case(tmp_path):
 def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_path, monkeypatch):
     from app.creation_execution import revision_digest
     repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
-    old_script = repo.get_creation_task_script('workspace_a', script_id)
+    old_script = repo.script_records.get_creation_task_script('workspace_a', script_id)
     old_plan = repo.plan_records.get_creation_plan('workspace_a', 'plan_workspace_a')
     expected = revision_digest(old_script, old_plan)
     original = repo.script_records.iter_execution_script_sections
@@ -68,7 +68,7 @@ def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_p
         raise AssertionError('preview must not hydrate the complete script or use another plan connection')
     with monkeypatch.context() as patch:
         patch.setattr(repo.script_records, 'iter_execution_script_sections', concurrent_tail_change)
-        patch.setattr(repo, 'get_creation_task_script', no_full_getter)
+        patch.setattr(repo.script_records, 'get_creation_task_script', no_full_getter)
         patch.setattr(repo.plan_records, 'get_creation_plan', no_full_getter)
         patch.setattr(execution, 'validate_input', no_full_getter)
         preview = control.preview('workspace_a', task_id)
@@ -78,7 +78,7 @@ def test_bounded_execution_preview_keeps_one_snapshot_during_a_tail_commit(tmp_p
     assert 'script_sections' not in preview
     latest = control.preview('workspace_a', task_id)
     assert latest['input_digest'] != expected
-    assert latest['input_digest'] == revision_digest(repo.get_creation_task_script('workspace_a', script_id), old_plan)
+    assert latest['input_digest'] == revision_digest(repo.script_records.get_creation_task_script('workspace_a', script_id), old_plan)
     assert latest['script_updated_at'] == '2026-10-27T01:02:03+00:00'
     with pytest.raises(ValueError, match='文案或制作要求已变化'):
         execution.validate_input('workspace_a', repo.task_records.get_creation_task('workspace_a', task_id), script_id, expected)
@@ -88,7 +88,7 @@ def test_bounded_execution_preview_replays_the_original_job_and_keeps_full_valid
     from app.creation_execution import revision_digest
     repo, task_id, script_id, execution, control = _bounded_preview_case(tmp_path)
     task = repo.task_records.get_creation_task('workspace_a', task_id)
-    old_digest = revision_digest(repo.get_creation_task_script('workspace_a', script_id), repo.plan_records.get_creation_plan('workspace_a', task.plan_id))
+    old_digest = revision_digest(repo.script_records.get_creation_task_script('workspace_a', script_id), repo.plan_records.get_creation_plan('workspace_a', task.plan_id))
     original = execution.start('workspace_a', task_id, script_id, old_digest)
     original_event = repo.execution_records.get_task_event('workspace_a', f'event_{original.id}_start')
     preview = control.preview('workspace_a', task_id)

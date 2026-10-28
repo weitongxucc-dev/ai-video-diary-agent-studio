@@ -853,8 +853,16 @@ class ScriptRecordStore:
         )
 
     def get_script_generation_run(
-        self, workspace_id: str, run_id: str
+        self, workspace_id: str, run_id: str, *, connection=None
     ) -> ScriptGenerationRun:
+        if connection is not None:
+            row = connection.execute(
+                'SELECT payload FROM script_generation_runs WHERE workspace_id=? AND id=?',
+                (workspace_id, run_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            return self._script_generation_run_from_payload(json.loads(row[0]))
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT payload FROM script_generation_runs WHERE workspace_id = ? AND id = ?",

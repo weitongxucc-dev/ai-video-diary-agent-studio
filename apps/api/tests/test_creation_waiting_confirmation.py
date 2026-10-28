@@ -41,7 +41,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
         render_is_valid=lambda *_: False)
     monkeypatch.setattr(main_module, "creation_execution", state.execution)
     state.normal_job = state.execution.start("local", state.task.id, "script",
-        main_module.revision_digest(state.repo.get_creation_task_script("local", "script"), state.plan), actor=state.actor)
+        main_module.revision_digest(state.repo.script_records.get_creation_task_script("local", "script"), state.plan), actor=state.actor)
     state.montage_calls = []
     def produce_waiting(*args):
         state.montage_calls.append(args)
@@ -50,7 +50,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
     state.executor.stage_actions["montage_plan"] = produce_waiting
     # Force the completed montage stage through the actual persisted Grant.
     from app.device_scheduler import SchedulePolicy, SubmissionIntent
-    key, _ = state.owner.stage_facts(state.task, state.repo.get_creation_task_script("local", "script"), state.plan, "montage_plan")
+    key, _ = state.owner.stage_facts(state.task, state.repo.script_records.get_creation_task_script("local", "script"), state.plan, "montage_plan")
     state.request = state.runtime.scheduler.submit(SubmissionIntent("local", "creation_job", state.normal_job.id,
         state.normal_job.input_digest, key, SchedulePolicy()), state.actor)
     state.resources.allowed = True

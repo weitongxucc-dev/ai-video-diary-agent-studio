@@ -83,7 +83,7 @@ def narration_preparation(tmp_path):
     repository=SimpleNamespace(
         job_records=SimpleNamespace(get_job_run=lambda _ws,_job:job),execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
         creation_execution_input=lambda *_:start.payload,
-        task_records=SimpleNamespace(get_creation_task=read_task),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),get_creation_task_script=lambda *_:script,
+        task_records=SimpleNamespace(get_creation_task=read_task),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),script_records=SimpleNamespace(get_creation_task_script=lambda *_:script),
         effective_creation_script=lambda *_:script,
         resolve_creation_task_narration_inputs=lambda **_:inputs,
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
@@ -400,7 +400,7 @@ def narration_application(tmp_path,monkeypatch):
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None,reason='native media tools unavailable')
 def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(narration_application):
     s=narration_application;repo=s.repo;url='/api/creation-tasks/'+s.task_id
-    script=repo.get_creation_task_script('local',s.script_id)
+    script=repo.script_records.get_creation_task_script('local',s.script_id)
     request={'script_id':script.id,'input_digest':revision_digest(script,s.plan),'requirements_confirmed':True}
     first=s.client.post(url+'/execution/start',json=request)
     assert first.status_code==202,first.text

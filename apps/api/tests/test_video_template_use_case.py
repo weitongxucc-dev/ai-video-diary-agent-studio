@@ -140,7 +140,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     monkeypatch.setattr(main, "_creation_task_output_path", output_fact)
     monkeypatch.setattr(VideoTemplateUseCase, "require_nonempty_output", staticmethod(observe_nonempty))
     monkeypatch.setattr(main, "_current_subtitle_tracks", track_facts)
-    monkeypatch.setattr(repository, "list_creation_task_scripts", script_facts)
+    monkeypatch.setattr(repository.script_records, "list_creation_task_scripts", script_facts)
     trace.clear()
     saved = main.save_creation_task_template(task_id, request,
         SaveVideoTemplateRequest(name=" 新模板 ", style_instruction=" 新任务风格 "))

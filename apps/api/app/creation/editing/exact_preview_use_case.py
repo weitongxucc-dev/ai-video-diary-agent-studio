@@ -504,7 +504,7 @@ class ExactPreviewUseCase:
                 if fact not in files:files.append(fact)
                 values = service.source_metadata(workspace_id,task_id,reference)
                 audio_inputs.append({'reference':reference,'path':str(path.resolve()),'size_bytes':stat.st_size,'uses':uses.get(reference,1),**values})
-        facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
+        facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
         if visual_scope is not None:facts['visual_preview']=visual_scope
         if graphics:facts['graphic_sources']=graphics
         return task,plan,payload,picture_candidates,facts,audio_inputs

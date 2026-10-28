@@ -41,7 +41,7 @@ def test_window_receipt_finishes_conversation_without_full_script_projection(api
     preview = {'kind': 'script_window_request', 'operation': 'start', 'task_id': 'task',
         'request_id': str(payload.request_id),
         'status': 'unknown', 'submission_effect': 'unknown'}
-    monkeypatch.setattr(state.repository, 'get_creation_task_script', lambda *args, **kwargs:
+    monkeypatch.setattr(state.repository.script_records, 'get_creation_task_script', lambda *args, **kwargs:
         pytest.fail('window turn response must not hydrate whole script'))
     result = main._finish_task_assistant_turn('task', request, SimpleNamespace(
         conversation_id=UUID(conversation['id']), expected_draft_version=conversation['draft_version']),

@@ -91,7 +91,7 @@ class SegmentProductionUseCase:
 
     def source_bindings(self, metadata, section, *, offset=0, limit=24, connection=None):
         try:
-            run = self.repository.get_script_generation_run(metadata['workspace_id'], metadata['run_id'], connection=connection)
+            run = self.repository.script_records.get_script_generation_run(metadata['workspace_id'], metadata['run_id'], connection=connection)
         except KeyError:
             run = None
         fixed = ({item['reference_id']: item for item in run.input_references}
@@ -757,7 +757,7 @@ class SegmentProductionUseCase:
                 'reference_bytes': Path(reference.source_path).stat().st_size, 'duration_seconds': budget.max_duration_seconds,
                 'max_output_bytes': budget.max_output_bytes, 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds}
             from app.creation_execution import narration_scope_fields
-            script = self.repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+            script = self.repository.script_records.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
             language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
             resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
                 language=language, max_output_bytes=resources['max_output_bytes'],

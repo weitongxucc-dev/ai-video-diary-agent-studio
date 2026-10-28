@@ -1459,7 +1459,7 @@ class CreationJobOwnerVerifier:
         ).fetchone()
         if script_row is None or plan_row is None:
             raise KeyError("已确认文案或方案不存在")
-        script = self.repository._creation_task_script_from_payload(json.loads(script_row["payload"]), connection=conn)
+        script = self.repository.script_records._creation_task_script_from_payload(json.loads(script_row["payload"]), connection=conn)
         plan_payload = json.loads(plan_row["payload"])
         plan_payload["visibility"] = str(plan_row["visibility"])
         plan = self.repository.plan_records.creation_plan_from_payload(plan_payload)
@@ -3582,7 +3582,7 @@ class CreationExecution:
     ) -> tuple[CreationTaskScript, CreationPlan]:
         if task.confirmed_script_id != script_id:
             raise ValueError("请先确认当前文案；方案确认不能代替文案确认")
-        script = self.repository.get_creation_task_script(workspace_id, script_id)
+        script = self.repository.script_records.get_creation_task_script(workspace_id, script_id)
         if script.task_id != task.id or script.selection_status != "confirmed":
             raise ValueError("当前文案不是已确认的任务文案")
         plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)

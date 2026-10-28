@@ -101,7 +101,7 @@ def test_actual_script_adoption_triggers_one_existing_continuation(api_state, mo
     body.update(expected_updated_at=script['updated_at'], adoption_kind='delegated_system', assistant_turn_id=turn['id'])
     response = state.client.post(f"/api/creation-tasks/task/scripts/{script['id']}/confirm", json=body)
     assert response.status_code == 200, response.text
-    actual = state.repository.get_creation_task_script('local', script['id'])
+    actual = state.repository.script_records.get_creation_task_script('local', script['id'])
     source = conversations.task_turn_source(turn['id'], 'local', state.owner.member_id, 'task')
     current = state.repository.task_records.get_creation_task('local', 'task')
     plan = state.repository.plan_records.get_creation_plan('local', current.plan_id)
@@ -176,7 +176,7 @@ def test_same_task_adopted_text_changes_only_after_review_and_old_revision_is_re
     document = draft(revised_content)
     calls = []
     def while_checking():
-        actual = state.repository.get_creation_task_script('local', old.id)
+        actual = state.repository.script_records.get_creation_task_script('local', old.id)
         assert actual.sections == old.sections and actual.updated_at == old.updated_at
     set_agent_reviewer(monkeypatch, reviewed(document), calls, during_check=while_checking)
     body = agent_payload(state, old, content=revised_content)
@@ -186,7 +186,7 @@ def test_same_task_adopted_text_changes_only_after_review_and_old_revision_is_re
     assert response.status_code == 200, response.text
     assert response.json()['id'] == old.id and response.json()['selection_status'] == 'confirmed'
     assert response.json()['adoption']['kind'] == ('delegated_system' if through_agent else 'manual')
-    actual = state.repository.get_creation_task_script('local', old.id)
+    actual = state.repository.script_records.get_creation_task_script('local', old.id)
     assert actual.sections[0].content == revised_content and actual.updated_at != old.updated_at
     assert state.repository.task_records.get_creation_task('local', 'task').stage == 'narration'
     stale = state.client.post('/api/creation-tasks/task/assistant/script-draft', json=body)
@@ -224,7 +224,7 @@ def test_draft_only_revision_never_becomes_manual_adoption(api_state, monkeypatc
         json={**agent_payload(state, old, content=revised_content), 'assistant_turn_id': turn['id']})
     assert response.status_code == 409, response.text
     assert private_task_rows(state) == before
-    actual = state.repository.get_creation_task_script('local', old.id)
+    actual = state.repository.script_records.get_creation_task_script('local', old.id)
     assert actual.sections == old.sections and actual.updated_at == old.updated_at and actual.adoption == old.adoption
     assert conversations.get_task_goal(turn['id']) is None
     assert not any(event.get('phase') == 'script_adoption' for event in conversations.get_turn(turn['id'])['events'])

@@ -159,7 +159,7 @@ def test_manual_and_fixed_copy_keep_existing_goal_and_locked_body_rules(adopted,
     assert CreationIntentUseCase.script_goal(state.repository, plan, task, viewer_user_id=None) == plan.goal
     assert (asdict(plan), asdict(task)) == before
     if kind == "final_script":
-        script = state.repository.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
+        script = state.repository.script_records.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
         assert script.sections[0].content == state.fixed_body
         assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
         assert CreationIntentUseCase.adopted_for_execution(plan, script)
@@ -268,7 +268,7 @@ def test_main_rejects_unreadable_or_mismatched_goal_before_model_and_script_run(
     response = state.client.get(path) if endpoint == "assistant/script-context" else state.client.post(path, json=payload)
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["error"] == "script_goal_source_changed"
-    assert state.repository.list_creation_task_scripts("local", state.task.id) == []
+    assert state.repository.script_records.list_creation_task_scripts("local", state.task.id) == []
     with state.repository._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM script_generation_runs WHERE task_id=?", (state.task.id,)).fetchone()[0] == 0
 
@@ -289,7 +289,7 @@ def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixe
         assert plan.adoption["kind"] == "manual"
     else:
         assert response.status_code == 409 and "锁定" in response.json()["detail"]
-        script = state.repository.get_creation_task_script("local", state.task.confirmed_script_id)
+        script = state.repository.script_records.get_creation_task_script("local", state.task.confirmed_script_id)
         assert script.sections[0].content == state.fixed_body
         assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
     assert state.repository.plan_records.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent

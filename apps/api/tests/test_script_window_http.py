@@ -20,7 +20,7 @@ def test_patch_http_preserves_unread_sections_and_replays_original_receipt(api_s
     original = saved_row_draft(state)
     state.client.app.include_router(build_script_sections_router(
         readable_task=main._readable_creation_task,
-        read_sections=state.repository.read_creation_task_script_sections,
+        read_sections=state.repository.script_records.read_creation_task_script_sections,
         patch_sections=main._patch_creation_script_sections,
     ))
     calls = []
@@ -33,7 +33,7 @@ def test_patch_http_preserves_unread_sections_and_replays_original_receipt(api_s
     response = state.client.patch(url, json=body)
     assert response.status_code == 200, response.text
     assert len(calls) == 1
-    saved = state.repository.get_creation_task_script('local', original.id)
+    saved = state.repository.script_records.get_creation_task_script('local', original.id)
     assert len(saved.sections) == 25
     assert saved.sections[:-1] == original.sections[:-1]
     assert saved.sections[-1].visual_prompt == section['visual_prompt']
@@ -56,7 +56,7 @@ def test_legacy_confirmation_rechecks_current_input_before_adoption(api_state, m
     set_api_provider(monkeypatch, draft(), reviewed(draft()), calls)
     generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
     assert generated.status_code == 200, generated.text
-    script = state.repository.list_creation_task_scripts('local', 'task')[0]
+    script = state.repository.script_records.list_creation_task_scripts('local', 'task')[0]
     turn_id = str(uuid4())
     checks = []
     def current_origin(task_id, request, actual_turn_id, *, draft_only=False):
@@ -72,7 +72,7 @@ def test_legacy_confirmation_rechecks_current_input_before_adoption(api_state, m
     assert result.status_code == 409, result.text
     assert '原输入已变化' in result.json()['detail']
     assert checks == [('task', turn_id, False), ('task', turn_id, False)]
-    assert state.repository.get_creation_task_script('local', script.id) == script
+    assert state.repository.script_records.get_creation_task_script('local', script.id) == script
     assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
     assert len(calls) == 2  # The unchanged candidate does not run another review.
 
@@ -81,7 +81,7 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
     state = api_state
     state.client.app.include_router(build_script_sections_router(
         readable_task=main._readable_creation_task,
-        read_sections=state.repository.read_creation_task_script_sections,
+        read_sections=state.repository.script_records.read_creation_task_script_sections,
         patch_sections=main._patch_creation_script_sections,
         start_window=main._start_creation_script_window,
         confirm_saved=main._confirm_saved_creation_script,
@@ -95,7 +95,7 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
     assert response.status_code == 200, response.text
     result = response.json()
     assert result['total_count'] == 1
-    saved = state.repository.get_creation_task_script('local', result['script_id'])
+    saved = state.repository.script_records.get_creation_task_script('local', result['script_id'])
     assert saved.draft_complete is False
     assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
     replay = state.client.post(url, json=body)
@@ -116,7 +116,7 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()['status'] == 'confirmed'
     assert len(calls) == 2
-    saved = state.repository.get_creation_task_script('local', result['script_id'])
+    saved = state.repository.script_records.get_creation_task_script('local', result['script_id'])
     assert saved.draft_complete is True and saved.selection_status == 'confirmed'
     lookup = (f"/api/creation-tasks/task/script-window-requests/{confirmation['request_id']}"
               f"?operation=confirm&script_id={result['script_id']}")
@@ -145,7 +145,7 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: checker)
     state.client.app.include_router(build_script_sections_router(
         readable_task=main._readable_creation_task,
-        read_sections=state.repository.read_creation_task_script_sections,
+        read_sections=state.repository.script_records.read_creation_task_script_sections,
         patch_sections=main._patch_creation_script_sections,
         start_window=main._start_creation_script_window,
         confirm_saved=main._confirm_saved_creation_script,
@@ -168,7 +168,7 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
     assert last['total_count'] == 45 and len(calls) == 3
     confirmation = {'request_id': str(uuid4()), 'expected_updated_at': last['updated_at']}
     with monkeypatch.context() as bounded:
-        bounded.setattr(state.repository, 'get_creation_task_script', lambda *args, **kwargs:
+        bounded.setattr(state.repository.script_records, 'get_creation_task_script', lambda *args, **kwargs:
                        pytest.fail('full adoption must not load the whole script'))
         response = state.client.post(f'/api/creation-tasks/task/scripts/{script_id}/confirm-saved', json=confirmation)
     assert response.status_code == 200, response.text
@@ -194,5 +194,5 @@ def test_legacy_window_requirement_does_not_mark_model_connection_failed(api_sta
     assert response.status_code == 422, response.text
     assert 'window_required' in response.text
     assert not calls and not state.verifications
-    run = state.repository.latest_script_generation_run('local', 'task')
+    run = state.repository.script_records.latest_script_generation_run('local', 'task')
     assert run.route_snapshot['availability'] == 'unverified'

@@ -394,7 +394,7 @@ def test_exact_final_copy_is_adopted_atomically_locked_and_replayed(client_state
     assert second.json()["current_window"]["entries"][0]["task_id"] == entry["task_id"]
     task = c.repository.task_records.get_creation_task("request-test", entry["task_id"])
     assert task.stage == "narration" and task.confirmed_script_id
-    script = c.repository.get_creation_task_script("request-test", task.confirmed_script_id)
+    script = c.repository.script_records.get_creation_task_script("request-test", task.confirmed_script_id)
     assert script.sections[0].content == text
     assert script.locked_body_digest == hashlib.sha256(text.encode()).hexdigest()
     assert script.adoption["kind"] == "delegated_system" and script.adoption["script_id"] == script.id
@@ -402,8 +402,8 @@ def test_exact_final_copy_is_adopted_atomically_locked_and_replayed(client_state
         c.repository.confirm_creation_task_script("request-test", task.id, script.id, title=script.title,
             sections=[replace(script.sections[0], content="模型改写版本")], expected_updated_at=script.updated_at,
             verified_owner_user_id=c.member.member_id, adoption_kind="delegated_system")
-    assert c.repository.get_creation_task_script("request-test", script.id).sections[0].content == text
-    assert len(c.repository.list_creation_task_scripts("request-test", task.id)) == 1
+    assert c.repository.script_records.get_creation_task_script("request-test", script.id).sections[0].content == text
+    assert len(c.repository.script_records.list_creation_task_scripts("request-test", task.id)) == 1
 
 
 def test_final_copy_failure_rolls_back_entire_window(client_state):
@@ -432,7 +432,7 @@ def test_final_copy_failure_rolls_back_entire_window(client_state):
     assert current["current_window"]["id"] == saved["current_window"]["id"]
     entry = current["current_window"]["entries"][0]
     task = c.repository.task_records.get_creation_task("request-test", entry["task_id"])
-    script = c.repository.get_creation_task_script("request-test", task.confirmed_script_id)
+    script = c.repository.script_records.get_creation_task_script("request-test", task.confirmed_script_id)
     assert task.stage == "narration" and task.selected_topic_id
     assert script.sections[0].content == "用户准确正文" and script.locked_body_digest
     event = c.repository.execution_records.get_task_event("request-test", "creation_adopted_" + task.id)

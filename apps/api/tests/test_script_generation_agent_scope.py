@@ -266,6 +266,6 @@ def test_real_generation_receipt_authorizes_only_its_original_action_and_durable
     owner.request_stop('local','task',record['request_id'],actor.member_id)
     stopped=invoke(business,binding,'read_creator_memory')
     assert not stopped['ok'] and stopped['failure']['submission_effect']=='not_submitted'
-    assert state.repository.get_script_generation_run('local',record['run_id']).status=='running'
+    assert state.repository.script_records.get_script_generation_run('local',record['run_id']).status=='running'
     current=conversations.get(chat['id'],'local',actor.member_id)
     assert current['draft_text']=='尚未发送的修改要求' and current['draft_version']==draft['draft_version']

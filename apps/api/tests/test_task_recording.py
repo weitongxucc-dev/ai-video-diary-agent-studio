@@ -246,7 +246,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     reloaded = restarted.get_narration_artifact("local", task.narration_cache_key)
     assert reloaded == saved_artifact
     assert restarted.narration_records.list_narration_segments("local", task_id) == [segment]
-    current_script = restarted.get_creation_task_script("local", "script_recording")
+    current_script = restarted.script_records.get_creation_task_script("local", "script_recording")
     current_plan = restarted.plan_records.get_creation_plan("local", "plan_recording")
     execution = CreationExecution(
         restarted,
@@ -326,7 +326,7 @@ def test_initial_recording_adoption_rejects_ambiguous_or_stale_script(recording_
     repo, task_id, _old_version_id, client = recording_task
     _prepare_first_recording_adoption(repo, task_id)
     route = f"/api/creation-tasks/{task_id}/audio/recordings"
-    script = repo.get_creation_task_script("local", "script_recording")
+    script = repo.script_records.get_creation_task_script("local", "script_recording")
     with repo._connect() as conn:
         payload = json.loads(conn.execute(
             "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
@@ -354,7 +354,7 @@ def test_initial_recording_rejects_script_content_changed_after_save(recording_t
     saved_response = client.post(route, files={"audio": ("voice.wav", wav_bytes(), "audio/wav")})
     assert saved_response.status_code == 200, saved_response.text
     saved = saved_response.json()
-    script = repo.get_creation_task_script("local", "script_recording")
+    script = repo.script_records.get_creation_task_script("local", "script_recording")
     with repo._connect() as conn:
         payload = json.loads(conn.execute(
             "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
@@ -683,7 +683,7 @@ def recording_metadata(tmp_path, monkeypatch):
             (script['id'],'local',task.id,script['run_id'],stored,now))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
             (json.dumps(asdict(task),default=str),'local',task.id))
-    digest = repo.confirmed_creation_task_script_digest('local',task.id,script['id'])
+    digest = repo.script_records.confirmed_creation_task_script_digest('local',task.id,script['id'])
     store = ArtifactStore(tmp_path/'artifacts')
     blob = store.publish_bytes('artifacts/declared-recording.webm', b'declared saved recording bytes; not media acceptance')
     job = repo.job_records.create_job_run(JobRun('declared-recording-job','local',task.id,TASK_MEDIA_KIND,'declared-recording',hashlib.sha256(b'declared').hexdigest()))
@@ -766,7 +766,7 @@ def test_recording_metadata_rejects_ambiguous_then_changed_script_without_partia
     def write_script(value):
         from dataclasses import replace
         from app.creation.script_contracts import CreationTaskScriptSection
-        original = repo.get_creation_task_script('local',state.script['id'])
+        original = repo.script_records.get_creation_task_script('local',state.script['id'])
         updated = replace(original,sections=[CreationTaskScriptSection(**part) for part in value['sections']])
         with repo._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")

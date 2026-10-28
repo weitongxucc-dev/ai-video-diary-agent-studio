@@ -330,7 +330,7 @@ def fixture(tmp_path):
         "script_id": "script",
         "plan_id": plan.id,
         "revision_digest": revision_digest(
-            repo.get_creation_task_script("local", "script"), plan
+            repo.script_records.get_creation_task_script("local", "script"), plan
         ),
         "input_digest": digest,
         "edit_proposal_id": proposal.id,

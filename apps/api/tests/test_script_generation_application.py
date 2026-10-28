@@ -12,9 +12,9 @@ def test_generation_source_preflight_records_original_run_without_model(api_stat
         lambda _: pytest.fail('preflight failure must not construct or invoke a provider'))
     response = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
     assert response.status_code == 503, response.text
-    run = state.repository.latest_script_generation_run('local', 'task')
+    run = state.repository.script_records.latest_script_generation_run('local', 'task')
     assert run is not None and run.status == 'failed'
     assert run.reason == response.json()['detail']['reason']
     assert run.finished_at is not None
-    assert state.repository.list_creation_task_scripts('local', 'task') == []
+    assert state.repository.script_records.list_creation_task_scripts('local', 'task') == []
     assert state.verifications == []

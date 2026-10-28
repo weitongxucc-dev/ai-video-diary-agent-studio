@@ -113,16 +113,16 @@ def test_existing_script_update_requires_current_revision_without_writing(tmp_pa
     for token, message in ((None, "必须提供当前 updated_at"), ("2000-01-01T00:00:00+00:00", "修订已变化")):
         with pytest.raises(ValueError, match=message):
             update(repo, script, token)
-        assert repo.get_creation_task_script(WORKSPACE, script.id) == script
+        assert repo.script_records.get_creation_task_script(WORKSPACE, script.id) == script
         assert repo.task_records.get_creation_task(WORKSPACE, script.task_id) == original_task
 
     revised = update(repo, script, script.updated_at.isoformat())
     assert revised.title == "更新后"
     assert revised.updated_at != script.updated_at
-    assert repo.get_creation_task_script(WORKSPACE, script.id) == revised
+    assert repo.script_records.get_creation_task_script(WORKSPACE, script.id) == revised
     with pytest.raises(ValueError, match="修订已变化"):
         update(repo, script, script.updated_at.isoformat())
-    assert repo.get_creation_task_script(WORKSPACE, script.id) == revised
+    assert repo.script_records.get_creation_task_script(WORKSPACE, script.id) == revised
 
 
 def test_confirmation_requires_current_revision_before_any_confirmation_write(tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ def test_confirmation_requires_current_revision_before_any_confirmation_write(tm
     for token, message in ((None, "必须提供当前 updated_at"), ("2000-01-01T00:00:00+00:00", "修订已变化")):
         with pytest.raises(ValueError, match=message):
             confirm(repo, script, token)
-        assert repo.get_creation_task_script(WORKSPACE, script.id) == script
+        assert repo.script_records.get_creation_task_script(WORKSPACE, script.id) == script
         assert repo.task_records.get_creation_task(WORKSPACE, script.task_id) == original_task
 
     task, confirmed = confirm(repo, script, script.updated_at.isoformat())
@@ -144,7 +144,7 @@ def test_confirmation_requires_current_revision_before_any_confirmation_write(tm
                            (script.updated_at.isoformat(), "修订已变化")):
         with pytest.raises(ValueError, match=message):
             confirm(repo, script, token)
-        assert repo.get_creation_task_script(WORKSPACE, script.id) == confirmed
+        assert repo.script_records.get_creation_task_script(WORKSPACE, script.id) == confirmed
         assert repo.task_records.get_creation_task(WORKSPACE, script.task_id) == confirmed_task
 
 
@@ -160,5 +160,5 @@ def test_confirmation_cas_does_not_bypass_visual_or_evidence_requirements(tmp_pa
             WORKSPACE, script.task_id, script.id, title="不允许确认", sections=incomplete,
             expected_updated_at=script.updated_at,
         )
-    assert repo.get_creation_task_script(WORKSPACE, script.id) == script
+    assert repo.script_records.get_creation_task_script(WORKSPACE, script.id) == script
     assert repo.task_records.get_creation_task(WORKSPACE, script.task_id).confirmed_script_id is None

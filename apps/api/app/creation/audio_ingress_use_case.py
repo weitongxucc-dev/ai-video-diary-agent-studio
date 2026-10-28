@@ -82,7 +82,7 @@ class AudioIngressUseCase:
         if task.confirmed_script_id != script_id:
             raise AudioIngressRejected(409, "文案版本已变化，请重新选择当前录音")
         try:
-            script = self.repository.get_creation_task_script(workspace_id, script_id)
+            script = self.repository.script_records.get_creation_task_script(workspace_id, script_id)
         except KeyError as exc:
             raise AudioIngressRejected(404, "当前文案不存在") from exc
         if script.selection_status != "confirmed" or len(script.sections) != 1:
@@ -90,7 +90,7 @@ class AudioIngressUseCase:
         section = script.sections[0]
         if source_section_id != section.id:
             raise AudioIngressRejected(409, "录音对应的文案段已变化，请重新选择")
-        script_digest = self.repository.confirmed_creation_task_script_digest(
+        script_digest = self.repository.script_records.confirmed_creation_task_script_digest(
             workspace_id, task.id, script.id,
         )
         if script_digest is None:
@@ -209,7 +209,7 @@ class AudioIngressUseCase:
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.stage not in {'narration', 'montage', 'review'} or not task.confirmed_script_id:
             raise AudioIngressRejected(status_code=409, detail='请先确认当前任务文案，再保存电脑录音')
-        script_digest = self.repository.confirmed_creation_task_script_digest(workspace_id, task.id, task.confirmed_script_id)
+        script_digest = self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task.id, task.confirmed_script_id)
         if script_digest is None:
             raise AudioIngressRejected(status_code=409, detail='当前文案未确认或已经变化，不能保存为本任务录音')
         suffix = Path(audio.filename or '').suffix.lower()
@@ -309,7 +309,7 @@ class AudioIngressUseCase:
             reference = self.repository.narration_artifact_reference(task.narration_cache_key)
             remember(reference, self.task_audio.source(workspace_id, task_id, reference, actor=actor))
         facts = {'base_version_id':task.current_timeline_version_id, 'script_id':task.confirmed_script_id,
-            'script_digest':self.repository.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
+            'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
                 if task.confirmed_script_id else None,
             'plan_id':task.plan_id, 'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),
             'montage':snapshot, 'files':files, 'narration_cache_key':task.narration_cache_key}

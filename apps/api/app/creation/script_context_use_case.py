@@ -42,7 +42,7 @@ class ScriptContextUseCase:
     def read_inputs(self, workspace_id: str, task_id: str):
         task = self._task(workspace_id, task_id)
         if task.confirmed_script_id and task.can_revise_script:
-            confirmed = next((item for item in self.repository.active_creation_task_script_headers(workspace_id, task_id)
+            confirmed = next((item for item in self.repository.script_records.active_creation_task_script_headers(workspace_id, task_id)
                               if item['id'] == task.confirmed_script_id), None)
             if confirmed is None:
                 raise ScriptDraftRejected(status_code=409, detail="当前确认文案不存在，请重新读取任务")
@@ -99,7 +99,7 @@ class ScriptContextUseCase:
                 "error": exc.reason, "message": exc.impact, "repair_action": exc.repair_action,
             }) from exc
         script_goal = self.goal(plan, task, reader_id)
-        scripts = self.repository.active_creation_task_script_headers(workspace_id, task.id)
+        scripts = self.repository.script_records.active_creation_task_script_headers(workspace_id, task.id)
         draft = scripts[0] if scripts and scripts[0]['selection_status'] == "draft" else None
         if task.can_revise_script and task.confirmed_script_id:
             draft = next((item for item in scripts if item['id'] == task.confirmed_script_id), None)

@@ -275,8 +275,8 @@ def test_draft_narration_requires_current_version_script_and_persisted_audio(gen
             conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                          (json.dumps(asdict(task), default=str), "local", state.task.id))
     elif mutation == "unconfirmed_script":
-        script = state.repo.get_creation_task_script("local", "script")
-        monkeypatch.setattr(state.repo, "get_creation_task_script", lambda *_: replace(script, selection_status="draft"))
+        script = state.repo.script_records.get_creation_task_script("local", "script")
+        monkeypatch.setattr(state.repo.script_records, "get_creation_task_script", lambda *_: replace(script, selection_status="draft"))
     elif mutation == "missing_artifact":
         monkeypatch.setattr(state.repo, "get_narration_artifact", lambda *_: None)
     elif mutation == "missing_file":

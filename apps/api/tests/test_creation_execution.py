@@ -104,7 +104,7 @@ def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool 
                 "UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
                 (json.dumps(asdict(task), default=str), now, workspace_id, task_id),
             )
-    script = repo.get_creation_task_script(workspace_id, script_id)
+    script = repo.script_records.get_creation_task_script(workspace_id, script_id)
     persisted_plan = repo.plan_records.get_creation_plan(workspace_id, plan.id)
     return repo, task_id, script_id, revision_digest(script, persisted_plan)
 
@@ -129,7 +129,7 @@ def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_pa
         payload.pop("visibility")
         conn.execute("UPDATE creation_plans SET payload=?, visibility='shared' WHERE id=?",
                      (json.dumps(payload), task.plan_id))
-    script = repo.get_creation_task_script("workspace_a", script_id)
+    script = repo.script_records.get_creation_task_script("workspace_a", script_id)
     plan = repo.plan_records.get_creation_plan("workspace_a", task.plan_id)
     actor = CreationExecutionActor("workspace_a", "member-a")
     _qualify_start_voice(repo,task_id,actor.member_id,workspace_id='workspace_a')
@@ -228,7 +228,7 @@ def _render_version_fixture(tmp_path):
     scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock", owners=owner,
         resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
                                   released=lambda _grant: True), processes=HostProcessProbe())
-    persisted_script = repo.get_creation_task_script("local", script_id)
+    persisted_script = repo.script_records.get_creation_task_script("local", script_id)
     persisted_plan = repo.plan_records.get_creation_plan("local", plan.id)
     return (repo, task_id, script_id, revision_digest(persisted_script, persisted_plan),
             actor, execution, owner, scheduler, version, members)
@@ -688,7 +688,7 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
             script_payload = json.loads(conn.execute("SELECT payload FROM creation_task_scripts WHERE id=?", (script_id,)).fetchone()[0])
             script_payload["sections"].append({**script_payload["sections"][0], "id": "section_2"})
             conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?", (json.dumps(script_payload), script_id))
-    digest = revision_digest(repo.get_creation_task_script(workspace, script_id), plan)
+    digest = revision_digest(repo.script_records.get_creation_task_script(workspace, script_id), plan)
     asset, _source_reference = register_synthetic_video_asset(
         repo, workspace_id=workspace, member_id=user,
         path=tmp_path / "library/source.mp4", asset_id="asset", seconds=36,
@@ -1629,13 +1629,13 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     repo.job_records.interrupt_running_job_runs()
     assert repo.task_records.get_creation_task("local", task_id).stage_status == "running"
     if scenario in {"changed_input", "newer_input_and_execution"}:
-        script = repo.get_creation_task_script("local", script_id)
+        script = repo.script_records.get_creation_task_script("local", script_id)
         script = replace(script, sections=[replace(script.sections[0], content="较新采用的文案")])
         with repo._connect() as conn:
             conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?",
                 (json.dumps(asdict(script), default=str), script.id))
     if scenario in {"newer_execution", "newer_input_and_execution"}:
-        newer_digest = revision_digest(repo.get_creation_task_script("local", script_id),
+        newer_digest = revision_digest(repo.script_records.get_creation_task_script("local", script_id),
             repo.plan_records.get_creation_plan("local", repo.task_records.get_creation_task("local", task_id).plan_id))
         newer = repo.job_records.create_job_run(JobRun("newer-execution", "local", task_id,
             "creation_task_execution", "newer-execution-input", newer_digest))
@@ -2010,7 +2010,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             (json.dumps(asdict(plan), default=str), "local", plan.id))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), "local", task_id))
-    digest = revision_digest(repo.get_creation_task_script("local", script_id), plan)
+    digest = revision_digest(repo.script_records.get_creation_task_script("local", script_id), plan)
     narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1)
     owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
     # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.
@@ -2749,7 +2749,7 @@ def _queued_creation_admission_case(tmp_path, *, static):
             owned = json.loads(row['payload']); owned['owner_user_id'] = actor.member_id
             conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
     task = repo.task_records.get_creation_task('local', task_id)
-    digest = revision_digest(repo.get_creation_task_script('local', script_id), repo.plan_records.get_creation_plan('local', task.plan_id))
+    digest = revision_digest(repo.script_records.get_creation_task_script('local', script_id), repo.plan_records.get_creation_plan('local', task.plan_id))
     job=execution.start('local',task_id,script_id,digest,actor=actor)
     budget=NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024)
     owner=CreationJobOwnerVerifier(repo,narration_budget=budget,verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
@@ -2855,12 +2855,12 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
             conn.execute(f'UPDATE {table} SET payload=? WHERE id=?', (json.dumps(owned), row['id']))
         row = conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script_id,)).fetchone()
         from app.creation.script_contracts import CreationTaskScriptSection
-        seeded = repo._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
+        seeded = repo.script_records._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
         seeded.sections = [CreationTaskScriptSection(**{**asdict(seeded.sections[0]),
             'id': f'section_{ordinal}', 'content': '原文' * 130}) for ordinal in range(1, section_count + 1)]
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo._script_payload(conn, seeded), script_id))
     task = repo.task_records.get_creation_task('local', task_id)
-    script = repo.get_creation_task_script('local', script_id)
+    script = repo.script_records.get_creation_task_script('local', script_id)
     plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     execution = _execution(repo)
     if local_policy:
@@ -3314,7 +3314,7 @@ def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_
     assert receipt['job_id']==request['job_id'] and receipt['status']=='succeeded', case.repo.job_records.get_job_run('local',request['job_id']).failure_reason
     current = case.segments.context('local',case.task_id,'section_1',case.actor)
     assert current['text']=='原文更紧凑' and current['segment_version']!=before['segment_version']
-    assert case.repo.get_creation_task_script('local',case.script_id).sections[0].content=='原文'*130
+    assert case.repo.script_records.get_creation_task_script('local',case.script_id).sections[0].content=='原文'*130
     assert case.repo.narration_records.list_narration_segments('local',case.task_id,case.script_id)[1].status=='pending'
     assert case.segments.video_path('local',case.task_id,'section_1',before['segment_version'],case.actor).is_file()
     assert case.segments.list_segments('local',case.task_id,case.actor)['revision_requests']['items'][0]['status']=='succeeded'
@@ -3993,7 +3993,7 @@ def test_narration_legacy_static_refusal_migrates_idempotently_without_new_job(t
     from app.host_resource_probes import HostResourceDecision
     case = _narration_units_case(tmp_path)
     task = case.repo.task_records.get_creation_task('local', case.task_id)
-    script = case.repo.get_creation_task_script('local', case.script_id)
+    script = case.repo.script_records.get_creation_task_script('local', case.script_id)
     plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
     key, resources = creation_stage_facts(case.repo, task, script, plan, 'narration', case.owner.narration_budget, None)
     request = case.scheduler.submit(SubmissionIntent('local', 'creation_job', case.job.id, case.job.input_digest, key, SchedulePolicy()), case.actor)
@@ -4248,7 +4248,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
     case = _narration_units_case(tmp_path)
     if legacy:
         task = case.repo.task_records.get_creation_task('local', case.task_id)
-        script = case.repo.get_creation_task_script('local', case.script_id)
+        script = case.repo.script_records.get_creation_task_script('local', case.script_id)
         plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
         key, _ = creation_stage_facts(case.repo, task, script, plan, 'narration', case.owner.narration_budget, None)
         old = case.scheduler.submit(SubmissionIntent('local', 'creation_job', case.job.id,
@@ -4262,7 +4262,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
         previous = json.loads(json.dumps(source.payload))
         previous['narration_reference']['reference']['device'] -= 4
         task = case.repo.task_records.get_creation_task('local',case.task_id)
-        script = case.repo.get_creation_task_script('local',case.script_id)
+        script = case.repo.script_records.get_creation_task_script('local',case.script_id)
         plan = case.repo.plan_records.get_creation_plan('local',task.plan_id)
         old_key,_ = creation_stage_facts(case.repo,task,script,plan,'narration',case.owner.narration_budget,None,
             comparison_reference=previous['narration_reference'])
@@ -4426,7 +4426,7 @@ def _account_voice_selection_case(tmp_path, monkeypatch):
     authorizations = TaskAuthorizationUseCase(repo, verify)
     authorization = authorizations.ensure(task, actor)
     execution = _execution(repo)
-    script = repo.get_creation_task_script(workspace, script_id)
+    script = repo.script_records.get_creation_task_script(workspace, script_id)
     plan = repo.plan_records.get_creation_plan(workspace, task.plan_id)
     job = execution.start(workspace, task_id, script_id, revision_digest(script, plan), actor=actor)
     narration = NarrationBudget(374, 3, 1_000_000, 30, 3*1024*1024, 1, 300, 1024, 16, .1, 2048, 1024,
@@ -4866,7 +4866,7 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         pytest.fail('paid single-segment recovery must not hydrate whole script/audio collections')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, no_full)
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, no_full)
     monkeypatch.setattr(case.repo.narration_records, '_decode_script', no_full)
     monkeypatch.setattr(case.owner, '_facts', no_full)
     if mismatch:
@@ -5299,7 +5299,7 @@ def _bounded_narration_start_case(tmp_path, monkeypatch):
     with repo._connect() as conn:
         conn.execute('PRAGMA journal_mode=WAL')
     task = repo.task_records.get_creation_task('local', case.task_id)
-    case.digest = revision_digest(repo.get_creation_task_script('local', case.script_id),
+    case.digest = revision_digest(repo.script_records.get_creation_task_script('local', case.script_id),
         repo.plan_records.get_creation_plan('local', task.plan_id))
     case.owner.task_authorizations = TaskAuthorizationUseCase(repo, lambda identity: 'ready')
     case.owner.segments = SegmentProductionUseCase(repo, narration_stage=case.stage,
@@ -5312,7 +5312,7 @@ def _bounded_narration_start_case(tmp_path, monkeypatch):
         raise AssertionError('pending narration admission must not hydrate or collect complete script/audio text')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments',) else repo, name, no_full)
+        monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else repo, name, no_full)
     monkeypatch.setattr(repo.narration_records, '_decode_script', no_full)
     monkeypatch.setattr(case.execution, 'validate_input', no_full)
     return case
@@ -5363,7 +5363,7 @@ def _forbid_single_segment_full_inputs(case, monkeypatch):
         pytest.fail('ordinary single-segment execution/recovery must not collect full body inputs')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, no_full)
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, no_full)
     monkeypatch.setattr(case.repo.narration_records, '_decode_script', no_full)
     monkeypatch.setattr(case.owner, '_facts', no_full)
 
@@ -5569,7 +5569,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
 
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments',) else repo, name, no_full)
+        monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else repo, name, no_full)
     monkeypatch.setattr(repo.narration_records, '_decode_script', no_full)
     monkeypatch.setattr(repo, 'read_creation_execution_snapshot', snapshot)
     monkeypatch.setattr(repo, 'iter_creation_narration_sections', scan)
@@ -5901,7 +5901,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
     case = _narration_units_case(tmp_path, section_count=3, audio_input_count=2, pcm_inprocess=False)
     repo = case.repo
     task = repo.task_records.get_creation_task('local', case.task_id)
-    script = repo.get_creation_task_script('local', case.script_id)
+    script = repo.script_records.get_creation_task_script('local', case.script_id)
     plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
         voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
@@ -5942,7 +5942,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbid_worker)
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        target = repo.narration_records if name == 'list_narration_segments' else repo
+        target = repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name == 'list_narration_segments' else repo
         original = getattr(target, name)
         def bounded(*args, _original=original, **kwargs):
             current = repo.task_records.get_creation_task('local', task.id, connection=kwargs.get('connection'))
@@ -6006,7 +6006,7 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
     case = _narration_units_case(tmp_path, section_count=3, audio_input_count=2, start_job=False)
     repo = case.repo
     task = repo.task_records.get_creation_task('local', case.task_id)
-    script = repo.get_creation_task_script('local', case.script_id)
+    script = repo.script_records.get_creation_task_script('local', case.script_id)
     rows = []
     for index, section in enumerate(script.sections):
         path = tmp_path / f'paid-source-{index}.wav'
@@ -6078,7 +6078,7 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
         pytest.fail('local edit must not hydrate full input DTOs or execute media')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments', 'upsert_narration_segments'):
-        monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments', 'upsert_narration_segments') else repo, name, forbidden)
+        monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments', 'upsert_narration_segments') else repo, name, forbidden)
     monkeypatch.setattr(repo.narration_records, '_decode_script', forbidden)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
     from app.creation_execution import CreationStageGrantContext
@@ -6178,7 +6178,7 @@ def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_pa
     repo = case.repo
     try:
         task = repo.task_records.get_creation_task('local', case.task_id)
-        script = repo.get_creation_task_script('local', case.script_id)
+        script = repo.script_records.get_creation_task_script('local', case.script_id)
         script.sections[-1] = replace(script.sections[-1], content='尾段 "quoted"\n\\ café 😺',
             visual_prompt='原稿视觉提示')
         with repo._connect() as conn:
@@ -6232,8 +6232,8 @@ def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_pa
         monkeypatch.setattr(narration_pcm, 'narration_edit_manifest_digest', oracle)
         def forbidden(*args, **kwargs):
             pytest.fail('edit admission must not hydrate the full script or run media')
-        monkeypatch.setattr(repo, 'get_creation_task_script', forbidden)
-        monkeypatch.setattr(repo, '_creation_task_script_from_payload', forbidden)
+        monkeypatch.setattr(repo.script_records, 'get_creation_task_script', forbidden)
+        monkeypatch.setattr(repo.script_records, '_creation_task_script_from_payload', forbidden)
         monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', forbidden)
         monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
         with repo.creation_execution_read() as conn:
@@ -6366,7 +6366,7 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
     case = _narration_units_case(tmp_path, section_count=23, duration_seconds=120)
     repo = case.repo
     task = repo.task_records.get_creation_task('local', case.task_id)
-    script = repo.get_creation_task_script('local', case.script_id)
+    script = repo.script_records.get_creation_task_script('local', case.script_id)
     plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
         voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
@@ -6406,7 +6406,7 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
         pytest.fail('section planning/confirmation must not hydrate full script or all narration text')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments',) else repo, name, no_full)
+        monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else repo, name, no_full)
     monkeypatch.setattr(repo.narration_records, '_decode_script', no_full)
     monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', no_execution)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', no_execution)
@@ -6710,7 +6710,7 @@ def test_section_context_projection_preserves_facts_without_unrelated_bodies(tmp
     def forbidden(*args,**kwargs):
         raise AssertionError('whole document reader used')
     for name in ('effective_creation_script','get_creation_task_script','list_narration_segments','get_timeline_version','get_creation_plan'):
-        monkeypatch.setattr(case.repo.plan_records if name == 'get_creation_plan' else case.repo.timeline_records if name == 'get_timeline_version' else case.repo.narration_records if name in ('list_narration_segments',) else case.repo,name,forbidden)
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.plan_records if name == 'get_creation_plan' else case.repo.timeline_records if name == 'get_timeline_version' else case.repo.narration_records if name in ('list_narration_segments',) else case.repo,name,forbidden)
     decode = json.loads
     def bounded(value,*args,**kwargs):
         assert 'FORBIDDEN_' not in value
@@ -6852,7 +6852,7 @@ def _section_change_paid_case(tmp_path, monkeypatch):
         pytest.fail('section publication/restore must not hydrate full script or full narration DTO list')
     for name in ('effective_creation_script','get_creation_task_script','_creation_task_script_from_payload',
                  'list_narration_segments','save_narration_segments'):
-        monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments', 'save_narration_segments') else repo,name,no_full)
+        monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments', 'save_narration_segments') else repo,name,no_full)
     monkeypatch.setattr(repo.narration_records, '_decode_script', no_full)
     monkeypatch.setattr(case.executor,'execute',lambda *a,**k: pytest.fail('no media execution'))
     original_publish = case.store.publish_bytes

@@ -175,7 +175,7 @@ class ScriptGenerationIntent:
             actual_member = actor.user_id or actor.member_id
         if actual_member != member_id:
             raise PermissionError("原生成请求成员不匹配")
-        state = self.repository.generation_run_state(conn, workspace_id, task_id, facts["run_id"])
+        state = self.repository.script_records.generation_run_state(conn, workspace_id, task_id, facts["run_id"])
         run, script = state["run"], state["script"]
         saved_result = context.get("generation_result")
         if (saved_result is not None and (saved_result["run_id"] != run.id or script is None

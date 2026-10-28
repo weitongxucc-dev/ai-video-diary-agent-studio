@@ -243,7 +243,7 @@ def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path
         expected_task_updated_at=draft_task.updated_at,
     )
     assert (retry_task.id, retry_run.id, retry_script.id) == (task.id, run.id, script.id)
-    assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
+    assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
     assert repo.execution_records.list_task_events(WORKSPACE, task.id) == saved_events
 
     with pytest.raises(ValueError, match="正文已变化"):
@@ -254,14 +254,14 @@ def test_transfer_requires_current_plan_topic_and_bound_completed_reply(tmp_path
         ])
     with pytest.raises(ValueError, match="固定版本不一致"):
         current_task = repo.task_records.get_creation_task(WORKSPACE, task.id)
-        current_script = repo.list_creation_task_scripts(WORKSPACE, task.id)[0]
+        current_script = repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)[0]
         transfer(
             repo, plan, current_task, request_id="changed-source-request",
             input_references=[{**INPUT_REFERENCES[0], "version_or_identity": "v2"}],
             replace_existing_script_id=current_script.id,
             expected_script_updated_at=current_script.updated_at,
         )
-    assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
+    assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
 
 
 def test_concurrent_same_transfer_request_returns_one_persisted_draft(tmp_path: Path) -> None:
@@ -280,7 +280,7 @@ def test_concurrent_same_transfer_request_returns_one_persisted_draft(tmp_path: 
         results = list(pool.map(submit, range(2)))
     assert results[0][1].id == results[1][1].id
     assert results[0][2].id == results[1][2].id
-    assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
+    assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
     transfer_events = [
         event for event in repo.execution_records.list_task_events(WORKSPACE, task.id)
         if event.event_type == "assistant_reply_script_transferred"
@@ -297,7 +297,7 @@ def test_transfer_rejects_wrong_member_scope_and_stale_task_without_writes(tmp_p
         transfer(repo, plan, task, expected_task_updated_at="2000-01-01T00:00:00+00:00")
     with pytest.raises(ValueError, match="选题已变化"):
         transfer(repo, plan, task, expected_topic_id="another-topic")
-    assert repo.list_creation_task_scripts(WORKSPACE, task.id) == []
+    assert repo.script_records.list_creation_task_scripts(WORKSPACE, task.id) == []
     assert repo.execution_records.list_task_events(WORKSPACE, task.id) == prior_events
 
 
@@ -308,7 +308,7 @@ def test_existing_task_transfer_does_not_require_plan_created_from_reply(tmp_pat
     )
     assert run.source_reply_reference == REPLY_REFERENCE
     assert script.source_reply_reference == REPLY_REFERENCE
-    assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
+    assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
 
 
 def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_version(tmp_path: Path) -> None:
@@ -410,7 +410,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
             expected_updated_at=before.updated_at,
         )
     assert repo.task_records.get_creation_task(WORKSPACE, task.id).confirmed_script_id == replacement.id
-    assert repo.get_creation_task_script(WORKSPACE, replacement.id) == confirmed
+    assert repo.script_records.get_creation_task_script(WORKSPACE, replacement.id) == confirmed
     # A current CAS plus an explicit manual edit is a new revision. This
     # endpoint has no request identity that would make it a replay.
     manual_section = replace(confirmed.sections[0], content="用户明确手工修订后的正文")
@@ -444,7 +444,7 @@ def test_reply_draft_replacement_and_manual_revision_preserve_saved_library_vers
             script_id=replacement.id,
             run_id="reply-run-three",
         )
-    assert repo.get_creation_task_script(WORKSPACE, replacement.id) == revised_script
+    assert repo.script_records.get_creation_task_script(WORKSPACE, replacement.id) == revised_script
     assert repo.get_script_library_entry(WORKSPACE, library_entry.id) == read_back
 
 
@@ -489,7 +489,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
     )
     first = main_module.transfer_assistant_reply_to_script(task.id, request, payload)
     assert first == {"saved": True}
-    saved = repo.list_creation_task_scripts(WORKSPACE, task.id)
+    saved = repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)
     assert len(saved) == 1 and saved[0].source_reply_reference == {
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -501,7 +501,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
     # original persisted script even though the first write advanced the task.
     second = main_module.transfer_assistant_reply_to_script(task.id, request, payload)
     assert second == {"saved": True}
-    assert len(repo.list_creation_task_scripts(WORKSPACE, task.id)) == 1
+    assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
 
     readable.version = "v2"
     changed_request = Request({"type": "http", "headers": []})
@@ -619,7 +619,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     transferred = main_module.transfer_assistant_reply_to_script(task.id, request, transfer_payload)
     assert transferred.task.id == task.id
     assert transferred.latest_run is None
-    draft = repo.list_creation_task_scripts(WORKSPACE, task.id)[0]
+    draft = repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)[0]
     assert draft.selection_status == "draft"
     assert draft.sections[0].visual_prompt == "" and draft.sections[0].evidence_reference_ids == []
     assert draft.sections[0].content == REPLY_TEXT and draft.source_reply_reference is not None

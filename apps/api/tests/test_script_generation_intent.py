@@ -271,7 +271,7 @@ def test_restart_reconciles_original_run_and_preserves_saved_or_unknown_writes(g
     else:
         assert result["status"] == result["run_status"] == result["turn_status"] == "failed"
     if checkpoint in {"partial", "ready"}:
-        preserved = state.repository.get_creation_task_script("local", "restart-draft")
+        preserved = state.repository.script_records.get_creation_task_script("local", "restart-draft")
         assert preserved.sections[0].content == "原已保存文字" and preserved.selection_status == "draft"
         assert result["saved_result"]["script_id"] == preserved.id
     main.recover_interrupted_assistant_turns()

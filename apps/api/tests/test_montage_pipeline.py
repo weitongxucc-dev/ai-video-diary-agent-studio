@@ -1001,7 +1001,7 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     def granted(stage="person_render"):
         current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
         plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
-        script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
+        script = state.production.script_records.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
         def forbidden(*args):
             pytest.fail("diagnostic must not run ungranted creation actions")
         execution = CreationExecution(state.production, run_narration=forbidden, run_montage_plan=forbidden,
@@ -1070,7 +1070,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     from app.avatar_lipsync import avatar_lipsync_cache_key
     monkeypatch.setattr(main_module, "_presenter_model_ids", lambda: {"high": state.provider.model_id, "fast": state.provider.model_id})
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    script = state.production.get_creation_task_script(state.workspace_id, task.confirmed_script_id)
+    script = state.production.script_records.get_creation_task_script(state.workspace_id, task.confirmed_script_id)
     plan = state.production.plan_records.get_creation_plan(state.workspace_id, task.plan_id)
     plan.presenter_share_target = 100
     with state.production._connect() as conn:

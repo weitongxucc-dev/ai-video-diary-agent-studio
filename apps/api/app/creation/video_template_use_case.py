@@ -98,7 +98,7 @@ class VideoTemplateUseCase:
                         name: str, style_instruction: str, template_id: str | None,
                         expected_version: int | None) -> VideoTemplate:
         source_track = next((item for item in tracks if item.source_language is None), None)
-        scripts = self.production.list_creation_task_scripts(workspace_id, task_id)
+        scripts = self.production.script_records.list_creation_task_scripts(workspace_id, task_id)
         script = next((item for item in scripts if item.id == task.confirmed_script_id), None)
         color_settings = [reusable_color_settings(clip.visual_effects) for clip in montage.clips]
         common_color = color_settings[0] if color_settings and all(

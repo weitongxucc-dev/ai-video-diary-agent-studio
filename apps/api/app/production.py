@@ -1743,7 +1743,7 @@ class ProductionRepository:
                 or transform.job_id != job.id or transform.output_refs != [source.logical_ref]
                 or transform.parameters.get("script_id") != artifact.script_id
                 or transform.parameters.get("script_digest") != artifact.source_script_digest
-                or self.confirmed_creation_task_script_digest(
+                or self.script_records.confirmed_creation_task_script_digest(
                     artifact.workspace_id, artifact.task_id, artifact.script_id
                 ) != artifact.source_script_digest):
             return False
@@ -4091,7 +4091,7 @@ class ProductionRepository:
                 (workspace_id, task_id, task.confirmed_script_id)).fetchone()
             if row is None:
                 raise ValueError('当前任务没有确认文案')
-            script = self._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
+            script = self.script_records._creation_task_script_from_payload(json.loads(row['payload']), connection=conn)
             sections = []
             for section in script.sections:
                 state = self.stage_segment_state(workspace_id, task_id, section.id, connection=conn)
@@ -5266,9 +5266,6 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
-    def generation_run_state(self, connection, workspace_id, task_id, run_id):
-        return self.script_records.generation_run_state(connection,workspace_id,task_id,run_id)
-
     def start_script_generation(self, run: _ScriptGenerationRun, *, write_guard=None, connection=None) -> tuple[_CreationTask, _ScriptGenerationRun]:
         return self.script_records.start_script_generation(run, write_guard=write_guard, connection=connection)
 
@@ -5290,33 +5287,6 @@ class ProductionRepository:
 
     def fail_script_generation(self, run_id: str, *, reason: str, impact: str, repair_action: str, retryable: bool, provider_attempted: bool=False, provider_failed: bool=True, connection=None) -> tuple[_CreationTask, _ScriptGenerationRun]:
         return self.script_records.fail_script_generation(run_id, reason=reason, impact=impact, repair_action=repair_action, retryable=retryable, provider_attempted=provider_attempted, provider_failed=provider_failed, connection=connection)
-
-    def get_script_generation_run(self, workspace_id: str, run_id: str, *, connection=None) -> _ScriptGenerationRun:
-        if connection is None:
-            return self.script_records.get_script_generation_run(workspace_id, run_id)
-        row = connection.execute('SELECT payload FROM script_generation_runs WHERE workspace_id=? AND id=?',
-            (workspace_id,run_id)).fetchone()
-        if row is None:
-            raise KeyError(run_id)
-        return self._script_generation_run_from_payload(json.loads(row[0]))
-
-    def latest_script_generation_run(self, workspace_id: str, task_id: str) -> _ScriptGenerationRun | None:
-        return self.script_records.latest_script_generation_run(workspace_id, task_id)
-
-    def list_creation_task_scripts(self, workspace_id: str, task_id: str) -> list[_CreationTaskScript]:
-        return self.script_records.list_creation_task_scripts(workspace_id, task_id)
-
-    def get_creation_task_script(self, workspace_id: str, script_id: str) -> _CreationTaskScript:
-        return self.script_records.get_creation_task_script(workspace_id, script_id)
-
-    def active_creation_task_script_headers(self, workspace_id, task_id):
-        return self.script_records.active_creation_task_script_headers(workspace_id, task_id)
-
-    def read_creation_task_script_sections(self, workspace_id, task_id, script_id, *, expected_updated_at=None, after_ordinal=0, limit=SCRIPT_SECTION_WINDOW_LIMIT):
-        return self.script_records.read_creation_task_script_sections(workspace_id, task_id, script_id, expected_updated_at=expected_updated_at, after_ordinal=after_ordinal, limit=limit)
-
-    def confirmed_creation_task_script_digest(self, workspace_id: str, task_id: str, script_id: str | None=None) -> str | None:
-        return self.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, script_id)
 
     def record_assistant_script_save(self, script, source, request_digest, *, connection):
         return self.script_records.record_assistant_script_save(script, source, request_digest, connection=connection)
@@ -5354,9 +5324,6 @@ class ProductionRepository:
 
     def script_confirm_saved_result(self, workspace_id, task_id, script_id, request_id, member_id):
         return self.script_records.script_confirm_saved_result(workspace_id, task_id, script_id, request_id, member_id)
-
-    def confirmed_script_adoption_facts(self, workspace_id, task_id, script_id, expected_updated_at):
-        return self.script_records.confirmed_script_adoption_facts(workspace_id, task_id, script_id, expected_updated_at)
 
     def confirm_reviewed_script(self, workspace_id, task_id, script_id, *, expected_updated_at, request_id, member_id, binding_digest, layout_digest, adoption_kind='manual', write_guard=None):
         return self.script_records.confirm_reviewed_script(workspace_id, task_id, script_id, expected_updated_at=expected_updated_at, request_id=request_id, member_id=member_id, binding_digest=binding_digest, layout_digest=layout_digest, adoption_kind=adoption_kind, write_guard=write_guard)
@@ -6230,15 +6197,8 @@ class ProductionRepository:
 
 
 
-    @staticmethod
-    def _script_generation_run_from_payload(data: dict[str, object]):
-        return ScriptRecordStore._script_generation_run_from_payload(data)
-
     def _script_payload(self, connection, script, *, write_sections=True):
         return self.script_records._script_payload(connection, script, write_sections=write_sections)
-
-    def _creation_task_script_from_payload(self, data: dict[str, object], *, connection=None) -> _CreationTaskScript:
-        return self.script_records._creation_task_script_from_payload(data, connection=connection)
 
 
 

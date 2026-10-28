@@ -100,7 +100,7 @@ def test_library_patch_without_configured_model_keeps_original_and_recoverable_r
     client, repo, _ = library
     created = reuse(client, save(client, repo)["id"]).json()
     task_id, script_id = created["task_id"], created["script_id"]
-    before = repo.get_creation_task_script("local", script_id)
+    before = repo.script_records.get_creation_task_script("local", script_id)
     unconfigured = Settings(llm_provider="minimax", llm_api_key=None, deepseek_api_key=None,
         llm_base_url="https://api.minimax.cn/v1", llm_model="review-model")
     assert not unconfigured.llm_configured
@@ -118,7 +118,7 @@ def test_library_patch_without_configured_model_keeps_original_and_recoverable_r
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["error"] == "route_configuration_invalid"
     assert "设置" in response.json()["detail"]["repair_action"]
-    assert repo.get_creation_task_script("local", script_id) == before
+    assert repo.script_records.get_creation_task_script("local", script_id) == before
     result = client.get(f"/api/creation-tasks/{task_id}/script-window-requests/{request_id}",
         params={"operation": "patch", "script_id": script_id, "include_input": "true"})
     assert result.status_code == 200, result.text
@@ -158,7 +158,7 @@ def test_save_versions_search_reuse_draft_and_new_confirmation_preserve_original
     result = reuse(client, one["id"])
     assert result.status_code == 200, result.text
     body = result.json()
-    draft=jsonable_encoder(asdict(repo.get_creation_task_script("local",body["script_id"])))
+    draft=jsonable_encoder(asdict(repo.script_records.get_creation_task_script("local",body["script_id"])))
     task = repo.task_records.get_creation_task("local", body["task_id"])
     assert task.id != "task_original" and task.confirmed_script_id is None
     assert task.stage == "script" and task.stage_status == "waiting_for_user"
@@ -198,7 +198,7 @@ def test_live_source_version_or_permission_loss_refuses_read_reuse_and_confirm(l
     assert client.get("/api/production/script-library").json()["items"][0]["id"] == entry["id"]
     assert reuse(client, entry["id"]).status_code == 409
     assert save(client,repo)["version"] == 2  # Owned confirmed history can still be saved.
-    draft=jsonable_encoder(asdict(repo.get_creation_task_script("local",created["script_id"])))
+    draft=jsonable_encoder(asdict(repo.script_records.get_creation_task_script("local",created["script_id"])))
     assert client.post(f"/api/creation-tasks/{created['task_id']}/scripts/{draft['id']}/confirm", json={
         "title": draft["title"], "sections": draft["sections"], "expected_updated_at": draft["updated_at"],
     }).status_code == 409
@@ -288,7 +288,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     # 让已确认文案的引用指向这条真正有版本快照的资料，并同步方案的引用版本。
     with repo._connect() as conn:
         row = conn.execute("SELECT payload FROM creation_task_scripts WHERE id='script_original'").fetchone()
-        script=repo.get_creation_task_script('local','script_original')
+        script=repo.script_records.get_creation_task_script('local','script_original')
         script.sections[0].evidence_reference_ids=[f"knowledge:{versioned.id}:1"]
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (repo._script_payload(conn,script),))
@@ -304,7 +304,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     repo.confirm_creation_task_script(
         "local", "task_original", "script_original", title="模块化介绍",
         sections=script.sections,
-        expected_updated_at=repo.get_creation_task_script("local", "script_original").updated_at,
+        expected_updated_at=repo.script_records.get_creation_task_script("local", "script_original").updated_at,
     )
     entry = save(client,repo)
     states = client.get(f"/api/production/script-library/{entry['id']}/sources").json()
@@ -342,7 +342,7 @@ def test_owned_script_without_external_references_can_save_and_reuse(library):
     client, repo, _ = library
     with repo._connect() as conn:
         row = conn.execute("SELECT payload FROM creation_task_scripts WHERE id='script_original'").fetchone()
-        script=repo.get_creation_task_script('local','script_original')
+        script=repo.script_records.get_creation_task_script('local','script_original')
         script.sections[0].evidence_reference_ids=[]
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id='script_original'", (repo._script_payload(conn,script),))
@@ -350,7 +350,7 @@ def test_owned_script_without_external_references_can_save_and_reuse(library):
     assert client.get(f"/api/production/script-library/{entry['id']}/sources").json() == []
     response = reuse(client, entry["id"])
     assert response.status_code == 200, response.text
-    assert repo.get_creation_task_script("local",response.json()["script_id"]).selection_status=="draft"
+    assert repo.script_records.get_creation_task_script("local",response.json()["script_id"]).selection_status=="draft"
 
 
 def test_library_use_case_reuse_rolls_back_receipt_failure_and_retries_original_request(library):

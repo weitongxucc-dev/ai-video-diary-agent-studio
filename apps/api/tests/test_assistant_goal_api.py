@@ -333,7 +333,7 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
                 assert kwargs["task_version"]["removed_selected_refs"] == [f"clip:{state.clip.id}"]
                 if len(calls) == 2:
                     current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-                    script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
+                    script = state.production.script_records.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
                     plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
                     actor = main._require_permit_actor(state.request, state.workspace_id)
                     source, prior = main._assistant_execution_source(current.id,state.request,kwargs["turn_id"],"start",revision_digest(script,plan))
@@ -458,7 +458,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
             assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["status"] == "succeeded"
             return "已读取原作业与实际登记输出。", None
         current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-        script = state.production.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
+        script = state.production.script_records.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
         plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         actor = main._require_permit_actor(state.request, state.workspace_id)
         source, prior = main._assistant_execution_source(current.id,state.request,kwargs["turn_id"],"start",revision_digest(script,plan))
@@ -872,7 +872,7 @@ def test_assistant_execution_query_cannot_authorize_foreign_or_stale_instruction
     if rejection=='stopped':
         state.conversations.finish_turn(turn['id'],'stopped',result={'reason':'user_stopped'})
     current=state.production.task_records.get_creation_task(state.workspace_id,state.task.id)
-    script=state.production.get_creation_task_script(state.workspace_id,current.confirmed_script_id)
+    script=state.production.script_records.get_creation_task_script(state.workspace_id,current.confirmed_script_id)
     plan=state.production.plan_records.get_creation_plan(state.workspace_id,current.plan_id)
     preview={'script_id':script.id,'input_digest':revision_digest(script,plan)}
     before=[job.id for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id)]
@@ -1137,7 +1137,7 @@ def execution_binding_state(execution_http_state, monkeypatch):
     from starlette.requests import Request
     state = execution_http_state
     repo = state.production
-    script = repo.get_creation_task_script(state.workspace_id, state.script_id)
+    script = repo.script_records.get_creation_task_script(state.workspace_id, state.script_id)
     plan = repo.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
     digest = revision_digest(script, plan)

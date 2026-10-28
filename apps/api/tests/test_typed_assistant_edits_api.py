@@ -111,8 +111,8 @@ def test_task_workspace_active_headers_do_not_hydrate_body(workspace_metadata_st
     def forbidden(*args, **kwargs):
         pytest.fail("workspace headers must not hydrate a full script or execute media")
 
-    monkeypatch.setattr(state.repo, "get_creation_task_script", forbidden)
-    monkeypatch.setattr(state.repo, "list_creation_task_scripts", forbidden)
+    monkeypatch.setattr(state.repo.script_records, "get_creation_task_script", forbidden)
+    monkeypatch.setattr(state.repo.script_records, "list_creation_task_scripts", forbidden)
     response = state.client.get(state.url)
     assert response.status_code == 200, response.text
     assert response.json()["scripts_scope"] == "active"
@@ -132,7 +132,7 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
     monkeypatch.setattr(main, "_portrait_processor", lambda _: SimpleNamespace(available=False))
     original_events = state.repo.execution_records.list_task_events
     original_evidence = state.repo.topic_records.list_topic_evidence_references
-    original_headers = state.repo.active_creation_task_script_headers
+    original_headers = state.repo.script_records.active_creation_task_script_headers
     original_plan_dto = main._creation_plan_preview_response
 
     def events(*args):
@@ -153,7 +153,7 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
 
     monkeypatch.setattr(state.repo.execution_records, "list_task_events", events)
     monkeypatch.setattr(state.repo.topic_records, "list_topic_evidence_references", evidence)
-    monkeypatch.setattr(state.repo, "active_creation_task_script_headers", headers)
+    monkeypatch.setattr(state.repo.script_records, "active_creation_task_script_headers", headers)
     monkeypatch.setattr(main, "_creation_plan_preview_response", plan_dto)
     # Declared profile facts at the finite profile owner ports, not model/profile-registration evidence.
     voices = [SimpleNamespace(id=name, version="v1", person_profile_id="person", person_version="v1",
@@ -228,8 +228,8 @@ def test_script_section_http_reads_complete_versioned_windows_without_full_hydra
     def forbidden(*args, **kwargs):
         pytest.fail('section reads must not hydrate the full script or start execution')
 
-    monkeypatch.setattr(state.repo, 'get_creation_task_script', forbidden)
-    monkeypatch.setattr(state.repo, 'list_creation_task_scripts', forbidden)
+    monkeypatch.setattr(state.repo.script_records, 'get_creation_task_script', forbidden)
+    monkeypatch.setattr(state.repo.script_records, 'list_creation_task_scripts', forbidden)
     monkeypatch.setattr(main, '_start_device_runtime', forbidden)
     for read_url in (state.url, state.url + '/scripts'):
         initial = state.client.get(read_url)

@@ -160,7 +160,7 @@ class AssistantExecutionBinding:
                 raise ExecutionBindingRejected('creation task not found', kind='not_found') from exc
             if plan.creation_task_id != task.id:
                 raise ExecutionBindingRejected('creation task not found', kind='not_found')
-            script = (self.production.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+            script = (self.production.script_records.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
                       if task.confirmed_script_id else None)
             if not CreationIntentUseCase.adopted_for_execution(plan, script):
                 raise ExecutionBindingRejected('原回合尚无已授权采用的实际文案版本，不能开始制作。')
