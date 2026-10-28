@@ -42,8 +42,8 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
             from app.creation.contracts import TimelineVersion
             from app.creation.transactions import clone_subtitle_track
             copied = clone_subtitle_track(track, timeline_version_id='audio-input')
-            base = repo.get_timeline_version('local', 'timeline')
-            repo.create_timeline_version(TimelineVersion('audio-input', 'local', 'task', 'timeline', 2,
+            base = repo.timeline_records.get_timeline_version('local', 'timeline')
+            repo.timeline_records.create_timeline_version(TimelineVersion('audio-input', 'local', 'task', 'timeline', 2,
                 {**base.snapshot, 'montage':original, 'subtitle_track_ids':[copied.id]}, None))
             repo.create_subtitle_track(copied)
         response = client.post('/api/creation-tasks/task/edits/exact', json=payloads[action])
@@ -86,7 +86,7 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
             original_commit = repo.confirm_direct_edit
             def commit(command, *args, **kwargs):
                 from app.creation.contracts import TimelineVersion
-                repo.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
+                repo.timeline_records.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
                 return original_commit(command, *args, **kwargs)
             monkeypatch.setattr(repo, 'confirm_direct_edit', commit)
         else:
@@ -196,7 +196,7 @@ def test_source_change_after_binding_before_direct_transaction_creates_no_lineag
         assert repo.edit_records.list_edit_intents('local', 'task') == []
         assert repo.edit_records.list_edit_proposals('local', 'task') == []
         assert repo.edit_records.list_edit_operations('local', 'task') == []
-        assert len(repo.list_timeline_versions('local', 'task')) == 1
+        assert len(repo.timeline_records.list_timeline_versions('local', 'task')) == 1
         assert repo.get_creation_task_montage_plan('local', 'task') == original
     finally:
         runtime.stop(0)
@@ -210,7 +210,7 @@ def test_direct_adoption_tail_failure_preserves_verify_order_and_rolls_back_line
     edit_adoption_no_execution(monkeypatch)
     repo = _repository(tmp_path)
     _save_creation_task(repo,workspace_id='workspace_a',task_id='task-a')
-    base = repo.create_timeline_version(TimelineVersion('direct-base','workspace_a','task-a',None,1,{},None))
+    base = repo.timeline_records.create_timeline_version(TimelineVersion('direct-base','workspace_a','task-a',None,1,{},None))
     intent = EditIntent('direct-intent','workspace_a','task-a','declared direct edit','montage',[],None,
         'replace_visual',{}, {},1,'interpreted')
     proposal = EditProposal('direct-proposal','workspace_a','task-a',intent.id,'declared direct adoption',['clip:clip-1'],
@@ -242,7 +242,7 @@ def test_direct_adoption_tail_failure_preserves_verify_order_and_rolls_back_line
     assert repo.edit_records.list_edit_intents('workspace_a','task-a')==[]
     assert repo.edit_records.list_edit_proposals('workspace_a','task-a')==[]
     assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
-    assert repo.list_timeline_versions('workspace_a','task-a')==[base]
+    assert repo.timeline_records.list_timeline_versions('workspace_a','task-a')==[base]
     assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
     confirmed, applied, saved, task = repo.confirm_direct_edit(command,intent,proposal,change,verify_sources=verify)
     assert sources==['before-lineage','before-lineage']

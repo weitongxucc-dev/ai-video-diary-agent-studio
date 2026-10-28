@@ -127,7 +127,7 @@ class SectionTimelineChange:
     def prepare_current(self,workspace_id,task_id,section_id,local,segment,job,*,desired_version=None):
         with self.repository.creation_execution_read() as conn:
             task = self.repository.task_records.get_creation_task(workspace_id,task_id,connection=conn)
-            version = self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
+            version = self.repository.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
             _snapshot,tracks,languages = self.compute(task,version.snapshot,section_id,local,segment,
                 'section-preparation',conn,desired_version=desired_version)
         self.prepare_tracks(task,tracks,languages,job)

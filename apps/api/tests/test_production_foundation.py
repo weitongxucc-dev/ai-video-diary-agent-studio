@@ -615,7 +615,7 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
 
     repo = _repository(tmp_path)
     _save_creation_task(repo, workspace_id="workspace_a", task_id="task-a")
-    base = repo.create_timeline_version(TimelineVersion(
+    base = repo.timeline_records.create_timeline_version(TimelineVersion(
         "base", "workspace_a", "task-a", None, 1, {}, None))
     version = TimelineVersion("delivery", "workspace_a", "task-a", base.id, 2,
         {"subtitle_track_ids": ["delivery-subtitles"], "cover_asset_id": "delivery-cover"}, None)
@@ -629,12 +629,12 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
     with pytest.raises(ValueError, match="封面缺少"):
         with repo._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            repo.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
+            repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
             assert repo.create_subtitle_track(track, connection=conn) == track
             repo.create_cover_asset(replace(cover, title=""), connection=conn)
     assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
     with pytest.raises(KeyError):
-        repo.get_timeline_version("workspace_a", version.id)
+        repo.timeline_records.get_timeline_version("workspace_a", version.id)
     with pytest.raises(KeyError):
         repo.get_subtitle_track("workspace_a", "task-a", track.id)
     with pytest.raises(KeyError):
@@ -642,7 +642,7 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
 
     with repo._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        repo.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
+        repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=base.id)
         assert repo.create_subtitle_track(track, connection=conn) == track
         assert repo.create_cover_asset(cover, connection=conn) == cover
         assert repo.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == base.id
@@ -653,15 +653,17 @@ def test_timeline_subtitle_and_cover_publish_or_roll_back_together(tmp_path):
     assert repo.get_cover_asset("workspace_a", "task-a", cover.id) == cover
     with repo._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        repo.create_timeline_version(base, connection=conn, expected_current_version_id=version.id)
-        assert repo.next_timeline_sequence("workspace_a", "task-a", connection=conn) == 3
+        repo.timeline_records.create_timeline_version(base, connection=conn, expected_current_version_id=version.id)
+        assert repo.timeline_records.next_timeline_sequence("workspace_a", "task-a", connection=conn) == 3
         with pytest.raises(KeyError):
-            repo.next_timeline_sequence("outside", "task-a", connection=conn)
+            repo.timeline_records.next_timeline_sequence("outside", "task-a", connection=conn)
 
 
 def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
     tmp_path,
+    monkeypatch,
 ):
+    edit_adoption_no_execution(monkeypatch)
     production = _repository(tmp_path)
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
@@ -669,7 +671,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
     _save_creation_task(
         production, workspace_id="workspace_b", task_id="task-b"
     )
-    version_one = production.create_timeline_version(
+    version_one = production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-v1",
             workspace_id="workspace_a",
@@ -680,7 +682,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
             created_by_operation_id=None,
         )
     )
-    version_two = production.create_timeline_version(
+    version_two = production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-v2",
             workspace_id="workspace_a",
@@ -692,7 +694,51 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
         )
     )
 
-    assert [item.id for item in production.list_timeline_versions("workspace_a", "task-a")] == [
+    current = production.task_records.get_creation_task("workspace_a", "task-a")
+    assert production.timeline_records.create_timeline_version(version_two) == version_two
+    assert production.task_records.get_creation_task("workspace_a", "task-a").updated_at == current.updated_at
+    with pytest.raises(ValueError, match="当前时间线已变化"):
+        production.timeline_records.create_timeline_version(version_one, expected_current_version_id=None)
+    assert production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version_two.id
+    assert production.timeline_records.create_timeline_version(version_one) == version_one
+    assert production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version_one.id
+    assert production.timeline_records.create_timeline_version(version_two) == version_two
+    with pytest.raises(ValueError, match="不能覆盖"):
+        production.timeline_records.create_timeline_version(
+            replace(version_two, created_at=version_two.created_at + timedelta(microseconds=1)))
+
+    # A historical parent is valid; sequence is based on the latest registered row.
+    pending = TimelineVersion("timeline-pending", "workspace_a", "task-a", version_one.id, 3,
+                              {"tracks": []}, None)
+    with production._connect() as writer:
+        assert not writer.in_transaction
+        assert production.timeline_records.create_timeline_version(version_two, connection=writer) == version_two
+        assert not writer.in_transaction
+        writer.execute("BEGIN IMMEDIATE")
+        production.timeline_records.create_timeline_version(
+            pending, connection=writer, expected_current_version_id=version_two.id)
+        assert writer.in_transaction
+        assert production.timeline_records.get_timeline_version("workspace_a", pending.id, connection=writer) == pending
+        assert production.timeline_records.next_timeline_sequence("workspace_a", "task-a", connection=writer) == 4
+        assert production.task_records.get_creation_task("workspace_a", "task-a", connection=writer).current_timeline_version_id == pending.id
+        with pytest.raises(KeyError):
+            production.timeline_records.get_timeline_version("workspace_a", pending.id)
+        assert production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version_two.id
+        writer.rollback()
+        assert production.timeline_records.next_timeline_sequence("workspace_a", "task-a", connection=writer) == 3
+        assert not writer.in_transaction
+    with production._connect() as conn:
+        conn.execute("CREATE TRIGGER reject_timeline_task_tail BEFORE UPDATE ON creation_tasks "
+                     "WHEN NEW.id='task-a' BEGIN SELECT RAISE(ABORT,'timeline task tail refused'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="timeline task tail refused"):
+        production.timeline_records.create_timeline_version(pending, expected_current_version_id=version_two.id)
+    with pytest.raises(KeyError):
+        production.timeline_records.get_timeline_version("workspace_a", pending.id)
+    assert production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id == version_two.id
+    with production._connect() as conn:
+        conn.execute("DROP TRIGGER reject_timeline_task_tail")
+
+    assert [item.id for item in production.timeline_records.list_timeline_versions("workspace_a", "task-a")] == [
         "timeline-v1",
         "timeline-v2",
     ]
@@ -701,12 +747,12 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
         == version_two.id
     )
     with pytest.raises(KeyError):
-        production.get_timeline_version("workspace_b", version_one.id)
+        production.timeline_records.get_timeline_version("workspace_b", version_one.id)
     with pytest.raises(ValueError, match="不能覆盖"):
-        production.create_timeline_version(
+        production.timeline_records.create_timeline_version(
             replace(version_two, snapshot={"tracks": []})
         )
-    production.create_timeline_version(
+    production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-b-v1",
             workspace_id="workspace_b",
@@ -718,7 +764,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
         )
     )
     with pytest.raises(ValueError, match="父时间线版本"):
-        production.create_timeline_version(
+        production.timeline_records.create_timeline_version(
             TimelineVersion(
                 id="timeline-cross-workspace",
                 workspace_id="workspace_b",
@@ -744,7 +790,7 @@ def test_timeline_versions_are_append_only_workspace_scoped_and_restart_safe(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.get_timeline_version("workspace_a", version_two.id) == version_two
+    assert reloaded.timeline_records.get_timeline_version("workspace_a", version_two.id) == version_two
     assert (
         reloaded.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id
         == version_two.id
@@ -1137,7 +1183,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
         snapshot={"preview_output_ref": artifact.logical_ref},
         created_by_operation_id="operation-replay",
     )
-    production.create_timeline_version(version)
+    production.timeline_records.create_timeline_version(version)
     production.job_records.finish_job_run(
         "workspace_a",
         job.id,
@@ -1149,7 +1195,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
     assert production.lineage_records.create_transform_run(transform) == transform
     assert production.lineage_records.create_dependency_edge(edge) == edge
     assert production.execution_records.append_task_event(event) == event
-    assert production.create_timeline_version(version) == version
+    assert production.timeline_records.create_timeline_version(version) == version
     assert (
         production.task_records.get_creation_task("workspace_a", "task-a").current_timeline_version_id
         == version.id
@@ -1170,7 +1216,7 @@ def test_production_fact_appends_are_strictly_idempotent_on_replay(tmp_path, lin
     with pytest.raises(ValueError, match="领域字段不一致"):
         production.execution_records.append_task_event(replace(event, payload={"artifact_id": "other"}))
     with pytest.raises(ValueError, match="不能覆盖"):
-        production.create_timeline_version(replace(version, snapshot={"changed": True}))
+        production.timeline_records.create_timeline_version(replace(version, snapshot={"changed": True}))
 
 
 def edit_adoption_no_execution(monkeypatch):
@@ -1203,7 +1249,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
     _save_creation_task(
         production, workspace_id="workspace_b", task_id="task-b"
     )
-    base_version = production.create_timeline_version(
+    base_version = production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-edit-base",
             workspace_id="workspace_a",
@@ -1423,7 +1469,7 @@ def test_edit_domain_is_scoped_stateful_atomic_and_restart_safe(tmp_path, monkey
     assert reloaded.edit_records.get_edit_intent("workspace_a", intent.id) == intent
     assert reloaded.edit_records.get_edit_proposal("workspace_a", proposal.id).status == "confirmed"
     assert reloaded.edit_records.get_edit_operation("workspace_a", operation.id) == operation
-    assert reloaded.get_timeline_version("workspace_a", result_version.id) == result_version
+    assert reloaded.timeline_records.get_timeline_version("workspace_a", result_version.id) == result_version
     assert reloaded.edit_records.list_edit_intents("workspace_a", "task-a") == [intent]
     assert len(reloaded.edit_records.list_edit_proposals("workspace_a", "task-a")) == 3
     assert reloaded.edit_records.list_edit_operations("workspace_a", "task-a") == [operation]
@@ -1455,7 +1501,7 @@ def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
     )
-    current_version = production.create_timeline_version(
+    current_version = production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-generic-0",
             workspace_id="workspace_a",
@@ -1572,7 +1618,7 @@ def test_generic_edit_confirmation_is_atomic_for_all_frozen_clip_operations(
         assert applied.operation_type == operation_type
         assert task.current_timeline_version_id == current_version.id
 
-    versions = production.list_timeline_versions("workspace_a", "task-a")
+    versions = production.timeline_records.list_timeline_versions("workspace_a", "task-a")
     assert [version.sequence for version in versions] == list(range(1, 8))
     assert [
         operation.operation_type
@@ -1709,7 +1755,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
             "dependencies": ["narration", "subtitles", "render-output"],
         }
 
-    base_version = production.create_timeline_version(
+    base_version = production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-narration-base",
             workspace_id="workspace_a",
@@ -1887,7 +1933,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         "workspace_a", subtitle_proposal.id
     ).status == "proposed"
     with pytest.raises(KeyError):
-        production.get_timeline_version("workspace_a", subtitle_version.id)
+        production.timeline_records.get_timeline_version("workspace_a", subtitle_version.id)
     assert production.task_records.get_creation_task(
         "workspace_a", "task-narration"
     ).current_timeline_version_id == current_version.id
@@ -1950,7 +1996,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     assert reloaded.list_narration_segments(
         "workspace_a", "task-narration"
     ) == restored_segments
-    assert reloaded.get_timeline_version(
+    assert reloaded.timeline_records.get_timeline_version(
         "workspace_a", restored_version.id
     ).snapshot["subtitle_cues"] == initial_cues
     assert reloaded.task_records.get_creation_task(
@@ -1965,7 +2011,7 @@ def test_creation_task_job_publishes_traceable_artifact_and_recovers_after_resta
     _save_creation_task(
         production, workspace_id="workspace_a", task_id="task-a"
     )
-    version = production.create_timeline_version(
+    version = production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-v1",
             workspace_id="workspace_a",
@@ -4482,7 +4528,7 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
     forbidden = edit_adoption_no_execution(monkeypatch)
     repo = _repository(tmp_path)
     _save_creation_task(repo, workspace_id='workspace_a', task_id='task-a')
-    base = repo.create_timeline_version(TimelineVersion('adoption-base','workspace_a','task-a',None,1,{},None))
+    base = repo.timeline_records.create_timeline_version(TimelineVersion('adoption-base','workspace_a','task-a',None,1,{},None))
     intent = EditIntent('adoption-intent','workspace_a','task-a','declared metadata','montage',[],None,
         'replace_visual',{}, {},1,'interpreted')
     proposal = EditProposal('adoption-proposal','workspace_a','task-a',intent.id,'declared adoption',['clip:clip-1'],
@@ -4527,5 +4573,5 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
     assert repo.edit_records.get_edit_proposal('workspace_a',proposal.id).status=='proposed'
     assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
     assert repo.list_subtitle_tracks('workspace_a','task-a')==[]
-    assert repo.list_timeline_versions('workspace_a','task-a')==[base]
+    assert repo.timeline_records.list_timeline_versions('workspace_a','task-a')==[base]
     assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id

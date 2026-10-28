@@ -103,7 +103,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         4, 0, narration_audio_path="narration://artifact/old")
     payload = creation_task_montage_plan_to_payload(montage)
     state.repo.save_creation_task_montage_plan("local", state.task.id, montage.id, payload)
-    state.base = state.repo.create_timeline_version(TimelineVersion("full-base", "local", state.task.id,
+    state.base = state.repo.timeline_records.create_timeline_version(TimelineVersion("full-base", "local", state.task.id,
         "base", 2, {"montage": payload}, None))
     state.proposal = state.repo.edit_records.create_edit_proposal(replace(state.proposal, id="full-proposal",
         operation={"operation_type": "RegenerateNarrationSegment",
@@ -168,7 +168,7 @@ def test_draft_narration_preview_does_not_require_a_rendered_video(generator_api
     from app.creation.contracts import TimelineVersion
     state = generator_api
     if with_narration_snapshot:
-        state.base = state.repo.create_timeline_version(TimelineVersion("with-audio-snapshot", "local", state.task.id,
+        state.base = state.repo.timeline_records.create_timeline_version(TimelineVersion("with-audio-snapshot", "local", state.task.id,
             state.base.id, 3, {**state.base.snapshot, **main_module._current_narration_snapshot("local", state.task)}, None))
     response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
         "raw_command": "这句以0.7倍速重新配音", "context_stage": "narration",
@@ -284,7 +284,7 @@ def test_draft_narration_requires_current_version_script_and_persisted_audio(gen
     else:
         payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
         payload["cues"][0]["narration_segment_id"] = "another-segment"
-        state.repo.create_timeline_version(TimelineVersion("unbound-version", "local", state.task.id,
+        state.repo.timeline_records.create_timeline_version(TimelineVersion("unbound-version", "local", state.task.id,
             state.base.id, 3, {"montage": payload}, None))
     response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
         "raw_command": "这句以0.7倍速重新配音", "context_stage": "narration",

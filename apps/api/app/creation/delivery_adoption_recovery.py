@@ -137,7 +137,7 @@ class DeliveryAdoptionRecovery:
         from app.montage import creation_task_montage_plan_from_payload
         montage = creation_task_montage_plan_from_payload(current_plan)
         tracks = owner.picture_fragments.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage)
-        version = self.repository.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         cover = owner.picture_fragments.metadata.cover_asset_for_version(job.workspace_id, job.task_id, version) if version is not None else None
         basis = json.loads(json.dumps({'montage': current_plan, 'subtitles': [asdict(track) for track in tracks or []],
             'narration': owner.picture_fragments.metadata.current_narration_snapshot(job.workspace_id, task),

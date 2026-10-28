@@ -241,7 +241,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     task = CreationTask(id=task_id, workspace_id=workspace, plan_id=plan.id,
                         name=plan.name, scenario=plan.goal)
     repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member)
-    repository.create_timeline_version(TimelineVersion(
+    repository.timeline_records.create_timeline_version(TimelineVersion(
         id=version_id, workspace_id=workspace, task_id=task_id, parent_version_id=None,
         sequence=1, snapshot={"montage": {"output_path": ref}, "output_refs": [ref]},
         created_by_operation_id=None,
@@ -262,7 +262,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
 
     def output_for(ws, current_task_id, user_id):
         persisted_task = repository.task_records.get_creation_task(ws, current_task_id)
-        persisted_version = repository.get_timeline_version(ws, version_id)
+        persisted_version = repository.timeline_records.get_timeline_version(ws, version_id)
         assert user_id == member and persisted_task.output_ready
         assert persisted_task.current_timeline_version_id == version_id
         assert persisted_version.snapshot["montage"]["output_path"] == ref

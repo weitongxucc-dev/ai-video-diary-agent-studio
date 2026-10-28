@@ -23,7 +23,7 @@ def typed_settings(request, monkeypatch):
 
 def bound(state, **action):
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     return {"request_id": str(uuid4()), "expected_timeline_version_id": version.id,
             "expected_timeline_sequence": version.sequence, **action}
 
@@ -357,7 +357,7 @@ def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http
     assert len(wakes) == 2
     assert recovered.json()["operation"] == saved["operation"]
     assert state.repo.task_records.get_creation_task('ws', state.task.id).narration_cache_key == state.narration.cache_key
-    assert state.repo.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
+    assert state.repo.timeline_records.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
     assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
 
 
@@ -370,7 +370,7 @@ def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tm
         operation_type='ChangeCrop', clip_id='clip', fit_mode='fit', crop_x=.3, crop_y=.7))
     assert cropped.status_code == 200, cropped.text
     before = state.repo.task_records.get_creation_task('ws', state.task.id)
-    base = state.repo.get_timeline_version('ws', before.current_timeline_version_id)
+    base = state.repo.timeline_records.get_timeline_version('ws', before.current_timeline_version_id)
     original = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     payload = {'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add',
         'graphic_overlay': {'kind': 'text', 'text': '公开素材演示', 'start_seconds': 0, 'end_seconds': 3},
@@ -380,7 +380,7 @@ def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tm
     assert response.status_code == 200, response.text
     saved = response.json()
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
-    version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
     montage = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     layer, = montage['graphic_overlays']
     assert layer['id'].startswith('overlay_') and layer['text'] == '公开素材演示'
@@ -389,14 +389,14 @@ def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tm
     assert montage['cues'] == original['cues'] and montage['audio_timeline'] == original['audio_timeline']
     assert montage['narration_audio_path'] == original['narration_audio_path']
     assert task.narration_cache_key == before.narration_cache_key
-    versions = state.repo.list_timeline_versions('ws', state.task.id)
+    versions = state.repo.timeline_records.list_timeline_versions('ws', state.task.id)
     operations = state.repo.edit_records.list_edit_operations('ws', state.task.id)
     with monkeypatch.context() as replay:
         replay.setattr(CreationTaskExactEditRequest, 'action_values',
             lambda self: pytest.fail('recorded replay must not normalize or save another graphic'))
         repeated = state.client.post(url + '/edits/exact', json=payload)
     assert repeated.status_code == 200 and repeated.json() == saved
-    assert state.repo.list_timeline_versions('ws', state.task.id) == versions
+    assert state.repo.timeline_records.list_timeline_versions('ws', state.task.id) == versions
     assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == operations
     assert state.repo.get_creation_task_montage_plan('ws', state.task.id)['graphic_overlays'] == [layer]
     journal = state.client.get(url + f"/assistant/edit-requests/{payload['request_id']}?phase=apply")
@@ -413,10 +413,10 @@ def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tm
     restored = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     assert restored['graphic_overlays'] == original['graphic_overlays'] == []
     assert restored['clips'] == original['clips'] and restored['audio_timeline'] == original['audio_timeline']
-    after_undo = state.repo.list_timeline_versions('ws', state.task.id)
+    after_undo = state.repo.timeline_records.list_timeline_versions('ws', state.task.id)
     replayed = state.client.post(url + '/edits/exact', json=payload)
     assert replayed.status_code == 200 and replayed.json() == saved
-    assert state.repo.list_timeline_versions('ws', state.task.id) == after_undo
+    assert state.repo.timeline_records.list_timeline_versions('ws', state.task.id) == after_undo
     assert state.repo.get_creation_task_montage_plan('ws', state.task.id)['graphic_overlays'] == []
 
 
@@ -447,7 +447,7 @@ def test_metadata_patch_routes_consume_use_case_without_route_reentry(metadata_h
     assert plan['cues'][0]['text'] == "只更新这句字幕"
     assert plan['narration_audio_path'] == state.plan.narration_audio_path
     assert current.narration_cache_key == state.narration.cache_key
-    assert len(state.repo.list_timeline_versions('ws', state.task.id)) == 3
+    assert len(state.repo.timeline_records.list_timeline_versions('ws', state.task.id)) == 3
 
 
 def test_metadata_http_refuses_stale_or_foreign_inputs(metadata_http_state):
@@ -681,12 +681,12 @@ def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(t
     from test_timeline_restore_application import restore_http_state
     state = restore_http_state(tmp_path, monkeypatch)
     original = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    original_version = state.production.get_timeline_version(state.workspace_id, original.current_timeline_version_id)
+    original_version = state.production.timeline_records.get_timeline_version(state.workspace_id, original.current_timeline_version_id)
     saved = state.client.post(state.base_url + "/edits/exact", json=bound(state,
         operation_type="ChangeCrop", clip_id="clip", fit_mode="fit", crop_x=.3, crop_y=.7))
     assert saved.status_code == 200, saved.text
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     undo = state.base_url + "/timeline/undo"
     stale = state.client.post(undo, json={"expected_timeline_version_id": original_version.id, "expected_timeline_sequence": original_version.sequence})
     assert stale.status_code == 409
@@ -701,7 +701,7 @@ def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(t
     undone = state.client.post(undo, json=expected)
     assert undone.status_code == 200, undone.text
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    undo_version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    undo_version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     redone = state.client.post(state.base_url + "/timeline/redo", json={
         "expected_timeline_version_id": undo_version.id, "expected_timeline_sequence": undo_version.sequence})
     assert redone.status_code == 200, redone.text
@@ -973,7 +973,7 @@ def test_subtitle_family_public_preview_confirm_fixed_read_preserves_other_facts
     result = state.client.get(result_url)
     assert result.status_code == 200 and result.json()['result']['operation'] == accepted.json()['operation']
     current = state.repo.task_records.get_creation_task('ws', state.task.id)
-    version = state.repo.get_timeline_version('ws', current.current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version('ws', current.current_timeline_version_id)
     after_plan = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     assert after_plan['clips'] == before_plan['clips'] and after_plan['audio_timeline'] == before_plan['audio_timeline']
     assert current.narration_cache_key == state.narration.cache_key
@@ -1000,7 +1000,7 @@ def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snaps
     en = replace(clone_subtitle_track(state.en, timeline_version_id='structure-start', track_id='structure-en'),
         source_language=None, generation_method='timeline')
     cover = clone_cover_asset(state.cover, timeline_version_id='structure-start')
-    state.repo.create_timeline_version(TimelineVersion('structure-start', 'ws', state.task.id, state.base.id, 3,
+    state.repo.timeline_records.create_timeline_version(TimelineVersion('structure-start', 'ws', state.task.id, state.base.id, 3,
         {**state.base.snapshot, 'subtitle_track_ids': [zh.id, en.id], 'cover_asset_id': cover.id}, None))
     state.repo.create_subtitle_track(zh)
     state.repo.create_subtitle_track(en)
@@ -1034,7 +1034,7 @@ def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snaps
         'operation_type': 'DeleteSubtitleCue', 'track_id': remaining.id, 'cue_id': remaining.cues[0].id})
     assert direct.status_code == 200, direct.text
     task = state.repo.task_records.get_creation_task('ws', task.id)
-    version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
     assert version.snapshot['subtitle_track_ids'] == []
     assert state.case.current_subtitle_tracks('ws', task, current_version=version, montage=state.plan) == []
 
@@ -1145,7 +1145,7 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
         'expected_input_digest': fixed.json()['input_digest']})
     assert accepted.status_code == 200, accepted.text
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
-    version = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
     assert version.sequence == 4 and len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
     after = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     assert after['clips'][0]['visual_effects']['exposure'] == .25 and after['clips'][1] == before['clips'][1]

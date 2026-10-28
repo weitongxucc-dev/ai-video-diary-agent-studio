@@ -23,7 +23,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
     montage["clips"][0]["needs_confirmation"] = True
     montage["low_confidence_clip_count"] = 1
     state.repo.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
-    state.base = state.repo.create_timeline_version(TimelineVersion("waiting-base", "local", state.task.id,
+    state.base = state.repo.timeline_records.create_timeline_version(TimelineVersion("waiting-base", "local", state.task.id,
         "full-base", 3, {"montage": montage}, None))
     with state.repo._connect() as connection:
         task = state.repo.task_records.get_creation_task("local", state.task.id)

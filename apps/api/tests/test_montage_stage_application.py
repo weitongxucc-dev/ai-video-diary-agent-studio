@@ -134,7 +134,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
             time.sleep(.1)
         task = repo.task_records.get_creation_task('local', task_id)
         montage = repo.get_creation_task_montage_plan('local', task_id)
-        versions = repo.list_timeline_versions('local', task_id)
+        versions = repo.timeline_records.list_timeline_versions('local', task_id)
         assert montage['status'] == task.stage_status == task.status == 'waiting_for_user'
         assert task.stage == 'montage' and not task.output_ready
         assert len(montage['clips']) == len(montage['cues']) == montage['low_confidence_clip_count'] == 1
@@ -161,7 +161,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert public.status_code == montage_public.status_code == 200, (public.text, montage_public.text)
         assert montage_public.json()['montage']['id'] == montage['id'] and montage_public.json()['montage']['status'] == 'waiting_for_user'
         assert not runtime.run_once()
-        assert calls == before_queries and len(repo.list_timeline_versions('local', task_id)) == 1
+        assert calls == before_queries and len(repo.timeline_records.list_timeline_versions('local', task_id)) == 1
         assert not repo.list_person_renders('local', task_id) and not repo.lineage_records.list_transform_runs('local', task_id)
         assert not repo.execution_records.list_artifact_records('local', task_id)
         stopped = client.post(url + '/execution/cancel')
@@ -279,7 +279,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
             with pytest.raises(KeyboardInterrupt):
                 case.executor.execute(grant, case.scheduler)
             assert case.repo.task_records.get_creation_task('local', case.task.id).montage_plan_id
-            assert not case.repo.list_timeline_versions('local', case.task.id)
+            assert not case.repo.timeline_records.list_timeline_versions('local', case.task.id)
             monkeypatch.setattr(case.stage.metadata, 'ensure_montage_base', original)
             if outcome == 'save_base_gap_changed_audio':
                 with case.repo._connect() as conn:
@@ -315,24 +315,24 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
         if outcome in {'tail', 'revoked'}:
             assert injected
             assert current.montage_plan_id is None
-            assert not case.repo.list_timeline_versions('local', case.task.id)
+            assert not case.repo.timeline_records.list_timeline_versions('local', case.task.id)
         elif outcome == 'save_base_gap_changed_audio':
             assert current.montage_plan_id
-            assert not case.repo.list_timeline_versions('local', case.task.id)
+            assert not case.repo.timeline_records.list_timeline_versions('local', case.task.id)
             assert case.scheduler._get(grant.request_id).state != 'done'
         elif outcome == 'checkpoint_revoked':
             assert current.montage_plan_id
-            assert len(case.repo.list_timeline_versions('local', case.task.id)) == 1
+            assert len(case.repo.timeline_records.list_timeline_versions('local', case.task.id)) == 1
             assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'interrupted'
             assert case.scheduler._get(grant.request_id).state != 'done'
         else:
             assert current.stage_status == 'waiting_for_user', (current.stage_repair_action, case.repo.job_records.get_job_run('local', grant.owner_id).failure_reason)
-            versions = case.repo.list_timeline_versions('local', case.task.id)
+            versions = case.repo.timeline_records.list_timeline_versions('local', case.task.id)
             assert len(versions) == 1
             assert [row['id'] for row in versions[0].snapshot['narration_segments']] == [row.id for row in reversed(case.rows)]
             assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'queued'
             same = case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
                 case.runtime, verify_media=False)
-            assert len(builds) == 1 and len(case.repo.list_timeline_versions('local', case.task.id)) == 1
+            assert len(builds) == 1 and len(case.repo.timeline_records.list_timeline_versions('local', case.task.id)) == 1
     finally:
         case.scheduler.close()

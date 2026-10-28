@@ -42,8 +42,8 @@ def preview_crop(state, clip_index=1, **values):
 
 
 def advance_version(state, version_id):
-    base = state.production.get_timeline_version(state.workspace_id, version_id)
-    return state.production.create_timeline_version(TimelineVersion(
+    base = state.production.timeline_records.get_timeline_version(state.workspace_id, version_id)
+    return state.production.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline-crop-concurrent", workspace_id=state.workspace_id,
         task_id=state.task.id, parent_version_id=base.id, sequence=base.sequence + 1,
         snapshot=base.snapshot, created_by_operation_id=None,

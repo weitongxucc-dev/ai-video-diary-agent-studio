@@ -28,7 +28,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     raw = "把当前镜头裁剪到左边，保留旁白"
     conversation = conversations.save_draft(conversation["id"], state.workspace_id, state.member.member_id, raw, conversation["draft_version"])
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     turn, _ = conversations.create_turn_idempotent(conversation["id"], state.workspace_id, state.member.member_id,
         raw, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": task.id,
         "target_snapshot": {"timeline_version_id": version.id, "timeline_sequence": version.sequence}})
@@ -128,7 +128,7 @@ def test_stopped_old_or_foreign_target_does_not_resume_an_actionable_turn(state,
     state.finish("stopped" if change == "stopped" else "completed")
     assert state.runtime.run_once()
     if change == "stale":
-        state.production.create_timeline_version(replace(state.version, id="concurrent-version", parent_version_id=state.version.id, sequence=state.version.sequence + 1))
+        state.production.timeline_records.create_timeline_version(replace(state.version, id="concurrent-version", parent_version_id=state.version.id, sequence=state.version.sequence + 1))
     elif change == "revoked":
         state.members.remove_member(state.member.member_id)
     elif change == "other_member":

@@ -381,7 +381,7 @@ class QualityInspectionUseCase:
                 source["task_id"], "rendered_video", source["source_ref"], source["render_ref"], source["size_bytes"]):
             raise ValueError("质检固定来源产物已变化")
         if source["timeline_version_id"] is not None:
-            version = self.production.get_timeline_version(source["workspace_id"], source["timeline_version_id"])
+            version = self.production.timeline_records.get_timeline_version(source["workspace_id"], source["timeline_version_id"])
             if version.task_id != source["task_id"] or source["source_ref"] not in version.snapshot.get("output_refs", []):
                 raise ValueError("质检固定版本与登记产物不一致")
         from app.creation.duration_requirement import DurationRequirement

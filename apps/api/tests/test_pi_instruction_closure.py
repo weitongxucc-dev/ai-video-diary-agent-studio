@@ -91,7 +91,7 @@ def test_server_rechecks_running_owner_and_timeline(bound_turn, monkeypatch):
         main._bind_assistant_edit_instruction(req, task, payload)
     assert caught.value.status_code == 404
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "qa")
-    production.create_timeline_version(TimelineVersion(id="changed", workspace_id="qa", task_id="task", parent_version_id=None,
+    production.timeline_records.create_timeline_version(TimelineVersion(id="changed", workspace_id="qa", task_id="task", parent_version_id=None,
                                                      sequence=1, snapshot={}, created_by_operation_id=None))
     task = production.task_records.get_creation_task("qa", "task")
     with pytest.raises(HTTPException, match="版本已变化"):

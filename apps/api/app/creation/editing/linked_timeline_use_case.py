@@ -177,7 +177,7 @@ class LinkedTimelineEditUseCase:
         if not operations:
             return None
         operation = operations[0]
-        version = self.repository.get_timeline_version(task.workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, operation.result_version_id)
         montage = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return MetadataEditResult(operation, montage, task, None)
 
@@ -191,7 +191,7 @@ class LinkedTimelineEditUseCase:
         operation_payload = proposal.operation.get('payload')
         if task.current_timeline_version_id != operation_payload.get('base_version_id'):
             raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新预览停顿剪辑。')
-        base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        base = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
         tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
         try:
@@ -257,7 +257,7 @@ class LinkedTimelineEditUseCase:
             control.actor_identity, base_id, operation, payload, source), bound)
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
         verifier.verify(command, None)
-        base = self.repository.get_timeline_version(control.workspace_id, base_id)
+        base = self.repository.timeline_records.get_timeline_version(control.workspace_id, base_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(control.workspace_id, control.task_id))
         tracks = self.montage_edits.current_subtitle_tracks(control.workspace_id, task, current_version=base, montage=plan)
         if operation == 'ChangeLinkedSpeed':

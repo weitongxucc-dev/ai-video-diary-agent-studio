@@ -279,7 +279,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
             ('montage','local','task',json.dumps(creation_task_montage_plan_to_payload(plan)),task.updated_at.isoformat()))
-    repo.create_timeline_version(TimelineVersion('timeline','local','task',None,1,
+    repo.timeline_records.create_timeline_version(TimelineVersion('timeline','local','task',None,1,
         {'montage':creation_task_montage_plan_to_payload(plan)},None))
     before = len(repo.job_records.list_job_runs('local','task'))
     draft = client.post('/api/creation-tasks/task/audio/preview?draft=true', json={

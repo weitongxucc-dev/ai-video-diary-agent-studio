@@ -89,7 +89,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     assert case.generated == original_audio_calls
     current = case.repo.task_records.get_creation_task('local', case.task_id)
     assert current.current_timeline_version_id != parent_head
-    version = case.repo.get_timeline_version('local', current.current_timeline_version_id)
+    version = case.repo.timeline_records.get_timeline_version('local', current.current_timeline_version_id)
     assert version.parent_version_id == parent_head and version.snapshot['audio_delivery']['job_id'] == job.id
     assert final_job.output_refs == version.snapshot['output_refs'] and len(final_job.output_refs) == 2
     subtitle = case.repo.execution_records.get_artifact_record('local', version.snapshot['audio_delivery']['subtitle_artifact_id'])

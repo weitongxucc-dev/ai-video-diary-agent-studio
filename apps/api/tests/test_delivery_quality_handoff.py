@@ -80,7 +80,7 @@ def test_original_delivery_runs_complete_quality_worker(tmp_path, monkeypatch):
         assert job_id == case.job.id
         assert case.repo.job_records.get_job_run(workspace_id, job_id).status == 'succeeded'
         task = case.repo.task_records.get_creation_task(workspace_id, task_id)
-        version = case.repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        version = case.repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         assert version.snapshot['audio_delivery']['job_id'] == job_id
         downloaded = outputs.download(workspace_id, task_id, expected_version_id=version.id, subtitle=False)
         _, _, path, artifact = outputs.quality_source_metadata(workspace_id, task_id)

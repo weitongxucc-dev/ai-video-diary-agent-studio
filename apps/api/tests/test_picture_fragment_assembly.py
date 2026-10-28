@@ -56,7 +56,7 @@ def _leaf_case(tmp_path, monkeypatch):
     montage.graphic_overlays = [{'kind': 'text', 'id': 'title', 'text': '原图层', 'start_seconds': .4,
         'end_seconds': 1.8, 'x': .5, 'y': .15, 'width': .8}]
     case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
-    case.repo.create_timeline_version(TimelineVersion(id='approved-picture-head', workspace_id='local', task_id=case.task_id,
+    case.repo.timeline_records.create_timeline_version(TimelineVersion(id='approved-picture-head', workspace_id='local', task_id=case.task_id,
         parent_version_id=None, sequence=1, created_by_operation_id=None, snapshot={'montage_plan': creation_task_montage_plan_to_payload(montage)}))
     store = ArtifactStore(tmp_path/'artifacts')
     audio = TaskAudio(case.repo, store, tmp_path/'audio')

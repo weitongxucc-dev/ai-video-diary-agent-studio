@@ -516,7 +516,7 @@ class CreationExecutionControl:
         if source is not None:
             return source
         base_id=proposal.operation['payload']['base_version_id']
-        base=self.repository.get_timeline_version(task.workspace_id,base_id)
+        base=self.repository.timeline_records.get_timeline_version(task.workspace_id,base_id)
         return {'source_kind':'interactive','workspace_id':task.workspace_id,'task_id':task.id,
             'member_id':actor.user_id or actor.member_id,'actor_identity':actor.identity_payload(),
             'proposal_id':proposal.id,'expected_timeline_version_id':base.id,'expected_timeline_sequence':base.sequence}

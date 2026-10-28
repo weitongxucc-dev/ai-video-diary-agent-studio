@@ -70,7 +70,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         "assistant_turn_id": turn["id"], "request_id": request_id, "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
     assert changed.status_code == 200, changed.text
     operation = changed.json()["operation"]
-    edit_version = state.repo.get_timeline_version("ws", operation["result_version_id"])
+    edit_version = state.repo.timeline_records.get_timeline_version("ws", operation["result_version_id"])
     job = state.repo.job_records.create_job_run(JobRun("render", "ws", state.task.id, "creation_task_execution", "render", "declared-input"))
     state.repo.job_records.claim_job_run("ws", job.id)
     source = {"workspace_id": "ws", "task_id": state.task.id, "member_id": state.member.member_id,
@@ -88,7 +88,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         rendered_montage.update(status="rendered", output_path=str(tmp_path/"declared-output.mp4"), subtitle_path=state.track.artifact_ref)
         state.repo.save_creation_task_montage_plan("ws", state.task.id, rendered_montage["id"], rendered_montage)
         snapshot = {key: value for key, value in edit_version.snapshot.items() if key != "subtitle_track_ids"}
-        state.repo.create_timeline_version(replace(edit_version, id="render-version", parent_version_id=edit_version.id, sequence=edit_version.sequence+1,
+        state.repo.timeline_records.create_timeline_version(replace(edit_version, id="render-version", parent_version_id=edit_version.id, sequence=edit_version.sequence+1,
             snapshot={**snapshot, "montage": rendered_montage, "transform_run_id": "declared-render", "creation_render_request_id": "published-render", "render_input_timeline_version_id": edit_version.id}))
         state.repo.job_records.finish_job_run("ws", job.id, status="succeeded")
     repo.finish_turn(turn["id"], "completed", "修改已保存；尚未重新生成视频。", {"kind": "task_turn", "response": {
@@ -160,7 +160,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     stored = repo.get_task_goal(turn["id"])["request_context"]
     assert stored == context, "the original user snapshot must stay immutable"
     assert repo.get(chat["id"], "ws", state.member.member_id)["selected_reference"] == selected
-    foreign = replace(state.repo.get_timeline_version("ws", "render-version"), id="unrelated", parent_version_id="render-version", sequence=edit_version.sequence+2, snapshot={})
-    state.repo.create_timeline_version(foreign)
+    foreign = replace(state.repo.timeline_records.get_timeline_version("ws", "render-version"), id="unrelated", parent_version_id="render-version", sequence=edit_version.sequence+2, snapshot={})
+    state.repo.timeline_records.create_timeline_version(foreign)
     owner = GoalResultProjection(state.repo, repo)
     assert owner.selection_version_chain(repo.get_task_goal(turn["id"]), foreign) is None

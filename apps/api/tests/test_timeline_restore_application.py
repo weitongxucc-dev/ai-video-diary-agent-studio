@@ -53,7 +53,7 @@ def restore_state(tmp_path, *, empty=False):
         snapshot['subtitle_track_ids'] = [track.id for track in tracks]
         snapshot['cover_asset_id'] = state.cover.id
     state.base = TimelineVersion('restore-base', 'ws', task.id, state.base.id, 3, snapshot, None)
-    state.repo.create_timeline_version(state.base)
+    state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
         state.repo.create_subtitle_track(track)
     if not empty:
@@ -121,13 +121,13 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
     assert MetadataEditUseCase.narration_segments_from_snapshot({'narration_segments': []}) == []
     with pytest.raises(ValueError, match='快照无效'):
         MetadataEditUseCase.narration_segments_from_snapshot({'narration_segments': [1]})
-    original_versions = {v.id: v for v in state.repo.list_timeline_versions('ws', state.task.id)}
+    original_versions = {v.id: v for v in state.repo.timeline_records.list_timeline_versions('ws', state.task.id)}
     first = crop_save(state, .3)
     second = crop_save(state, .6)
-    second_version = state.repo.get_timeline_version('ws', second.operation.result_version_id)
+    second_version = state.repo.timeline_records.get_timeline_version('ws', second.operation.result_version_id)
     render_only = replace(second_version, id='render-only', parent_version_id=second_version.id,
         sequence=second_version.sequence + 1, created_by_operation_id=None)
-    state.repo.create_timeline_version(render_only)
+    state.repo.timeline_records.create_timeline_version(render_only)
     prepared = state.application.prepare_restore(TimelineRestoreCommand('ws',
         state.repo.task_records.get_creation_task('ws', state.task.id), False))
     before = editorial_rows(state.repo)
@@ -168,8 +168,8 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
     assert state.repo.task_records.get_creation_task('ws', state.task.id).narration_cache_key == state.narration.cache_key
     assert state.narration.audio_path and state.case.output_root.joinpath('artifacts/task/fixed-narration.wav').stat().st_size > 0
     for version_id, version in original_versions.items():
-        assert state.repo.get_timeline_version('ws', version_id) == version
-    assert state.repo.get_timeline_version('ws', render_only.id) == render_only
+        assert state.repo.timeline_records.get_timeline_version('ws', version_id) == version
+    assert state.repo.timeline_records.get_timeline_version('ws', render_only.id) == render_only
 
 
 def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_path, monkeypatch):
@@ -189,10 +189,10 @@ def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_p
         base_version=state.base, result_version_id=result_id, operation_type='ChangeCanvas',
         operation_payload={'base_version_id': state.base.id}, subtitle_tracks=tracks, cover_asset=cover,
         updated_plan=plan, narration_segments=state.segments, narration_artifact=state.narration)
-    edited_version = state.repo.get_timeline_version('ws', edited.operation.result_version_id)
+    edited_version = state.repo.timeline_records.get_timeline_version('ws', edited.operation.result_version_id)
     prepared, undone = restore(state, monkeypatch)
     assert prepared.subtitle_cover_undo
-    version = state.repo.get_timeline_version('ws', undone.operation.result_version_id)
+    version = state.repo.timeline_records.get_timeline_version('ws', undone.operation.result_version_id)
     assert version.snapshot['subtitle_track_ids'] == [] and 'cover_asset_id' not in version.snapshot
     assert [row['id'] for row in version.snapshot['narration_segments']] == ['fixed-segment']
     assert state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id) == []
@@ -201,11 +201,11 @@ def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_p
     assert set(state.repo.edit_records.get_edit_proposal('ws', undone.operation.proposal_id).invalidated_refs) == {
         tracks[0].artifact_ref, cover.artifact_ref}
     _prepared, redone = restore(state, monkeypatch, redo=True)
-    restored = state.repo.get_timeline_version('ws', redone.operation.result_version_id)
+    restored = state.repo.timeline_records.get_timeline_version('ws', redone.operation.result_version_id)
     rows = state.repo.list_subtitle_tracks('ws', state.task.id, timeline_version_id=restored.id)
     assert len(rows) == 1 and rows[0].id != tracks[0].id and rows[0].cues == tracks[0].cues
     restored_cover = state.repo.get_cover_asset('ws', state.task.id, restored.snapshot['cover_asset_id'])
     assert restored_cover.id != cover.id and restored_cover.artifact_ref == cover.artifact_ref
     assert [row['id'] for row in restored.snapshot['narration_segments']] == ['fixed-segment']
-    assert state.repo.get_timeline_version('ws', state.base.id) == state.base
-    assert state.repo.get_timeline_version('ws', edited_version.id) == edited_version
+    assert state.repo.timeline_records.get_timeline_version('ws', state.base.id) == state.base
+    assert state.repo.timeline_records.get_timeline_version('ws', edited_version.id) == edited_version

@@ -94,7 +94,7 @@ def material_execution_input(state):
     state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,montage.id,payload)
     state.version=replace(state.version,id="material-execution-input",parent_version_id=state.version.id,
         sequence=state.version.sequence+1,snapshot={**state.version.snapshot,"montage":payload})
-    state.production.create_timeline_version(state.version)
+    state.production.timeline_records.create_timeline_version(state.version)
 
 
 def test_assistant_scope_reads_registered_image_overlay_from_persisted_montage(state):
@@ -296,7 +296,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         new_instruction = "新的独立指令：重新生成同名图片"
         chat = state.conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, new_instruction, chat["draft_version"])
         task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-        version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+        version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
         new = state.raw_post(state.base_url + "/assistant/turn", json={"conversation_id": chat["id"], "message": new_instruction,
             "client_request_id": str(uuid4()), "expected_draft_version": chat["draft_version"], "context_stage": "montage",
             "selected_object_refs": [], "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
@@ -484,7 +484,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
     state.production.job_records.claim_job_run(state.workspace_id, jobs[0].id)
     state.production.job_records.finish_job_run(state.workspace_id, jobs[0].id, status="succeeded")
     if stale:
-        state.production.create_timeline_version(replace(state.version, id="unrelated-version", sequence=2,
+        state.production.timeline_records.create_timeline_version(replace(state.version, id="unrelated-version", sequence=2,
                                                          parent_version_id=state.version.id, snapshot={}))
     main.start_assistant_continuation_driver()
     expected = "invalidated" if stale else "no_progress"
@@ -827,7 +827,7 @@ def execution_http_state(tmp_path, monkeypatch):
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
             (json.dumps(asdict(task), default=str), task.id))
-    version = repo.create_timeline_version(TimelineVersion(
+    version = repo.timeline_records.create_timeline_version(TimelineVersion(
         'http-source-version', 'local', task.id, None, 1, {}, None))
     conversations = ConversationRepository(root / 'conversations.sqlite3')
     chat = conversations.create('local', member.member_id, 'task', task.id)
@@ -1176,7 +1176,7 @@ def test_execution_binding_preserves_source_actor_and_receipt_error_order(execut
     with pytest.raises(HTTPException) as bad_receipt:
         main._bind_assistant_execution_result('missing', object(), state.turn_id, {})
     assert bad_receipt.value.status_code == 502 and calls == []
-    state.production.create_timeline_version(TimelineVersion('unrelated-head', state.workspace_id,
+    state.production.timeline_records.create_timeline_version(TimelineVersion('unrelated-head', state.workspace_id,
         task_id, state.version.id, 2, {}, None))
     with pytest.raises(HTTPException) as stale:
         main._assistant_execution_source(task_id, request, state.turn_id, 'start')
@@ -1264,7 +1264,7 @@ def test_execution_binding_late_input_and_version_gate_precede_actor_and_write(e
     assert main._bind_assistant_execution_observation(state.task.id, state.request, state.turn_id,
         {'input_id':old_input, 'input_turn_id':state.turn_id}, result) is result
     assert actor_calls == []
-    state.production.create_timeline_version(TimelineVersion('changed-head', state.workspace_id,
+    state.production.timeline_records.create_timeline_version(TimelineVersion('changed-head', state.workspace_id,
         state.task.id, state.version.id, 2, {}, None))
     assert main._bind_assistant_execution_observation(state.task.id, state.request, state.turn_id,
         {'input_id':new_input, 'input_turn_id':state.turn_id}, result) is result
@@ -1292,7 +1292,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     repo.edit_records.create_edit_proposal(EditProposal('binding-edit-proposal', state.workspace_id, task.id,
         'binding-edit-intent', 'declared committed edit', ['clip://declared-clip'], {'operation_type':'ChangeCrop'}, [], {}, []))
     repo.edit_records.transition_edit_proposal(state.workspace_id, task.id, 'binding-edit-proposal', status='confirmed')
-    version = repo.create_timeline_version(TimelineVersion('committed-edit-head', state.workspace_id, task.id,
+    version = repo.timeline_records.create_timeline_version(TimelineVersion('committed-edit-head', state.workspace_id, task.id,
         state.version.id, 2, {}, 'binding-edit-operation'))
     from app.models import utc_now
     applied_at = utc_now()
@@ -1519,7 +1519,7 @@ def media_result_state(receipt_state, monkeypatch, tmp_path):
     slot = main._goal_script_source_slot(goal,job.id,actor)
     assert conversations.record_goal_completed_sources(state.turn_id,[slot],expected_goal=goal)
     # Adoption is an input fact here, not a claim to exercise the editor or renderer.
-    version = repo.create_timeline_version(TimelineVersion('declared-adopted-version','local',state.task.id,None,1,{'montage':{}},None))
+    version = repo.timeline_records.create_timeline_version(TimelineVersion('declared-adopted-version','local',state.task.id,None,1,{'montage':{}},None))
     event = {'type':'business_result','event_id':'declared-actual-adoption','phase':'apply','status':'confirmed',
         'task_id':state.task.id,'job_id':job.id,'base_version_id':None,'result_version_id':version.id,'actionable':False}
     assert conversations.project_business_result(state.turn_id,'local',actor.member_id,event,
@@ -1558,7 +1558,7 @@ def test_media_result_completed_slot_keeps_adopted_chain_and_rechecks_file(media
             requested_outputs=[{**state.contract,'name':'new-slot.png'}],input_refs=[]) is None
         # A real task version change without updating the original goal is refused.
         from dataclasses import replace
-        state.production.create_timeline_version(replace(state.version,id='unbound-later-version',parent_version_id=state.version.id,sequence=2))
+        state.production.timeline_records.create_timeline_version(replace(state.version,id='unbound-later-version',parent_version_id=state.version.id,sequence=2))
         task = state.production.task_records.get_creation_task('local',state.task.id)
         with pytest.raises(main.HTTPException) as stale:
             main._completed_media_result(task,state.request,state.child_id,state.slot,contract=state.contract,input_refs=[])

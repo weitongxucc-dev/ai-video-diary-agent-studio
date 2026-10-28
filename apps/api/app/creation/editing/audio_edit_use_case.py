@@ -164,7 +164,7 @@ class AudioEditUseCase:
             if isinstance(exc,AudioEditRejected):raise
             raise AudioEditRejected(409,'音频提案不再适用，请检查源文件并重新预览') from exc
         prepare_changed_montage(changed,message='音轨已更新，可以试听或重新渲染成片。')
-        base=self.repository.get_timeline_version(task.workspace_id,task.current_timeline_version_id)
+        base=self.repository.timeline_records.get_timeline_version(task.workspace_id,task.current_timeline_version_id)
         guard=AudioEditSourceGuard(self,task,proposal,actor,before,expected,verifier)
         return self.montage_edits.persist_montage_edit(workspace_id=task.workspace_id,task=task,proposal=proposal,
             base_version=base,updated_plan=changed,operation_type='EditAudioTimeline',operation_payload=payload,
@@ -249,7 +249,7 @@ class AudioEditUseCase:
     def seal(self, workspace_id, task_id, operation, arguments, actor, budget):
         task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         source=arguments.get('_typed_source')
-        version=self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version=self.repository.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
         if source is not None and (source['workspace_id'],source['task_id'],source['member_id'],source['expected_timeline_version_id'],source['expected_timeline_sequence']) != (
                 workspace_id,task_id,actor.user_id or actor.member_id,task.current_timeline_version_id,version.sequence if version else 0):
             raise ValueError('封存的类型化编辑输入或成员已失效')

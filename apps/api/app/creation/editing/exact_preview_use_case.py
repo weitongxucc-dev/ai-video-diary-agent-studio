@@ -209,7 +209,7 @@ class ExactPreviewUseCase:
             raise EditPreviewRejected(403,'原请求不能归入另一轮次或输入')
 
     def typed_source(self, task, payload, member_id):
-        version = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if not {'expected_timeline_version_id', 'expected_timeline_sequence'} <= payload.model_fields_set:
             raise EditPreviewRejected(status_code=422, detail='类型化请求须绑定期望时间线版本和序号')
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
@@ -350,7 +350,7 @@ class ExactPreviewUseCase:
             raise ClipPreviewConflict('当前故事板没有基础版本，请先保留当前故事板并建立版本')
         if task.current_timeline_version_id != command.base_version_id:
             raise ClipPreviewConflict('时间线已经变化，请刷新后重新预览')
-        base = self.repository.get_timeline_version(workspace_id, command.base_version_id)
+        base = self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id)
         source = command.source
         if source is None and original_command is not None:
             action = CreationTaskExactEditRequest(operation_type=command.operation_type, **{'clip_ids': command.clip_ids, 'effects': command.values} if command.operation_type == 'AdjustVisualEffects' else {'clip_id': command.clip_ids[0], **command.values})
@@ -463,7 +463,7 @@ class ExactPreviewUseCase:
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None

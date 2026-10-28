@@ -75,7 +75,7 @@ def seed_render(system, content=b"fake video", *, register=True, ref="artifacts/
     payload = creation_task_montage_plan_to_payload(montage(ref))
     repo.save_creation_task_montage_plan("local", "task", "montage", payload)
     current = repo.task_records.get_creation_task("local", "task").current_timeline_version_id
-    repo.create_timeline_version(TimelineVersion(id=version, workspace_id="local", task_id="task",
+    repo.timeline_records.create_timeline_version(TimelineVersion(id=version, workspace_id="local", task_id="task",
                                                  parent_version_id=current, sequence=1 if current is None else 2,
                                                  snapshot={"montage": payload, "output_refs": [ref]},
                                                  created_by_operation_id=None))
@@ -127,7 +127,7 @@ def test_real_wil119_black_frame_persisted_and_locatable(system):
         (evidence / "real-check.json").write_text(json.dumps({"api": result, "persisted": monkey_repo.get("local", "task")},
                                                            ensure_ascii=False, indent=2))
     # New timeline, same immutable video bytes: old conclusion still invalidates.
-    repo.create_timeline_version(TimelineVersion(id="v2", workspace_id="local", task_id="task",
+    repo.timeline_records.create_timeline_version(TimelineVersion(id="v2", workspace_id="local", task_id="task",
                                                  parent_version_id="v1", sequence=2, snapshot={},
                                                  created_by_operation_id=None))
     stale = client.get("/api/creation-tasks/task/quality-check", headers=headers).json()

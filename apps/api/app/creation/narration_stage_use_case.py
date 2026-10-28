@@ -409,7 +409,7 @@ class NarrationStageUseCase:
             current = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
             if current.current_timeline_version_id != payload['base_version_id']:
                 raise ValueError('当前时间线已变化，未提交局部配音')
-            base = self.repository.get_timeline_version(workspace_id, payload['base_version_id'], connection=connection)
+            base = self.repository.timeline_records.get_timeline_version(workspace_id, payload['base_version_id'], connection=connection)
             self.repository.save_narration_artifact(target, connection=connection)
             try:
                 return self.metadata.persist_montage_edit(workspace_id=workspace_id, task=current, proposal=proposal, base_version=base, updated_plan=montage, operation_type='RegenerateNarrationSegment', operation_payload=payload, narration_replacement=updated_target, narration_snapshot=narration_snapshot, narration_artifact=combined, connection=connection)

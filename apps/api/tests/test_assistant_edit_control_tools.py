@@ -271,10 +271,14 @@ def _history_owner(repo, tmp_path):
     return TimelineRestoreUseCase(repo, edits), CreationExecutionActor('local', 'history-reader')
 
 
-def test_history_http_and_background_share_bounded_read_projection(history_task, tmp_path):
+def test_history_http_and_background_share_bounded_read_projection(history_task, tmp_path, monkeypatch):
     from app.creation.editing.timeline_history_repository import TimelineHistoryReadRepository
     from app.schemas import TimelineVersionListResponse
     repo, task_id, client = history_task
+    def forbidden_full_version(*_args, **_kwargs):
+        pytest.fail("bounded history must not hydrate full version snapshots")
+    for name in ("get_timeline_version", "list_timeline_versions", "_decode_snapshot"):
+        monkeypatch.setattr(repo.timeline_records, name, forbidden_full_version)
     owner, actor = _history_owner(repo, tmp_path)
     path = f'/api/creation-tasks/{task_id}/timeline/versions'
     pages = []
@@ -318,7 +322,7 @@ def test_history_list_detail_and_background_use_original_operation_identity(hist
                  'AdjustVisualEffects', json.dumps({'request_id': 'synthetic-history-request'}),
                  'timeline_history_v2', 'timeline_history_v1' if association == 'result' else version_id,
                  'applied', '2026-01-01T00:00:00+00:00'))
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id=version_id, workspace_id='local', task_id=task_id, parent_version_id='timeline_history_v2',
         sequence=3, snapshot={}, created_by_operation_id=operation_id))
     before = repo.task_records.get_creation_task('local', task_id)

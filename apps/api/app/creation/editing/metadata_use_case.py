@@ -239,12 +239,12 @@ class MetadataEditUseCase:
             source_command = EditSourceVerifier.restore_scope(source_command, bound)
             verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
             prepare_changed_montage(plan, message='整组镜头排序已保存；一次撤销可恢复，重新生成后播放新成片。')
-            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id), updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks, proposal_source_command=source_command, proposal_source_verifier=verifier)
+            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id), updated_plan=plan, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=tracks, proposal_source_command=source_command, proposal_source_verifier=verifier)
         if operation_type == 'ChangePresenterShare' and isinstance(operation_payload, dict):
             if task.current_timeline_version_id != operation_payload.get('base_version_id'):
                 raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新预览露脸比例')
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
-            base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            base = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             target = operation_payload['target']
             plan.presenter_share_target = target
             prepare_changed_montage(plan, message=f'露脸目标 {target}% 已保存到草稿；实际镜头保持不变，请明确生成后再核对实际占比。')
@@ -268,7 +268,7 @@ class MetadataEditUseCase:
                     raise EditPreviewRejected(status_code=409, detail='原提案未封存实际影响的来源范围，请为当前版本重新预览')
                 verifier = EditSourceVerifier(self.repository, identity=command.actor_identity) if command.source is not None else None
             prepare_changed_montage(changed, message='镜头设置已更新；文案、配音和其他镜头保持不变，可以重新渲染。')
-            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=self.repository.get_timeline_version(workspace_id, command.base_version_id), updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=edited_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
+            return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id), updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, edited_subtitle_tracks=edited_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
         if operation_type in PICTURE_METADATA_OPERATIONS and isinstance(operation_payload, dict):
             command = metadata_edit_command(task, identity, operation_type, operation_payload, source=source)
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
@@ -287,12 +287,12 @@ class MetadataEditUseCase:
                 verifier = EditSourceVerifier(self.repository, identity=command.actor_identity) if command.source is not None else None
             messages = {'EditGraphicOverlay': '图文已更新，可以重新渲染。', 'SetClipTransition': '转场已更新，配音与字幕时轴不变。', 'AdjustVisualEffects': '画面效果已更新，可以重新渲染。'}
             prepare_changed_montage(changed, message=messages[operation_type])
-            base = self.repository.get_timeline_version(workspace_id, command.base_version_id)
+            base = self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id)
             return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=base, updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, proposal_source_command=command, proposal_source_verifier=verifier)
         if operation_type == 'ChangeCanvas' and isinstance(operation_payload, dict):
             if task.current_timeline_version_id != operation_payload.get('base_version_id'):
                 raise EditPreviewRejected(status_code=409, detail='版本已变化，请重新预览画幅')
-            base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            base = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
             montage.aspect_ratio = operation_payload['aspect_ratio']
             if operation_payload.get('fit_mode'):
@@ -330,7 +330,7 @@ class MetadataEditUseCase:
             with self.repository.creation_execution_read() as conn:
                 current = self.repository.task_records.get_creation_task(workspace_id, task.id, connection=conn)
                 return self.current_narration_snapshot(workspace_id, current, connection=conn)
-        version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id,
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id,
             connection=connection) if task.current_timeline_version_id else None
         # This complete immutable output is necessary; the input rows stream.
         return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False,
@@ -362,7 +362,7 @@ class MetadataEditUseCase:
 
     def ensure_montage_base(self, workspace_id: str, task: CreationTask, plan: CreationTaskMontagePlan, *, source=None, verify_inputs=None) -> TimelineVersion:
         if task.current_timeline_version_id:
-            current = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            current = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             if isinstance(current.snapshot.get('montage'), dict):
                 return current
         with self.repository._connect() as conn:
@@ -375,7 +375,7 @@ class MetadataEditUseCase:
             expected=source['expected_timeline_version_id'] if source is not None else task.current_timeline_version_id
             if current_task.current_timeline_version_id != expected:
                 raise EditConflict('时间线已变化，未创建基础版本')
-            current=(self.repository.get_timeline_version(workspace_id,expected,connection=conn) if expected else None)
+            current=(self.repository.timeline_records.get_timeline_version(workspace_id,expected,connection=conn) if expected else None)
             if source is not None:
                 if source['expected_timeline_sequence'] != (current.sequence if current else 0):
                     raise EditConflict('时间线序号已变化，未创建基础版本')
@@ -401,8 +401,8 @@ class MetadataEditUseCase:
                     parent_version_id=None,created_by_operation_id=None,
                     snapshot={'montage':creation_task_montage_plan_to_payload(plan),
                             **self.current_narration_snapshot(workspace_id,current_task,connection=conn)})
-            self.repository.create_timeline_version(version,connection=conn,expected_current_version_id=expected)
-        return self.repository.get_timeline_version(workspace_id,version.id)
+            self.repository.timeline_records.create_timeline_version(version,connection=conn,expected_current_version_id=expected)
+        return self.repository.timeline_records.get_timeline_version(workspace_id,version.id)
 
     def begin(self, task, member_id, request_id, inputs, *, phase="preview"):
         if request_id is None:
@@ -427,7 +427,7 @@ class MetadataEditUseCase:
         if operation is None:
             raise EditPreviewRejected(409,{'error':'edit_request_result_unknown',
                 'reason':'原保存结果尚未确定，请查询原请求，不重复执行','submission_effect':'unknown'})
-        version = self.repository.get_timeline_version(task.workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, operation.result_version_id)
         plan = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return event_id, MetadataEditReplay(None, MetadataEditResult(operation, plan, task, None,
             execution_readiness=self.repository.edit_execution_readiness(task.workspace_id,task.id,operation.id)))
@@ -440,7 +440,7 @@ class MetadataEditUseCase:
         if command.base_version_id is None:
             raise EditConflict('先保留当前故事板并建立可撤销版本')
         check_command(task, command)
-        base = self.repository.get_timeline_version(command.workspace_id, command.base_version_id)
+        base = self.repository.timeline_records.get_timeline_version(command.workspace_id, command.base_version_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, task.id))
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity,
             audio_service=self.audio_service if command.operation_type == 'EditAudioTimeline' else None,
@@ -548,7 +548,7 @@ class MetadataEditUseCase:
     def current_subtitle_tracks(self, workspace_id: str, task: CreationTask, *, current_version: TimelineVersion | None=None, montage: CreationTaskMontagePlan | None=None):
         if current_version is None and task.current_timeline_version_id:
             try:
-                current_version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+                current_version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             except KeyError:
                 current_version = None
         if current_version is None:

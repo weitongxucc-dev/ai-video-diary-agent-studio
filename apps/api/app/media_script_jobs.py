@@ -61,7 +61,7 @@ class MediaScriptPreviewUseCase:
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         if operation == 'media_script_tool_preview':
@@ -71,7 +71,7 @@ class MediaScriptPreviewUseCase:
                 raise ValueError('封存配方版本或来源发生变化')
         else:
             payload = MediaScriptPreviewRequest.model_validate(arguments['payload'])
-        version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise ValueError('脚本输入时间线已变化')
         return task, payload, version

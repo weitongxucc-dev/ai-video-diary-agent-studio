@@ -163,7 +163,7 @@ def request_current(repository, task, event, *, connection=None) -> bool:
             or task.confirmed_script_id != inputs["script_id"]
             or task.narration_cache_key != event["narration_cache_key"]):
         return False
-    version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=connection)
+    version = repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=connection)
     return (version.sequence == inputs["expected_timeline_sequence"]
             and narration_signature(repository, task, connection=connection) == event["narration_signature"]
             and material_signature(repository, task, connection=connection) == event["material_signature"])
@@ -235,7 +235,7 @@ class StoryboardRegeneration:
             task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             if not request_current(self.repository, task, event, connection=conn):
                 raise ValueError('故事板原请求的时间线、文案或配音已变化')
-            base = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=conn)
+            base = self.repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=conn)
         previous = creation_task_montage_plan_from_payload(base.snapshot["montage"])
         candidate = self.montage_stage.build_candidate(job.workspace_id, job.task_id, grant_context=context)
         from app.creation.duration_requirement import DurationRequirement

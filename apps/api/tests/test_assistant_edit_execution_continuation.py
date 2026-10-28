@@ -44,8 +44,8 @@ def test_execution_accepts_only_this_inputs_committed_successor(metadata_http_st
         original = main.get_exact_edit_request_result
         monkeypatch.setattr(main, "get_exact_edit_request_result", lambda *args: {**original(*args), "status": "unknown"})
     elif case == "foreign_version":
-        version = state.repo.get_timeline_version("ws", edited.current_timeline_version_id)
-        state.repo.create_timeline_version(replace(version, id="foreign-version", parent_version_id=version.id, sequence=version.sequence+1))
+        version = state.repo.timeline_records.get_timeline_version("ws", edited.current_timeline_version_id)
+        state.repo.timeline_records.create_timeline_version(replace(version, id="foreign-version", parent_version_id=version.id, sequence=version.sequence+1))
     if case == "other_input":
         conversations.append_event(turn["id"], {"type": "assistant_input", "status": "consumed", "input_id": str(uuid4()),
             "target_turn_id": turn["id"], "message": "追加输入", "mode": "steer", "request_context": {
@@ -169,8 +169,8 @@ def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_
         "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
     assert response.status_code == 200, response.text
     edit_id = response.json()["operation"]["result_version_id"]
-    edit_version = state.repo.get_timeline_version("ws", edit_id)
-    state.repo.create_timeline_version(replace(edit_version, id="rendered-v4", parent_version_id=edit_id, sequence=edit_version.sequence+1))
+    edit_version = state.repo.timeline_records.get_timeline_version("ws", edit_id)
+    state.repo.timeline_records.create_timeline_version(replace(edit_version, id="rendered-v4", parent_version_id=edit_id, sequence=edit_version.sequence+1))
     status = {"task_id": state.task.id, "job": {"id": "render", "status": "succeeded"}, "video_ready": True}
     def bound(*_args):
         if kind in {"refused", "read_refused"}:

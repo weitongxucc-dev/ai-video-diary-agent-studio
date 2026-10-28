@@ -218,21 +218,21 @@ def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_pat
     intent, proposal = make_metadata_proposal(command, refs, summary, values)
     state.repo.edit_records.create_edit_intent(intent)
     state.repo.edit_records.create_edit_proposal(proposal)
-    before = len(state.repo.list_timeline_versions('ws', state.task.id))
+    before = len(state.repo.timeline_records.list_timeline_versions('ws', state.task.id))
     result = case.confirm_legacy(state.task, proposal, settings=None)
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
     task = fresh.task_records.get_creation_task('ws', state.task.id)
-    version = fresh.get_timeline_version('ws', task.current_timeline_version_id)
+    version = fresh.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
     tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
     operations = fresh.edit_records.list_edit_operations('ws', task.id)
-    assert len(fresh.list_timeline_versions('ws', task.id)) == before + 1
+    assert len(fresh.timeline_records.list_timeline_versions('ws', task.id)) == before + 1
     assert len(operations) == 1 and operations[0].proposal_id == proposal.id
     assert result.operation.id == operations[0].id and result.operation.result_version_id == version.id
     assert version.parent_version_id == state.base.id and version.sequence == 2
     assert len(tracks) == 1 and tracks[0].style['enabled'] is False
     assert [asdict(cue) for cue in tracks[0].cues] == [asdict(cue) for cue in state.track.cues]
     assert tracks[0].artifact_ref == state.track.artifact_ref
-    assert fresh.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
+    assert fresh.timeline_records.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
     assert state.track.style.get('enabled', True) is True
     assert result.montage.narration_audio_path == state.plan.narration_audio_path
     assert case.montage_edits.cover_asset_for_version('ws', task.id, version) is None

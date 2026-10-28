@@ -13,7 +13,7 @@ def control(state, monkeypatch, command):
     conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     chat = conversations.create(state.workspace_id, state.member.member_id, "home", "home", "编辑控制")
     conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, command, 0)
     row, created = conversations.create_turn_idempotent(chat["id"], state.workspace_id, state.member.member_id,

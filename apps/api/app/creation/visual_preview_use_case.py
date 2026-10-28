@@ -137,7 +137,7 @@ class VisualPreviewUseCase:
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None

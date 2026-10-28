@@ -315,7 +315,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     task = CreationTask("task", "workspace", plan.id, plan.name, "declared-cover-fixture")
     repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
     montage = CreationTaskMontagePlan("montage", "workspace", task.id, "script", "cover", "rendered", [], [], 1.0, 0)
-    base = repo.create_timeline_version(TimelineVersion("base", "workspace", task.id, None, 1,
+    base = repo.timeline_records.create_timeline_version(TimelineVersion("base", "workspace", task.id, None, 1,
         {"montage": creation_task_montage_plan_to_payload(montage), "subtitle_track_ids": []}, None))
     published = store.publish_bytes("artifacts/task/source/current.mp4", b"declared source metadata")
     source_job = repo.job_records.create_job_run(JobRun("source", "workspace", task.id, "declared_render_metadata",

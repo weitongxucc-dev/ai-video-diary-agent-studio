@@ -54,7 +54,7 @@ def state(tmp_path, monkeypatch):
         sequence=state.base.sequence + 1, snapshot={**state.base.snapshot, "montage": old_payload,
             "subtitle_track_ids": [track.id for track in tracks], "cover_asset_id": cover.id,
             "narration_segments": [asdict(item) for item in state.segments]})
-    state.repo.create_timeline_version(state.base)
+    state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
         state.repo.create_subtitle_track(track)
     state.repo.create_cover_asset(cover)
@@ -94,7 +94,7 @@ def inputs(state):
     task = state.repo.task_records.get_creation_task("ws", state.task.id)
     script = state.repo.get_creation_task_script("ws", task.confirmed_script_id)
     plan = state.repo.plan_records.get_creation_plan("ws", task.plan_id)
-    version = state.repo.get_timeline_version("ws", task.current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version("ws", task.current_timeline_version_id)
     return {"request_id": str(uuid4()), "script_id": script.id, "input_digest": revision_digest(script, plan),
         "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence}
 
@@ -113,7 +113,7 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     assert state.repo.get_narration_artifact("ws", task.narration_cache_key).script_id == script.id
     state.owner.stage_facts(task, script, plan, "montage_plan")
     before = state.repo.get_creation_task_montage_plan("ws", state.task.id)
-    versions = state.repo.list_timeline_versions("ws", state.task.id)
+    versions = state.repo.timeline_records.list_timeline_versions("ws", state.task.id)
     response = state.client.post(state.url, json=payload)
     assert response.status_code == 202, response.text
     receipt = response.json()
@@ -131,9 +131,9 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     assert current["id"] == result["montage_plan_id"] == before["id"]
     assert current["clips"] != before["clips"]
     assert all(current[key] == before[key] for key in ("graphic_overlays", "audio_timeline", "narration_audio_path", "aspect_ratio"))
-    version = state.repo.get_timeline_version("ws", result["timeline_version_id"])
+    version = state.repo.timeline_records.get_timeline_version("ws", result["timeline_version_id"])
     assert version.parent_version_id == payload["expected_timeline_version_id"]
-    old_version = state.repo.get_timeline_version("ws", payload["expected_timeline_version_id"])
+    old_version = state.repo.timeline_records.get_timeline_version("ws", payload["expected_timeline_version_id"])
     for old_id, new_id in zip(old_version.snapshot["subtitle_track_ids"], version.snapshot["subtitle_track_ids"]):
         old_track, new_track = (state.repo.get_subtitle_track("ws", state.task.id, key) for key in (old_id, new_id))
         assert old_track.cues == new_track.cues and old_track.style == new_track.style
@@ -143,12 +143,12 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     assert replace(new_cover, id=old_cover.id, timeline_version_id=old_cover.timeline_version_id,
         created_at=old_cover.created_at, updated_at=old_cover.updated_at) == old_cover
     assert state.repo.list_narration_segments("ws", state.task.id, "fixed-script") == state.segments
-    assert state.repo.get_timeline_version("ws", versions[-1].id) == versions[-1]
-    count = len(state.repo.list_timeline_versions("ws", state.task.id))
+    assert state.repo.timeline_records.get_timeline_version("ws", versions[-1].id) == versions[-1]
+    count = len(state.repo.timeline_records.list_timeline_versions("ws", state.task.id))
     assert state.client.post(state.url, json=payload).json() == completed
     state.control.recover(state.runtime)
     assert state.scheduler.pick_and_grant() is None and len(state.builds) == 1
-    assert state.repo.list_timeline_versions("ws", state.task.id)[-1].snapshot["montage"] == version.snapshot["montage"]
+    assert state.repo.timeline_records.list_timeline_versions("ws", state.task.id)[-1].snapshot["montage"] == version.snapshot["montage"]
     undone = state.client.post(state.base_url + "/timeline/undo", json={
         "request_id": str(uuid4()),
         "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
@@ -157,13 +157,13 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     restored = state.repo.get_creation_task_montage_plan("ws", state.task.id)
     assert all(restored[key] == before[key] for key in ("clips", "graphic_overlays", "audio_timeline"))
     assert state.client.post(state.url, json=payload).json() == completed
-    assert len(state.builds) == 1 and len(state.repo.list_timeline_versions("ws", state.task.id)) >= count
+    assert len(state.builds) == 1 and len(state.repo.timeline_records.list_timeline_versions("ws", state.task.id)) >= count
 
 
 def adopted(state):
     return (state.repo.task_records.get_creation_task("ws", state.task.id),
         state.repo.get_creation_task_montage_plan("ws", state.task.id),
-        state.repo.list_timeline_versions("ws", state.task.id),
+        state.repo.timeline_records.list_timeline_versions("ws", state.task.id),
         state.repo.list_narration_segments("ws", state.task.id, "fixed-script"))
 
 
@@ -224,8 +224,8 @@ def test_granted_failure_or_cancellation_preserves_adopted_work(state, monkeypat
         elif failure == "cancel":
             state.control.cancel("ws", state.task.id, state.actor, state.runtime, verify_media=False)
         elif failure == "CAS":
-            base = state.repo.get_timeline_version("ws", before[0].current_timeline_version_id)
-            state.repo.create_timeline_version(replace(base, id="manual-concurrent", parent_version_id=base.id,
+            base = state.repo.timeline_records.get_timeline_version("ws", before[0].current_timeline_version_id)
+            state.repo.timeline_records.create_timeline_version(replace(base, id="manual-concurrent", parent_version_id=base.id,
                 sequence=base.sequence + 1))
         elif failure == "narration":
             segment = state.repo.list_narration_segments("ws", state.task.id, "fixed-script")[0]
@@ -435,10 +435,10 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     job = state.repo.job_records.get_job_run('ws', receipt['job_id'])
     start = state.repo.execution_records.get_task_event('ws', f'event_{job.id}_start')
     task = state.repo.task_records.get_creation_task('ws', state.task.id)
-    base = state.repo.get_timeline_version('ws', task.current_timeline_version_id)
+    base = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
     confirmed = replace(base, id='confirmed-storyboard-head', parent_version_id=base.id, sequence=base.sequence+1,
         created_by_operation_id=None)
-    state.repo.create_timeline_version(confirmed)
+    state.repo.timeline_records.create_timeline_version(confirmed)
     audio = state.repo.get_narration_artifact('ws', task.narration_cache_key)
     import hashlib
     audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
@@ -468,7 +468,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
         state.owner.verify_submission(SubmissionIntent('ws', 'creation_job', job.id, job.input_digest,
             original_unit, SchedulePolicy()), state.actor)
     if stale_head:
-        state.repo.create_timeline_version(replace(confirmed, id='changed-after-render-request',
+        state.repo.timeline_records.create_timeline_version(replace(confirmed, id='changed-after-render-request',
             parent_version_id=confirmed.id, sequence=confirmed.sequence+1))
         with state.repo._connect() as conn:
             assert state.owner.check_current(state.scheduler._get(pending[0]['id']), conn) == 'stale'
@@ -551,7 +551,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
         case.executor.execute(first, case.scheduler)
         case.control.cancel('local', case.task.id, case.actor, case.runtime, verify_media=False)
         task = repo.task_records.get_creation_task('local', case.task.id)
-        base = repo.get_timeline_version('local', task.current_timeline_version_id)
+        base = repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
         before = repo.get_creation_task_montage_plan('local', task.id)
         payload = StoryboardRegenerationRequest.model_validate({'request_id': str(uuid4()),
             'script_id': case.script.id, 'input_digest': case.digest,
@@ -583,7 +583,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
                     elif outcome == 'revoked':
                         monkeypatch.setattr(case.owner, 'verify_identity', lambda _: 'unauthorized')
                     else:
-                        repo.create_timeline_version(TimelineVersion('later-storyboard-head', 'local', task.id,
+                        repo.timeline_records.create_timeline_version(TimelineVersion('later-storyboard-head', 'local', task.id,
                             base.id, base.sequence+1, base.snapshot, None), connection=conn)
                 return result
             monkeypatch.setattr(case.scheduler, '_released_for_commit', inject)
@@ -609,7 +609,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             after = repo.get_creation_task_montage_plan('local', task.id)
             assert after['audio_timeline'] == before['audio_timeline']
             assert after['graphic_overlays'] == before['graphic_overlays']
-            assert repo.get_timeline_version('local', current.current_timeline_version_id).snapshot['narration_segments'] == base.snapshot['narration_segments']
+            assert repo.timeline_records.get_timeline_version('local', current.current_timeline_version_id).snapshot['narration_segments'] == base.snapshot['narration_segments']
             assert len(observed) == 1
         else:
             assert changed

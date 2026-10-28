@@ -117,7 +117,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     state.base=replace(state.base,id="confirmed-input",parent_version_id=state.base.id,sequence=2,
         snapshot={**state.base.snapshot,"subtitle_track_ids":["confirmed-zh"],
                   "narration_segments":[json.loads(json.dumps(asdict(segment),default=str))]})
-    state.repo.create_timeline_version(state.base)
+    state.repo.timeline_records.create_timeline_version(state.base)
     state.repo.create_subtitle_track(replace(state.track,id="confirmed-zh",timeline_version_id=state.base.id))
     conversations = ConversationRepository(tmp_path / "assistant.sqlite")
     monkeypatch.setattr(main, "conversation_repo", conversations)
@@ -229,7 +229,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     try:
         for message in ("把当前字幕改为：第一轮文字", "再把这句改为：第二轮文字", "撤销上一步修改", "画布改成横屏16:9", "撤销上一步修改"):
             current = state.repo.task_records.get_creation_task("ws", state.task.id)
-            version = state.repo.get_timeline_version("ws", current.current_timeline_version_id)
+            version = state.repo.timeline_records.get_timeline_version("ws", current.current_timeline_version_id)
             saved = conversations.get(chat["id"], "ws", state.member.member_id)
             draft = conversations.save_draft(chat["id"], "ws", state.member.member_id, message, saved["draft_version"])
             payload = {"conversation_id": chat["id"], "client_request_id": str(uuid4()),
@@ -276,10 +276,10 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert [output["history_count"] for output in outputs] == sorted({output["history_count"] for output in outputs})
         reopened = ConversationRepository(conversations.database_path)
         assert [turn["status"] for turn in reopened.list_turns(chat["id"])] == ["completed"] * 5
-        assert state.repo.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
+        assert state.repo.timeline_records.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
         assert state.repo.task_records.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
         current=state.repo.task_records.get_creation_task("ws",state.task.id)
-        version=state.repo.get_timeline_version("ws",current.current_timeline_version_id)
+        version=state.repo.timeline_records.get_timeline_version("ws",current.current_timeline_version_id)
         saved=conversations.get(chat["id"],"ws",state.member.member_id)
         message="先改成旧输入文字，然后继续生成视频"
         draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
@@ -318,7 +318,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert conversations.list_turns(chat["id"])[-1]["user_message"] == ""
         assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 5
         monkeypatch.setattr(main,"run_task_turn",run_sdk)
-        version=state.repo.get_timeline_version("ws",state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id)
+        version=state.repo.timeline_records.get_timeline_version("ws",state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id)
         saved=conversations.get(chat["id"],"ws",state.member.member_id)
         message="先修改，追加输入只作澄清"
         draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
@@ -375,7 +375,7 @@ def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_s
     business=main._task_business()
     def invoke(operation,action):
         task=s.repo.task_records.get_creation_task('ws',s.task.id)
-        version=s.repo.get_timeline_version('ws',task.current_timeline_version_id)
+        version=s.repo.timeline_records.get_timeline_version('ws',task.current_timeline_version_id)
         payload={**action,'request_id':str(uuid4()),'expected_timeline_version_id':version.id,
                  'expected_timeline_sequence':version.sequence}
         return business.execute(operation,{'payload':payload,'draft_only':True},actor,task,{},origin,{},lambda conn:None)
@@ -612,7 +612,7 @@ def _bootstrap_input(s, bootstrap):
     montage.task_id=seeded_task.id
     s.repo.save_creation_task_montage_plan('ws',seeded_task.id,montage.id,creation_task_montage_plan_to_payload(montage))
     if bootstrap=='missing_montage':
-        s.repo.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
+        s.repo.timeline_records.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
             parent_version_id=None,created_by_operation_id=None,snapshot={}),
             expected_current_version_id=None)
     task=s.repo.task_records.get_creation_task('ws',seeded_task.id)
@@ -657,7 +657,7 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
             'current_turn_id':turn['id'],'status':'stopped'}
         with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
     else:
-        s.repo.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
+        s.repo.timeline_records.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
             sequence=expected_sequence+1,parent_version_id=task.current_timeline_version_id,created_by_operation_id=None,snapshot={}),
             expected_current_version_id=task.current_timeline_version_id)
     before_head=s.repo.task_records.get_creation_task('ws',task.id).current_timeline_version_id

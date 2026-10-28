@@ -54,7 +54,7 @@ class PictureFragmentAssembly:
         self.renderer.validate_material_use(job.workspace_id, montage)
         files, _graphics = self.renderer.qualified_picture_sources(job.workspace_id, task, montage, [montage], actor)
         tracks = self.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage)
-        current_version = self.repository.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        current_version = self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         explicit_subtitles = current_version is not None and 'subtitle_track_ids' in current_version.snapshot
         tracks = tracks if tracks or explicit_subtitles else None
         captions = (subtitle_schedule(tracks, montage.duration_seconds) if tracks is not None

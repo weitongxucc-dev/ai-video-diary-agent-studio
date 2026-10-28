@@ -49,7 +49,7 @@ def case(tmp_path, *, normalize=False, budget=True):
     payload = repo.get_creation_task_montage_plan('local', task_id)
     payload.update(audio_timeline=graph.model_dump(), narration_linkage_created_audio_timeline=normalize)
     repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
-    repo.create_timeline_version(replace(base, id='timeline_audio', parent_version_id=base.id, sequence=2,
+    repo.timeline_records.create_timeline_version(replace(base, id='timeline_audio', parent_version_id=base.id, sequence=2,
                                         snapshot={'montage': payload}))
     service = TaskAudio(repo, ArtifactStore(tmp_path/'artifacts'), tmp_path/'temp')
     cap = audio_budget() if budget else None
@@ -365,8 +365,8 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         payload = repo.get_creation_task_montage_plan('local', task_id)
         payload['audio_timeline']['tracks'][1]['muted'] = True
         repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
-        current = repo.get_timeline_version('local', 'timeline_audio')
-        repo.create_timeline_version(replace(current, id='timeline_silence', parent_version_id=current.id, sequence=3, snapshot={'montage':payload}))
+        current = repo.timeline_records.get_timeline_version('local', 'timeline_audio')
+        repo.timeline_records.create_timeline_version(replace(current, id='timeline_silence', parent_version_id=current.id, sequence=3, snapshot={'montage':payload}))
         monkeypatch.setattr(main, 'production_repo', repo)
         monkeypatch.setattr(main, 'artifact_store', service.artifact_store)
         monkeypatch.setattr(main, 'settings', replace(main.settings,video_inbox_path=str(repo.video_library_path),

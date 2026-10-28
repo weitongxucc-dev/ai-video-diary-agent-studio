@@ -147,7 +147,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
                               clips=[clip], graphic_overlays=[])
     with material_repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
-    material_repo.create_timeline_version(TimelineVersion(
+    material_repo.timeline_records.create_timeline_version(TimelineVersion(
         id=task.current_timeline_version_id, workspace_id=task.workspace_id, task_id=task.id,
         parent_version_id=None, sequence=1, created_by_operation_id=None,
         snapshot={"montage": {"clips": [asdict(clip)]}, "narration_segments": [

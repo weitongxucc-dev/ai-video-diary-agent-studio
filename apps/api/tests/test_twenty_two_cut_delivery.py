@@ -43,9 +43,9 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
     previous = case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id
     with case.repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        case.repo.create_timeline_version(TimelineVersion(id='approved-twenty-two-cuts', workspace_id='local',
+        case.repo.timeline_records.create_timeline_version(TimelineVersion(id='approved-twenty-two-cuts', workspace_id='local',
             task_id=case.task_id, parent_version_id=previous,
-            sequence=case.repo.next_timeline_sequence('local', case.task_id, connection=conn),
+            sequence=case.repo.timeline_records.next_timeline_sequence('local', case.task_id, connection=conn),
             snapshot={'montage': payload}, created_by_operation_id=None), connection=conn,
             expected_current_version_id=previous)
     audio = TaskAudio(case.repo, store, tmp_path/'audio')
@@ -79,7 +79,7 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
             assert row['status'] == 'succeeded' and len(json.loads(row['output_refs_json'])) == 2
             assert permit['state'] == 'free' and permit['request_id'] is None
         task = case.repo.task_records.get_creation_task(workspace_id, task_id)
-        version = case.repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        version = case.repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         assert version.snapshot['audio_delivery']['job_id'] == job_id
         downloaded = outputs.download(workspace_id, task_id, expected_version_id=version.id, subtitle=False)
         sidecar = outputs.download(workspace_id, task_id, expected_version_id=version.id, subtitle=True)

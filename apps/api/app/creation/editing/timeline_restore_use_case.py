@@ -97,7 +97,7 @@ class TimelineRestoreUseCase:
 
     def history(self, workspace_id, task_id, actor, *, limit=20, before_sequence=None):
         self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
-        return self.repository.timeline_history_page(workspace_id, task_id, limit=limit, before_sequence=before_sequence)
+        return self.repository.timeline_history.page(workspace_id, task_id, limit=limit, before_sequence=before_sequence)
 
     def read_request(self, workspace_id, task_id, request_id, actor):
         self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
@@ -105,7 +105,7 @@ class TimelineRestoreUseCase:
 
     def replay(self, workspace_id, task_id, receipt):
         operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])
-        version = self.repository.get_timeline_version(workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, operation.result_version_id)
         payload = version.snapshot.get('montage')
         plan = creation_task_montage_plan_from_payload(payload) if payload else None
         key = version.snapshot.get('narration_cache_key')
@@ -157,9 +157,9 @@ class TimelineRestoreUseCase:
             if target_operation_id is not None and expected_timeline_version_id is None:
                 raise EditConflict('指定修改的恢复需要原读取版本')
             if expected_timeline_version_id is not None:
-                seen = self.repository.get_timeline_version(workspace_id, expected_timeline_version_id)
+                seen = self.repository.timeline_records.get_timeline_version(workspace_id, expected_timeline_version_id)
                 if (seen.task_id != task_id or seen.sequence != expected_timeline_sequence
-                        or not self.repository.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, seen.id)):
+                        or not self.repository.timeline_records.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, seen.id)):
                     raise EditConflict('恢复所依据的版本不属于当前作品历史')
             command = replace(command, task=task, target_operation_id=target_operation_id,
                 restore_request_id=request_id, restore_member_id=member_id, write_guard=guarded,
@@ -173,7 +173,7 @@ class TimelineRestoreUseCase:
                 changed = self.repository.edit_records.get_edit_operation(workspace_id, changed_version.created_by_operation_id)
                 resolved = changed.payload.get('target_operation_id')
                 if resolved is None and changed.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}:
-                    original_version = self.repository.get_timeline_version(workspace_id, changed.payload['changed_version_id'])
+                    original_version = self.repository.timeline_records.get_timeline_version(workspace_id, changed.payload['changed_version_id'])
                     resolved = original_version.created_by_operation_id
                 command = replace(command, target_operation_id=resolved or changed.id)
             prepared = self.prepare_restore(command)
@@ -193,20 +193,20 @@ class TimelineRestoreUseCase:
         if command.target_operation_id is not None:
             target = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if (target.task_id != task_id or target.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}
-                    or not self.repository.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, target.result_version_id)):
+                    or not self.repository.timeline_records.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, target.result_version_id)):
                 raise EditConflict('指定原修改不属于当前作品的有效历史')
             last = self.repository.restore_requests.latest_operation_restore(workspace_id, task_id, target.id)
             if command.redo:
                 if last is None or last.operation_type != 'UndoTimelineVersion':
                     raise EditConflict('指定原修改没有对应的可重做撤销记录')
                 command = replace(command, target_undo_operation_id=last.id)
-                changed_version = self.repository.get_timeline_version(workspace_id, last.result_version_id)
-                target_version = self.repository.get_timeline_version(workspace_id, target.result_version_id)
+                changed_version = self.repository.timeline_records.get_timeline_version(workspace_id, last.result_version_id)
+                target_version = self.repository.timeline_records.get_timeline_version(workspace_id, target.result_version_id)
             else:
                 if last is not None and last.operation_type == 'UndoTimelineVersion':
                     raise EditConflict('指定原修改已经撤销')
-                changed_version = self.repository.get_timeline_version(workspace_id, target.result_version_id)
-                target_version = self.repository.get_timeline_version(workspace_id, target.base_version_id)
+                changed_version = self.repository.timeline_records.get_timeline_version(workspace_id, target.result_version_id)
+                target_version = self.repository.timeline_records.get_timeline_version(workspace_id, target.base_version_id)
         else:
             changed_version, target_version = (redo_target_versions if command.redo else undo_target_versions)(self.repository, workspace_id, task)
         operation_type = "RedoTimelineVersion" if command.redo else "UndoTimelineVersion"
@@ -226,7 +226,7 @@ class TimelineRestoreUseCase:
             # A prior scoped control version records the exact composed dependencies it created.
             cursor = task.current_timeline_version_id
             while cursor:
-                recent = self.repository.get_timeline_version(workspace_id,cursor)
+                recent = self.repository.timeline_records.get_timeline_version(workspace_id,cursor)
                 if recent.created_by_operation_id:
                     control = self.repository.edit_records.get_edit_operation(workspace_id,recent.created_by_operation_id)
                     if (control.payload.get('section_history',{}).get('after_publication') == history['after_publication']
@@ -339,10 +339,10 @@ class TimelineRestoreUseCase:
 
     def prepare_local_restore(self, command, original, changed_version, target_version, operation_type, action_label):
         ws, task = command.workspace_id, command.task
-        expected_version = self.repository.get_timeline_version(ws, original.base_version_id if command.redo else original.result_version_id)
-        desired_version = self.repository.get_timeline_version(ws, original.result_version_id if command.redo else original.base_version_id)
+        expected_version = self.repository.timeline_records.get_timeline_version(ws, original.base_version_id if command.redo else original.result_version_id)
+        desired_version = self.repository.timeline_records.get_timeline_version(ws, original.result_version_id if command.redo else original.base_version_id)
         expected, desired = expected_version.snapshot.get('montage'), desired_version.snapshot.get('montage')
-        current_version = self.repository.get_timeline_version(ws, task.current_timeline_version_id)
+        current_version = self.repository.timeline_records.get_timeline_version(ws, task.current_timeline_version_id)
         current = current_version.snapshot.get('montage')
         if not all(isinstance(value, dict) for value in (expected, desired, current)):
             raise EditConflict('原局部操作缺少完整时间线依据')
@@ -414,7 +414,7 @@ class TimelineRestoreUseCase:
             for key in ('created_at','updated_at'):
                 values[key] = datetime.fromisoformat(values[key])
             segment = NarrationSegment(**values)
-            desired_version = self.repository.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
+            desired_version = self.repository.timeline_records.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
             publication = self.repository.execution_records.get_task_event(workspace_id,history[f'{side}_publication'])
             job = self.repository.job_records.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
                 kind='section_timeline_restore',idempotency_key=f'section_restore:{uuid4().hex}',
@@ -427,7 +427,7 @@ class TimelineRestoreUseCase:
                         desired_version=desired_version)
                     with self.repository.creation_execution_read() as reader:
                         latest=self.repository.task_records.get_creation_task(workspace_id,task_id,connection=reader)
-                        baseline=self.repository.get_timeline_version(workspace_id,latest.current_timeline_version_id,connection=reader)
+                        baseline=self.repository.timeline_records.get_timeline_version(workspace_id,latest.current_timeline_version_id,connection=reader)
                         prospective,_,_=change.compute(latest,baseline.snapshot,history['section_id'],
                             publication.payload['montage'],segment,'restore-permission-preparation',reader,desired_version=desired_version)
                     if baseline.snapshot.get('montage') is not None and prospective.get('montage') is not None:
@@ -473,7 +473,7 @@ class TimelineRestoreUseCase:
             restored_plan, _ = prepare_changed_montage(
                 restored_plan, message="草稿已恢复；原成片依赖或产物已失效，请明确重新生成。",
             )
-        current_version = self.repository.get_timeline_version(
+        current_version = self.repository.timeline_records.get_timeline_version(
             workspace_id, task.current_timeline_version_id or ""
         )
         restored_tracks: list[SubtitleTrack] = []
@@ -561,7 +561,7 @@ class TimelineRestoreUseCase:
                     "before": {
                         "ref": f"timeline:{task.current_timeline_version_id}",
                         "label": "当前版本",
-                        "detail": f"版本 {self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id or '').sequence}",
+                        "detail": f"版本 {self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id or '').sequence}",
                     },
                     "after": {
                         "ref": f"timeline:{target_version.id}",
@@ -612,7 +612,7 @@ class TimelineRestoreUseCase:
         from app.subtitle_tracks import render_srt
         command = prepared.command
         ws, task = command.workspace_id, command.task
-        base = self.repository.get_timeline_version(ws, prepared.local_sources['current_version_id'])
+        base = self.repository.timeline_records.get_timeline_version(ws, prepared.local_sources['current_version_id'])
         now = utc_now()
         intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}',workspace_id=ws,
             task_id=task.id,raw_command=f'{prepared.action_label}指定原修改',context_stage='montage',

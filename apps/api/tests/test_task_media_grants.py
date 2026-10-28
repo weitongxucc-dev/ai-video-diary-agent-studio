@@ -552,7 +552,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
             (json.dumps(asdict(task), default=str),))
     repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
     payload = repo.get_creation_task_montage_plan('local', 'task')
-    repo.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
+    repo.timeline_records.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
     selected_budget = main._device_host_budget()
     monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, clip_preview=selected_budget.cpu_render))
     store = ArtifactStore(tmp_path/'output')

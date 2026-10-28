@@ -76,6 +76,7 @@ from app.creation.contracts import (
 )
 from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
 from app.creation.task_records import TaskRecordStore
+from app.creation.timeline_records import TimelineRecordStore, validate_timeline_version
 from app.creation.editing.records import EditRecordStore, validate_edit_operation
 from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload, narration_segment_from_row,
@@ -523,18 +524,20 @@ class ProductionRepository:
     def _initialize_profile_stores(self) -> None:
         """Bind record owners; do not open connections or provision schema."""
         self.task_records = TaskRecordStore(self._connect)
+        self.timeline_records = TimelineRecordStore(self._connect, decode_snapshot=_json_object_from_text)
+        self.timeline_history = TimelineHistoryReadRepository(self._connect)
         self.edit_records = EditRecordStore(self._connect,
             current_source=EXACT_EDIT_SOURCE.get, decode_reference_list=_string_list_from_text,
-            decode_object=_json_object_from_text, decode_timeline_version=self._timeline_version_from_row)
+            decode_object=_json_object_from_text, decode_timeline_version=self.timeline_records.timeline_version_from_row)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
             require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
             read_task=self.task_records.get_creation_task, read_proposal=self.edit_records.get_edit_proposal,
-            read_operation=self.edit_records.get_edit_operation, read_version=self.get_timeline_version,
+            read_operation=self.edit_records.get_edit_operation, read_version=self.timeline_records.get_timeline_version,
             read_narration_segment=self.get_narration_segment,
             iter_narration_edit_segments=self.iter_narration_edit_segments,
             replace_adopted_narration_segment=self.replace_adopted_narration_segment,
             upsert_narration_segments=self._upsert_narration_segments,
-            validate_operation=validate_edit_operation, validate_version=_validate_timeline_version,
+            validate_operation=validate_edit_operation, validate_version=validate_timeline_version,
             validate_track=_validate_subtitle_track, validate_cover=_validate_cover_asset)
         self.preview_records = PreviewRecordStore(self._connect)
         self._media_authorizations = MediaAuthorizationStore(self._connect)
@@ -3095,168 +3098,12 @@ class ProductionRepository:
 
 
 
-    def create_timeline_version(
-        self, version: _TimelineVersion, *, connection: sqlite3.Connection | None = None,
-        expected_current_version_id: str | None | Literal[False] = False,
-    ) -> _TimelineVersion:
-        _validate_timeline_version(version)
-        if connection is None:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                self.create_timeline_version(version, connection=conn,
-                    expected_current_version_id=expected_current_version_id)
-            return self.get_timeline_version(version.workspace_id, version.id)
-        conn = connection
-        task = require_creation_task(conn, version.workspace_id, version.task_id)
-        if (expected_current_version_id is not False
-                and task.current_timeline_version_id != expected_current_version_id):
-            raise ValueError("当前时间线已变化，不能发布旧版本成片")
-        existing_row = conn.execute(
-            "SELECT * FROM timeline_versions WHERE id = ?",
-            (version.id,),
-        ).fetchone()
-        if existing_row is None:
-            existing_row = conn.execute(
-                """
-                SELECT * FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND sequence = ?
-                """,
-                (version.workspace_id, version.task_id, version.sequence),
-            ).fetchone()
-        if existing_row is not None:
-            persisted = self._timeline_version_from_row(existing_row)
-            if persisted != version:
-                raise ValueError("时间线版本已存在，不能覆盖")
-            if task.current_timeline_version_id != version.id:
-                task.current_timeline_version_id = version.id
-                task.updated_at = utc_now()
-                conn.execute(
-                    """
-                    UPDATE creation_tasks SET payload = ?, updated_at = ?
-                    WHERE workspace_id = ? AND id = ?
-                    """,
-                    (
-                        _json_payload(task),
-                        task.updated_at.isoformat(),
-                        task.workspace_id,
-                        task.id,
-                    ),
-                )
-            return persisted
-        latest_row = conn.execute(
-            """
-            SELECT id, sequence FROM timeline_versions
-            WHERE workspace_id = ? AND task_id = ?
-            ORDER BY sequence DESC LIMIT 1
-            """,
-            (version.workspace_id, version.task_id),
-        ).fetchone()
-        if latest_row is None:
-            if version.parent_version_id is not None or version.sequence != 1:
-                raise ValueError("首个时间线版本必须从序号 1 开始且不能有父版本")
-        else:
-            parent = conn.execute(
-                """
-                SELECT sequence FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
-                """,
-                (
-                    version.workspace_id,
-                    version.task_id,
-                    version.parent_version_id,
-                ),
-            ).fetchone()
-            if parent is None:
-                raise ValueError("父时间线版本不属于当前工作区与任务")
-            if version.sequence != int(latest_row["sequence"]) + 1:
-                raise ValueError("时间线版本序号必须连续递增")
-        try:
-            conn.execute(
-                """
-                INSERT INTO timeline_versions
-                    (id, workspace_id, task_id, parent_version_id, sequence,
-                     snapshot_json, created_by_operation_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    version.id,
-                    version.workspace_id,
-                    version.task_id,
-                    version.parent_version_id,
-                    version.sequence,
-                    _json_object(version.snapshot),
-                    version.created_by_operation_id,
-                    version.created_at.isoformat(),
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("时间线版本已存在，不能覆盖") from exc
-        task.current_timeline_version_id = version.id
-        task.updated_at = utc_now()
-        conn.execute(
-            """
-            UPDATE creation_tasks SET payload = ?, updated_at = ?
-            WHERE workspace_id = ? AND id = ?
-            """,
-            (
-                _json_payload(task),
-                task.updated_at.isoformat(),
-                task.workspace_id,
-                task.id,
-            ),
-        )
-        return version
 
-    def get_timeline_version(
-        self, workspace_id: str, version_id: str, *, connection: sqlite3.Connection | None = None
-    ) -> _TimelineVersion:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            row = conn.execute(
-                "SELECT * FROM timeline_versions WHERE workspace_id = ? AND id = ?",
-                (workspace_id, version_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError(version_id)
-        return self._timeline_version_from_row(row)
 
-    def next_timeline_sequence(
-        self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection,
-    ) -> int:
-        require_creation_task(connection, workspace_id, task_id)
-        row = connection.execute(
-            "SELECT MAX(sequence) FROM timeline_versions WHERE workspace_id = ? AND task_id = ?",
-            (workspace_id, task_id),
-        ).fetchone()
-        return (row[0] or 0) + 1
 
-    def list_timeline_versions(
-        self, workspace_id: str, task_id: str
-    ) -> list[_TimelineVersion]:
-        with self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            rows = conn.execute(
-                """
-                SELECT * FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? ORDER BY sequence ASC
-                """,
-                (workspace_id, task_id),
-            ).fetchall()
-        return [self._timeline_version_from_row(row) for row in rows]
 
-    def timeline_history_page(self, workspace_id, task_id, *, limit=20, before_sequence=None):
-        return TimelineHistoryReadRepository(self._connect).page(
-            workspace_id, task_id, limit=limit, before_sequence=before_sequence)
 
-    def timeline_history_summary(self, workspace_id, task_id, version_id):
-        return TimelineHistoryReadRepository(self._connect).summary(workspace_id, task_id, version_id)
 
-    def timeline_contains_version(self, workspace_id, task_id, current_id, ancestor_id):
-        with self._connect() as conn:
-            return conn.execute("WITH RECURSIVE history(id,parent_version_id) AS ("
-                "SELECT id,parent_version_id FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=? UNION "
-                "SELECT v.id,v.parent_version_id FROM timeline_versions v JOIN history h ON h.parent_version_id=v.id "
-                "WHERE v.workspace_id=? AND v.task_id=?) SELECT 1 FROM history WHERE id=? LIMIT 1",
-                (workspace_id, task_id, current_id, workspace_id, task_id, ancestor_id)).fetchone() is not None
 
 
     def edit_execution_readiness(self,workspace_id,task_id,operation_id,*,connection=None):
@@ -3898,7 +3745,7 @@ class ProductionRepository:
                 self.edit_adoption.confirm(task.workspace_id,task.id,proposal.id,operation=operation,result_version=version,
                     montage_plan_id=full['id'] if full else None,montage_payload=full,subtitle_tracks=tracks,connection=connection)
             else:
-                self.create_timeline_version(version,connection=connection,expected_current_version_id=task.current_timeline_version_id)
+                self.timeline_records.create_timeline_version(version,connection=connection,expected_current_version_id=task.current_timeline_version_id)
             if segment is not None:
                 self.replace_adopted_narration_segment(task, segment, connection=connection)
                 self._invalidate_section_composition(task.workspace_id,task.id,connection)
@@ -3950,8 +3797,8 @@ class ProductionRepository:
         """The legacy snapshot restore is safe only while no later facts are lost."""
         with nullcontext(connection) if connection is not None else self._connect() as conn:
             task = require_creation_task(conn,workspace_id,task_id)
-            changed = self.get_timeline_version(workspace_id,changed_version_id,connection=conn)
-            current = self.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
+            changed = self.timeline_records.get_timeline_version(workspace_id,changed_version_id,connection=conn)
+            current = self.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
             if (changed.task_id!=task_id or self._timeline_restore_business_facts(current,conn)
                     !=self._timeline_restore_business_facts(changed,conn)):
                 raise ValueError('此修改之后已有其他时间线成果；当前编辑尚不支持局部反向恢复，不能覆盖后来成果')
@@ -3991,15 +3838,15 @@ class ProductionRepository:
             segment = replace(segment,updated_at=utc_now())
             if publication.payload['narration_reference'] != segment.audio_reference or publication.payload['text'] != segment.text:
                 raise ValueError('历史正文、配音与采用段来源不一致')
-            current = self.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
+            current = self.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
             snapshot = dict(current.snapshot)
             snapshot['stage_segments'] = {**snapshot.get('stage_segments',{}),section_id:publication.id}
             version_id = f'timeline_{uuid4().hex}'
             persisted_job = self.job_records.get_job_run(workspace_id,job.id,connection=conn)
             if persisted_job.task_id!=task_id or persisted_job.kind!='section_timeline_restore' or persisted_job.status!='running':
                 raise ValueError('局部恢复作业不属于当前运行请求')
-            source_version = self.get_timeline_version(workspace_id,history[f'{expected}_timeline_version_id'],connection=conn)
-            desired_version = self.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'],connection=conn)
+            source_version = self.timeline_records.get_timeline_version(workspace_id,history[f'{expected}_timeline_version_id'],connection=conn)
+            desired_version = self.timeline_records.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'],connection=conn)
             if source_version.task_id!=task_id or desired_version.task_id!=task_id:
                 raise ValueError('局部恢复来源版本不属于当前任务')
             invalidations = dict(snapshot.get('stage_segment_invalidations', {}))
@@ -6159,7 +6006,7 @@ class ProductionRepository:
                 workspace_id, task_id, plan_id, payload, connection=publish_conn,
                 expected_current_version_id=expected_current_version_id,
             )
-            self.create_timeline_version(
+            self.timeline_records.create_timeline_version(
                 version, connection=publish_conn,
                 expected_current_version_id=expected_current_version_id,
             )
@@ -6698,26 +6545,6 @@ class ProductionRepository:
 
 
 
-    @staticmethod
-    def _timeline_version_from_row(row: sqlite3.Row) -> _TimelineVersion:
-        return _TimelineVersion(
-            id=str(row["id"]),
-            workspace_id=str(row["workspace_id"]),
-            task_id=str(row["task_id"]),
-            parent_version_id=(
-                str(row["parent_version_id"])
-                if row["parent_version_id"] is not None
-                else None
-            ),
-            sequence=int(row["sequence"]),
-            snapshot=_json_object_from_text(str(row["snapshot_json"])),
-            created_by_operation_id=(
-                str(row["created_by_operation_id"])
-                if row["created_by_operation_id"] is not None
-                else None
-            ),
-            created_at=datetime.fromisoformat(str(row["created_at"])),
-        )
 
 
 
@@ -7040,21 +6867,6 @@ def _narration_segment_values(segment: _NarrationSegment) -> tuple[object, ...]:
 
 
 
-def _validate_timeline_version(version: _TimelineVersion) -> None:
-    if not all(
-        value.strip() for value in (version.id, version.workspace_id, version.task_id)
-    ):
-        raise ValueError("时间线版本缺少 ID、工作区或任务")
-    if version.sequence < 1:
-        raise ValueError("时间线版本序号必须从 1 开始")
-    if version.parent_version_id is not None and not version.parent_version_id.strip():
-        raise ValueError("父时间线版本 ID 不能为空")
-    if (
-        version.created_by_operation_id is not None
-        and not version.created_by_operation_id.strip()
-    ):
-        raise ValueError("创建时间线版本的操作 ID 不能为空")
-    _json_object(version.snapshot)
 
 
 

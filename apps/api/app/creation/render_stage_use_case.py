@@ -119,7 +119,7 @@ class RenderStageUseCase:
             raise RenderRejected(status_code=409,detail=str(exc)) from exc
         active_subtitle_tracks = self.current_subtitle_tracks(workspace_id, task, montage=plan)
         active_version = (
-            self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             if task.current_timeline_version_id
             else None
         )
@@ -242,14 +242,14 @@ class RenderStageUseCase:
                     self.repository.save_creation_task_montage_plan(
                         workspace_id, task.id, plan.id, rendered_payload
                     )
-                    versions = self.repository.list_timeline_versions(workspace_id, task.id)
+                    versions = self.repository.timeline_records.list_timeline_versions(workspace_id, task.id)
                     current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
                     version_id = f"timeline_{uuid4().hex}"
                     inherited_cover = (
                         _clone_cover_asset(active_cover, timeline_version_id=version_id)
                         if active_cover is not None else None
                     )
-                    version = self.repository.create_timeline_version(
+                    version = self.repository.timeline_records.create_timeline_version(
                         TimelineVersion(
                             id=version_id,
                             workspace_id=workspace_id,
@@ -470,11 +470,11 @@ class RenderStageUseCase:
                     render_context.check()
                 version_id = f"timeline_{context.job_id}"
                 try:
-                    version = self.repository.get_timeline_version(
+                    version = self.repository.timeline_records.get_timeline_version(
                         workspace_id, version_id
                     )
                 except KeyError:
-                    versions = self.repository.list_timeline_versions(workspace_id, task.id)
+                    versions = self.repository.timeline_records.list_timeline_versions(workspace_id, task.id)
                     current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
                     parent_version_id = current_task.current_timeline_version_id
                     if (render_context is not None
@@ -639,7 +639,7 @@ class RenderStageUseCase:
             task = self.repository.task_records.get_creation_task(workspace_id, task_id)
             if not task.current_timeline_version_id:
                 return False
-            version = timeline_version or self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            version = timeline_version or self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             plan = version.snapshot["montage"] if timeline_version is not None else self.repository.get_creation_task_montage_plan(workspace_id, task_id)
             ref = plan.get("output_path")
             if (plan.get("status") != "rendered" or not isinstance(ref, str)
@@ -673,7 +673,7 @@ class RenderStageUseCase:
                         or not isinstance(version.snapshot.get("render_input_subtitle_tracks"), list)
                         or transform.input_digest != render_input_digest):
                     return False
-                input_version = self.repository.get_timeline_version(workspace_id, input_version_id)
+                input_version = self.repository.timeline_records.get_timeline_version(workspace_id, input_version_id)
                 if input_version.task_id != task_id:
                     return False
             input_plan = creation_task_montage_plan_from_payload(plan)
@@ -684,7 +684,7 @@ class RenderStageUseCase:
                 input_version_id = version.snapshot.get("render_input_timeline_version_id")
                 if not isinstance(input_version_id, str) or version.parent_version_id != input_version_id:
                     return False
-                input_version = self.repository.get_timeline_version(workspace_id, input_version_id)
+                input_version = self.repository.timeline_records.get_timeline_version(workspace_id, input_version_id)
                 input_plan_payload = input_version.snapshot.get("montage")
                 subtitle_tracks = version.snapshot.get("render_input_subtitle_tracks")
                 subtitles_visible = version.snapshot.get("render_input_subtitles_visible")
@@ -774,7 +774,7 @@ class RenderStageUseCase:
         valid = self.valid(workspace_id, task_id, render_context=grant)
         if valid:
             task = self.repository.task_records.get_creation_task(workspace_id, task_id)
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             if 'audio_delivery' not in version.snapshot:
                 plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
                 self.graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)

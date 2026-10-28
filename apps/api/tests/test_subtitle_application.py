@@ -67,7 +67,7 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
             0, '原封面', {}, {}, 'video_frame', 'fixture-input', cover_ref, 'fixture-cover-transform', 'valid')
         snapshot['cover_asset_id'] = state.cover.id
     state.base = TimelineVersion('subtitle-base', 'ws', state.task.id, state.base.id, 2, snapshot, None)
-    state.repo.create_timeline_version(state.base)
+    state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
         state.repo.create_subtitle_track(track)
     if state.cover is not None:
@@ -93,7 +93,7 @@ def test_style_preparation_keeps_original_ids_and_save_uses_original_base_CAS(tm
     assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
     later_zh = clone_subtitle_track(state.zh, timeline_version_id='later-head', track_id='later-zh')
     later_en = clone_subtitle_track(state.en, timeline_version_id='later-head', track_id='later-en')
-    state.repo.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=3,
+    state.repo.timeline_records.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=3,
         snapshot={**state.base.snapshot, 'subtitle_track_ids': [later_zh.id, later_en.id]}))
     state.repo.create_subtitle_track(later_zh)
     state.repo.create_subtitle_track(later_en)

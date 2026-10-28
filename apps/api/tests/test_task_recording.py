@@ -123,7 +123,7 @@ def recording_task(tmp_path, monkeypatch):
                      (json.dumps(asdict(task), default=str), workspace_id, task_id))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
                      (montage.id, workspace_id, task_id, json.dumps(montage_payload), now))
-    version = repo.create_timeline_version(TimelineVersion(
+    version = repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_recording_base", workspace_id=workspace_id, task_id=task_id,
         parent_version_id=None, sequence=1, snapshot={"montage": montage_payload},
         created_by_operation_id=None))
@@ -503,8 +503,8 @@ def test_recording_proposal_cannot_apply_after_version_changes(recording_task):
         "base_version_id": version_id, "action": "replace_narration",
         "target_id": "audio-narration-main", "values": {"source_ref": uploaded["source_ref"]}})
     assert preview.status_code == 200, preview.text
-    base = repo.get_timeline_version("local", version_id)
-    repo.create_timeline_version(TimelineVersion(
+    base = repo.timeline_records.get_timeline_version("local", version_id)
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_recording_other_edit", workspace_id="local", task_id=task_id,
         parent_version_id=version_id, sequence=base.sequence + 1, snapshot=base.snapshot,
         created_by_operation_id=None))
@@ -745,7 +745,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     assert blocked.status_code==200 and blocked.json()['requirements']['can_continue'] is False
     assert '当前配音是本人录音' in blocked.json()['requirements']['continuation_blocker']
     assert [job.id for job in repo.job_records.list_job_runs('local',task.id)]==before_jobs
-    assert current.current_timeline_version_id is None and repo.list_timeline_versions('local',task.id)==[]
+    assert current.current_timeline_version_id is None and repo.timeline_records.list_timeline_versions('local',task.id)==[]
     # The other original applied source is the current montage narration graph.
     montage = CreationTaskMontagePlan('declared-montage','local',task.id,task.confirmed_script_id,'metadata','ready',
         [],[],1,0,narration_audio_path=state.source.logical_ref,

@@ -107,7 +107,7 @@ def test_short_preview_replay_cancel_and_changed_base_do_not_execute(tmp_path, m
         second = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
         assert second.status_code == 202, second.text
         version = TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None)
-        repo.create_timeline_version(version)
+        repo.timeline_records.create_timeline_version(version)
         replay = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
         assert replay.status_code == 202 and replay.json()['job_id'] == second.json()['job_id']
         assert client.get(second.json()['result_url']).json()['status'] == 'stale'
@@ -139,7 +139,7 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
         missing = client.post('/api/creation-tasks/task/visual/preview', json=payload)
         assert missing.status_code == 409 and '基础版本' in missing.text
         assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id is None
-        assert len(repo.list_timeline_versions('local', 'task')) == 1
+        assert len(repo.timeline_records.list_timeline_versions('local', 'task')) == 1
     finally:
         runtime.stop(0)
 
@@ -229,7 +229,7 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
     from test_task_media_grants import _visual_scope_case
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
     def commit_other_edit():
-        repo.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
+        repo.timeline_records.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
     try:
         job_count = len(repo.job_records.list_job_runs('local', 'task'))
         intent_count = len(repo.edit_records.list_edit_intents('local', 'task'))
@@ -310,7 +310,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
             ('montage','local','task',json.dumps(creation_task_montage_plan_to_payload(plan)),task.updated_at.isoformat()))
-    repo.create_timeline_version(TimelineVersion('timeline','local','task',None,1,{'montage':creation_task_montage_plan_to_payload(plan)},None))
+    repo.timeline_records.create_timeline_version(TimelineVersion('timeline','local','task',None,1,{'montage':creation_task_montage_plan_to_payload(plan)},None))
     budget=CpuRenderBudget(max_duration_seconds=20.401,max_pixel_seconds=1920*1920*20.401,max_width_px=1920,max_height_px=1920,
         max_input_bytes=10000000,max_clip_count=64,max_overlay_count=16,max_output_bytes=2000000,max_threads=1,max_timeout_seconds=30,
         additional_memory_bytes=1,additional_disk_bytes=1,max_process_threads=16)  # Synthetic test profile.

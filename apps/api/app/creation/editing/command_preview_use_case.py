@@ -199,7 +199,7 @@ class CommandPreviewUseCase:
         if turn['status'] != 'running' or context.get('kind') != 'task' or context.get('task_id') != task.id or (context.get('stage') != payload.context_stage) or (context.get('selected_object_refs') != sorted(payload.selected_object_refs)) or (context.get('playhead_ms') != payload.playhead_ms):
             raise EditPreviewRejected(status_code=409, detail='修改目标与本轮原始要求不一致，未生成提案。')
         snapshot = context.get('target_snapshot', {})
-        version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if snapshot.get('timeline_version_id') != task.current_timeline_version_id or snapshot.get('timeline_sequence') != (version.sequence if version else 0):
             raise EditPreviewRejected(status_code=409, detail='任务版本已变化，请重新查看目标后发送；未生成提案。')
         try:
@@ -219,7 +219,7 @@ class CommandPreviewUseCase:
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None

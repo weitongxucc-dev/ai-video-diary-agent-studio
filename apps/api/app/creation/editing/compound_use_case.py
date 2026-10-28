@@ -91,7 +91,7 @@ class CompoundEditUseCase:
             return None
         task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(control.workspace_id, task.id))
-        current = self.repository.get_timeline_version(control.workspace_id, control.base_version_id) if control.base_version_id else None
+        current = self.repository.timeline_records.get_timeline_version(control.workspace_id, control.base_version_id) if control.base_version_id else None
         tracks = self.montage_edits.current_subtitle_tracks(control.workspace_id, task, current_version=current, montage=plan)
         calculated = calculate_compound_edit(plan, tracks, effective_audio_timeline(plan),
             raw_command=control.raw_command, selected_refs=control.selected_object_refs,
@@ -169,7 +169,7 @@ class CompoundEditUseCase:
         if not operations:
             return None
         operation = operations[0]
-        version = self.repository.get_timeline_version(command.workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(command.workspace_id, operation.result_version_id)
         montage = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return MetadataEditResult(operation, montage, task, None)
 
@@ -181,7 +181,7 @@ class CompoundEditUseCase:
         if task.current_timeline_version_id != operation_payload.get('base_version_id'):
             raise EditConflict('时间线已变化，请重新预览全部修改')
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, task.id))
-        base = self.repository.get_timeline_version(command.workspace_id, task.current_timeline_version_id)
+        base = self.repository.timeline_records.get_timeline_version(command.workspace_id, task.current_timeline_version_id)
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=montage)
         bound = intent.constraints.get('affected_source_scope')
         if bound is None:
@@ -243,7 +243,7 @@ class CompoundEditUseCase:
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None

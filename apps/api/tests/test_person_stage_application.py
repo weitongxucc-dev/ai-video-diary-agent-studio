@@ -250,7 +250,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     payload=repo.get_creation_task_montage_plan('local',s.task_id)
     assert payload['status']=='rendered' and payload['output_path']
     rendered_file=_file_fact(main.artifact_store.resolve_file(payload['output_path']))
-    base=repo.get_timeline_version('local',rendered_task.current_timeline_version_id)
+    base=repo.timeline_records.get_timeline_version('local',rendered_task.current_timeline_version_id)
     preview=s.client.post(url+'/edits/preview',json={'raw_command':'这里只重做口型，其他都不要动','context_stage':'review',
         'selected_object_refs':['clip:'+clips[0].id],'playhead_ms':500})
     assert preview.status_code==200,preview.text

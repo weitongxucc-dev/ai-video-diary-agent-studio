@@ -299,7 +299,7 @@ class GoalContinuationService:
                     or adoption.get('authorization_source')!=original['source']
                     or adoption.get('window_input_fingerprint')!=original.get('input_fingerprint')):
                 return {'status':'blocked','reason':'原任务组采用出处不一致，没有恢复其他目标'}
-            version=production.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn) if task.current_timeline_version_id else None
+            version=production.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn) if task.current_timeline_version_id else None
             snapshot={**goal['target_snapshot'],'timeline_version_id':task.current_timeline_version_id,
                 'timeline_sequence':version.sequence if version else 0}
             checkpoint=goal.get('completed_output_checkpoint') or {}
@@ -527,7 +527,7 @@ class GoalResultProjection:
         goal = self.conversations.get_task_goal(source["assistant_turn_id"])
         if goal is None or not self.source_belongs_to_goal(goal, source):
             return False
-        version = self.production.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+        version = self.production.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
         return version.parent_version_id == result_version and self.owned_render_version(goal, version)
 
     def selection_version_chain(self, goal, version):
@@ -538,7 +538,7 @@ class GoalResultProjection:
                 return None
             if version.parent_version_id in chain:
                 return None
-            version = self.production.get_timeline_version(goal["workspace_id"], version.parent_version_id)
+            version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], version.parent_version_id)
             chain.add(version.id)
         return chain if original in chain else None
 
@@ -548,7 +548,7 @@ class GoalResultProjection:
         if event.get("base_version_id") != expected:
             return {"status": "invalidated", "reason": "unrelated_timeline_change"}
         if task.current_timeline_version_id != event_version:
-            version = self.production.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
+            version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
             if (event.get("phase") != "apply" or version.parent_version_id != event_version
                     or not self.owned_render_version(goal, version)):
                 return {"status": "invalidated", "reason": "unrelated_timeline_change"}
@@ -560,7 +560,7 @@ class GoalResultProjection:
         result = event.get("result_version_id")
         if not self.bound_execution(goal, result):
             return None
-        version = self.production.get_timeline_version(goal["workspace_id"], result)
+        version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], result)
         return {"status": "waiting_result", "reason": "read_original_request_result", "consume_event": True,
                 "task_version": {"timeline_version_id": result, "timeline_sequence": version.sequence}}
 
@@ -626,7 +626,7 @@ class GoalResultProjection:
             if item.proposal_id == proposal.id and item.id == event.get("operation_id") and item.status == "applied"), None)
         current = task.current_timeline_version_id == (operation.result_version_id if operation else None)
         if not current and operation is not None:
-            version = self.production.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
+            version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
             current = version.parent_version_id == operation.result_version_id and self.owned_render_version(goal, version)
         if proposal.status != "confirmed" or operation is None or not current:
             return {"status": "invalidated", "reason": "adoption_result_not_current"}, None, removed
@@ -824,11 +824,11 @@ class GoalResultProjection:
         if result == base:
             if result is None:
                 return source["expected_timeline_sequence"] == 0
-            version = self.production.get_timeline_version(task.workspace_id, result)
+            version = self.production.timeline_records.get_timeline_version(task.workspace_id, result)
             return version.sequence == source["expected_timeline_sequence"]
         if status != "succeeded" or result is None:
             return False
-        version = self.production.get_timeline_version(task.workspace_id, result)
+        version = self.production.timeline_records.get_timeline_version(task.workspace_id, result)
         rendered = self.production.goal_render_request_row(task.workspace_id, version.snapshot.get("creation_render_request_id"))
         return (version.parent_version_id == base and version.snapshot.get("render_input_timeline_version_id") == base
             and rendered is not None and rendered["owner_id"] == job_id and rendered["state"] == "done")
@@ -1161,7 +1161,7 @@ class GoalResultProjection:
 
     def script_tool_projection(self, context, receipt):
         source, task, binding = context.source, context.task, context.binding
-        version = self.production.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.production.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         current = (task.current_timeline_version_id, version.sequence if version else 0) == (
             source["expected_timeline_version_id"], source["expected_timeline_sequence"])
         status = "stopped" if binding["status"] == "stopped" else "recorded" if current else "stale"

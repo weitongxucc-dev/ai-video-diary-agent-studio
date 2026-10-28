@@ -31,7 +31,7 @@ class ClipPreviewUseCase:
             raise PermissionError("当前成员不能修改此任务")
         if task.current_timeline_version_id != command.base_version_id:
             raise ClipPreviewConflict("时间线已经变化，请刷新后重新预览")
-        version = self.repository.get_timeline_version(actor.workspace_id, command.base_version_id)
+        version = self.repository.timeline_records.get_timeline_version(actor.workspace_id, command.base_version_id)
         if version.task_id != task.id:
             raise ClipPreviewConflict("基础时间线不属于当前任务")
         if command.source is not None and (command.source["workspace_id"], command.source["task_id"],

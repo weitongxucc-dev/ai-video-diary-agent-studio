@@ -51,7 +51,7 @@ def task_client(tmp_path, monkeypatch):
                             confirmed_script_id="script" if sequence else None)
         production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
         for number in range(1, sequence + 1):
-            production.create_timeline_version(TimelineVersion(
+            production.timeline_records.create_timeline_version(TimelineVersion(
                 id=f"timeline-{number}", workspace_id="qa", task_id=task.id,
                 parent_version_id=f"timeline-{number - 1}" if number > 1 else None,
                 sequence=number, snapshot={}, created_by_operation_id=None,
@@ -112,7 +112,7 @@ def test_unavailable_or_unrelated_persisted_timeline_is_rejected(task_client, ta
         other_task = CreationTask(id="other-task", workspace_id="qa", plan_id=other_plan.id,
                                   name="其他任务", scenario="knowledge_explanation")
         production.plan_confirmation.confirm_creation_plan(other_plan, other_task, verified_owner_user_id=member_id)
-        production.create_timeline_version(TimelineVersion(
+        production.timeline_records.create_timeline_version(TimelineVersion(
             id=target, workspace_id="qa", task_id=other_task.id, parent_version_id=None,
             sequence=1, snapshot={}, created_by_operation_id=None,
         ))

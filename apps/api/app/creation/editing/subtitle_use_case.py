@@ -131,7 +131,7 @@ class SubtitleEditUseCase:
             if task.current_timeline_version_id != operation_payload['base_version_id']:
                 raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新校准字幕')
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
-            base = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            base = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
             track = next((item for item in tracks if item.id == operation_payload['track_id']), None)
             if track is None:
@@ -143,7 +143,7 @@ class SubtitleEditUseCase:
         if operation_type == 'ConfigureSubtitleTrack' and isinstance(operation_payload, dict) and ('subtitle_display' in operation_payload):
             if task.current_timeline_version_id != operation_payload.get('base_version_id'):
                 raise EditPreviewRejected(status_code=409, detail='creation task edit proposal is stale')
-            base_version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            base_version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
             tracks = self.montage_edits.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
             selection = subtitle_display_selection(tracks, operation_payload['subtitle_display'])
@@ -162,7 +162,7 @@ class SubtitleEditUseCase:
                 raise EditPreviewRejected(status_code=409, detail='invalid subtitle track configuration')
             if task.current_timeline_version_id != base_version_id:
                 raise EditPreviewRejected(status_code=409, detail='creation task edit proposal is stale')
-            base_version = self.repository.get_timeline_version(workspace_id, base_version_id)
+            base_version = self.repository.timeline_records.get_timeline_version(workspace_id, base_version_id)
             try:
                 montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
             except KeyError as exc:
@@ -200,7 +200,7 @@ class SubtitleEditUseCase:
                 raise EditPreviewRejected(status_code=409, detail='invalid subtitle edit operation')
             if task.current_timeline_version_id != base_version_id:
                 raise EditPreviewRejected(status_code=409, detail='creation task edit proposal is stale')
-            base_version = self.repository.get_timeline_version(workspace_id, base_version_id)
+            base_version = self.repository.timeline_records.get_timeline_version(workspace_id, base_version_id)
             try:
                 montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
                 cue = next((item for item in montage.cues if item.id == cue_id))
@@ -237,7 +237,7 @@ class SubtitleEditUseCase:
         if not operations:
             return None
         operation = operations[0]
-        version = self.repository.get_timeline_version(command.workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(command.workspace_id, operation.result_version_id)
         montage = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return MetadataEditResult(operation, montage, task, None)
 
@@ -258,7 +258,7 @@ class SubtitleEditUseCase:
         if command.source is not None:
             EditSourceVerifier(self.repository, identity=command.actor_identity).verify(command, None)
         check_command(task, command)
-        base = self.repository.get_timeline_version(command.workspace_id, task.current_timeline_version_id)
+        base = self.repository.timeline_records.get_timeline_version(command.workspace_id, task.current_timeline_version_id)
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, task.id))
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=montage)
         version_id = f'timeline_{uuid4().hex}'

@@ -323,7 +323,7 @@ class TaskBusiness:
         if frozen.get('kind')!='task' or frozen.get('task_id')!=task.id:
             raise TaskBusinessRejected('追加输入切换了任务，需要从交互入口重新授权')
         snapshot=frozen['target_snapshot']
-        timeline=(self.production.get_timeline_version(task.workspace_id,task.current_timeline_version_id,connection=conn)
+        timeline=(self.production.timeline_records.get_timeline_version(task.workspace_id,task.current_timeline_version_id,connection=conn)
             if task.current_timeline_version_id else None)
         version={'timeline_version_id':task.current_timeline_version_id,'timeline_sequence':timeline.sequence if timeline else 0}
         if any(snapshot.get(key)!=value for key,value in version.items()):

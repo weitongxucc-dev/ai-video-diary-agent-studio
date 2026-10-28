@@ -39,15 +39,15 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
         [], [], None, [], 0, 0, "declared metadata fixture", [], [], [], "fixture")
     task = CreationTask("task", "workspace", plan.id, plan.name, "declared-goal-fixture")
     production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
-    base = production.create_timeline_version(TimelineVersion(
+    base = production.timeline_records.create_timeline_version(TimelineVersion(
         "version:one", "workspace", task.id, None, 1, {}, None))
     job = production.job_records.create_job_run(JobRun("execution:one", "workspace", task.id,
         "creation_task_execution", "execution:one", "declared-input"))
     production.job_records.claim_job_run("workspace", job.id)
     production.job_records.finish_job_run("workspace", job.id, status="succeeded")
-    rendered = production.create_timeline_version(TimelineVersion("version:render", "workspace", task.id,
+    rendered = production.timeline_records.create_timeline_version(TimelineVersion("version:render", "workspace", task.id,
         base.id, 2, {"render_input_timeline_version_id": base.id, "creation_render_request_id": "render:one"}, None))
-    production.create_timeline_version(TimelineVersion("version:other", "workspace", task.id, base.id, 3, {}, None))
+    production.timeline_records.create_timeline_version(TimelineVersion("version:other", "workspace", task.id, base.id, 3, {}, None))
     assert rendered.parent_version_id == base.id and rendered.snapshot["render_input_timeline_version_id"] == base.id
 
     chat = conversations.create("workspace", "member", "task", task.id)

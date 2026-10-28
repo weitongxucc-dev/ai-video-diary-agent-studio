@@ -60,7 +60,7 @@ def send(state, message="只重新生成故事板，保留配音，不生成视�
     current = state.conversations.get(state.chat["id"], "ws", state.member.member_id)
     draft = state.conversations.save_draft(current["id"], "ws", state.member.member_id, message, current["draft_version"])
     task = state.repo.task_records.get_creation_task("ws", state.task.id)
-    version = state.repo.get_timeline_version("ws", task.current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version("ws", task.current_timeline_version_id)
     payload = {"conversation_id": current["id"], "message": message, "context_stage": "montage",
         "client_request_id": str(uuid4()), "expected_draft_version": draft["draft_version"],
         "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence}
@@ -74,7 +74,7 @@ def test_task_send_stale_timeline_returns_machine_code_before_creating_turn(chat
     current = state.conversations.get(state.chat["id"], "ws", state.member.member_id)
     message = "保留这条尚未发送的修改要求"
     draft = state.conversations.save_draft(current["id"], "ws", state.member.member_id, message, current["draft_version"])
-    version = state.repo.get_timeline_version("ws", state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id)
+    version = state.repo.timeline_records.get_timeline_version("ws", state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id)
     monkeypatch.setattr(main, "run_task_turn", lambda *_a, **_k: pytest.fail("stale task must not invoke the assistant"))
     payload = {"conversation_id": current["id"], "message": message, "context_stage": "montage",
         "client_request_id": str(uuid4()), "expected_draft_version": draft["draft_version"],

@@ -3827,7 +3827,7 @@ def _task_observation_metadata(task,member_id):
             targets.append({"target": {"kind": "media_job", "job_id": row["producer_job_id"], "artifact_id": row["id"]},
                 "artifact_id": row["id"], "sha256": row["sha256"],
                 "output_role": "graphic_source" if row["kind"] == "graphic_source" else "composed_preview"})
-    version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    version = production_repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     return {"task_id": task_id, "timeline_version_id": task.current_timeline_version_id,
         "timeline_sequence": version.sequence if version else 0,
         "quality_check": current, "quality_history": [bounded_quality_evidence(item)
@@ -4035,7 +4035,7 @@ def _submit_clip_preview(task_id, request, *, base_version_id, operation_type, c
             raise ClipPreviewConflict("当前故事板没有基础版本，请先保留当前故事板并建立版本")
         if task.current_timeline_version_id != base_version_id:
             raise ClipPreviewConflict("时间线已经变化，请刷新后重新预览")
-        base = production_repo.get_timeline_version(workspace_id, base_version_id)
+        base = production_repo.timeline_records.get_timeline_version(workspace_id, base_version_id)
         original = getattr(request.state, "task_media_command", None)
         if source is None and original is not None:
             action = CreationTaskExactEditRequest(operation_type=operation_type,
@@ -4254,7 +4254,7 @@ def _completed_script_submission_receipt(task, actor, turn_id, slot, *, contract
 
 def _media_script_submission_use_case():
     return script_submission.MediaScriptSubmissionUseCase(request_receipts=_exact_preview_use_case,
-        read_version=production_repo.get_timeline_version, conversations=conversation_repo,
+        read_version=production_repo.timeline_records.get_timeline_version, conversations=conversation_repo,
         expand_recipe=_expand_media_script_submission_recipe,
         completed_receipt=_completed_script_submission_receipt)
 
@@ -4358,7 +4358,7 @@ def save_media_script_tool(task_id: str, request: Request, payload: MediaScriptT
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         _require_assistant_input_origin(request, {**source, "assistant_turn_id": str(payload.assistant_turn_id)})
-        version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = production_repo.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         snapshot = source["context"].get("target_snapshot", {})
         if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise HTTPException(status_code=409, detail="保存配方的原任务目标已变化")
@@ -6691,7 +6691,7 @@ def _assistant_turn_scope(
         version = None
         if task.current_timeline_version_id:
             try:
-                version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+                version = production_repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             except KeyError as exc:
                 raise HTTPException(status_code=409, detail="当前任务的时间线版本不可用") from exc
             if version.task_id != task.id:
@@ -6848,7 +6848,7 @@ def _creation_task_assistant_turn(
     current_version = None
     if task.current_timeline_version_id is not None:
         try:
-            current_version = production_repo.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            current_version = production_repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         except KeyError as exc:
             raise HTTPException(status_code=409, detail="当前任务的时间线版本不可用") from exc
         if current_version.task_id != task.id:
@@ -7009,7 +7009,7 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
         base = (actual["base_timeline_version_id"], actual["base_timeline_sequence"])
         if base != (snapshot["timeline_version_id"], snapshot["timeline_sequence"]):
             task = production_repo.task_records.get_creation_task(workspace_id, task_id)
-            version = production_repo.get_timeline_version(workspace_id, base[0])
+            version = production_repo.timeline_records.get_timeline_version(workspace_id, base[0])
             successor = _assistant_edited_execution_version(task, member_id, turn_id, origin, snapshot, version, request)
             if successor is None or base != (successor["timeline_version_id"], successor["timeline_sequence"]):
                 raise HTTPException(status_code=502, detail="故事板原请求与本轮目标版本不一致")
@@ -8242,7 +8242,7 @@ def initialize_creation_task_timeline(task_id: str, request: Request) -> dict[st
     )
     _logical_montage_output_refs(plan)
     if task.current_timeline_version_id is None:
-        versions = production_repo.list_timeline_versions(workspace_id, task_id)
+        versions = production_repo.timeline_records.list_timeline_versions(workspace_id, task_id)
         if versions:
             current_snapshot = {
                 "montage": creation_task_montage_plan_to_payload(plan),
@@ -8259,7 +8259,7 @@ def initialize_creation_task_timeline(task_id: str, request: Request) -> dict[st
                 )
     version = _ensure_montage_base_version(workspace_id, task, plan)
     if task.current_timeline_version_id is None:
-        version = production_repo.create_timeline_version(version)
+        version = production_repo.timeline_records.create_timeline_version(version)
     return {"version_id": version.id}
 
 
@@ -8608,7 +8608,7 @@ def _original_edit_result(task, proposal):
     operations = [item for item in production_repo.edit_records.list_edit_operations(task.workspace_id, task.id) if item.proposal_id == proposal.id]
     if operations:
         operation = operations[0]
-        version = production_repo.get_timeline_version(task.workspace_id, operation.result_version_id)
+        version = production_repo.timeline_records.get_timeline_version(task.workspace_id, operation.result_version_id)
         montage = creation_task_montage_plan_from_payload(version.snapshot["montage"])
         return CreationTaskEditConfirmResponse(operation=asdict(operation), montage=_creation_task_montage_response(montage), narration=None)
     with production_repo._connect() as conn:
@@ -8811,7 +8811,7 @@ def _task_edit_capability_facts(task):
     payload = production_repo.get_creation_task_montage_plan(task.workspace_id, task.id) if task.montage_plan_id else None
     clips = payload.get("clips", []) if payload else []
     tracks = production_repo.list_subtitle_tracks(task.workspace_id, task.id, timeline_version_id=task.current_timeline_version_id) if task.current_timeline_version_id else []
-    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    version = production_repo.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     operations = []
     for operation, fields in EXACT_EDIT_FIELDS.items():
         reason = None
@@ -9445,7 +9445,7 @@ def _timeline_version_or_404(
     keeps another task's version from being read through this route.
     """
     try:
-        version = production_repo.get_timeline_version(workspace_id, version_id)
+        version = production_repo.timeline_records.get_timeline_version(workspace_id, version_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="时间线版本不存在。") from exc
     if version.task_id != task_id:
@@ -9471,7 +9471,7 @@ def _history_summary(
 ) -> TimelineVersionSummaryResponse:
     try:
         return TimelineVersionSummaryResponse.model_validate(
-            production_repo.timeline_history_summary(workspace_id, task.id, version.id))
+            production_repo.timeline_history.summary(workspace_id, task.id, version.id))
     except TimelineHistoryConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -9575,7 +9575,7 @@ def list_creation_task_timeline_versions(
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
     try:
-        return TimelineVersionListResponse.model_validate(production_repo.timeline_history_page(
+        return TimelineVersionListResponse.model_validate(production_repo.timeline_history.page(
             workspace_id, task.id, limit=limit, before_sequence=before_sequence))
     except TimelineHistoryConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -13304,7 +13304,7 @@ def _goal_script_source_slot(goal, job_id, actor):
 
 
 def _goal_readiness_timeline(workspace_id, version_id):
-    return production_repo.get_timeline_version(workspace_id, version_id)
+    return production_repo.timeline_records.get_timeline_version(workspace_id, version_id)
 
 
 def _goal_readiness_script(workspace_id, script_id):

@@ -64,7 +64,7 @@ def speed_state(tmp_path):
         cues=[replace(state.track.cues[0], end_seconds=2), replace(state.track.cues[0], id='neighbour-cue', text='后续字幕', start_seconds=2, end_seconds=4)])
     state.base = TimelineVersion('linked-base', 'ws', state.task.id, state.base.id, 2,
         {'montage': payload, 'subtitle_track_ids': [state.track.id], 'narration_cache_key': state.narration.cache_key}, None)
-    repo.create_timeline_version(state.base)
+    repo.timeline_records.create_timeline_version(state.base)
     repo.create_subtitle_track(state.track)
     state.task = repo.task_records.get_creation_task('ws', state.task.id)
     state.neighbour = neighbour
@@ -104,7 +104,7 @@ def test_public_preview_confirm_replay_recovers_fixed_version_after_lost_project
     control = apply_command(state, proposal)
     accepted = state.application.confirm(control)
     assert accepted.newly_applied and accepted.record_projection and accepted.outcome.montage.duration_seconds == 3
-    original_version = state.repo.get_timeline_version('ws', accepted.outcome.operation.result_version_id)
+    original_version = state.repo.timeline_records.get_timeline_version('ws', accepted.outcome.operation.result_version_id)
     state.repo.save_edit_request_result(state.task, accepted.event_id, status_code=200, response={'only': 'transport projection'})
     replay = state.application.confirm(control)
     assert not replay.newly_applied and not replay.record_projection
@@ -118,7 +118,7 @@ def test_public_preview_confirm_replay_recovers_fixed_version_after_lost_project
     assert recovered.outcome.montage.duration_seconds == 3
     saved = state.application.read_result(control)
     assert saved.outcome.operation.result_version_id == original_version.id and saved.outcome.montage.duration_seconds == 3
-    assert state.repo.get_timeline_version('ws', original_version.id) == original_version
+    assert state.repo.timeline_records.get_timeline_version('ws', original_version.id) == original_version
     assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 2
     changed = replace(control, expected_input_digest=saved.input_digest,
         request_fields={**control.request_fields, 'expected_input_digest': saved.input_digest})
@@ -167,7 +167,7 @@ def test_apply_rechecks_original_sources_moved_neighbour_and_base(state, mutatio
     elif mutation == 'source_bytes':
         state.source.write_bytes(b'changed actual source identity')
     else:
-        state.repo.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=3))
+        state.repo.timeline_records.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=3))
     before = editorial_rows(state.repo)
     with pytest.raises((PermissionError, EditConflict, OSError)):
         state.application.confirm(control)

@@ -32,7 +32,7 @@ def media_case(tmp_path):
             confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
         repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan",
             name="test", scenario="knowledge_explanation"))
-        base = repo.create_timeline_version(TimelineVersion("timeline-base", "local", "task", None, 1, {}, None))
+        base = repo.timeline_records.create_timeline_version(TimelineVersion("timeline-base", "local", "task", None, 1, {}, None))
         state = {"identity_calls": 0, "facts_calls": 0, "verdict": "ready", "revision": 1,
             "block_identity": False}
         entered, release = threading.Event(), threading.Event()
@@ -69,7 +69,7 @@ def media_case(tmp_path):
 
 
 def advance(case, connection=None):
-    return case.repo.create_timeline_version(TimelineVersion("timeline-next", "local", "task",
+    return case.repo.timeline_records.create_timeline_version(TimelineVersion("timeline-next", "local", "task",
         case.base.id, 2, {}, None), connection=connection)
 
 

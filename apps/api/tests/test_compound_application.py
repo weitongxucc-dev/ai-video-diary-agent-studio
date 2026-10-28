@@ -30,7 +30,7 @@ def compound_state(tmp_path):
     state.zh, state.en = tracks
     state.base = TimelineVersion('compound-base', 'ws', state.task.id, state.base.id, 3,
         {**state.base.snapshot, 'subtitle_track_ids': [track.id for track in tracks]}, None)
-    state.repo.create_timeline_version(state.base)
+    state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
         state.repo.create_subtitle_track(track)
     state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
@@ -61,7 +61,7 @@ def test_prepared_selection_recompiles_original_context_and_original_save_base_C
     assert state.repo.edit_records.get_edit_proposal('ws', proposal.id) == old
     later_tracks = [clone_subtitle_track(track, timeline_version_id='later-head', track_id='later-' + track.id)
         for track in (state.zh, state.en)]
-    state.repo.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=4,
+    state.repo.timeline_records.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=4,
         snapshot={**state.base.snapshot, 'subtitle_track_ids': [track.id for track in later_tracks]}))
     for track in later_tracks:
         state.repo.create_subtitle_track(track)

@@ -17,8 +17,8 @@ def test_observation_get_keeps_original_quality_facts_and_current_version_separa
     assert facts["timeline_sequence"] == 1
     assert facts["quality_history"][0]["render_ref"] == publication.sha256
     assert facts["targets"][0]["output_role"] == "composed_output"
-    current = repo.get_timeline_version("local", "v1")
-    repo.create_timeline_version(replace(current, id="v2", parent_version_id="v1", sequence=2))
+    current = repo.timeline_records.get_timeline_version("local", "v1")
+    repo.timeline_records.create_timeline_version(replace(current, id="v2", parent_version_id="v1", sequence=2))
     facts = client.get("/api/creation-tasks/task/observations", headers=headers).json()
     assert facts["quality_check"]["stale"] is True and facts["quality_check"]["findings"] == []
     assert facts["quality_history"][0]["timeline_version_id"] == "v1"

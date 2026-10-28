@@ -200,7 +200,7 @@ class PersonStageUseCase:
         if task.current_timeline_version_id != required_strings['base_version_id']:
             raise PersonStageRejected(status_code=409, detail='creation task edit proposal is stale')
         try:
-            base_version = self.repository.get_timeline_version(workspace_id, required_strings['base_version_id'])
+            base_version = self.repository.timeline_records.get_timeline_version(workspace_id, required_strings['base_version_id'])
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
             clip = next((item for item in montage.clips if item.id == required_strings['clip_id']))
             cue = next((item for item in montage.cues if item.id == required_strings['cue_id']))

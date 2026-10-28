@@ -184,7 +184,7 @@ class CoverUseCase:
             raise ValueError("封面生成操作无效")
         if task.current_timeline_version_id != payload["base_version_id"]:
             raise ValueError("封面提案基础版本已变化")
-        base = self.repository.get_timeline_version(actor.workspace_id, payload["base_version_id"])
+        base = self.repository.timeline_records.get_timeline_version(actor.workspace_id, payload["base_version_id"])
         if base.task_id != task_id:
             raise ValueError("封面基础版本不属于当前任务")
         source = self._source_record(actor.workspace_id, task_id, payload["source_video_ref"])
@@ -243,7 +243,7 @@ class CoverUseCase:
         if (operation.operation_type != COVER_OPERATION or operation.status != "applied"
                 or _canonical(operation.payload) != operation_json):
             raise ValueError("原封面采用记录与请求不一致")
-        version = self.repository.get_timeline_version(workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, operation.result_version_id)
         if (version.task_id != task_id or version.created_by_operation_id != operation.id
                 or version.parent_version_id != operation.base_version_id):
             raise ValueError("原封面采用记录的版本谱系不一致")
@@ -333,7 +333,7 @@ class CoverUseCase:
         receipt = self.read_staged(command, job, max_receipt_bytes=max_receipt_bytes)
         if receipt is None:
             raise ValueError("原封面缺少可信staged回执，保持未确定，不重生成")
-        base = self.repository.get_timeline_version(command.workspace_id, command.operation["base_version_id"])
+        base = self.repository.timeline_records.get_timeline_version(command.workspace_id, command.operation["base_version_id"])
         version_id = f"timeline_{uuid4().hex}"
         tracks = [clone_subtitle_track(track, timeline_version_id=version_id)
                   for track in self.metadata.current_subtitle_tracks(command.workspace_id, task, current_version=base)]

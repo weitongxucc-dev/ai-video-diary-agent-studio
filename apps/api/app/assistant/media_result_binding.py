@@ -37,7 +37,7 @@ class AssistantMediaResultBinding:
     def completed_receipt(self, task, actor, turn_id, slot, *, contract, input_refs):
         goal = self.conversations.get_task_goal(turn_id)
         bound = self.conversations.completed_goal_source(turn_id, requested_outputs=[contract], input_refs=input_refs)
-        version = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (bound is None or bound["job_id"] != slot["job_id"] or
                 (goal["target_snapshot"].get("timeline_version_id"), goal["target_snapshot"].get("timeline_sequence")) != (
                     task.current_timeline_version_id, version.sequence if version else 0)):

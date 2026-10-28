@@ -58,7 +58,7 @@ def render_case(tmp_path, monkeypatch):
         plan = {"id": "fixture_montage", "workspace_id": workspace_id, "task_id": current_task_id,
                 "script_id": script_id, "status": "rendered", "output_path": str(receipt)}
         task = repo.task_records.get_creation_task(workspace_id, current_task_id)
-        previous = repo.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        previous = repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         version = TimelineVersion(id=f"fixture-output-{state['render_calls']}", workspace_id=workspace_id,
             task_id=current_task_id, parent_version_id=task.current_timeline_version_id,
             sequence=previous.sequence + 1 if previous else 1, created_by_operation_id=None,
@@ -66,7 +66,7 @@ def render_case(tmp_path, monkeypatch):
         with repo._connect() as conn:
             conn.execute("INSERT OR REPLACE INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
                          (plan["id"], workspace_id, current_task_id, json.dumps(plan), state["now"].isoformat()))
-            repo.create_timeline_version(version, connection=conn)
+            repo.timeline_records.create_timeline_version(version, connection=conn)
 
     def validate(workspace_id, current_task_id, context):
         state["validation_calls"] += 1

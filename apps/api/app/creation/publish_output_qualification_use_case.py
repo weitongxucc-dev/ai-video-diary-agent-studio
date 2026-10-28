@@ -31,7 +31,7 @@ class PublishOutputQualificationUseCase:
             raise PermissionError("当前成员无权发布此创作任务")
         if not task.output_ready or not task.current_timeline_version_id:
             raise ValueError("当前创作任务尚无可发布的有效成片")
-        version = self.production.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        version = self.production.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         if version.task_id != task.id:
             raise ValueError('当前时间线版本没有已验证的有效成片')
         return task, version

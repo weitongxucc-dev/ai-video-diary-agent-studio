@@ -623,7 +623,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         raise ValueError("当前生成配音与已选择的声音版本不一致")
     version = None
     if task.current_timeline_version_id:
-        version = repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+        version = repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
         if version.task_id != task.id:
             raise ValueError("当前时间线不属于制作任务")
         # Only this request's actual inner publication can advance its own
@@ -649,7 +649,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                     or inner.output_refs != [payload.get("output_path"), payload.get("subtitle_path")]
                     or not all(isinstance(ref, str) and ref for ref in inner.output_refs)):
                 raise ValueError("当前成片版本与真实渲染记录不一致")
-            version = (repository.get_timeline_version(task.workspace_id, version.parent_version_id)
+            version = (repository.timeline_records.get_timeline_version(task.workspace_id, version.parent_version_id)
                        if version.parent_version_id is not None else None)
     if version is not None:
         previous_montage = version.snapshot.get("montage")
@@ -2836,7 +2836,7 @@ class CreationJobUnitExecutor:
                 request = scheduler._get(grant.request_id)
                 with self.repository.creation_execution_read() as reader:
                     observed = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=reader)
-                    base = (self.repository.get_timeline_version(job.workspace_id, observed.current_timeline_version_id,
+                    base = (self.repository.timeline_records.get_timeline_version(job.workspace_id, observed.current_timeline_version_id,
                         connection=reader) if observed.current_timeline_version_id else None)
                     needs_base = base is None or not isinstance(base.snapshot.get('montage'), dict)
                     if needs_base:
@@ -3432,7 +3432,7 @@ class CreationJobUnitExecutor:
                     "wall_clock_s": deadline - time.monotonic(),
                 }, capacity=sample_host_capacity())
                 task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
-                version = (self.repository.get_timeline_version(job.workspace_id, task.current_timeline_version_id)
+                version = (self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id)
                            if task.current_timeline_version_id else None)
                 # A prior attempt may have published this request's output before
                 # pressure interrupted validation. Revalidate it under the new

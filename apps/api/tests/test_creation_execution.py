@@ -219,7 +219,7 @@ def _render_version_fixture(tmp_path):
         duration_seconds=1, low_confidence_clip_count=0, narration_audio_path="narration://artifact/cache_1",
     )
     repo.save_creation_task_montage_plan("local", task_id, montage.id, creation_task_montage_plan_to_payload(montage))
-    version = repo.create_timeline_version(TimelineVersion(
+    version = repo.timeline_records.create_timeline_version(TimelineVersion(
         "timeline_base", "local", task_id, None, 1,
         {"montage": repo.get_creation_task_montage_plan("local", task_id)}, None))
     execution = _execution(repo, render_ready=lambda workspace, task: repo.task_records.get_creation_task(workspace, task).output_ready)
@@ -246,7 +246,7 @@ def test_cpu_render_counts_repeated_source_once_and_preserves_all_clips(tmp_path
         ]
         montage["duration_seconds"] = 21
         repo.save_creation_task_montage_plan("local", task_id, "montage_1", montage)
-        repo.create_timeline_version(replace(
+        repo.timeline_records.create_timeline_version(replace(
             base, id="timeline_repeated_source", parent_version_id=base.id, sequence=2,
             snapshot={"montage": montage}))
         task = repo.task_records.get_creation_task("local", task_id)
@@ -319,7 +319,7 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
         assert not task.output_ready and task.current_timeline_version_id == version.id
         assert repo.edit_records.get_edit_proposal("local", proposal.id).status == "confirmed"
         if mutation == "version":
-            repo.create_timeline_version(replace(version, id="timeline_concurrent", parent_version_id=version.id, sequence=3))
+            repo.timeline_records.create_timeline_version(replace(version, id="timeline_concurrent", parent_version_id=version.id, sequence=3))
         elif mutation == "source":
             (tmp_path / "library/source.mp4").write_bytes(b"changed-source")
         else:
@@ -348,16 +348,16 @@ def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_cro
                 conn.execute("BEGIN IMMEDIATE")
                 repo.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
                     connection=conn, expected_current_version_id=base.id)
-                repo.create_timeline_version(conflict, connection=conn, expected_current_version_id=base.id)
+                repo.timeline_records.create_timeline_version(conflict, connection=conn, expected_current_version_id=base.id)
         assert repo.get_creation_task_montage_plan("local", task_id) == original
         concurrent = replace(base, id="timeline_concurrent", sequence=2, parent_version_id=base.id)
-        repo.create_timeline_version(concurrent)
+        repo.timeline_records.create_timeline_version(concurrent)
         for status in ("rendered", "failed"):
             with pytest.raises(ValueError, match="不能覆盖"):
                 repo.save_creation_task_montage_plan("local", task_id, "montage_1", {**old_output, "status": status},
                     expected_current_version_id=base.id)
         with pytest.raises(ValueError, match="不能发布"):
-            repo.create_timeline_version(replace(conflict, parent_version_id=base.id), expected_current_version_id=base.id)
+            repo.timeline_records.create_timeline_version(replace(conflict, parent_version_id=base.id), expected_current_version_id=base.id)
         assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == concurrent.id
         assert repo.get_creation_task_montage_plan("local", task_id) == original
         # Successful compare-and-publish reuses the same transaction and current parent.
@@ -366,7 +366,7 @@ def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_cro
             conn.execute("BEGIN IMMEDIATE")
             repo.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
                 connection=conn, expected_current_version_id=concurrent.id)
-            repo.create_timeline_version(output, connection=conn, expected_current_version_id=concurrent.id)
+            repo.timeline_records.create_timeline_version(output, connection=conn, expected_current_version_id=concurrent.id)
         assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == output.id
         assert repo.get_creation_task_montage_plan("local", task_id)["output_path"] == old_output["output_path"]
     finally:
@@ -410,13 +410,13 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
             conn.execute("BEGIN IMMEDIATE")
             repo.save_creation_task_montage_plan("local", task_id, "montage_1", rendered,
                 connection=conn, expected_current_version_id=base.id)
-            repo.create_timeline_version(published, connection=conn, expected_current_version_id=base.id)
+            repo.timeline_records.create_timeline_version(published, connection=conn, expected_current_version_id=base.id)
         scheduler.assert_grant(grant)
         # New output tracks are not retroactively inputs to their own render.
         repo.create_subtitle_track(replace(track, id="output_track", timeline_version_id=published.id))
         scheduler.assert_grant(grant)
         copied = replace(published, id="timeline_independent", parent_version_id=published.id, sequence=3)
-        repo.create_timeline_version(copied)
+        repo.timeline_records.create_timeline_version(copied)
         with pytest.raises(PermissionError, match="失效"):
             scheduler.assert_grant(grant)
         with repo._connect() as conn:
@@ -508,7 +508,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         with repo._connect() as conn:
             conn.execute("UPDATE creation_task_montage_plans SET payload=? WHERE task_id=?",
                          (json.dumps(legacy), task_id))
-        base = repo.create_timeline_version(replace(base, id="timeline_legacy", parent_version_id=base.id,
+        base = repo.timeline_records.create_timeline_version(replace(base, id="timeline_legacy", parent_version_id=base.id,
             sequence=2, snapshot=dict(base.snapshot, montage=legacy)))
     try:
         monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda: HostCapacity(
@@ -575,7 +575,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
             return
         assert finished.status == "succeeded", finished.failure_reason
         published_task = repo.task_records.get_creation_task("local", task_id)
-        version = repo.get_timeline_version("local", published_task.current_timeline_version_id)
+        version = repo.timeline_records.get_timeline_version("local", published_task.current_timeline_version_id)
         assert version.parent_version_id == base.id
         assert version.snapshot["render_input_timeline_version_id"] == base.id
         assert version.snapshot["creation_render_request_id"] == request_id
@@ -1090,7 +1090,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
                       json.dumps(creation_task_montage_plan_to_payload(montage)), datetime.now(timezone.utc).isoformat()))
     # The real montage stage persists its input version before requesting render.
     # Recovery must seal that version, not an absent timeline identifier.
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         "timeline_render_input", task.workspace_id, task_id, None, 1,
         {"montage": creation_task_montage_plan_to_payload(montage)}, None))
     execution = _execution(repo)
@@ -1207,7 +1207,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             retry_executor.execute(retry_grant, scheduler)
         assert render_calls == [1]
         published_task = repo.task_records.get_creation_task(task.workspace_id, task_id)
-        published_version = repo.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
+        published_version = repo.timeline_records.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
         inner_jobs = [item for item in repo.job_records.list_job_runs(task.workspace_id, task_id)
                       if item.kind == "creation_task_montage_render"]
         assert len(inner_jobs) == 1 and inner_jobs[0].status == "succeeded"
@@ -1235,7 +1235,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             return
 
         # An independently edited timeline version also invalidates the grant.
-        repo.create_timeline_version(TimelineVersion(
+        repo.timeline_records.create_timeline_version(TimelineVersion(
             id="timeline_independent_edit", workspace_id=task.workspace_id, task_id=task_id,
             parent_version_id=published_version.id, sequence=published_version.sequence + 1,
             snapshot=published_version.snapshot, created_by_operation_id="operation_independent_edit",
@@ -1552,7 +1552,7 @@ def _render_validity_fixture(tmp_path, monkeypatch):
     repository = SimpleNamespace(
         task_records=SimpleNamespace(get_creation_task=lambda *_: task),
         get_creation_task_montage_plan=lambda *_: plan,
-        get_timeline_version=lambda *_: current_version,
+        timeline_records=SimpleNamespace(get_timeline_version=lambda *_: current_version),
         execution_records=SimpleNamespace(list_artifact_records=lambda *_: [record]),
         job_records=SimpleNamespace(get_job_run=lambda *_: SimpleNamespace(status="succeeded", task_id="task_1",
             output_refs=[published.logical_ref], input_digest="render-input")),
@@ -1884,7 +1884,7 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
         [MontageClip('clip','cue','asset','segment','workspace://original.mp4',0,1,0,1,1,[],False)],1,0)
     payload=creation_task_montage_plan_to_payload(plan)
     repo.save_creation_task_montage_plan('local',task_id,plan.id,payload)
-    base=repo.create_timeline_version(TimelineVersion('base','local',task_id,None,1,{'montage':payload},None))
+    base=repo.timeline_records.create_timeline_version(TimelineVersion('base','local',task_id,None,1,{'montage':payload},None))
     edits=MetadataEditUseCase(repo,ArtifactStore(tmp_path/'artifacts'),output_root=tmp_path/'restore',audio_service=None)
     intent=repo.edit_records.create_edit_intent(EditIntent('crop-intent','local',task_id,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
     proposal=repo.edit_records.create_edit_proposal(EditProposal('crop-proposal','local',task_id,intent.id,'crop',['clip:clip'],
@@ -1895,11 +1895,11 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
     restore=TimelineRestoreUseCase(repo,edits)
     prepared=restore.prepare_restore(TimelineRestoreCommand('local',edited.task,False))
     # A successful no-op production version leaves the complete edit result unchanged.
-    changed=repo.get_timeline_version('local',edited.task.current_timeline_version_id)
+    changed=repo.timeline_records.get_timeline_version('local',edited.task.current_timeline_version_id)
     snapshot=json.loads(json.dumps(changed.snapshot,default=str))
     snapshot['stage_segments']={'section_2':'later-real-publication'}
     later=TimelineVersion('later-production','local',task_id,changed.id,changed.sequence+1,snapshot,None)
-    repo.create_timeline_version(later,expected_current_version_id=changed.id)
+    repo.timeline_records.create_timeline_version(later,expected_current_version_id=changed.id)
     with pytest.raises(ValueError,match='后来成果'):
         restore.prepare_restore(TimelineRestoreCommand('local',repo.task_records.get_creation_task('local',task_id),False))
     # A preparation made before the later result must also be fenced at commit.
@@ -1919,7 +1919,7 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
     clean_plan=replace(plan,task_id=clean_task,script_id=clean_script)
     clean_payload=creation_task_montage_plan_to_payload(clean_plan)
     clean_repo.save_creation_task_montage_plan('local',clean_task,clean_plan.id,clean_payload)
-    clean_base=clean_repo.create_timeline_version(TimelineVersion('clean-base','local',clean_task,None,1,{'montage':clean_payload},None))
+    clean_base=clean_repo.timeline_records.create_timeline_version(TimelineVersion('clean-base','local',clean_task,None,1,{'montage':clean_payload},None))
     clean_edits=MetadataEditUseCase(clean_repo,ArtifactStore(clean_root/'artifacts'),output_root=clean_root/'restore',audio_service=None)
     for name,position in [('A',.2),('B',.3)]:
         intent=clean_repo.edit_records.create_edit_intent(EditIntent(f'intent-{name}','local',clean_task,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
@@ -1928,7 +1928,7 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
         outcome=clean_edits.persist_montage_edit(workspace_id='local',task=clean_repo.task_records.get_creation_task('local',clean_task),
             proposal=proposal,base_version=clean_base,updated_plan=replace(clean_plan,clips=[replace(clean_plan.clips[0],crop_x=position)]),
             operation_type='ChangeCrop',operation_payload={'clip_id':'clip','crop_x':position})
-        clean_base=clean_repo.get_timeline_version('local',outcome.task.current_timeline_version_id)
+        clean_base=clean_repo.timeline_records.get_timeline_version('local',outcome.task.current_timeline_version_id)
     clean_restore=TimelineRestoreUseCase(clean_repo,clean_edits)
     for position in (.2,.5):
         command=TimelineRestoreCommand('local',clean_repo.task_records.get_creation_task('local',clean_task),False)
@@ -3086,7 +3086,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
         narration_audio_path=case.repo.narration_artifact_reference(task.narration_cache_key))
     payload=creation_task_montage_plan_to_payload(montage)
     case.repo.save_creation_task_montage_plan('local',task.id,montage.id,payload)
-    base=case.repo.create_timeline_version(TimelineVersion('edit-base','local',task.id,None,1,
+    base=case.repo.timeline_records.create_timeline_version(TimelineVersion('edit-base','local',task.id,None,1,
         {'montage':payload,'narration_cache_key':task.narration_cache_key,'subtitle_track_ids':[]},None))
     task=case.repo.task_records.get_creation_task('local',task.id)
     case.stage.metadata=MetadataEditUseCase(case.repo,ArtifactStore(tmp_path/'outputs'),output_root=tmp_path/'outputs',audio_service=None)
@@ -3423,7 +3423,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     _before,request,_runtime=_submit_section_revision(case)
     for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     task=case.repo.task_records.get_creation_task('local',case.task_id)
-    a=case.repo.edit_records.get_edit_operation('local',case.repo.get_timeline_version('local',task.current_timeline_version_id).created_by_operation_id)
+    a=case.repo.edit_records.get_edit_operation('local',case.repo.timeline_records.get_timeline_version('local',task.current_timeline_version_id).created_by_operation_id)
     current=creation_task_montage_plan_from_payload(case.repo.get_creation_task_montage_plan('local',case.task_id))
     second_id=current.clips[1].id
     actor_identity={'member_id':case.actor.member_id,'local_diagnostic':False}
@@ -3432,7 +3432,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     assert b.operation.id != a.id
     assert case.repo.stage_segment_state('local',case.task_id,'section_2')['current_validity']=='invalidated'
     restore=TimelineRestoreUseCase(case.repo,edits)
-    seen=case.repo.get_timeline_version('local',b.task.current_timeline_version_id)
+    seen=case.repo.timeline_records.get_timeline_version('local',b.task.current_timeline_version_id)
     arguments=dict(actor=case.actor,request_id='undo-earlier-body',target_operation_id=a.id,
         expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
     undone=restore.execute(TimelineRestoreCommand('local',b.task,False),**arguments)
@@ -3447,13 +3447,13 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     assert len(page['items'])==2 and page['truncated'] and page['items'][0]['operation_id']==undone.operation.id
     following=restore.history('local',case.task_id,case.actor,limit=2,before_sequence=page['next_before_sequence'])
     assert not {item['id'] for item in page['items']} & {item['id'] for item in following['items']}
-    seen=case.repo.get_timeline_version('local',undone.task.current_timeline_version_id)
+    seen=case.repo.timeline_records.get_timeline_version('local',undone.task.current_timeline_version_id)
     redone=restore.execute(TimelineRestoreCommand('local',undone.task,True),actor=case.actor,
         request_id='redo-earlier-body',target_operation_id=a.id,
         expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
     assert redone.operation.payload['target_undo_operation_id']==undone.operation.id
     assert next(clip for clip in redone.montage.clips if clip.id==second_id).visual_effects['exposure']==.1
-    seen=case.repo.get_timeline_version('local',redone.task.current_timeline_version_id)
+    seen=case.repo.timeline_records.get_timeline_version('local',redone.task.current_timeline_version_id)
     undo_b=restore.execute(TimelineRestoreCommand('local',redone.task,False),actor=case.actor,
         request_id='undo-earlier-color',target_operation_id=b.operation.id,
         expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
@@ -3461,7 +3461,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     assert VisualEffects.model_validate(next(clip for clip in undo_b.montage.clips if clip.id==second_id).visual_effects).exposure==0
     assert case.repo.effective_creation_script('local',case.task_id).sections[0].content=='原文更紧凑'
     assert case.segments.context('local',case.task_id,'section_2',case.actor)['adopted']
-    seen=case.repo.get_timeline_version('local',undo_b.task.current_timeline_version_id)
+    seen=case.repo.timeline_records.get_timeline_version('local',undo_b.task.current_timeline_version_id)
     redone=restore.execute(TimelineRestoreCommand('local',undo_b.task,True),actor=case.actor,
         request_id='redo-earlier-color',target_operation_id=b.operation.id,
         expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
@@ -3470,7 +3470,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     changed=edits.save(redone.task,metadata_edit_command(redone.task,actor_identity,'AdjustVisualEffects',
         {'base_version_id':redone.task.current_timeline_version_id,'clip_ids':[redone.montage.clips[0].id],
             'effects':{'exposure':.2}}))
-    seen=case.repo.get_timeline_version('local',changed.task.current_timeline_version_id)
+    seen=case.repo.timeline_records.get_timeline_version('local',changed.task.current_timeline_version_id)
     with pytest.raises(ValueError,match='依赖|冲突'):
         restore.execute(TimelineRestoreCommand('local',changed.task,False),actor=case.actor,
             request_id='conflicting-undo-body',target_operation_id=a.id,
@@ -3539,13 +3539,13 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     assert case.repo.job_records.get_job_run('local',request['job_id']).status=='succeeded'
     current=case.repo.task_records.get_creation_task('local',case.task_id)
-    revised=case.repo.get_timeline_version('local',current.current_timeline_version_id)
+    revised=case.repo.timeline_records.get_timeline_version('local',current.current_timeline_version_id)
     assert next(item for item in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
         if item.language=='zh-CN').cues[0].text=='原文更紧凑'
     payload=json.loads(json.dumps(revised.snapshot,default=str))
     payload['montage']['clips'][1]['crop_y']=.31
     later=TimelineVersion('later_other_section','local',case.task_id,revised.id,revised.sequence+1,payload,None)
-    case.repo.create_timeline_version(later,expected_current_version_id=revised.id)
+    case.repo.timeline_records.create_timeline_version(later,expected_current_version_id=revised.id)
     rows=case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=revised.id)
     source_track=next(item for item in rows if item.language=='zh-CN')
     later_track=replace(source_track,id='later_source',timeline_version_id=later.id,
@@ -3594,8 +3594,8 @@ def test_segment_revision_checks_actual_target_dependencies_and_semantic_input(t
         running_check=case.segments.capture_local(case.scheduler._get(queued['id']),conn,case.owner)
     if changed=='unrelated_timeline':
         current = case.repo.task_records.get_creation_task('local',case.task_id)
-        base = case.repo.get_timeline_version('local',current.current_timeline_version_id)
-        case.repo.create_timeline_version(TimelineVersion('unrelated_version','local',case.task_id,base.id,
+        base = case.repo.timeline_records.get_timeline_version('local',current.current_timeline_version_id)
+        case.repo.timeline_records.create_timeline_version(TimelineVersion('unrelated_version','local',case.task_id,base.id,
             base.sequence+1,base.snapshot,None),expected_current_version_id=base.id)
     elif changed=='target_audio':
         segments=case.repo.list_narration_segments('local',case.task_id,case.script_id)
@@ -4969,7 +4969,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     montage['graphic_overlays'] = [TextOverlay(id='opening', text='Opening title', start_seconds=0, end_seconds=.4).model_dump(),
         TextOverlay(id='credit', text='Closing credit', start_seconds=.5, end_seconds=1).model_dump()]
     repo.save_creation_task_montage_plan('local', task_id, montage['id'], montage)
-    edited = repo.create_timeline_version(TimelineVersion('timeline_two_titles', 'local', task_id,
+    edited = repo.timeline_records.create_timeline_version(TimelineVersion('timeline_two_titles', 'local', task_id,
         base.id, 2, {'montage': repo.get_creation_task_montage_plan('local', task_id)}, 'two-title-edit'))
     audio = repo.get_narration_artifact('local', 'cache_1')
     audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
@@ -5008,7 +5008,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
         rendered = repo.get_creation_task_montage_plan('local', task_id)
         rendered.update(status='rendered', output_path='artifact://new-render/preview.mp4')
         repo.save_creation_task_montage_plan('local', task_id, rendered['id'], rendered)
-        published = repo.create_timeline_version(TimelineVersion('timeline_new_render', 'local', task_id,
+        published = repo.timeline_records.create_timeline_version(TimelineVersion('timeline_new_render', 'local', task_id,
             edited.id, 3, {'montage': rendered, 'output_refs': [rendered['output_path']]}, None))
         with repo._connect() as conn:
             conn.execute("UPDATE job_runs SET status='running' WHERE id=?", (job.id,))
@@ -5328,7 +5328,7 @@ def _single_segment_preparation_case(tmp_path):
         version = TimelineVersion(id='preparation-version', workspace_id='local', task_id=case.task_id,
             parent_version_id=None, sequence=1, created_by_operation_id=None,
             snapshot={'stage_segments': {'section_1': 'preparation-adopted-text'}})
-        repo.create_timeline_version(version, connection=conn)
+        repo.timeline_records.create_timeline_version(version, connection=conn)
         task = repo.task_records.get_creation_task('local', case.task_id, connection=conn)
         task.current_timeline_version_id = version.id
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
@@ -5599,7 +5599,7 @@ def test_single_segment_preparation_refuses_changed_tail_or_current_voice_before
             repo.execution_records.append_task_event(TaskEvent('preparation-wrong-tail', 'local', case.task_id, None,
                 'segment_publication', {'script_id': 'other-script', 'text': '错误采用尾段',
                                         'narration_reference': 'narration://artifact/tail'}), connection=conn)
-            repo.create_timeline_version(TimelineVersion(id='preparation-tail-version', workspace_id='local',
+            repo.timeline_records.create_timeline_version(TimelineVersion(id='preparation-tail-version', workspace_id='local',
                 task_id=case.task_id, parent_version_id='preparation-version', sequence=2, created_by_operation_id=None,
                 snapshot={'stage_segments': {'section_1': 'preparation-adopted-text',
                                              'section_45': 'preparation-wrong-tail'}}), connection=conn)
@@ -5731,7 +5731,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
         version = TimelineVersion(id='effective-text-version', workspace_id='local', task_id=case.task_id,
             parent_version_id=None, sequence=1, created_by_operation_id=None,
             snapshot={'stage_segments': {'section_1': 'adopted-text'}})
-        repo.create_timeline_version(version, connection=conn)
+        repo.timeline_records.create_timeline_version(version, connection=conn)
         task.current_timeline_version_id = version.id
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
     assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
@@ -5926,7 +5926,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
             {'script_id': script.id, 'text': effective, 'narration_reference': segments[0].audio_reference}), connection=conn)
         version = TimelineVersion('pcm-effective-version', 'local', task.id, None, 1,
             {'stage_segments': {'section_1': 'pcm-adopted-text'}}, None)
-        repo.create_timeline_version(version, connection=conn)
+        repo.timeline_records.create_timeline_version(version, connection=conn)
         task.current_timeline_version_id = version.id
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
         conn.execute('UPDATE narration_segments SET text=? WHERE id=?', (effective, segments[0].id))
@@ -6032,7 +6032,7 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
         cues, clips, 3, 0, narration_audio_path=repo.narration_artifact_reference('paid-0'))
     payload = creation_task_montage_plan_to_payload(montage)
     repo.save_creation_task_montage_plan('local', task.id, montage.id, payload)
-    base = repo.create_timeline_version(TimelineVersion('paid-base', 'local', task.id, None, 1,
+    base = repo.timeline_records.create_timeline_version(TimelineVersion('paid-base', 'local', task.id, None, 1,
         {'montage': payload, 'narration_cache_key': 'paid-0', 'subtitle_track_ids': []}, None))
     task = repo.task_records.get_creation_task('local', task.id)
     case.stage.metadata = MetadataEditUseCase(repo, ArtifactStore(tmp_path/'outputs'),
@@ -6107,7 +6107,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
                 if not changed and grant.request_id == final.request_id:
                     changed.append(True)
                     if outcome == 'head':
-                        repo.create_timeline_version(TimelineVersion('later-head', 'local', case.task.id,
+                        repo.timeline_records.create_timeline_version(TimelineVersion('later-head', 'local', case.task.id,
                             case.base.id, 2, case.base.snapshot, None), connection=conn)
                     elif outcome == 'tail':
                         conn.execute("UPDATE narration_segments SET duration_seconds=2 WHERE id=?", (case.rows[-1].id,))
@@ -6134,7 +6134,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
         if outcome in {'normal', 'unknown'}:
             current = repo.task_records.get_creation_task('local', case.task.id)
             assert current.current_timeline_version_id != case.base.id
-            snapshot = repo.get_timeline_version('local', current.current_timeline_version_id).snapshot
+            snapshot = repo.timeline_records.get_timeline_version('local', current.current_timeline_version_id).snapshot
             assert [row['source_section_id'] for row in snapshot['narration_segments']] == ['section_1', 'section_2', 'section_3']
             assert snapshot['narration_segments'][0]['audio_reference'].endswith('paid-replacement')
             assert repo.get_narration_segment('local', case.task.id, case.rows[-1].id) == case.rows[-1]
@@ -6552,7 +6552,7 @@ def test_bounded_segment_planning_ports_keep_snapshot_and_transaction_owner(tmp_
             parent_version_id=None, sequence=1, created_by_operation_id=None,
             snapshot={'stage_segments': {'section_1': event.id}, 'stage_segment_invalidations': {
                 'section_1': {'publication_id': event.id, 'reason': '保留旧失效原因'}}})
-        repo.create_timeline_version(version, connection=borrowed)
+        repo.timeline_records.create_timeline_version(version, connection=borrowed)
         task.current_timeline_version_id = version.id
         borrowed.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
             (json.dumps(asdict(task), default=str), task.id))
@@ -6593,7 +6593,7 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
             version = TimelineVersion(id='other-clock-version', workspace_id='local', task_id=case.task_id,
                 parent_version_id=None, sequence=1, created_by_operation_id=None,
                 snapshot={'stage_segments': {'section_2': publication.id}})
-            case.repo.create_timeline_version(version, connection=conn)
+            case.repo.timeline_records.create_timeline_version(version, connection=conn)
             task.current_timeline_version_id = version.id
             conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
     waiting = case.repo.execution_records.get_task_event('local', waiting.id)
@@ -6669,7 +6669,7 @@ def _section_context_projection_case(tmp_path):
     case.snapshot = {'montage':case.montage,'stage_segments':publications,
         'stage_segment_invalidations':{'section_3':{'publication_id':'publication_3','reason':'changed_source'}},
         'unrelated_body':'FORBIDDEN_SNAPSHOT_BODY'}
-    repo.create_timeline_version(TimelineVersion('projection_v1','local',case.task_id,None,1,case.snapshot,None),
+    repo.timeline_records.create_timeline_version(TimelineVersion('projection_v1','local',case.task_id,None,1,case.snapshot,None),
         expected_current_version_id=None)
     with repo._connect() as conn:
         conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','FORBIDDEN_AUDIO_BODY') "
@@ -6696,7 +6696,7 @@ def test_section_context_projection_preserves_facts_without_unrelated_bodies(tmp
     def forbidden(*args,**kwargs):
         raise AssertionError('whole document reader used')
     for name in ('effective_creation_script','get_creation_task_script','list_narration_segments','get_timeline_version','get_creation_plan'):
-        monkeypatch.setattr(case.repo.plan_records if name == 'get_creation_plan' else case.repo,name,forbidden)
+        monkeypatch.setattr(case.repo.plan_records if name == 'get_creation_plan' else case.repo.timeline_records if name == 'get_timeline_version' else case.repo,name,forbidden)
     decode = json.loads
     def bounded(value,*args,**kwargs):
         assert 'FORBIDDEN_' not in value
@@ -6726,7 +6726,7 @@ def _section_projection_next_version(case, snapshot, *, connection=None, subtitl
         with case.repo._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             return _section_projection_next_version(case,snapshot,connection=conn,subtitle_change=subtitle_change)
-    case.repo.create_timeline_version(TimelineVersion('projection_v2','local',case.task_id,'projection_v1',2,snapshot,None),
+    case.repo.timeline_records.create_timeline_version(TimelineVersion('projection_v2','local',case.task_id,'projection_v1',2,snapshot,None),
         connection=connection,expected_current_version_id='projection_v1')
     for track in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id='projection_v1',connection=connection):
         cues = [replace(cue,text='changed overlap') if subtitle_change and cue.id=='overlap_zh-CN' else cue for cue in track.cues]
@@ -6803,7 +6803,7 @@ def _section_change_paid_case(tmp_path, monkeypatch):
         narration_audio_path='narration://artifact/original')
     case.montage = creation_task_montage_plan_to_payload(full)
     case.snapshot = {**case.snapshot,'montage':case.montage}
-    repo.create_timeline_version(TimelineVersion('change_base','local',case.task_id,'projection_v1',2,case.snapshot,None),
+    repo.timeline_records.create_timeline_version(TimelineVersion('change_base','local',case.task_id,'projection_v1',2,case.snapshot,None),
         expected_current_version_id='projection_v1')
     with repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=json_set(payload,'$.stage','montage') WHERE id=?", (case.task_id,))
@@ -6858,7 +6858,7 @@ def _publish_paid_section_change(case):
             timeline_change=case.change,connection=conn)
         assert conn.in_transaction
     task = case.repo.task_records.get_creation_task('local',case.task_id)
-    version = case.repo.get_timeline_version('local',task.current_timeline_version_id)
+    version = case.repo.timeline_records.get_timeline_version('local',task.current_timeline_version_id)
     return task,version,case.repo.edit_records.get_edit_operation('local',version.created_by_operation_id)
 
 
@@ -6872,13 +6872,13 @@ def test_section_change_publish_restore_preserves_later_facts_without_full_input
     snapshot = json.loads(json.dumps(version.snapshot))
     snapshot['montage']['clips'][-1]['crop_y']=.31
     later = TimelineVersion('change_later','local',case.task_id,version.id,version.sequence+1,snapshot,None)
-    case.repo.create_timeline_version(later,expected_current_version_id=version.id)
+    case.repo.timeline_records.create_timeline_version(later,expected_current_version_id=version.id)
     for track in case.repo.list_subtitle_tracks('local',case.task_id,timeline_version_id=version.id):
         case.repo.create_subtitle_track(replace(track,id=track.id+'_later',timeline_version_id=later.id))
     restore = TimelineRestoreUseCase(case.repo,case.edits)
     for redo,expected in [(False,case.before),(True,case.replacement)]:
         task=case.repo.task_records.get_creation_task('local',case.task_id)
-        seen=case.repo.get_timeline_version('local',task.current_timeline_version_id)
+        seen=case.repo.timeline_records.get_timeline_version('local',task.current_timeline_version_id)
         request='redo_narrow' if redo else 'undo_narrow'
         result=restore.execute(TimelineRestoreCommand('local',task,redo),actor=case.actor,request_id=request,
             target_operation_id=operation.id,expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
@@ -7076,7 +7076,7 @@ def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path
     request_id = 'original-restore'
     event_id,fresh = records.claim(task,actor.member_id,request_id,inputs)
     assert fresh
-    base = repo.create_timeline_version(TimelineVersion('restore-base',task.workspace_id,task.id,None,1,{},None))
+    base = repo.timeline_records.create_timeline_version(TimelineVersion('restore-base',task.workspace_id,task.id,None,1,{},None))
     intent = repo.edit_records.create_edit_intent(EditIntent('restore-intent',task.workspace_id,task.id,'declared undo','montage',[],None,
         'undo_timeline',{}, {},1,'interpreted'))
     payload = {'restore_request_id':request_id,'restore_member_id':actor.member_id,
@@ -7111,8 +7111,8 @@ def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path
     assert receipt['operation_id']==operation.id and receipt['result_version_id']==version.id
     assert receipt['execution_readiness']==readiness
     assert records.latest_operation_restore(task.workspace_id,task.id,payload['target_operation_id'])==operation
-    before = repo.list_timeline_versions(task.workspace_id,task.id)
+    before = repo.timeline_records.list_timeline_versions(task.workspace_id,task.id)
     replay = restore.execute(command,actor=actor,request_id=request_id)
     assert replay.operation==operation and replay.restore_request==receipt
-    assert repo.list_timeline_versions(task.workspace_id,task.id)==before
+    assert repo.timeline_records.list_timeline_versions(task.workspace_id,task.id)==before
     assert repo.job_records.list_job_runs(task.workspace_id,task.id)==[]

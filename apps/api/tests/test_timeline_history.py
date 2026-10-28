@@ -86,6 +86,8 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
 
 @pytest.fixture
 def history_task(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
     repo = ProductionRepository(database_path=tmp_path / "production.sqlite3",
                                 video_library_path=tmp_path / "library")
     store = ArtifactStore(tmp_path / "artifacts")
@@ -111,7 +113,7 @@ def history_task(tmp_path, monkeypatch):
                               output_path="artifacts/task_history/v1.mp4",
                               subtitle_path=None)
     old_payload = creation_task_montage_plan_to_payload(old_montage)
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_history_v1", workspace_id=WORKSPACE_ID, task_id=task.id,
         parent_version_id=None, sequence=1,
         snapshot={"montage": old_payload,
@@ -129,7 +131,7 @@ def history_task(tmp_path, monkeypatch):
     store.publish_bytes("artifacts/task_history/v1.mp4", b"old-version-video-bytes")
     store.publish_bytes("artifacts/task_history/v1.srt", "旧版本字幕\n".encode())
 
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_history_v2", workspace_id=WORKSPACE_ID, task_id=task.id,
         parent_version_id="timeline_history_v1", sequence=2,
         snapshot={"montage": creation_task_montage_plan_to_payload(current_montage),
@@ -149,7 +151,7 @@ def history_task(tmp_path, monkeypatch):
                                 cue_text="别的任务文案",
                                 output_path=None, subtitle_path=None)
     persist_task(repo, other_task, "script_other", other_montage)
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_other_v1", workspace_id=WORKSPACE_ID, task_id=other_task.id,
         parent_version_id=None, sequence=1,
         snapshot={"montage": creation_task_montage_plan_to_payload(other_montage)},
@@ -249,7 +251,7 @@ def test_history_detail_preserves_original_operation_from_list(history_task):
     from app.creation.contracts import EditIntent,EditProposal,EditOperation
     from app.graphic_overlays import TextOverlay
     repo,task_id,client=history_task
-    base=repo.get_timeline_version(WORKSPACE_ID,'timeline_history_v2')
+    base=repo.timeline_records.get_timeline_version(WORKSPACE_ID,'timeline_history_v2')
     overlay=TextOverlay(id='history-overlay',text='公开演示',start_seconds=0,end_seconds=1,x=.48,font_size=24).model_dump()
     snapshot=json.loads(json.dumps(base.snapshot))
     snapshot['montage'].update(graphic_overlays=[overlay],status='ready',output_path=None,subtitle_path=None)
@@ -265,7 +267,7 @@ def test_history_detail_preserves_original_operation_from_list(history_task):
     repo.edit_adoption.confirm(WORKSPACE_ID,task_id,proposal.id,operation=operation,result_version=version,
         montage_plan_id=snapshot['montage']['id'],montage_payload=snapshot['montage'])
     later=replace(version,id='timeline_history_after_overlay',sequence=4,parent_version_id=version.id,created_by_operation_id=None)
-    repo.create_timeline_version(later)
+    repo.timeline_records.create_timeline_version(later)
     listed=client.get(f'/api/creation-tasks/{task_id}/timeline/versions')
     detail=client.get(f'/api/creation-tasks/{task_id}/timeline/versions/{version.id}')
     assert listed.status_code==200 and detail.status_code==200

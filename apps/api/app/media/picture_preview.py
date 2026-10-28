@@ -181,7 +181,7 @@ class PicturePreviewRenderer:
                     "start_seconds":clip.timeline_start_seconds, "end_seconds":clip.timeline_end_seconds,
                     "solo_track_ids":voice_ids}):
             raise ValueError("静音分析不是本次实际镜头的固定原始音轨与区间")
-        base = self.repository.get_timeline_version(workspace_id, scope["base_version_id"])
+        base = self.repository.timeline_records.get_timeline_version(workspace_id, scope["base_version_id"])
         tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=before)
         expected, expected_tracks = remove_time_ranges(before, tracks, effective_audio_timeline(before), cuts)
         transient = {"status", "message", "output_path", "subtitle_path", "created_at", "updated_at"}

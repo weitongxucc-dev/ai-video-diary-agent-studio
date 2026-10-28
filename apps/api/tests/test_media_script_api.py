@@ -98,7 +98,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     monkeypatch.setattr(scripts, "run_media_script", run)
     state.runtime, state.root, state.descriptor = runtime, root, descriptor
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     state.payload = {"request_id": str(uuid4()), "expected_timeline_version_id": version.id,
         "expected_timeline_sequence": version.sequence, "script_source": "from PIL import Image\n# fixture reviewed source",
         "language": "python", "parameters": {"color": "red"}, "input_refs": [], "purpose": "preview",

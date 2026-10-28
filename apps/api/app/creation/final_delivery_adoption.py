@@ -54,7 +54,7 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
     plan = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn))
     DurationRequirement.from_plan(repo.plan_records.get_creation_plan(job.workspace_id, task.plan_id)).require(plan.duration_seconds, 30)
     tracks = picture_fragments.metadata.current_subtitle_tracks(job.workspace_id, task, montage=plan)
-    parent_version = repo.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+    parent_version = repo.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
     tracks = tracks if tracks or (parent_version is not None and 'subtitle_track_ids' in parent_version.snapshot) else None
     visible = bool(subtitle_schedule(tracks, plan.duration_seconds)) if tracks is not None else bool(narration_schedule(plan.cues, plan.duration_seconds))
     input_payload = render_input_payload(plan, subtitles_visible=visible,
@@ -76,7 +76,7 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
     rendered = creation_task_montage_plan_to_payload(plan)
     version = TimelineVersion(id=version_id, workspace_id=job.workspace_id, task_id=job.task_id,
         parent_version_id=task.current_timeline_version_id,
-        sequence=repo.next_timeline_sequence(job.workspace_id, job.task_id, connection=conn),
+        sequence=repo.timeline_records.next_timeline_sequence(job.workspace_id, job.task_id, connection=conn),
         created_by_operation_id=None, snapshot={'montage': rendered,
             **picture_fragments.metadata.current_narration_snapshot(job.workspace_id, task),
             'output_refs': output_refs, 'transform_run_id': transform.id, 'audio_delivery': {
@@ -155,7 +155,7 @@ def apply_delivery_adoption(repo, conn, job, candidate):
     repo.lineage_records.create_transform_run(transform, connection=conn)
     repo.save_creation_task_montage_plan(job.workspace_id, job.task_id, candidate['plan_id'], candidate['montage'],
         connection=conn, expected_current_version_id=candidate['head'])
-    repo.create_timeline_version(version, connection=conn, expected_current_version_id=candidate['head'])
+    repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=candidate['head'])
     for track in candidate['tracks']:
         repo.create_subtitle_track(track, connection=conn)
     if candidate['cover'] is not None:

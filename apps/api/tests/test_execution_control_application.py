@@ -345,7 +345,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
             permits=[dict(r) for r in conn.execute('SELECT state,children_json FROM device_permit').fetchall()]
         assert len(request_rows)==2 and all(r['state']=='cancelled' for r in request_rows)
         assert not repo.list_person_renders('local',task_id) and not repo.lineage_records.list_transform_runs('local',task_id)
-        assert not repo.list_timeline_versions('local',task_id)
+        assert not repo.timeline_records.list_timeline_versions('local',task_id)
         assert all(json.loads(row['children_json'])==[] for row in permits)
         evidence={'preview':preview.json(),'first':first.json(),'duplicate':duplicate.json(),'bound':bound.json(),
             'declared_interrupted_projection':interrupted.json(),'local_kind_query_status':local_query.status_code,

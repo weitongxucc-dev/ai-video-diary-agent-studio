@@ -97,7 +97,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         [], [clip], 2, 0, aspect_ratio='16:9', output_path=publication.logical_ref)
     payload = creation_task_montage_plan_to_payload(plan)
     repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
-    base = repo.create_timeline_version(TimelineVersion('v1', 'local', 'task', None, 1,
+    base = repo.timeline_records.create_timeline_version(TimelineVersion('v1', 'local', 'task', None, 1,
         {'montage':payload,'output_refs':[publication.logical_ref]}, None))
     assert type(media.output_observation) is OutputObservationUseCase
     assert runtime.registrations['creation_job'].owner.task_media is media

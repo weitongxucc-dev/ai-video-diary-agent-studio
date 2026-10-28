@@ -149,7 +149,7 @@ class AssistantExecutionBinding:
         except ValueError as exc:
             raise ExecutionBindingRejected(str(exc)) from exc
         snapshot = origin['context'].get('target_snapshot', {})
-        version = (self.production.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+        version = (self.production.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
                    if task.current_timeline_version_id else None)
         if not origin['raw_command'].strip():
             raise ExecutionBindingRejected('原助手制作要求的阶段或目标版本已失效')

@@ -38,7 +38,7 @@ def output(linked, tmp_path, monkeypatch):
             'output_path': refs[0], 'subtitle_path': refs[1]}, 'output_refs': refs if rendered else []}
         result = TimelineVersion(f'v{number}', WORKSPACE, task.id, f'v{number-1}' if number > 1 else None,
             number, snapshot, None)
-        repository.create_timeline_version(result)
+        repository.timeline_records.create_timeline_version(result)
         return result
 
     version(1)

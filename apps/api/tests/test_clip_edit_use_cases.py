@@ -85,7 +85,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         seed = creation_task_montage_plan_to_payload(plan)
         repo.save_creation_task_montage_plan('local','task','montage',seed)
         copied = clone_subtitle_track(track,timeline_version_id='neighbor-base')
-        repo.create_timeline_version(TimelineVersion('neighbor-base','local','task','timeline',2,
+        repo.timeline_records.create_timeline_version(TimelineVersion('neighbor-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
         repo.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
@@ -108,7 +108,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         assert response.status_code == (403 if change=='private' else 409),response.text
         assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='neighbor-base'
         assert repo.edit_records.list_edit_intents('local','task')==[] and repo.edit_records.list_edit_proposals('local','task')==[]
-        assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
+        assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.timeline_records.list_timeline_versions('local','task'))==2
         assert repo.get_creation_task_montage_plan('local','task')==seed
     finally:
         runtime.stop(0)
@@ -147,7 +147,7 @@ def test_unaffected_distant_private_source_is_not_part_of_a_reorder(tmp_path,mon
         seed=creation_task_montage_plan_to_payload(plan)
         repo.save_creation_task_montage_plan('local','task','montage',seed)
         copied=clone_subtitle_track(track,timeline_version_id='distant-base')
-        repo.create_timeline_version(TimelineVersion('distant-base','local','task','timeline',2,
+        repo.timeline_records.create_timeline_version(TimelineVersion('distant-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
         repo.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
@@ -181,7 +181,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         seed=creation_task_montage_plan_to_payload(plan)
         repo.save_creation_task_montage_plan('local','task','montage',seed)
         copied=clone_subtitle_track(track,timeline_version_id='transition-base')
-        repo.create_timeline_version(TimelineVersion('transition-base','local','task','timeline',2,
+        repo.timeline_records.create_timeline_version(TimelineVersion('transition-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
         repo.create_subtitle_track(copied)
         monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
@@ -201,7 +201,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         assert response.status_code==403,response.text
         assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='transition-base'
         assert len(repo.edit_records.list_edit_intents('local','task'))==1 and len(repo.edit_records.list_edit_proposals('local','task'))==1
-        assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.list_timeline_versions('local','task'))==2
+        assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.timeline_records.list_timeline_versions('local','task'))==2
     finally:runtime.stop(0)
 
 

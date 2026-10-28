@@ -2388,7 +2388,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert len(transforms) == 1 and transforms[0].status == "succeeded"
     assert transforms[0].output_refs == jobs[0].output_refs
     assert len(production.lineage_records.list_dependency_edges(workspace_id, task.id)) == 6
-    versions = production.list_timeline_versions(workspace_id, task.id)
+    versions = production.timeline_records.list_timeline_versions(workspace_id, task.id)
     assert len(versions) == 1
     saved_plan = creation_task_montage_plan_from_payload(
         production.get_creation_task_montage_plan(workspace_id, task.id)
@@ -2465,7 +2465,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert migrated_plan.output_path == jobs[0].output_refs[0]
     assert migrated_plan.subtitle_path == jobs[0].output_refs[1]
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 1
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 1
     assert production.task_records.get_creation_task(
         workspace_id, task.id
     ).current_timeline_version_id
@@ -2535,7 +2535,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert unchanged_plan.clips[0].asset_id == asset.id
     assert unchanged_plan.output_path == migrated_plan.output_path
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 1
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 1
     assert production.edit_records.list_edit_operations(workspace_id, task.id) == []
     assert preview_payload["proposal"]["operation"]["operation_type"] == "ReplaceClip"
     replacement_payload = preview_payload["proposal"]["operation"]["payload"]
@@ -2565,7 +2565,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         replacement_payload["segment_id"],
     )
     assert updated_plan.clips[1].asset_id == asset.id
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 2
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 2
     assert len(production.edit_records.list_edit_intents(workspace_id, task.id)) == 1
     assert len(production.edit_records.list_edit_proposals(workspace_id, task.id)) == 1
     assert len(production.edit_records.list_edit_operations(workspace_id, task.id)) == 1
@@ -2583,7 +2583,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert rerendered_plan.status == "rendered"
     assert rerendered_plan.output_path not in jobs[0].output_refs
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 3
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 3
     workspace_after_rerender = client.get(f"/api/creation-tasks/{task.id}").json()
     assert workspace_after_rerender["task"]["timeline_sequence"] == 3
     assert workspace_after_rerender["task"]["can_undo"] is True
@@ -2632,7 +2632,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert trimmed_plan.clips[1].source_start_seconds == 1.0
     assert trimmed_plan.narration_audio_path == rendered_narration_reference
     assert trimmed_plan.output_path is None and trimmed_plan.subtitle_path is None
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 6
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 6
 
     undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
@@ -2645,7 +2645,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert restored_plan.clips[1].source_start_seconds == 1
     assert restored_plan.narration_audio_path == rendered_narration_reference
     assert restored_plan.output_path is None and restored_plan.subtitle_path is None
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 7
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 7
 
     reloaded = ProductionRepository(
         database_path=production.database_path,
@@ -2653,7 +2653,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     assert reloaded.task_records.get_creation_task(
         workspace_id, task.id
-    ).current_timeline_version_id == production.list_timeline_versions(
+    ).current_timeline_version_id == production.timeline_records.list_timeline_versions(
         workspace_id, task.id
     )[-1].id
     assert creation_task_montage_plan_from_payload(
@@ -2663,7 +2663,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
 
     final_render = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
     assert final_render.status == "rendered"
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 8
     final_output = client.get(f"/api/creation-tasks/{task.id}/output")
     assert final_output.status_code == 200
     assert final_output.content == b"playable-video"
@@ -2933,7 +2933,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     production.save_creation_task_montage_plan(
         workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage)
     )
-    production.create_timeline_version(
+    production.timeline_records.create_timeline_version(
         TimelineVersion(
             id="timeline-subtitle-edit-base",
             workspace_id=workspace_id,
@@ -2960,7 +2960,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
 
-    base = production.get_timeline_version(workspace_id, "timeline-subtitle-edit-base")
+    base = production.timeline_records.get_timeline_version(workspace_id, "timeline-subtitle-edit-base")
     chinese = main_module._subtitle_track_from_montage(workspace_id, task, base, montage)
     production.create_subtitle_track(chinese)
     production.create_subtitle_track(replace(chinese, id="fixture-english", language="en-US", source_language="zh-CN", cues=[
@@ -3023,7 +3023,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert saved.narration_audio_path == montage.narration_audio_path
     assert saved.output_path is None and saved.subtitle_path is None
     assert production.task_records.get_creation_task(workspace_id, task.id).narration_cache_key == "whole-cache"
-    assert len(production.list_timeline_versions(workspace_id, task.id)) == 8
+    assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 8
     assert any(operation.id == response.json()["operation"]["id"] and operation.operation_type == "UpdateSubtitleCue" for operation in production.edit_records.list_edit_operations(workspace_id, task.id))
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
     assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
@@ -3209,7 +3209,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
         == "RegeneratePersonRender"
     )
     assert preview_payload["proposal"]["invalidated_refs"] == old_output_refs
-    assert len(production.list_timeline_versions(state.workspace_id, state.task.id)) == 1
+    assert len(production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id)) == 1
 
     # An uncalibrated dedicated budget still rejects before queue or generation writes.
     _assert_unpermitted_person_confirm(state, preview_payload['proposal'])
@@ -3257,7 +3257,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
     assert changed_plan.narration_audio_path == state.montage.narration_audio_path
     assert changed_plan.output_path is None
     assert changed_plan.subtitle_path is None
-    versions = production.list_timeline_versions(
+    versions = production.timeline_records.list_timeline_versions(
         state.workspace_id, state.task.id
     )
     assert len(versions) == 2
@@ -3412,7 +3412,7 @@ def test_person_expression_unavailable_creates_no_edit_or_timeline(
     assert state.production.edit_records.list_edit_proposals(
         state.workspace_id, state.task.id
     ) == []
-    assert state.production.list_timeline_versions(
+    assert state.production.timeline_records.list_timeline_versions(
         state.workspace_id, state.task.id
     ) == []
 
@@ -3440,7 +3440,7 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     assert response.task_id == task.id
     versioned_task = state.production.task_records.get_creation_task(state.workspace_id, task.id)
     assert versioned_task.current_timeline_version_id is not None
-    assert len(state.production.list_timeline_versions(state.workspace_id, task.id)) == 1
+    assert len(state.production.timeline_records.list_timeline_versions(state.workspace_id, task.id)) == 1
     montage = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
     assert montage.clips and all(clip.fit_mode == "fit" for clip in montage.clips)
     assert all(clip.visual_effects == (plan.template_settings.get("color_style") or {}) for clip in montage.clips)
@@ -3638,7 +3638,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     assert persisted["clips"][0]["needs_confirmation"] is False
     assert persisted["clips"][1] == creation_task_montage_plan_to_payload(plan)["clips"][1]
     confirmed_task = production.task_records.get_creation_task(workspace_id, task.id)
-    confirmed_version = production.get_timeline_version(workspace_id, confirmed_task.current_timeline_version_id)
+    confirmed_version = production.timeline_records.get_timeline_version(workspace_id, confirmed_task.current_timeline_version_id)
     assert "subtitle_track_ids" not in confirmed_version.snapshot
     undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
     assert undo.status_code == 200, undo.text
@@ -3919,7 +3919,7 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
             state.workspace_id, state.task.id, state.task.confirmed_script_id)]
     proposal = state.production.edit_records.get_edit_proposal(state.workspace_id, preview.json()["proposal"]["id"])
     current_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    base_version = state.production.get_timeline_version(state.workspace_id, base_version_id)
+    base_version = state.production.timeline_records.get_timeline_version(state.workspace_id, base_version_id)
     main_module._persist_typed_montage_edit(
         workspace_id=state.workspace_id, task=current_task, proposal=proposal,
         base_version=base_version, updated_plan=changed,
@@ -5616,7 +5616,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     input_edit = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"16:9"})
     assert input_edit.status_code == 200, input_edit.text
     input_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    input_version = state.production.get_timeline_version(state.workspace_id, input_task.current_timeline_version_id)
+    input_version = state.production.timeline_records.get_timeline_version(state.workspace_id, input_task.current_timeline_version_id)
     input_plan = creation_task_montage_plan_from_payload(input_version.snapshot["montage"])
     input_refs = main_module._creation_task_montage_render_input_refs(input_task, input_plan)
     input_subtitle_tracks = main_module._current_subtitle_tracks(
@@ -5656,7 +5656,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
         input_refs=input_refs, output_refs=[published.logical_ref], engine="fixture", parameters={}, status="succeeded",
         started_at=now, finished_at=now))
     rendered_plan = replace(input_plan, status="rendered", output_path=published.logical_ref)
-    original = state.production.create_timeline_version(TimelineVersion(id="timeline_job_v3_fixture",
+    original = state.production.timeline_records.create_timeline_version(TimelineVersion(id="timeline_job_v3_fixture",
         workspace_id=state.workspace_id, task_id=state.task.id, parent_version_id=input_version.id,
         sequence=input_version.sequence + 1,
         snapshot={"montage":creation_task_montage_plan_to_payload(rendered_plan),
@@ -5694,7 +5694,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert task.current_timeline_version_id != original.id and not task.output_ready
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)["aspect_ratio"] == "1:1"
     assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == jobs_before
-    changed_input_version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    changed_input_version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     changed_seal_snapshot = dict(original.snapshot)
     changed_seal_snapshot["render_input_timeline_version_id"] = changed_input_version.id
     changed_dependency = replace(original, parent_version_id=changed_input_version.id, snapshot=changed_seal_snapshot)
@@ -5763,7 +5763,7 @@ def _revoke_person_edit_authorization(state):
 
 
 def _person_edit_versions(state):
-    return state.production.list_timeline_versions(state.workspace_id, state.task.id)
+    return state.production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id)
 
 
 @pytest.mark.parametrize("exact,change", [(False, False), (True, False), (True, True)])

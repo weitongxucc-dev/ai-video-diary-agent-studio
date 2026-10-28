@@ -125,14 +125,14 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
         state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
             creation_task_montage_plan_to_payload(plan))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
-    versions = state.production.list_timeline_versions(state.workspace_id, state.task.id)
+    versions = state.production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id)
     response = (preview(state, "1↔3") if phase == "preview"
                 else state.client.post(state.base_url + f"/edits/{proposal_id}/confirm"))
     assert response.status_code == 409, response.text
     assert "这次换位会移动人物口型镜头" in response.json()["detail"]
     assert "明确联动范围" in response.json()["detail"]
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == before
-    assert state.production.list_timeline_versions(state.workspace_id, state.task.id) == versions
+    assert state.production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id) == versions
     if phase == "preview":
         assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     else:

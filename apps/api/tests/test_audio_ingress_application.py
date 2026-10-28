@@ -171,7 +171,7 @@ def seed_narration(repo, media, tmp_path):
         narration_audio_path=str(path),audio_timeline=graph)
     payload=creation_task_montage_plan_to_payload(plan)
     repo.save_creation_task_montage_plan('local',task.id,plan.id,payload)
-    version=repo.create_timeline_version(TimelineVersion('base','local',task.id,None,1,{'montage':payload,
+    version=repo.timeline_records.create_timeline_version(TimelineVersion('base','local',task.id,None,1,{'montage':payload,
         'narration_segments':[asdict(segment)],'narration_cache_key':narration.cache_key},None))
     return version,graph,path
 

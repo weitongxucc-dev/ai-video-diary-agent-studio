@@ -254,7 +254,7 @@ def test_cover_local_check_uses_original_binding_without_reading_source_or_recei
         kind=COVER_JOB_KIND, idempotency_key=command.idempotency_key, input_digest=command.input_digest))
     repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", workspace, task_id, "rendered_video",
         ref, published.sha256, published.size_bytes, job.id, []))
-    repo.create_timeline_version(TimelineVersion("base", workspace, task_id, None, 1,
+    repo.timeline_records.create_timeline_version(TimelineVersion("base", workspace, task_id, None, 1,
         {"output_refs": [ref]}, None))
     repo.edit_records.create_edit_intent(EditIntent("intent", workspace, task_id, "cover", "review", [], None,
         "cover", {}, {}, 1., "proposed"))

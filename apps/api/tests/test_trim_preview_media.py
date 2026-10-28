@@ -123,7 +123,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     assert initialized.status_code == 200, initialized.text
     assert initialized.json()["version_id"] == repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert repository.get_creation_task_montage_plan(workspace_id, task_id)["clips"][0]["source_start_seconds"] == 0
-    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    assert len(repository.timeline_records.list_timeline_versions(workspace_id, task_id)) == 1
 
     original_resolve = repository.resolve_clip_media_reference
     resolve_calls = 0
@@ -182,7 +182,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
     assert repository.edit_records.list_edit_operations(workspace_id, task_id) == []
     assert repository.job_records.list_job_runs(workspace_id, task_id) == []
-    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    assert len(repository.timeline_records.list_timeline_versions(workspace_id, task_id)) == 1
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "another-workspace")
     assert client.get(preview.json()["proposal"]["preview"]["after"]["video_url"].split("#")[0]).status_code == 404
 
@@ -206,4 +206,4 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     assert conflict.json()["detail"]["error"] == "timeline_version_conflict"
     assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
     assert repository.get_creation_task_montage_plan(workspace_id, task_id) == saved_payload
-    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    assert len(repository.timeline_records.list_timeline_versions(workspace_id, task_id)) == 1

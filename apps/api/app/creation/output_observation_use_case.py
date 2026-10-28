@@ -94,7 +94,7 @@ class OutputObservationUseCase:
             raise OutputObservationRejected(status_code=404, detail='creation task not found') from exc
 
     def version(self, task, payload):
-        version = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise ValueError('观察目标时间线已变化，请回读当前版本')
         return version
@@ -125,7 +125,7 @@ class OutputObservationUseCase:
         if task.current_timeline_version_id is None:
             return OutputDownload(self.output_path(workspace_id, task_id, subtitle=subtitle), None, None)
         try:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         except KeyError as exc:
             raise OutputObservationRejected(404, '作品版本不存在。') from exc
         if version.task_id != task_id:
@@ -233,7 +233,7 @@ class OutputObservationUseCase:
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         payload = CreationTaskObservationRequest.model_validate(arguments['payload'])

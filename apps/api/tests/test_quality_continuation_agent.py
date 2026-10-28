@@ -82,7 +82,7 @@ def test_agent_continuation_keeps_original_job_and_replays_before_new_head_or_ru
     assert receipt['job_id'] == pair['job_id'] and receipt['check_id'] == original['check_id']
     assert receipt['request_id'] != failed['id']
     assert checks.get('local', 'task')['evidence']['_phases'] == original['evidence']['_phases']
-    repo.create_timeline_version(TimelineVersion('v2', 'local', 'task', 'v1', 2, {}, None))
+    repo.timeline_records.create_timeline_version(TimelineVersion('v2', 'local', 'task', 'v1', 2, {}, None))
     monkeypatch.setattr(main, 'device_runtime', None)
     monkeypatch.setattr(main, '_quality_inspection_use_case', lambda **kwargs: service)
     monkeypatch.setattr(main, '_bind_quality_runtime', lambda: pytest.fail('original receipt cannot bind runtime'))
@@ -123,7 +123,7 @@ def test_agent_new_continuation_rejects_stale_head_and_foreign_pair(failed_quali
     assert not host('read_task_quality_continuation', {**pair, 'task_id': 'other'}, **options)['ok']
     with pytest.raises((KeyError, PermissionError)):
         business.quality.read_continuation('local', 'task', pair['job_id'], pair['failed_request_id'], CreationExecutionActor('local', 'other'))
-    repo.create_timeline_version(TimelineVersion('v2', 'local', 'task', 'v1', 2, {}, None))
+    repo.timeline_records.create_timeline_version(TimelineVersion('v2', 'local', 'task', 'v1', 2, {}, None))
     denied = host('continue_task_quality_check', {'payload': pair}, **options)
     assert not denied['ok'] and denied['failure']['status_code'] == 409 and starts == []
     assert repo.job_records.get_job_run('local', pair['job_id']).status == 'failed'

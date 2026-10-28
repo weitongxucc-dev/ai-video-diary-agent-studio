@@ -343,8 +343,8 @@ def test_unknown_tool_save_reopens_and_gets_only_original_receipt(assistant_stat
     assert updated.status_code == 200 and updated.json()["version"] == 2
     turn_id = body["turn_id"]
     if change == "stale":
-        version = state.production.get_timeline_version(state.workspace_id, state.payload["expected_timeline_version_id"])
-        state.production.create_timeline_version(replace(version, id="tool-later-timeline", parent_version_id=version.id, sequence=version.sequence + 1))
+        version = state.production.timeline_records.get_timeline_version(state.workspace_id, state.payload["expected_timeline_version_id"])
+        state.production.timeline_records.create_timeline_version(replace(version, id="tool-later-timeline", parent_version_id=version.id, sequence=version.sequence + 1))
     elif change == "revoked":
         state.members.remove_member(state.member.member_id)
     elif change == "other_member":
