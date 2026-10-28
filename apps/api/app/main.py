@@ -4111,42 +4111,7 @@ def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile
 def list_creation_task_recordings(task_id: str, request: Request):
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if not task.confirmed_script_id:
-        return {"items": []}
-    service = _task_audio()
-    current_narration_refs = set()
-    if task.montage_plan_id:
-        plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id))
-        if plan.script_id == task.confirmed_script_id:
-            current_narration_refs = {clip.source_ref for track in _effective_audio_timeline(plan).tracks
-                                      if track.role == "narration" for clip in track.clips}
-    if task.narration_cache_key:
-        current_narration = production_repo.get_narration_artifact(
-            workspace_id, task.narration_cache_key,
-        )
-        if (current_narration is not None and current_narration.task_id == task.id
-                and current_narration.script_id == task.confirmed_script_id
-                and current_narration.source_kind == "recorded"
-                and current_narration.source_artifact_ref):
-            current_narration_refs.add(current_narration.source_artifact_ref)
-    items = []
-    for record in reversed(production_repo.list_artifact_records(workspace_id, task_id)):
-        if record.kind != "task_recording":
-            continue
-        try:
-            _, duration_ms = service.recording(
-                workspace_id, task_id, record.logical_ref,
-            )
-            if not _output_observation_use_case().published_outputs_current(production_repo.get_job_run(workspace_id, record.producer_job_id)):
-                continue
-        except (KeyError, ValueError, FileNotFoundError):
-            continue  # Failed or obsolete uploads are never offered as current narration.
-        items.append({"source_ref": record.logical_ref, "artifact_id": record.id,
-                      "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
-                      "duration_ms": duration_ms, "created_at": record.created_at.isoformat(),
-                      "applied": record.logical_ref in current_narration_refs})
-    return {"items": items}
+    return _audio_ingress_use_case().list_recordings(task, outputs=_output_observation_use_case())
 
 
 @app.post('/api/creation-tasks/{task_id}/audio/recordings')
@@ -4165,77 +4130,12 @@ def adopt_creation_task_recording(
 ) -> CreationTaskNarrationResponse:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if task.stage != "narration" or task.stage_status not in {"not_started", "failed"}:
-        raise HTTPException(status_code=409, detail="当前任务不能首次采用录音")
-    if task.confirmed_script_id != payload.script_id:
-        raise HTTPException(status_code=409, detail="文案版本已变化，请重新选择当前录音")
     try:
-        script = production_repo.get_creation_task_script(workspace_id, payload.script_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="当前文案不存在") from exc
-    if script.selection_status != "confirmed" or len(script.sections) != 1:
-        raise HTTPException(status_code=409, detail="当前版本有多个文案段，暂不能确定单段录音的对应关系")
-    section = script.sections[0]
-    if payload.source_section_id != section.id:
-        raise HTTPException(status_code=409, detail="录音对应的文案段已变化，请重新选择")
-    script_digest = production_repo.confirmed_creation_task_script_digest(
-        workspace_id, task.id, script.id,
-    )
-    if script_digest is None:
-        raise HTTPException(status_code=409, detail="当前文案未确认或已经变化，不能采用录音")
-    try:
-        source, duration_ms = _task_audio().recording(
-            workspace_id, task.id, payload.source_ref,
-        )
-        if not _output_observation_use_case().published_outputs_current(production_repo.get_job_run(workspace_id, source.producer_job_id)):
-            raise ValueError("电脑录音已变化或缺少受许可核验回执，请重新录制")
-        audio_path = _task_audio().source(workspace_id, task.id, source.logical_ref)
-        cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
-        cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
-        narration_ref = production_repo.narration_artifact_reference(cache_key)
-        narration_id = f"narration_segment_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:20]}"
-        language = {"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language]
-        record = NarrationArtifactRecord(
-            id=cache_key,
-            workspace_id=workspace_id,
-            task_id=task.id,
-            script_id=script.id,
-            voice_profile_id=None,
-            cache_key=cache_key,
-            audio_path=str(audio_path),
-            duration_seconds=duration_ms / 1000,
-            sample_rate=None,
-            model_id=None,
-            language=language,
-            source_kind="recorded",
-            source_artifact_ref=source.logical_ref,
-            source_sha256=source.sha256,
-            source_script_digest=script_digest,
-        )
-        segment = NarrationSegment(
-            id=narration_id,
-            workspace_id=workspace_id,
-            task_id=task.id,
-            script_id=script.id,
-            source_section_id=section.id,
-            text=section.content,
-            audio_reference=narration_ref,
-            duration_seconds=duration_ms / 1000,
-            sample_rate=None,
-            model_id=None,
-            voice_profile_id=None,
-            voice_version=None,
-            language=language,
-            pronunciation_version="",
-            status="ready",
-            source_kind="recorded",
-            source_artifact_ref=source.logical_ref,
-            source_sha256=source.sha256,
-            source_script_digest=script_digest,
-        )
-        task, record = production_repo.complete_creation_task_narration(record, segments=[segment])
-    except (KeyError, ValueError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=409, detail=f"当前录音未采用：{exc}") from exc
+        task, record = _audio_ingress_use_case().adopt_recording(task,
+            script_id=payload.script_id, source_section_id=payload.source_section_id,
+            source_ref=payload.source_ref, outputs=_output_observation_use_case())
+    except AudioIngressRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return _creation_task_narration_response(task, record)
 
 

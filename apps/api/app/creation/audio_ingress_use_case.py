@@ -1,5 +1,8 @@
 """Five sealed audio actions using the original source, grant and publication owners."""
 from dataclasses import asdict, dataclass
+import hashlib
+from app.production import NarrationArtifactRecord
+from app.creation.contracts import NarrationSegment
 from collections import Counter
 from pathlib import Path
 import subprocess
@@ -31,6 +34,122 @@ class AudioIngressUseCase:
             raise ValueError('音频输入必须绑定同一仓储负责人')
         self.repository, self.task_audio = repository, task_audio
         self.waveform_cache_root = waveform_cache_root
+
+    def list_recordings(self, task, *, outputs):
+        workspace_id, task_id = task.workspace_id, task.id
+        if not task.confirmed_script_id:
+            return {"items": []}
+        service = self.task_audio
+        current_narration_refs = set()
+        if task.montage_plan_id:
+            plan = creation_task_montage_plan_from_payload(
+                self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            if plan.script_id == task.confirmed_script_id:
+                current_narration_refs = {clip.source_ref for track in effective_audio_timeline(plan).tracks
+                                          if track.role == "narration" for clip in track.clips}
+        if task.narration_cache_key:
+            current_narration = self.repository.get_narration_artifact(
+                workspace_id, task.narration_cache_key,
+            )
+            if (current_narration is not None and current_narration.task_id == task.id
+                    and current_narration.script_id == task.confirmed_script_id
+                    and current_narration.source_kind == "recorded"
+                    and current_narration.source_artifact_ref):
+                current_narration_refs.add(current_narration.source_artifact_ref)
+        items = []
+        for record in reversed(self.repository.list_artifact_records(workspace_id, task_id)):
+            if record.kind != "task_recording":
+                continue
+            try:
+                _, duration_ms = service.recording(
+                    workspace_id, task_id, record.logical_ref,
+                )
+                if not outputs.published_outputs_current(self.repository.get_job_run(workspace_id, record.producer_job_id)):
+                    continue
+            except (KeyError, ValueError, FileNotFoundError):
+                continue  # Failed or obsolete uploads are never offered as current narration.
+            items.append({"source_ref": record.logical_ref, "artifact_id": record.id,
+                          "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
+                          "duration_ms": duration_ms, "created_at": record.created_at.isoformat(),
+                          "applied": record.logical_ref in current_narration_refs})
+        return {"items": items}
+
+
+    def adopt_recording(self, task, *, script_id, source_section_id, source_ref, outputs):
+        workspace_id = task.workspace_id
+        if task.stage != "narration" or task.stage_status not in {"not_started", "failed"}:
+            raise AudioIngressRejected(409, "当前任务不能首次采用录音")
+        if task.confirmed_script_id != script_id:
+            raise AudioIngressRejected(409, "文案版本已变化，请重新选择当前录音")
+        try:
+            script = self.repository.get_creation_task_script(workspace_id, script_id)
+        except KeyError as exc:
+            raise AudioIngressRejected(404, "当前文案不存在") from exc
+        if script.selection_status != "confirmed" or len(script.sections) != 1:
+            raise AudioIngressRejected(409, "当前版本有多个文案段，暂不能确定单段录音的对应关系")
+        section = script.sections[0]
+        if source_section_id != section.id:
+            raise AudioIngressRejected(409, "录音对应的文案段已变化，请重新选择")
+        script_digest = self.repository.confirmed_creation_task_script_digest(
+            workspace_id, task.id, script.id,
+        )
+        if script_digest is None:
+            raise AudioIngressRejected(409, "当前文案未确认或已经变化，不能采用录音")
+        try:
+            source, duration_ms = self.task_audio.recording(
+                workspace_id, task.id, source_ref,
+            )
+            if not outputs.published_outputs_current(self.repository.get_job_run(workspace_id, source.producer_job_id)):
+                raise ValueError("电脑录音已变化或缺少受许可核验回执，请重新录制")
+            audio_path = self.task_audio.source(workspace_id, task.id, source.logical_ref)
+            cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
+            cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
+            narration_ref = self.repository.narration_artifact_reference(cache_key)
+            narration_id = f"narration_segment_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:20]}"
+            language = {"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language]
+            record = NarrationArtifactRecord(
+                id=cache_key,
+                workspace_id=workspace_id,
+                task_id=task.id,
+                script_id=script.id,
+                voice_profile_id=None,
+                cache_key=cache_key,
+                audio_path=str(audio_path),
+                duration_seconds=duration_ms / 1000,
+                sample_rate=None,
+                model_id=None,
+                language=language,
+                source_kind="recorded",
+                source_artifact_ref=source.logical_ref,
+                source_sha256=source.sha256,
+                source_script_digest=script_digest,
+            )
+            segment = NarrationSegment(
+                id=narration_id,
+                workspace_id=workspace_id,
+                task_id=task.id,
+                script_id=script.id,
+                source_section_id=section.id,
+                text=section.content,
+                audio_reference=narration_ref,
+                duration_seconds=duration_ms / 1000,
+                sample_rate=None,
+                model_id=None,
+                voice_profile_id=None,
+                voice_version=None,
+                language=language,
+                pronunciation_version="",
+                status="ready",
+                source_kind="recorded",
+                source_artifact_ref=source.logical_ref,
+                source_sha256=source.sha256,
+                source_script_digest=script_digest,
+            )
+            task, record = self.repository.complete_creation_task_narration(record, segments=[segment])
+        except (KeyError, ValueError, FileNotFoundError) as exc:
+            raise AudioIngressRejected(409, f"当前录音未采用：{exc}") from exc
+        return task, record
+
 
     def execute(self, job, event, actor, context):
         action = event['operation']

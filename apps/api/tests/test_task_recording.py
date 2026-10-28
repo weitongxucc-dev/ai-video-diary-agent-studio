@@ -631,3 +631,163 @@ def test_browser_webm_recording_keeps_audio_container_and_reloads(recording_task
     audio = client.get(uploaded.json()["audio_url"])
     assert audio.status_code == 200 and audio.headers["content-type"] == "audio/webm"
     assert audio.content == media.read_bytes()
+
+
+@pytest.fixture
+def recording_metadata(tmp_path, monkeypatch):
+    """Declared saved-recording facts; no waveform, upload, decoder or worker run."""
+    import hashlib
+    from dataclasses import replace
+    from app.local_members import LocalMemberService
+    from app.creation.contracts import JobRun, ArtifactRecord, TransformRun, TaskEvent
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from app.device_runtime import DeviceRuntime
+    from app.task_audio import TaskAudio, TASK_MEDIA_KIND
+    from app.models import utc_now
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    def forbidden(*args, **kwargs):
+        pytest.fail('recording adoption evidence forbids wave/provider/Popen/runtime/model/driver/media')
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    monkeypatch.setattr(TaskAudio, 'probe', forbidden)
+    monkeypatch.setattr(TaskAudio, 'publish', forbidden)
+    monkeypatch.setattr(main_module.narration_generator, 'generate_for_creation_task', forbidden)
+    monkeypatch.setattr(main_module.montage_renderer, 'render', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset', 'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    repo = ProductionRepository(tmp_path/'recording.sqlite3', tmp_path/'library')
+    members = LocalMemberService(repo.database_path)
+    member, token = members.whoami(None)
+    plan = CreationPlan(id='plan_metadata',workspace_id='local',goal='declared recording',name='metadata',target_count=1,
+        language='zh-CN',aspect_ratio='9:16',duration_target_seconds=1,knowledge_references=[],source_references=[],
+        selected_voice=None,pronunciation_references=[],approved_asset_count=0,approved_clip_count=0,
+        material_rule_summary='',model_snapshot=[],confirmation_points=[],blockers=[],preflight_fingerprint='declared')
+    task = CreationTask('task_metadata','local',plan.id,'metadata recording','knowledge_explanation',owner_user_id=member.member_id)
+    repo.confirm_creation_plan(plan,task,verified_owner_user_id=member.member_id)
+    task = repo.get_creation_task('local',task.id)
+    now = utc_now().isoformat()
+    script = {'id':'script_metadata','workspace_id':'local','task_id':task.id,'run_id':'declared-run','topic_id':'declared-topic',
+        'title':'declared script','language':'zh-CN','sections':[{'id':'section_1','title':'正文','content':'真实待制作文案',
+            'visual_prompt':'','evidence_reference_ids':[]}], 'selection_status':'confirmed',
+        'created_at':now,'updated_at':now,'confirmed_at':now}
+    task.confirmed_script_id = script['id']
+    task.stage, task.stage_status, task.recovery_point = 'narration','not_started','narration'
+    script_record = CreationTaskScript(**{**script,
+        'sections':[CreationTaskScriptSection(**part) for part in script['sections']],
+        'created_at':datetime.fromisoformat(now),'updated_at':datetime.fromisoformat(now),'confirmed_at':datetime.fromisoformat(now)})
+    with repo._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        stored = repo.script_records._script_payload(conn,script_record)
+        conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
+            (script['id'],'local',task.id,script['run_id'],stored,now))
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task),default=str),'local',task.id))
+    digest = repo.confirmed_creation_task_script_digest('local',task.id,script['id'])
+    store = ArtifactStore(tmp_path/'artifacts')
+    blob = store.publish_bytes('artifacts/declared-recording.webm', b'declared saved recording bytes; not media acceptance')
+    job = repo.create_job_run(JobRun('declared-recording-job','local',task.id,TASK_MEDIA_KIND,'declared-recording',hashlib.sha256(b'declared').hexdigest()))
+    running = repo.claim_job_run('local',job.id)
+    source = repo.create_artifact_record(ArtifactRecord('declared-recording-source','local',task.id,'task_recording',
+        blob.logical_ref,blob.sha256,blob.size_bytes,job.id,[]))
+    repo.lineage_records.create_transform_run(TransformRun('declared-recording-transform','local',task.id,job.id,
+        'task_recording',job.input_digest,[],[source.logical_ref],'declared metadata',
+        {'duration_ms':1000,'script_id':script['id'],'script_digest':digest,'montage_plan_id':None},
+        'succeeded',running.started_at,utc_now()))
+    stat = store.resolve_file(source.logical_ref).stat()
+    repo.append_task_event(TaskEvent('event_'+job.id+'_verified','local',task.id,job.id,'task_media_verified',
+        {'outputs':[{'reference':source.logical_ref,'size_bytes':stat.st_size,'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns}]}))
+    repo.finish_job_run('local',job.id,status='succeeded',output_refs=[source.logical_ref])
+    monkeypatch.setattr(main_module,'production_repo',repo)
+    monkeypatch.setattr(main_module,'artifact_store',store)
+    monkeypatch.setattr(main_module,'creation_execution',main_module._new_creation_execution(repo))
+    monkeypatch.setattr(main_module,'local_members_service',members)
+    monkeypatch.setattr(main_module,'auth_context',SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main_module,'current_workspace_id',lambda request:'local')
+    monkeypatch.setattr(main_module,'settings',replace(main_module.settings,
+        temporary_root_path=str(tmp_path/'temporary'),video_output_path=str(tmp_path/'output')))
+    client = TestClient(main_module.app,headers={'x-local-member-token':token})
+    return SimpleNamespace(repo=repo,task=task,source=source,store=store,client=client,script=script,
+        route=f'/api/creation-tasks/{task.id}/audio/recordings',
+        payload={'script_id':script['id'],'source_section_id':'section_1','source_ref':source.logical_ref})
+
+
+def test_recording_metadata_adoption_persists_applied_and_continuation_identity(recording_metadata):
+    from dataclasses import replace
+    state = recording_metadata
+    repo, task, client = state.repo, state.task, state.client
+    before_jobs = [job.id for job in repo.list_job_runs('local',task.id)]
+    assert client.get(state.route).json()['items'][0]['applied'] is False
+    adopted = client.post(state.route+'/adopt',json=state.payload)
+    assert adopted.status_code==200,adopted.text
+    body = adopted.json()
+    assert body['source_kind']=='recorded' and body['model_id'] is None and body['voice_profile_id'] is None
+    assert body['task']['stage']=='montage' and body['source_artifact_ref']==state.source.logical_ref
+    assert client.get(state.route).json()['items'][0]['applied'] is True
+    current = repo.get_creation_task('local',task.id)
+    artifact = repo.get_narration_artifact('local',current.narration_cache_key)
+    segment, = repo.list_narration_segments('local',task.id)
+    assert (segment.source_kind,segment.source_section_id,segment.text)==('recorded','section_1','真实待制作文案')
+    assert segment.model_id is None and segment.voice_profile_id is None and segment.voice_version is None
+    assert artifact.source_sha256==state.source.sha256 and artifact.source_script_digest==segment.source_script_digest
+    reopened = ProductionRepository(repo.database_path,repo.video_library_path)
+    assert reopened.get_narration_artifact('local',current.narration_cache_key)==artifact
+    assert reopened.list_narration_segments('local',task.id)==[segment]
+    preview = client.get(f'/api/creation-tasks/{task.id}/execution/preview')
+    assert preview.status_code==200,preview.text
+    assert preview.json()['narration_source']=={'source_kind':'recorded','source_artifact_ref':state.source.logical_ref,'duration_seconds':1}
+    assert preview.json()['requirements']['can_continue'] is True and preview.json()['requirements']['continuation_blocker'] is None
+    plan = repo.get_creation_plan('local',task.plan_id)
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(replace(plan,presenter_share_target=20)),default=str),'local',plan.id))
+    blocked = client.get(f'/api/creation-tasks/{task.id}/execution/preview')
+    assert blocked.status_code==200 and blocked.json()['requirements']['can_continue'] is False
+    assert '当前配音是本人录音' in blocked.json()['requirements']['continuation_blocker']
+    assert [job.id for job in repo.list_job_runs('local',task.id)]==before_jobs
+    assert current.current_timeline_version_id is None and repo.list_timeline_versions('local',task.id)==[]
+    # The other original applied source is the current montage narration graph.
+    montage = CreationTaskMontagePlan('declared-montage','local',task.id,task.confirmed_script_id,'metadata','ready',
+        [],[],1,0,narration_audio_path=state.source.logical_ref,
+        audio_timeline=narration_audio_timeline(state.source.logical_ref,1))
+    repo.save_creation_task_montage_plan('local',task.id,montage.id,creation_task_montage_plan_to_payload(montage))
+    assert client.get(state.route).json()['items'][0]['applied'] is True
+    with repo._connect() as conn:
+        current = repo.get_creation_task('local',task.id)
+        current.narration_cache_key = None
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(current),default=str),'local',task.id))
+    assert client.get(state.route).json()['items'][0]['applied'] is True
+
+
+def test_recording_metadata_rejects_ambiguous_then_changed_script_without_partial_adoption(recording_metadata):
+    state = recording_metadata
+    repo, task, client = state.repo,state.task,state.client
+    def write_script(value):
+        from dataclasses import replace
+        from app.creation.script_contracts import CreationTaskScriptSection
+        original = repo.get_creation_task_script('local',state.script['id'])
+        updated = replace(original,sections=[CreationTaskScriptSection(**part) for part in value['sections']])
+        with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            stored = repo.script_records._script_payload(conn,updated)
+            conn.execute('UPDATE creation_task_scripts SET payload=? WHERE workspace_id=? AND id=?',
+                (stored,'local',state.script['id']))
+    script = {**state.script,'sections':[*state.script['sections'],{**state.script['sections'][0],'id':'section_2'}]}
+    write_script(script)
+    ambiguous = client.post(state.route+'/adopt',json=state.payload)
+    assert ambiguous.status_code==409 and '多个文案段' in ambiguous.json()['detail']
+    write_script({**state.script,'sections':[{**state.script['sections'][0],'content':'已修改的文案正文'}]})
+    changed = client.post(state.route+'/adopt',json=state.payload)
+    assert changed.status_code==409
+    current = repo.get_creation_task('local',task.id)
+    assert current.stage=='narration' and current.narration_cache_key is None
+    assert repo.list_narration_segments('local',task.id)==[]
+    with repo._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM narration_artifacts WHERE workspace_id=?',('local',)).fetchone()[0]==0
+    assert client.get(state.route).json()['items']==[]
