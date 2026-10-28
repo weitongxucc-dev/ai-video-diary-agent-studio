@@ -137,7 +137,7 @@ def test_real_recipe_bridge_keeps_leaf_validated_parameter_defaults(state):
     assert saved.status_code == 200, saved.text
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
     call = main.MediaScriptToolPreviewRequest.model_validate({**invocation(state), "tool_version": saved.json()["version"]})
-    expanded, _ref = main._instantiate_script_tool(actor, saved.json()["tool_id"], call)
+    expanded, _ref = main._media_script_use_case().expand_recipe(actor, saved.json()["tool_id"], call)
     assert expanded.parameters == {"color": "blue", "gain": 1}
     queued = state.client.post(state.base_url + f"/media-script-tools/{saved.json()['tool_id']}/preview", json=call.model_dump(mode="json", exclude_unset=True))
     assert queued.status_code == 202 and state.runtime.run_once(), queued.text
@@ -451,6 +451,12 @@ def receipt_state(tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail('recipe receipt evidence forbids Popen, SDK, media helpers, models and drivers')
     monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import wave
+    from app.device_runtime import DeviceRuntime
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    monkeypatch.setattr(main.narration_generator, 'generate_for_creation_task', forbidden)
     import _media_preview_test_fixtures as helpers
     import test_creation_execution as creation_helpers
     for owner in (helpers, creation_helpers):
@@ -701,3 +707,165 @@ def test_related_media_receipt_uses_original_turn_job_and_rejects_foreign_source
         assert [item.id for item in state.production.job_records.list_job_runs('local',state.task.id)].count(job.id)==1
     finally:
         runtime.scheduler.close()
+
+
+def test_submission_metadata_claim_unknown_and_recorded_replay(receipt_state, monkeypatch):
+    from test_media_script_api import submission_metadata_context
+    state = submission_metadata_context(receipt_state, monkeypatch)
+    owner = main._exact_preview_use_case()
+    raw = state.raw_payload()
+    model = main.MediaScriptPreviewRequest.model_validate(raw)
+    event, fresh = owner.claim_request(state.task, state.member.member_id, raw['request_id'], 'script',
+        model.model_dump(mode='json', exclude_unset=True))
+    assert fresh
+    response = state.client.post(state.base_url+'/media-scripts/preview', json=raw)
+    assert response.status_code == 409 and '尚未确定' in response.text
+    assert state.config_calls == [] and state.expansions == []
+    assert owner.read_request_result(state.task,event) is None
+    changed = state.client.post(state.base_url+'/media-scripts/preview', json={**raw,'script_source':'changed source'})
+    assert changed.status_code == 409 and '不同编辑输入' in changed.text
+    original = {'detail':'declared original rejection','nested':{'value':'preserved'}}
+    owner.record_request_result(state.task,event,status_code=503,response=original)
+    replay = state.client.post(state.base_url+'/media-scripts/preview',json=raw)
+    assert replay.status_code == 503 and replay.json() == original
+    assert state.config_calls == []
+    call = invocation(state)
+    event_tool, fresh = owner.claim_request(state.task,state.member.member_id,call['request_id'],'script',
+        {**main.MediaScriptToolPreviewRequest.model_validate(call).model_dump(mode='json',exclude_unset=True),'tool_id':state.tool['tool_id']})
+    assert fresh
+    url = state.base_url+'/media-script-tools/'+state.tool['tool_id']+'/preview'
+    unknown = state.client.post(url,json=call)
+    assert unknown.status_code == 409 and '尚未确定' in unknown.text
+    rebound = state.client.post(state.base_url+'/media-script-tools/another-tool/preview',json=call)
+    assert rebound.status_code == 409 and '不同编辑输入' in rebound.text
+    assert state.expansions == [] and owner.read_request_result(state.task,event_tool) is None
+    state.configuration_error = 'declared configuration unavailable'
+    refused = state.raw_payload()
+    response = state.client.post(state.base_url+'/media-scripts/preview',json=refused)
+    assert response.status_code == 503 and response.json() == {'detail':state.configuration_error,'error':state.configuration_error}
+    claim, fresh = owner.claim_request(state.task,state.member.member_id,refused['request_id'],'script',
+        main.MediaScriptPreviewRequest.model_validate(refused).model_dump(mode='json',exclude_unset=True))
+    assert not fresh and owner.read_request_result(state.task,claim)=={'status_code':503,'response':{'detail':state.configuration_error}}
+    assert state.config_calls == ['configuration']
+    again = state.client.post(state.base_url+'/media-scripts/preview',json=refused)
+    # The original HTTP exception adapter adds error; recorded JSONResponse replays the plain ledger body.
+    assert again.status_code == 503 and again.json() == {'detail':state.configuration_error}
+    assert state.config_calls == ['configuration']
+    assert state.production.job_records.list_job_runs(state.workspace_id,state.task.id) == state.initial_jobs
+
+
+def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(receipt_state, monkeypatch, tmp_path):
+    from test_media_script_api import submission_metadata_context
+    from app.device_runtime import OwnerRegistration, build_device_runtime
+    from app.creation_execution import CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.member_permits import MemberDeviceAccess
+    from app.task_audio import TaskMediaJobs
+    from app.media_script_tools import ScriptToolError
+    from test_device_runtime import Resources, Processes
+    from tests.host_memory_boundary import IsolatedMemoryMonitor
+    state = submission_metadata_context(receipt_state, monkeypatch)
+    identity = lambda actor: 'ready' if actor == state.actor and main.find_member(state.members,actor.member_id) else 'unauthorized'
+    def facts(workspace,task_id,operation,arguments,actor):
+        # Explicit metadata facts only: no program preparation or resource calibration.
+        return ({'base_version_id':None,'declared_arguments_digest':main.media_digest(arguments)},
+            {'kind':'media_script','timeout_seconds':30,'max_output_bytes':65536,'threads':1})
+    media = TaskMediaJobs(state.production,facts=facts,verify_identity=identity)
+    owner = CreationJobOwnerVerifier(state.production,task_media=media,verify_identity=identity)
+    executor = CreationJobUnitExecutor(state.production,render_action=None,render_is_valid=None,task_media=media)
+    resources = Resources();resources.memory_monitor=IsolatedMemoryMonitor()
+    runtime = build_device_runtime(database_path=state.production.database_path,
+        device_lock_path=tmp_path/'submission-only.lock',device_access=MemberDeviceAccess(state.members,identity_verifier=identity),
+        registrations={'creation_job':OwnerRegistration(owner,executor)},resources=resources,processes=Processes())
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    receipt_owner = main._exact_preview_use_case()
+    events=[]
+    original_receipt = main._media_result_receipt
+    def receipt(media,job,actor,runtime):
+        result = original_receipt(media,job,actor,runtime)
+        result['result']={'declared_snapshot':'must survive HTTP projection'}
+        return result
+    monkeypatch.setattr(main,'_media_result_receipt',receipt)
+    def wake():
+        # A real committed request result must exist before any continuation wake.
+        with state.production._connect() as conn:
+            rows=conn.execute("SELECT payload_json FROM task_events WHERE event_type='edit_request_result'").fetchall()
+        assert rows and any(json.loads(row[0])['response'].get('result') is not None for row in rows)
+        events.append('wake-after-record')
+    monkeypatch.setattr(main,'_wake_assistant_continuations',wake)
+    try:
+        raw = state.raw_payload()
+        queued = state.client.post(state.base_url+'/media-scripts/preview?draft=true',json=raw)
+        assert queued.status_code == 202 and queued.json()['result'] is None
+        job = state.production.job_records.get_job_run(state.workspace_id,queued.json()['job_id'])
+        assert job.status == 'queued'
+        start = state.production.execution_records.get_task_event(state.workspace_id,'event_'+job.id+'_start').payload
+        assert start['operation']=='media_script_preview' and start['arguments']['payload']==raw
+        assert start['arguments']['_draft'] is True and start['arguments']['_media_kind']=='media_script'
+        assert start['arguments']['_typed_source']=={'workspace_id':state.workspace_id,'task_id':state.task.id,
+            'member_id':state.member.member_id,'request_id':raw['request_id'],'expected_timeline_version_id':None,
+            'expected_timeline_sequence':0,'actor_identity':state.actor.identity_payload()}
+        assert start['arguments']['_script_toolchain']['python']==str(state.toolchain.python)
+        request,view=runtime.scheduler.task_media_result_request(state.workspace_id,job.id,job.input_digest,state.actor)
+        assert request.owner_id==job.id and request.state=='waiting' and request.attempt_number==1
+        assert request.last_grant_generation is None
+        claim,fresh=receipt_owner.claim_request(state.task,state.member.member_id,raw['request_id'],'script',raw)
+        assert not fresh
+        stored=receipt_owner.read_request_result(state.task,claim)
+        assert stored['status_code']==202 and stored['response']['result']=={'declared_snapshot':'must survive HTTP projection'}
+        replay=state.client.post(state.base_url+'/media-scripts/preview',json=raw)
+        assert replay.status_code==202 and replay.json()==stored['response']
+        call=invocation(state);state.expansions.clear()
+        tool_url=state.base_url+'/media-script-tools/'+state.tool['tool_id']+'/preview'
+        queued_tool=state.client.post(tool_url,json=call)
+        assert queued_tool.status_code==202 and len(state.expansions)==3
+        tool_start=state.production.execution_records.get_task_event(state.workspace_id,'event_'+queued_tool.json()['job_id']+'_start').payload
+        assert tool_start['operation']=='media_script_tool_preview'
+        assert tool_start['arguments']['payload']==call and 'script_source' not in tool_start['arguments']['payload']
+        assert tool_start['arguments']['_recipe_ref']['tool_id']==state.tool['tool_id'] and tool_start['arguments']['_recipe_ref']['version']==1
+        before=state.production.job_records.list_job_runs(state.workspace_id,state.task.id)
+        source={'job_id':state.producer_job_id,'result':{'reused_completed_source':True,'applied':False}}
+        monkeypatch.setattr(state.conversations,'completed_goal_source',lambda *a,**k:{'job_id':state.producer_job_id})
+        binding_calls=[]
+        def completed(task,actor,turn,slot,**contracts):
+            assert actor==state.actor and slot['job_id']==state.producer_job_id
+            binding_calls.append(contracts)
+            return source
+        monkeypatch.setattr(main,'_completed_script_submission_receipt',completed)
+        reused=state.raw_payload();reused['assistant_turn_id']=state.turn_id
+        config_before=list(state.config_calls)
+        result=state.client.post(state.base_url+'/media-scripts/preview',json=reused)
+        assert result.status_code==200 and result.json()==source and len(binding_calls)==1
+        assert state.config_calls==config_before and state.production.job_records.list_job_runs(state.workspace_id,state.task.id)==before
+        original_expand=main._expand_media_script_submission_recipe
+        # One representative across each existing current-check checkpoint; no worker is executed.
+        for stop_at in (1,2,3):
+            new_payload={**state.save_payload,'request_id':str(uuid4()),'name':'checkpoint '+str(stop_at)}
+            registered=state.client.post(state.base_url+'/media-script-tools',json=new_payload)
+            assert registered.status_code==200,registered.text
+            tool=registered.json();calls=[]
+            def expand(actor,tool_id,values):
+                calls.append(tool_id)
+                if len(calls)==stop_at:
+                    main._media_script_tools().revoke(actor,tool_id,expected_version=1)
+                return original_expand(actor,tool_id,values)
+            with monkeypatch.context() as scoped:
+                scoped.setattr(main,'_expand_media_script_submission_recipe',expand)
+                invocation_payload={**invocation(state),'tool_version':1}
+                endpoint=state.base_url+'/media-script-tools/'+tool['tool_id']+'/preview'
+                if stop_at<3:
+                    rejected=state.client.post(endpoint,json=invocation_payload)
+                    assert rejected.status_code==422 and 'revoked' in rejected.text
+                else:
+                    with pytest.raises(ScriptToolError,match='revoked'):
+                        state.client.post(endpoint,json=invocation_payload)
+                event,fresh=receipt_owner.claim_request(state.task,state.member.member_id,invocation_payload['request_id'],'script',
+                    {**invocation_payload,'tool_id':tool['tool_id']})
+                assert not fresh and len(calls)==stop_at
+                recorded=receipt_owner.read_request_result(state.task,event)
+                assert (recorded is None) if stop_at==3 else (recorded['status_code']==422)
+        from app.task_audio import TASK_MEDIA_KIND
+        assert [j for j in state.production.job_records.list_job_runs(state.workspace_id,state.task.id) if j.kind==TASK_MEDIA_KIND] == [j for j in before if j.kind==TASK_MEDIA_KIND]
+        assert len(events)==5  # two queued snapshots, one reused source, first/second rejected checkpoints
+        assert runtime._thread is None
+    finally:
+        runtime.stop(0)

@@ -148,6 +148,7 @@ from app.creation.projection import project_task_summary, undo_target_versions, 
 from app.creation.editing.subtitles import subtitle_display_selection
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
     clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset)
+from app.creation import media_script_submission_use_case as script_submission
 from app.media_script import MediaScriptError
 from app.media_script_jobs import read_script_toolchain, MediaScriptPreviewUseCase, MEDIA_SCRIPT_ACTIONS
 from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptToolConflict, ScriptToolUnknown
@@ -4196,38 +4197,6 @@ def _script_configuration():
 
 
 
-def _prepare_script_request(task_id, request, payload):
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    version = production_repo.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
-        raise HTTPException(status_code=409, detail="脚本目标版本已变化")
-    source = {"workspace_id": task.workspace_id, "task_id": task.id, "member_id": member_id,
-        "request_id": str(payload.request_id), "expected_timeline_version_id": payload.expected_timeline_version_id,
-        "expected_timeline_sequence": payload.expected_timeline_sequence}
-    if payload.assistant_turn_id is not None:
-        try:
-            origin = conversation_repo.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task.id)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        snapshot = origin["context"].get("target_snapshot", {})
-        if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (task.current_timeline_version_id, version.sequence if version else 0):
-            raise HTTPException(status_code=409, detail="原助手目标版本已失效")
-        source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin["conversation_id"], raw_command=origin["raw_command"],
-                      **{key: origin[key] for key in ("input_id", "input_turn_id") if key in origin})
-    _require_assistant_input_origin(request, source)
-    actor = _request_permit_actor(request, task.workspace_id) if auth_context.enabled else CreationExecutionActor(task.workspace_id, member_id)
-    if actor is not None:
-        source["actor_identity"] = actor.identity_payload()
-    if payload.assistant_turn_id is not None:
-        slot = conversation_repo.completed_goal_source(str(payload.assistant_turn_id),
-            requested_outputs=[item.model_dump(mode="json") for item in payload.requested_outputs],
-            input_refs=[item.model_dump(mode="json") for item in payload.input_refs])
-        if slot is not None:
-            source["reused_completed_source"] = _completed_media_result(task, request, str(payload.assistant_turn_id), slot,
-                contract=payload.requested_outputs[0].model_dump(mode="json"),
-                input_refs=[item.model_dump(mode="json") for item in payload.input_refs])
-    return source
-
 
 @app.get("/api/creation-tasks/{task_id}/assistant/media-script-capabilities")
 def get_media_script_capabilities(task_id: str, request: Request):
@@ -4251,88 +4220,112 @@ def _task_script_capability_facts(task, member_id):
         "output_count": 1, "note": "生成PNG来源，尚未应用图层或生成成片；视频和音频脚本未接入。"}
 
 
+def _media_script_submission_source(payload):
+    return script_submission.ScriptSource(
+        str(payload.request_id) if payload.request_id is not None else None,
+        str(payload.assistant_turn_id) if payload.assistant_turn_id is not None else None,
+        payload.expected_timeline_version_id, payload.expected_timeline_sequence,
+        [item.model_dump(mode="json") for item in payload.requested_outputs],
+        [item.model_dump(mode="json") for item in payload.input_refs])
+
+
+def _media_script_submission_command(task_id, payload, *, tool_id=None):
+    return script_submission.ScriptSubmission(task_id,
+        str(payload.request_id) if payload.request_id is not None else None,
+        payload.model_dump(mode="json", exclude_unset=True),
+        _media_script_submission_source(payload) if tool_id is None else None, tool_id)
+
+
+def _expand_media_script_submission_recipe(actor, tool_id, values):
+    expanded, reference = _media_script_use_case().expand_recipe(actor, tool_id,
+        MediaScriptToolPreviewRequest.model_validate(values))
+    return script_submission.RecipeExpansion(_media_script_submission_source(expanded), reference)
+
+
+def _completed_script_submission_receipt(task, actor, turn_id, slot, *, contract, input_refs):
+    try:
+        return _media_result_binding().completed_receipt(task, actor, turn_id, slot, contract=contract, input_refs=input_refs)
+    except MediaResultRejected as exc:
+        raise script_submission.ScriptSubmissionRejected(exc.status_code, exc.detail) from exc
+
+
+def _media_script_submission_use_case():
+    return script_submission.MediaScriptSubmissionUseCase(request_receipts=_exact_preview_use_case,
+        read_version=production_repo.get_timeline_version, conversations=conversation_repo,
+        expand_recipe=_expand_media_script_submission_recipe,
+        completed_receipt=_completed_script_submission_receipt)
+
+
+def _run_media_script_submission(request: Request, steps):
+    """Answer only the submission owner's explicit access/configuration/queue stages."""
+    try:
+        try:
+            stage = next(steps)
+        except StopIteration as result:
+            return result.value
+        while True:
+            try:
+                if isinstance(stage, script_submission.WriteAccess):
+                    answer = _exact_edit_access(stage.task_id, request, write=True)
+                elif isinstance(stage, script_submission.RequireActor):
+                    workspace_id = stage.workspace_id if stage.workspace_id is not None else current_workspace_id(request)
+                    answer = _require_permit_actor(request, workspace_id)
+                elif isinstance(stage, script_submission.SourceActor):
+                    answer = (_request_permit_actor(request, stage.workspace_id) if auth_context.enabled
+                        else CreationExecutionActor(stage.workspace_id, stage.member_id))
+                elif isinstance(stage, script_submission.InputOrigin):
+                    answer = _require_assistant_input_origin(request, stage.source)
+                elif isinstance(stage, script_submission.ReadWorkspace):
+                    answer = current_workspace_id(request)
+                elif isinstance(stage, script_submission.ReadTask):
+                    answer = _creation_task_or_404(stage.workspace_id, stage.task_id)
+                elif isinstance(stage, script_submission.ReadDraft):
+                    answer = request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')
+                elif isinstance(stage, script_submission.ReadConfiguration):
+                    answer = _script_configuration()
+                elif isinstance(stage, script_submission.QueueScript):
+                    runtime = _creation_runtime()
+                    media = runtime.registrations['creation_job'].owner.task_media
+                    job = media.submit(runtime, stage.actor, stage.task_id, stage.operation, stage.arguments, 'graphic_source')
+                    answer = _media_result_receipt(media, job, stage.actor, runtime)
+                elif isinstance(stage, script_submission.WakeContinuations):
+                    answer = _wake_assistant_continuations()
+                else:
+                    raise TypeError(f"Unsupported media-script submission stage: {type(stage).__name__}")
+            except Exception as exc:
+                # Only formerly HTTP-mapped errors participate in the owner's two recorded-error blocks.
+                if isinstance(exc, HTTPException):
+                    failure = script_submission.ScriptSubmissionRejected(exc.status_code, exc.detail)
+                    failure.__cause__ = exc.__cause__
+                else:
+                    failure = exc
+                try:
+                    stage = steps.throw(failure)
+                except StopIteration as result:
+                    return result.value
+            else:
+                try:
+                    stage = steps.send(answer)
+                except StopIteration as result:
+                    return result.value
+    except script_submission.ScriptSubmissionRejected as exc:
+        failure = HTTPException(status_code=exc.status_code, detail=exc.detail)
+        if exc.__cause__ is not None:
+            raise failure from exc.__cause__
+        raise failure from None
+
+
 @app.post("/api/creation-tasks/{task_id}/media-scripts/preview", response_model=TaskMediaJobResponse)
 def preview_media_script(task_id: str, request: Request, payload: MediaScriptPreviewRequest):
-    return _submit_media_script(task_id, request, payload)
+    command = _media_script_submission_command(task_id, payload)
+    result = _run_media_script_submission(request, _media_script_submission_use_case().submit(command))
+    return JSONResponse(status_code=result.status_code, content=result.body)
 
 
 def _media_script_use_case(repository=None, *, task_id=None):
     repo = repository if repository is not None else production_repo
     return MediaScriptPreviewUseCase(repo, artifact_store, settings.effective_temporary_root_path, _media_script_tools(repo, task_id=task_id))
 
-
-def _submit_media_script(task_id, request, payload, *, tool_id=None):
-    operation = 'media_script_tool_preview' if tool_id is not None else 'media_script_preview'
-    edit_request_event = None
-    if payload.request_id is not None:
-        task, member_id = _exact_edit_access(task_id, request, write=True)
-        edit_request_event, fresh = _claim_edit_request(task, member_id, payload.request_id, 'script',
-            {**payload.model_dump(mode='json', exclude_unset=True), **({'tool_id': tool_id} if tool_id is not None else {})})
-        if not fresh:
-            result = _read_edit_request_result(task, edit_request_event)
-            if result is not None:
-                return result
-            raise HTTPException(status_code=409, detail='原预览请求结果尚未确定，请查询原请求，不重复执行')
-    try:
-        script_payload = payload
-        if tool_id is not None:
-            actor = _require_permit_actor(request, current_workspace_id(request))
-            try:
-                script_payload, _ref = _instantiate_script_tool(actor, tool_id, payload)
-            except (KeyError, PermissionError, ScriptToolError) as exc:
-                _script_tool_error(exc)
-        typed_source = _prepare_script_request(task_id, request, script_payload)
-        if typed_source.get('reused_completed_source') is not None:
-            result = JSONResponse(status_code=200, content=typed_source['reused_completed_source'])
-            if edit_request_event:
-                _save_edit_request_result(task, edit_request_event, result)
-            return result
-    except HTTPException as exc:
-        if edit_request_event:
-            _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
-        raise
-    try:
-        if tool_id is not None:
-            actor = _require_permit_actor(request, current_workspace_id(request))
-            try:
-                _expanded, _ref = _instantiate_script_tool(actor, tool_id, payload)
-            except (KeyError, PermissionError, ScriptToolError) as exc:
-                _script_tool_error(exc)
-        try:
-            _script_configuration()
-        except MediaScriptError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except HTTPException as exc:
-        if edit_request_event:
-            _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=exc.status_code, content={'detail': exc.detail}))
-        raise
-    workspace_id = current_workspace_id(request)
-    actor = _require_permit_actor(request, workspace_id)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
-        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
-    values = {'_media_kind': 'media_script', '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'),
-              '_typed_source': typed_source}
-    toolchain, _budget = _script_configuration()
-    values['_script_toolchain'] = {key: str(value) if isinstance(value, Path) else value for key, value in asdict(toolchain).items()}
-    if tool_id is not None:
-        _expanded, values['_recipe_ref'] = _instantiate_script_tool(actor, tool_id, payload)
-    try:
-        if tool_id is not None:
-            values['tool_id'] = tool_id
-        values['payload'] = payload.model_dump(mode='json', exclude_unset=True)
-        runtime = _creation_runtime()
-        media = runtime.registrations['creation_job'].owner.task_media
-        job = media.submit(runtime, actor, task_id, operation, values, 'graphic_source')
-        receipt = _media_result_receipt(media, job, actor, runtime)
-        if edit_request_event:
-            _save_edit_request_result(task, edit_request_event, JSONResponse(status_code=202, content=receipt))
-        receipt['result'] = None
-        return JSONResponse(status_code=202, content=receipt)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _media_script_tools(repository=None, *, task_id=None):
@@ -4350,9 +4343,6 @@ def _script_tool_error(exc):
     status = 403 if isinstance(exc, PermissionError) else 404 if isinstance(exc, KeyError) else 409 if isinstance(exc, (ScriptToolConflict, ScriptToolUnknown)) else 422
     raise HTTPException(status_code=status, detail="配方不存在或不可访问" if isinstance(exc, KeyError) else str(exc)) from exc
 
-
-def _instantiate_script_tool(actor, tool_id, payload):
-    return _media_script_use_case().expand_recipe(actor, tool_id, payload)
 
 
 @app.post("/api/creation-tasks/{task_id}/media-script-tools")
@@ -4442,7 +4432,9 @@ def revoke_media_script_tool(tool_id: str, request: Request, payload: MediaScrip
 
 @app.post("/api/creation-tasks/{task_id}/media-script-tools/{tool_id}/preview", response_model=TaskMediaJobResponse)
 def preview_media_script_tool(task_id: str, tool_id: str, request: Request, payload: MediaScriptToolPreviewRequest):
-    return _submit_media_script(task_id, request, payload, tool_id=tool_id)
+    command = _media_script_submission_command(task_id, payload, tool_id=tool_id)
+    result = _run_media_script_submission(request, _media_script_submission_use_case().submit(command))
+    return JSONResponse(status_code=result.status_code, content=result.body)
 
 
 @app.get("/api/creation-tasks/{task_id}/graphics/sources")

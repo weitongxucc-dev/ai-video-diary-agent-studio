@@ -390,3 +390,33 @@ def test_partial_metadata_recovery_reuses_identical_records_without_rerunning(st
     assert result.json()["status"] == "succeeded", result.text
     assert state.production.execution_records.get_artifact_record(state.workspace_id, definition.id) == definition
     assert len(state.calls) == 1
+
+
+def submission_metadata_context(state, monkeypatch):
+    """Plain source/configuration facts over receipt_state's real isolated owners."""
+    from pathlib import Path
+    from app.media_script import ScriptToolchain, MediaScriptError
+    state.config_calls, state.expansions = [], []
+    state.configuration_error = None
+    root = Path(state.production.database_path).parent
+    state.toolchain = ScriptToolchain(root/'declared-python',root/'declared-stdlib',root/'declared-library',
+        root/'declared-pillow','declared-metadata','d'*64)
+    def configure():
+        state.config_calls.append('configuration')
+        if state.configuration_error is not None:
+            raise MediaScriptError(state.configuration_error)
+        return state.toolchain, SimpleNamespace()
+    monkeypatch.setattr(main,'_script_configuration',configure)
+    expand = main._expand_media_script_submission_recipe
+    def expand_recipe(actor, tool_id, values):
+        state.expansions.append(tool_id)
+        return expand(actor,tool_id,values)
+    monkeypatch.setattr(main,'_expand_media_script_submission_recipe',expand_recipe)
+    def raw_payload():
+        return {'request_id':str(uuid4()),'expected_timeline_version_id':None,'expected_timeline_sequence':0,
+            'script_source':'# declared submission only; never executed', 'parameters':{},'input_refs':[],
+            'requested_outputs':[{'name':'card.png','max_bytes':4096,'width':16,'height':16}]}
+    state.raw_payload = raw_payload
+    state.payload = raw_payload()
+    state.initial_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
+    return state

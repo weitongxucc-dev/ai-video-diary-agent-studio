@@ -241,9 +241,9 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         assert reused["result"]["applied"] is False
         assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
         if len(models) == 2:
-            prepared = main._prepare_script_request(state.task.id, state.request, main.MediaScriptPreviewRequest.model_validate({
+            prepared = main._run_media_script_submission(state.request, main._media_script_submission_use_case().prepare_source(state.task.id, main._media_script_submission_source(main.MediaScriptPreviewRequest.model_validate({
                 **script_state.payload, "request_id": uuid4(), "assistant_turn_id": kwargs["turn_id"],
-                "requested_outputs": [{**script_state.payload["requested_outputs"][0], "name": "new-slot.png"}]}))
+                "requested_outputs": [{**script_state.payload["requested_outputs"][0], "name": "new-slot.png"}]}))))
             assert "reused_completed_source" not in prepared  # A different slot follows normal scheduling.
             proposal = state.raw_post(state.base_url + "/edits/exact/preview", json={
                 "operation_type": "DeleteClip", "clip_id": state.clip.id, "request_id": str(uuid4()),
