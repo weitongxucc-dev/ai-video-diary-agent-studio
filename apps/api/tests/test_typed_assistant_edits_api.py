@@ -37,10 +37,16 @@ def replace_action(state):
 def metadata_http_state(tmp_path, monkeypatch, request):
     from fastapi.testclient import TestClient
     from test_metadata_edit_use_case import metadata_state
-    if "workspace_metadata_state" in request.fixturenames:
+    if {"workspace_metadata_state", "scope_metadata_state"}.intersection(request.fixturenames):
         from test_production_foundation import edit_adoption_no_execution
         forbidden = edit_adoption_no_execution(monkeypatch)
         monkeypatch.setattr(main, "_lipsync_provider", forbidden)
+        if "scope_metadata_state" in request.fixturenames:
+            from app.local_portrait import LocalPortrait
+            from app.subtitle_tracks import OpenAICompatibleSubtitleTranslationProvider, UnavailableSubtitleTranslationProvider
+            monkeypatch.setattr(LocalPortrait, "process", forbidden)
+            monkeypatch.setattr(OpenAICompatibleSubtitleTranslationProvider, "translate", forbidden)
+            monkeypatch.setattr(UnavailableSubtitleTranslationProvider, "translate", forbidden)
     state = metadata_state(tmp_path)
     monkeypatch.setattr(main, "production_repo", state.repo)
     monkeypatch.setattr(main, "artifact_store", state.store)
@@ -57,6 +63,91 @@ def metadata_payload(state):
     return {"operation_type": "ChangeCrop", "clip_id": "clip", "fit_mode": "fit", "crop_x": .3, "crop_y": .7,
         "request_id": str(uuid4()), "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": 1}
 
+
+
+@pytest.fixture
+def scope_metadata_state(metadata_http_state):
+    return metadata_http_state
+
+
+def test_task_turn_scope_uses_current_metadata_refs_and_original_stage_gates(scope_metadata_state):
+    """Declared preexisting rows/path flags, not media generation or output qualification."""
+    from dataclasses import asdict
+    from app.creation.contracts import CoverAsset, NarrationSegment
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.script_windows import write_script_sections
+    from app.graphic_overlays import TextOverlay
+    from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+    state = scope_metadata_state
+    task = replace(state.task, confirmed_script_id="fixed-script", montage_plan_id="montage")
+    # Artifact lookup requires an existing file. Seed opaque bytes only, never a WAV/decoder.
+    narration_reference = state.narration.audio_path
+    assert state.repo.get_narration_artifact("ws", task.narration_cache_key) is None
+    opaque_audio = state.case.output_root / "declared-narration.opaque"
+    opaque_audio.parent.mkdir(parents=True, exist_ok=True)
+    opaque_audio.write_bytes(b"declared metadata existence only; never decode")
+    state.narration = replace(state.narration, audio_path=str(opaque_audio))
+    state.repo.save_narration_artifact(state.narration)
+    assert state.repo.get_narration_artifact("ws", task.narration_cache_key) is not None
+    script = CreationTaskScript("fixed-script", "ws", task.id, "declared-run", "declared-topic", "已确认稿", "zh-CN",
+        [CreationTaskScriptSection("section", "段落", "原配音", "素材画面", []),
+         CreationTaskScriptSection("pending-section", "待配音", "待配音文字", "素材画面", [])],
+        selection_status="confirmed")
+    header = asdict(script)
+    sections = header.pop("sections")
+    header["_sections_storage"] = "rows"
+    with state.repo._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+        conn.execute("INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
+            (script.id, "ws", task.id, script.run_id, json.dumps(header, default=str), script.updated_at.isoformat()))
+        write_script_sections(conn, "ws", script.id, sections)
+    ready = NarrationSegment("fixed-segment", "ws", task.id, script.id, "section", "原配音",
+        narration_reference, 4, 16000, "declared-model", "declared-voice", "v1", "zh", "declared", "ready")
+    pending = replace(ready, id="pending-segment", source_section_id="pending-section", text="待配音文字",
+        audio_reference=None, duration_seconds=None, sample_rate=None, status="pending")
+    state.repo.narration_records.save_narration_segments("ws", task.id, script.id, [ready, pending])
+    montage = creation_task_montage_plan_from_payload(state.repo.get_creation_task_montage_plan("ws", task.id))
+    montage.graphic_overlays = [TextOverlay(id="declared-overlay", text="声明标题", start_seconds=0, end_seconds=4).model_dump()]
+    state.repo.save_creation_task_montage_plan("ws", task.id, montage.id, creation_task_montage_plan_to_payload(montage))
+    unavailable = CoverAsset("unavailable-cover", "ws", task.id, state.base.id,
+        "artifacts/task/declared-output.mp4", 0, "声明的不可用封面", {}, {}, "video_frame", "declared-engine",
+        None, None, "unavailable", failure_reason="未执行", impact="没有生成封面", repair_action="先处理原条件")
+    state.repo.cover_records.create_cover_asset(unavailable)
+    task = state.repo.task_records.get_creation_task("ws", task.id)
+
+    def scope(stage, refs=(), playhead=None):
+        payload = main.CreationTaskAssistantTurnRequest(conversation_id=uuid4(), message="只核当前选区资格",
+            client_request_id=uuid4(), expected_draft_version=0, context_stage=stage,
+            selected_object_refs=list(refs), playhead_ms=playhead)
+        return main._assistant_turn_scope("ws", task, payload)
+
+    # No-selection review keeps the original early return even before a rendered path exists.
+    assert scope("review") == ("review", [])
+    graph = main._effective_audio_timeline(montage)
+    selected = ["clip:clip", "overlay:declared-overlay", "audio:" + graph.tracks[0].id,
+                "audio:" + graph.tracks[0].clips[0].id, "narration:fixed-segment", "clip:clip"]
+    assert scope("montage", selected, 4000) == ("montage", selected)
+    assert scope("narration", ["narration:fixed-segment"], 999999) == ("narration", ["narration:fixed-segment"])
+    with pytest.raises(main.HTTPException) as rejected:
+        scope("narration", ["narration:pending-segment"])
+    assert rejected.value.status_code == 422
+    with pytest.raises(main.HTTPException) as rejected:
+        scope("montage", ["clip:foreign"], 4001)
+    assert rejected.value.status_code == 422 and rejected.value.detail == "播放位置超出当前任务的时间线"
+    with pytest.raises(main.HTTPException) as rejected:
+        scope("montage", ["clip:foreign"], 4000)
+    assert rejected.value.status_code == 422 and rejected.value.detail == "选中对象不属于当前任务或阶段"
+    with pytest.raises(main.HTTPException) as rejected:
+        scope("review", ["clip:clip"])
+    assert rejected.value.status_code == 409 and rejected.value.detail == "当前任务没有可查看的成片"
+    subtitles = ["clip:clip", "subtitle-track:base-zh", "cue:cue", "cover:unavailable-cover"]
+    assert scope("subtitle_cover", subtitles, 4000) == ("subtitle_cover", subtitles)
+    # This policy observes the stored rendered/path flags; it does not qualify an actual output file.
+    montage.status, montage.output_path = "rendered", "artifacts/task/declared-output.mp4"
+    state.repo.save_creation_task_montage_plan("ws", task.id, montage.id, creation_task_montage_plan_to_payload(montage))
+    assert scope("review", selected, 4000) == ("review", selected)
+    assert scope("subtitle_cover", ["cover:" + task.id]) == ("subtitle_cover", ["cover:" + task.id])
 
 def test_execution_capability_read_is_authorized_and_does_not_start_runtime(metadata_http_state, monkeypatch):
     state = metadata_http_state

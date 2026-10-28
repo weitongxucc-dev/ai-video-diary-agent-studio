@@ -254,7 +254,12 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     ]
 
 
-def test_topic_scope_is_current_task_only():
+def test_topic_scope_is_current_task_only(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace())
+    monkeypatch.setattr(main_module, "_script_context_use_case", forbidden)
+    monkeypatch.setattr(main_module, "_metadata_edit_use_case", forbidden)
     topic_task = SimpleNamespace(id="task-one", stage="topic")
     request = main_module.CreationTaskAssistantTurnRequest(
         conversation_id=uuid4(), message="请生成选题", client_request_id=uuid4(), expected_draft_version=0,
@@ -264,6 +269,10 @@ def test_topic_scope_is_current_task_only():
 
 
 def test_confirmed_task_without_production_artifacts_can_use_general_assistant_scope(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main_module, "_script_context_use_case", forbidden)
+    monkeypatch.setattr(main_module, "_metadata_edit_use_case", forbidden)
     task = SimpleNamespace(
         id="task-one", stage="narration", confirmed_script_id="script-confirmed",
         narration_cache_key=None, current_timeline_version_id=None, montage_plan_id=None,

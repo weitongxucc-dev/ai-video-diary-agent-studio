@@ -4,6 +4,7 @@ from app.creation.media_result_use_case import MediaResultUseCase, MediaResultRe
 from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
 from app.assistant import home_plan_turn_use_case as home_plan
+from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
     StoryboardResultRejected, UnknownStoryboardReference)
 from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
@@ -6636,99 +6637,27 @@ def _assistant_stream_response(
     })
 
 
+def _task_turn_scope_use_case():
+    return TaskTurnScopeUseCase(
+        read_script_inputs=lambda ws, task_id: _script_context_use_case().read_inputs(ws, task_id),
+        read_narration=lambda ws, key: production_repo.get_narration_artifact(ws, key),
+        read_segments=lambda ws, task_id, script_id: production_repo.narration_records.list_narration_segments(ws, task_id, script_id),
+        read_montage=lambda ws, task_id: production_repo.get_creation_task_montage_plan(ws, task_id),
+        read_version=lambda ws, version_id: production_repo.timeline_records.get_timeline_version(ws, version_id),
+        read_subtitles=lambda ws, task, **values: _metadata_edit_use_case().current_subtitle_tracks(ws, task, **values),
+        read_covers=lambda ws, task_id, **values: production_repo.cover_records.list_cover_assets(ws, task_id, **values),
+    )
+
+
 def _assistant_turn_scope(
     workspace_id: str, task: CreationTask, payload: CreationTaskAssistantTurnRequest,
 ) -> tuple[str, list[str]]:
-    """Authorize the requested view and selection from persisted task objects before Pi runs."""
-    stage = payload.context_stage
-    if task.stage == "topic":
-        if stage != "topic":
-            raise HTTPException(status_code=409, detail="当前任务只能在选题阶段使用对话")
-        if payload.selected_object_refs or payload.playhead_ms is not None:
-            raise HTTPException(status_code=422, detail="选题对话不能选择剪辑对象")
-        return "topic", []
-    if task.stage == "script" or task.confirmed_script_id is None or stage == "script" and task.can_revise_script:
-        if stage != "script":
-            raise HTTPException(status_code=409, detail="当前任务尚未完成文案确认，不能使用剪辑对话")
-        try:
-            _script_context_use_case().read_inputs(workspace_id, task.id)
-        except ScriptDraftRejected as exc:
-            raise HTTPException(exc.status_code, exc.detail) from exc
-        if payload.selected_object_refs or payload.playhead_ms is not None:
-            raise HTTPException(status_code=422, detail="文案对话不能选择剪辑对象")
-        return "script", []
-    if stage in {"topic", "script"} or task.stage not in {"narration", "montage", "review"}:
-        raise HTTPException(status_code=409, detail="当前任务不能在所选阶段使用对话")
-    if task.stage == "narration" and stage != "narration":
-        raise HTTPException(status_code=409, detail="当前任务尚未生成可修改的故事板")
-
-    # The task-scoped conversation can read confirmed-task facts and invoke
-    # the explicit execution actions before any narration artifact exists.
-    # Object edits still pass through the strict selected-ref checks below;
-    # preview_edit's existing endpoint remains the authority for edit scope.
-    if not payload.selected_object_refs and payload.playhead_ms is None:
-        return stage, []
-
-    narration = (production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
-                 if task.narration_cache_key else None)
-    if stage == "narration":
-        if narration is None or narration.task_id != task.id or narration.script_id != task.confirmed_script_id:
-            raise HTTPException(status_code=409, detail="当前任务没有可修改的配音")
-        refs = {f"narration:{segment.id}" for segment in production_repo.narration_records.list_narration_segments(
-            workspace_id, task.id, task.confirmed_script_id,
-        ) if segment.status == "ready"}
-    else:
-        try:
-            montage = creation_task_montage_plan_from_payload(
-                production_repo.get_creation_task_montage_plan(workspace_id, task.id)
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=409, detail="当前任务没有可修改的故事板") from exc
-        if (montage.task_id != task.id or montage.script_id != task.confirmed_script_id
-                or task.montage_plan_id != montage.id):
-            raise HTTPException(status_code=409, detail="当前故事板不属于已确认文案")
-        version = None
-        if task.current_timeline_version_id:
-            try:
-                version = production_repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
-            except KeyError as exc:
-                raise HTTPException(status_code=409, detail="当前任务的时间线版本不可用") from exc
-            if version.task_id != task.id:
-                raise HTTPException(status_code=409, detail="当前时间线不属于此任务")
-        if stage == "review" and (montage.status != "rendered" or not montage.output_path):
-            raise HTTPException(status_code=409, detail="当前任务没有可查看的成片")
-        refs = {f"clip:{clip.id}" for clip in montage.clips}
-        if stage in {"montage", "review"}:
-            refs.update(f"overlay:{overlay['id']}" for overlay in montage.graphic_overlays)
-            audio = _effective_audio_timeline(montage)
-            refs.update(f"audio:{track.id}" for track in audio.tracks)
-            refs.update(f"audio:{clip.id}" for track in audio.tracks for clip in track.clips)
-            if narration is not None and narration.task_id == task.id and narration.script_id == task.confirmed_script_id:
-                refs.update(f"narration:{segment.id}" for segment in production_repo.narration_records.list_narration_segments(
-                    workspace_id, task.id, task.confirmed_script_id,
-                ) if segment.status == "ready")
-        else:
-            if version is None:
-                raise HTTPException(status_code=409, detail="当前任务没有可修改的字幕时间线")
-            tracks = [track for track in _current_subtitle_tracks(
-                workspace_id, task, current_version=version, montage=montage,
-            ) if track.status == "valid" and track.task_id == task.id
-                      and track.timeline_version_id == version.id]
-            if not tracks:
-                raise HTTPException(status_code=409, detail="当前任务没有可修改的字幕")
-            refs.update(f"subtitle-track:{track.id}" for track in tracks)
-            refs.update(f"cue:{cue.id}" for track in tracks for cue in track.cues)
-            covers = production_repo.cover_records.list_cover_assets(
-                workspace_id, task.id, timeline_version_id=version.id,
-            )
-            refs.update(f"cover:{cover.id}" for cover in covers)
-            if montage.status == "rendered" and montage.output_path:
-                refs.add(f"cover:{task.id}")
-        if payload.playhead_ms is not None and payload.playhead_ms > round(montage.duration_seconds * 1000):
-            raise HTTPException(status_code=422, detail="播放位置超出当前任务的时间线")
-    if any(ref not in refs for ref in payload.selected_object_refs):
-        raise HTTPException(status_code=422, detail="选中对象不属于当前任务或阶段")
-    return stage, list(payload.selected_object_refs)
+    try:
+        return _task_turn_scope_use_case().resolve(workspace_id, task, TaskTurnSelection(
+            context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs,
+            playhead_ms=payload.playhead_ms))
+    except TaskTurnScopeRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.post(
