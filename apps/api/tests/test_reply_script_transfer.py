@@ -169,7 +169,7 @@ def transfer(repo, plan, task, **overrides):
         "verified_owner_user_id": OWNER,
     }
     values.update(overrides)
-    return repo.transfer_completed_assistant_reply_to_script(**values)
+    return repo.script_records.transfer_completed_assistant_reply_to_script(**values)
 
 
 def test_plan_confirmation_from_reply_is_atomic_idempotent_and_bound(tmp_path: Path) -> None:

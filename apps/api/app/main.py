@@ -6341,7 +6341,7 @@ def transfer_assistant_reply_to_script(
         content=reply_text, visual_prompt="", evidence_reference_ids=[],
     )
     try:
-        task, _run, _script = production_repo.transfer_completed_assistant_reply_to_script(
+        task, _run, _script = production_repo.script_records.transfer_completed_assistant_reply_to_script(
             workspace_id, task_id, request_id=str(payload.request_id),
             reply_reference=reference, reply_text=reply_text,
             plan_conversion_request_id=(str(payload.plan_conversion_request_id) if payload.plan_conversion_request_id else None),

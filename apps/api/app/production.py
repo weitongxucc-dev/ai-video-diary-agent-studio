@@ -5266,16 +5266,6 @@ class ProductionRepository:
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task
 
-    def transfer_completed_assistant_reply_to_script(self, workspace_id: str, task_id: str, *, request_id: str, reply_reference: dict[str, str], plan_conversion_request_id: str | None=None, reply_text: str, expected_plan_id: str, expected_plan_updated_at: datetime | str, expected_topic_id: str, expected_task_updated_at: datetime | str, input_references: list[dict[str, object]], script_id: str, run_id: str, title: str, language: Literal['zh-CN', 'en-US', 'zh-CN/en-US'], sections: list[_CreationTaskScriptSection], replace_existing_script_id: str | None=None, expected_script_updated_at: datetime | str | None=None, verified_owner_user_id: str | None=None) -> tuple[_CreationTask, _ScriptGenerationRun, _CreationTaskScript]:
-        return self.script_records.transfer_completed_assistant_reply_to_script(workspace_id, task_id, request_id=request_id, reply_reference=reply_reference, plan_conversion_request_id=plan_conversion_request_id, reply_text=reply_text, expected_plan_id=expected_plan_id, expected_plan_updated_at=expected_plan_updated_at, expected_topic_id=expected_topic_id, expected_task_updated_at=expected_task_updated_at, input_references=input_references, script_id=script_id, run_id=run_id, title=title, language=language, sections=sections, replace_existing_script_id=replace_existing_script_id, expected_script_updated_at=expected_script_updated_at, verified_owner_user_id=verified_owner_user_id)
-
-    def _require_assistant_reply_plan_event(self, conn: sqlite3.Connection, *, workspace_id: str, task_id: str, plan_id: str, request_id: str, reply_reference: dict[str, str], reply_owner_user_id: str | None) -> None:
-        return self.script_records._require_assistant_reply_plan_event(conn, workspace_id=workspace_id, task_id=task_id, plan_id=plan_id, request_id=request_id, reply_reference=reply_reference, reply_owner_user_id=reply_owner_user_id)
-
-    @staticmethod
-    def _validate_assistant_reply_inputs(plan: _CreationPlan, input_references: dict[str, dict[str, object]]):
-        return ScriptRecordStore._validate_assistant_reply_inputs(plan, input_references)
-
     def record_assistant_script_save(self, script, source, request_digest, *, connection):
         return self.script_records.record_assistant_script_save(script, source, request_digest, connection=connection)
 

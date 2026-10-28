@@ -291,11 +291,11 @@ def test_reply_transfer_after_adoption_keeps_historical_script_immutable(state, 
     historical = rows(state, ('creation_task_scripts', 'script_generation_runs'))
     if replace:
         with pytest.raises(ValueError, match='旧稿仅保留为历史'):
-            state.repository.transfer_completed_assistant_reply_to_script('local', 'task',
+            state.repository.script_records.transfer_completed_assistant_reply_to_script('local', 'task',
                 **kwargs, replace_existing_script_id=old.id, expected_script_updated_at=old.updated_at)
         assert rows(state, historical) == historical
     else:
-        _, run, script = state.repository.transfer_completed_assistant_reply_to_script('local', 'task', **kwargs)
+        _, run, script = state.repository.script_records.transfer_completed_assistant_reply_to_script('local', 'task', **kwargs)
         assert script.id != old.id and run.input_references == refs
         assert len(state.repository.script_records.list_creation_task_scripts('local', 'task')) == 2
     assert state.repository.script_records.get_creation_task_script('local', old.id) == old
