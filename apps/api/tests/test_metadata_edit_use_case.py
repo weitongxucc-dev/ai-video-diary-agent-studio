@@ -235,7 +235,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
             ('fixed-script','ws',s.task.id,'fixture-run',json.dumps(script),now.isoformat()))
     s.repo.timeline_records.create_timeline_version(s.base)
     s.repo.subtitle_records.create_subtitle_track(replace(s.track,id='complete-zh',timeline_version_id=s.base.id))
-    s.repo.save_narration_segments('ws',s.task.id,'fixed-script',[segment])
+    s.repo.narration_records.save_narration_segments('ws',s.task.id,'fixed-script',[segment])
     path=tmp_path/'library'/'inserted.mp4';path.write_bytes(b'opaque inserted source')
     info=path.stat()
     asset=replace(s.asset,id='inserted-material',path=str(path),file_name=path.name,size_bytes=info.st_size,

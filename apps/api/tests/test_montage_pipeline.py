@@ -3026,7 +3026,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 8
     assert any(operation.id == response.json()["operation"]["id"] and operation.operation_type == "UpdateSubtitleCue" for operation in production.edit_records.list_edit_operations(workspace_id, task.id))
     reloaded = ProductionRepository(production.database_path, production.video_library_path)
-    assert reloaded.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
+    assert reloaded.narration_records.list_narration_segments(workspace_id, task.id, script.id)[0].audio_reference == segment.audio_reference
 
     undo = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).post(
         f"/api/creation-tasks/{task.id}/timeline/undo",
@@ -3915,7 +3915,7 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
         [SimpleNamespace(id=segment_id, duration_seconds=6, status="ready")], "narration://artifact/diagnostic-new")
     # Direct diagnostic snapshot only: synthetic duration facts exercise persisted history, not licensed generation.
     regenerated = [replace(segment, duration_seconds=6, updated_at=main_module.utc_now())
-        for segment in state.production.list_narration_segments(
+        for segment in state.production.narration_records.list_narration_segments(
             state.workspace_id, state.task.id, state.task.confirmed_script_id)]
     proposal = state.production.edit_records.get_edit_proposal(state.workspace_id, preview.json()["proposal"]["id"])
     current_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
@@ -3931,7 +3931,7 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
     assert after[0]["status"] == "unavailable"
     assert after[0]["artifact_ref"] is None and after[0]["transform_id"] is None
     assert after[0]["failure_reason"] and after[0]["impact"] and after[0]["repair_action"]
-    assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
+    assert state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
     restored = state.client.get(base).json()["subtitle_tracks"]
     assert restored[0]["cues"][0]["end_seconds"] == 4
@@ -3945,7 +3945,7 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
     assert redone[0]["status"] == "unavailable"
     assert redone[0]["artifact_ref"] is None and redone[0]["transform_id"] is None
     assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
-    assert state.production.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4
+    assert state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4
 
 @pytest.mark.parametrize("action,expected", [("DeleteClip", 4), ("DuplicateClip", 12)])
 def test_linked_clip_edits_preview_audio_and_undo(person_render_edit_state, action, expected):
@@ -4860,13 +4860,13 @@ def test_person_preview_rejects_partial_or_negated_request(person_render_edit_st
 
 def test_person_generation_reads_narration_language(permitted_person_edit_state, monkeypatch):
     state = permitted_person_edit_state
-    segment = state.production.get_narration_segment(state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id)
+    segment = state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id)
     voice = state.production.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id, segment.voice_version)
     state.production.save_versioned_voice_profile(
         replace(voice, version='v2', language='en'),
         verified_owner_user_id=state.member.member_id,
     )
-    state.production.save_narration_segments(state.workspace_id, state.task.id, segment.script_id,
+    state.production.narration_records.save_narration_segments(state.workspace_id, state.task.id, segment.script_id,
                                             [replace(segment, voice_version='v2', language='en')])
     plan = state.production.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     plan.selected_voice = replace(plan.selected_voice, version='v2', language='en')
@@ -4885,8 +4885,8 @@ def test_person_generation_reads_narration_language(permitted_person_edit_state,
 
 def test_person_preview_rejects_unsupported_narration_language(person_render_edit_state, monkeypatch):
     state = person_render_edit_state
-    original_get = state.production.get_narration_segment
-    monkeypatch.setattr(state.production, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
+    original_get = state.production.narration_records.get_narration_segment
+    monkeypatch.setattr(state.production.narration_records, 'get_narration_segment', lambda *args: replace(original_get(*args), language='en'))
     response = state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview', json={
         'raw_command': '这里只重做口型', 'context_stage': 'review',
         'selected_object_refs': ['clip:clip-person-target'],
@@ -4917,10 +4917,10 @@ def test_person_reuse_requires_current_audio_lineage(permitted_person_edit_state
     assert preview.status_code == 200, preview.text
     proposal = preview.json()['proposal']
     assert proposal['operation']['payload']['reuse_person_render_id'] == generated.id
-    original_get = state.production.get_narration_segment
+    original_get = state.production.narration_records.get_narration_segment
     before = state.client.get(base).json()
     with monkeypatch.context() as scoped:
-        scoped.setattr(state.production, 'get_narration_segment', lambda *args:
+        scoped.setattr(state.production.narration_records, 'get_narration_segment', lambda *args:
                        replace(original_get(*args), audio_reference='narration://artifact/replacement'))
         changed = state.client.post(base + '/edits/preview', json=command)
         assert changed.status_code == 200, changed.text
@@ -4976,7 +4976,7 @@ def test_person_cache_rejects_same_path_mutation(permitted_person_edit_state, ro
 
 def test_person_lineage_requires_matching_language_and_success(person_render_edit_state):
     state = person_render_edit_state
-    segment = state.production.get_narration_segment(state.workspace_id, state.task.id,
+    segment = state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id,
                                                       state.montage.cues[0].narration_segment_id)
     render = replace(state.old_render, artifact_ref='artifacts/test/person.mp4')
     transform = SimpleNamespace(transform_type='person_render', status='succeeded',
@@ -5566,7 +5566,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     base = f"/api/creation-tasks/{state.task.id}"
     # Seal this fixture's existing person clip with the current, authorized
     # lineage path; no portrait renderer or media decoding is invoked.
-    person_segment = state.production.get_narration_segment(
+    person_segment = state.production.narration_records.get_narration_segment(
         state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id,
     )
     person_profile = state.production.get_person_profile(
@@ -5779,7 +5779,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
             text="保留当前字幕", start_seconds=0, end_seconds=4)],
         generation_method="timeline", model_id=None, artifact_ref=None, transform_id=None, status="unavailable",
         failure_reason="合成字幕尚无产物", impact="保留字幕文字与时间", repair_action="后续核验字幕产物"))
-    narration_before = state.production.list_narration_segments(state.workspace_id, state.task.id)
+    narration_before = state.production.narration_records.list_narration_segments(state.workspace_id, state.task.id)
     queued, proposal_id = _queued_person_edit(state, exact=exact, change=change)
     assert len(_person_edit_versions(state)) == 1
     assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
@@ -5795,7 +5795,7 @@ def test_public_person_edit_queue_grant_commits_only_target(permitted_person_edi
     assert asdict(plan.clips[1]) == asdict(state.montage.clips[1])
     assert [asdict(cue) for cue in plan.cues] == [asdict(cue) for cue in state.montage.cues]
     assert plan.narration_audio_path == state.montage.narration_audio_path
-    assert state.production.list_narration_segments(state.workspace_id, state.task.id) == narration_before
+    assert state.production.narration_records.list_narration_segments(state.workspace_id, state.task.id) == narration_before
     tracks = state.production.subtitle_records.list_subtitle_tracks(state.workspace_id, state.task.id,
         timeline_version_id=state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id)
     assert len(tracks) == 1

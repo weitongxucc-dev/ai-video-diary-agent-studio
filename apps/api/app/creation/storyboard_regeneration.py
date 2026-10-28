@@ -115,7 +115,7 @@ def narration_signature(repository, task, *, connection=None) -> str:
         raise ValueError("故事板必须复用当前文案的真实配音")
     references = dict.fromkeys([repository.narration_artifact_reference(artifact.cache_key)])
     count = 0
-    for item in repository.iter_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=connection):
+    for item in repository.narration_records.iter_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=connection):
         if item.status != 'ready' or not item.audio_reference or not item.duration_seconds:
             raise ValueError('当前文案缺少可用的真实分段配音')
         references[item.audio_reference] = None
@@ -132,7 +132,7 @@ def narration_signature(repository, task, *, connection=None) -> str:
     checksum = hashlib.sha256()
     encode = lambda value: json.dumps(value, sort_keys=True, default=str).encode()
     checksum.update(b'[' + encode(asdict(artifact)) + b', [')
-    for index, item in enumerate(repository.iter_narration_segments(task.workspace_id, task.id,
+    for index, item in enumerate(repository.narration_records.iter_narration_segments(task.workspace_id, task.id,
             task.confirmed_script_id, connection=connection)):
         if index:
             checksum.update(b', ')

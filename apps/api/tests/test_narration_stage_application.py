@@ -87,13 +87,13 @@ def narration_preparation(tmp_path):
         effective_creation_script=lambda *_:script,
         resolve_creation_task_narration_inputs=lambda **_:inputs,
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
-        get_narration_segment=lambda _ws,_task,identity:segments[identity],
-        list_narration_segments=lambda *_:list(reversed(list(segments.values()))),
+        narration_records=SimpleNamespace(get_narration_segment=lambda _ws,_task,identity:segments[identity], list_narration_segments=lambda *_:list(reversed(list(segments.values()))), save_narration_segments=no_write),
+
         narration_artifact_reference=lambda key:'narration://artifact/'+key,
         resolve_authorized_narration_audio_reference=lambda _ws,ref:Path(records[ref.rsplit('/',1)[1]].audio_path),
         get_narration_artifact=lambda _ws,key:records.get(key),
         start_creation_task_narration=no_write,save_narration_artifact=no_write,
-        save_narration_segments=no_write,complete_creation_task_narration=no_write,fail_creation_task_stage=no_write)
+        complete_creation_task_narration=no_write,fail_creation_task_stage=no_write)
     def artifact(key):
         path=tmp_path/(key+'.wav');path.write_bytes(b'controlled-output')
         return NarrationArtifact(str(path),1.,24000,'fixture-model',task_id=task.id,script_id=script.id,
@@ -412,7 +412,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
         time.sleep(.1)
     task=repo.task_records.get_creation_task('local',s.task_id)
     assert task.stage=='montage' and task.narration_cache_key
-    sections=repo.list_narration_segments('local',s.task_id,s.script_id)
+    sections=repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)
     assert len(sections)==2 and all(item.status=='ready' for item in sections)
     combined=repo.get_narration_artifact('local',task.narration_cache_key)
     initial_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in sections}
@@ -450,7 +450,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     assert s.runtime.run_once(),s.runtime.last_error
     job=repo.job_records.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
     current=repo.task_records.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
-    updated=repo.list_narration_segments('local',s.task_id,s.script_id)
+    updated=repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)
     changed=next(item for item in updated if item.id==target.id)
     assert changed.audio_reference!=target.audio_reference
     assert next(item for item in updated if item.id==untouched.id)==untouched

@@ -355,7 +355,7 @@ def presenter_stage_facts(repository, task, script, plan, budget, models, *, con
     for index, (segment_id, request) in enumerate(inputs):
         if index:
             checksum.update(b', ')
-        segment = repository.get_narration_segment(task.workspace_id, task.id, segment_id, connection=connection)
+        segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id, segment_id, connection=connection)
         checksum.update(encode([asdict(segment), asdict(request)]))
     checksum.update(b'], "resources": ' + encode(resources) + b'}')
     return f"person_render:{checksum.hexdigest()}", resources
@@ -431,7 +431,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
         raise ValueError("配音编辑提案或时间线已变化，请重新预览")
     script, script_fields = repository.script_records.read_execution_script_metadata(
         connection, task.workspace_id, task.confirmed_script_id)
-    segment = repository.get_narration_segment(task.workspace_id, task.id,
+    segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id,
         payload["narration_segment_id"], connection=connection)
     section = next(item for item in repository.script_records.iter_execution_script_sections(
         connection, task.workspace_id, script.id) if item.id == segment.source_section_id)
@@ -463,7 +463,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
     source_audio = []
     segment_artifacts = []
     total_duration = 0.0
-    for item in repository.iter_narration_segments(task.workspace_id, task.id, script.id, connection=connection):
+    for item in repository.narration_records.iter_narration_segments(task.workspace_id, task.id, script.id, connection=connection):
         if (item.status != "ready" or item.script_id != script.id or not item.duration_seconds
                 or item.duration_seconds <= 0 or not item.audio_reference):
             raise ValueError("合并配音存在不可用片段，未安排局部重做")
@@ -505,7 +505,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
     from app.creation.narration_pcm import narration_edit_manifest_digest
     digest = narration_edit_manifest_digest(manifest, script_fields,
         repository.script_records.iter_execution_script_sections(connection, task.workspace_id, script.id),
-        repository.iter_narration_segments(task.workspace_id, task.id, script.id, connection=connection))
+        repository.narration_records.iter_narration_segments(task.workspace_id, task.id, script.id, connection=connection))
     return f"narration_edit:{digest}", resources
 
 
@@ -522,7 +522,7 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
     montage = creation_task_montage_plan_from_payload(repository.get_creation_task_montage_plan(task.workspace_id, task.id))
     clip = next(item for item in montage.clips if item.id == payload["clip_id"])
     cue = next(item for item in montage.cues if item.id == payload["cue_id"])
-    segment = repository.get_narration_segment(task.workspace_id, task.id, payload["narration_segment_id"])
+    segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id, payload["narration_segment_id"])
     if (clip.asset_id != payload["expected_asset_id"] or clip.segment_id != payload["expected_segment_id"]
             or clip.person_render_id != payload["expected_person_render_id"]
             or cue.narration_segment_id != segment.id or segment.script_id != task.confirmed_script_id
@@ -670,7 +670,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             if cue is None or cue.narration_segment_id not in person_inputs:
                 raise ValueError("人物镜头不属于当前配音与露脸选择")
             item = person_inputs[cue.narration_segment_id]
-            segment = repository.get_narration_segment(task.workspace_id, task.id, cue.narration_segment_id, connection=conn)
+            segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id, cue.narration_segment_id, connection=conn)
             render = current_presenter_render(repository, task, segment, item, resolve_presenter_output)
             if (render is None or render.id != clip.person_render_id
                     or clip.asset_id != f"person:{render.id}" or clip.source_path != f"person-render://{render.id}"
@@ -1211,7 +1211,7 @@ class CreationJobOwnerVerifier:
                 candidate = self.repository.narration_edit_generated(job.workspace_id, job.id, connection=conn)
                 if candidate is not None:
                     generated = self.repository.get_narration_artifact(job.workspace_id, candidate['cache_key'], connection=conn)
-                    section_id = self.repository.get_narration_segment(job.workspace_id, job.task_id,
+                    section_id = self.repository.narration_records.get_narration_segment(job.workspace_id, job.task_id,
                         candidate['segment_id'], connection=conn).source_section_id
             for _, segment in self.repository.iter_creation_narration_sections(
                     task, snapshot.script_header, connection=conn):
@@ -1307,7 +1307,7 @@ class CreationJobOwnerVerifier:
             raise RecoveryBlocked('原配音业务依赖已变化')
         if job.kind == KIND:
             if (task.narration_cache_key is not None
-                    or self.repository.list_narration_segments(task.workspace_id, task.id, script.id, connection=conn)):
+                    or self.repository.narration_records.list_narration_segments(task.workspace_id, task.id, script.id, connection=conn)):
                 raise RecoveryBlocked('原制作已经产生配音，不能按未执行恢复')
             if old.unit_key.count(':') == 1:
                 original_key, original_resources = creation_stage_facts(self.repository, task, script, plan, 'narration',

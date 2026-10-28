@@ -212,7 +212,7 @@ def person_application(tmp_path,monkeypatch):
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None,reason='native media tools unavailable')
 def test_full_person_segment_then_selected_regeneration_preserves_early_child(person_application):
     s=person_application;repo=s.repo;url='/api/creation-tasks/'+s.task_id
-    narration_before=[asdict(item) for item in repo.list_narration_segments('local',s.task_id,s.script_id)]
+    narration_before=[asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]
     narration_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in s.sections}
     request={'script_id':s.script_id,'input_digest':revision_digest(repo.get_creation_task_script('local',s.script_id),s.plan),'requirements_confirmed':True}
     first=s.client.post(url+'/execution/start',json=request);assert first.status_code==202,first.text
@@ -264,7 +264,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     changed=repo.get_creation_task_montage_plan('local',s.task_id)
     assert changed['clips'][0]['person_render_id']!=clips[0].person_render_id
     assert changed['clips'][1]==payload['clips'][1] and changed['cues']==payload['cues']
-    assert [asdict(item) for item in repo.list_narration_segments('local',s.task_id,s.script_id)]==narration_before
+    assert [asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]==narration_before
     assert all(_file_fact(fact['path'])==fact for fact in [*initial_files.values(),*narration_files.values()])
     assert _file_fact(rendered_file['path'])==rendered_file
     final_renders=repo.list_person_renders('local',s.task_id);assert len(final_renders)==2

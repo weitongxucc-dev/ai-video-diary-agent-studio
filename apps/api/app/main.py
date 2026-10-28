@@ -3318,7 +3318,7 @@ def _creation_task_narration_response(
 ) -> CreationTaskNarrationResponse:
     if artifact.task_id != task.id:
         raise ValueError("配音产物与当前创作任务不一致")
-    segments = production_repo.list_narration_segments(
+    segments = production_repo.narration_records.list_narration_segments(
         task.workspace_id, task.id, artifact.script_id
     )
     return CreationTaskNarrationResponse.model_validate(
@@ -6677,7 +6677,7 @@ def _assistant_turn_scope(
     if stage == "narration":
         if narration is None or narration.task_id != task.id or narration.script_id != task.confirmed_script_id:
             raise HTTPException(status_code=409, detail="当前任务没有可修改的配音")
-        refs = {f"narration:{segment.id}" for segment in production_repo.list_narration_segments(
+        refs = {f"narration:{segment.id}" for segment in production_repo.narration_records.list_narration_segments(
             workspace_id, task.id, task.confirmed_script_id,
         ) if segment.status == "ready"}
     else:
@@ -6707,7 +6707,7 @@ def _assistant_turn_scope(
             refs.update(f"audio:{track.id}" for track in audio.tracks)
             refs.update(f"audio:{clip.id}" for track in audio.tracks for clip in track.clips)
             if narration is not None and narration.task_id == task.id and narration.script_id == task.confirmed_script_id:
-                refs.update(f"narration:{segment.id}" for segment in production_repo.list_narration_segments(
+                refs.update(f"narration:{segment.id}" for segment in production_repo.narration_records.list_narration_segments(
                     workspace_id, task.id, task.confirmed_script_id,
                 ) if segment.status == "ready")
         else:
@@ -7526,7 +7526,7 @@ def get_creation_task_narration_segment_audio(
     workspace_id = current_workspace_id(request)
     _readable_creation_task(request, task_id)
     try:
-        segment = production_repo.get_narration_segment(
+        segment = production_repo.narration_records.get_narration_segment(
             workspace_id, task_id, segment_id
         )
     except KeyError as exc:

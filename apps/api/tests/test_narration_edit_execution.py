@@ -228,7 +228,7 @@ def fixture(tmp_path):
         )
         for i in (1, 2)
     ]
-    repo.save_narration_segments("local", task.id, "script", segments)
+    repo.narration_records.save_narration_segments("local", task.id, "script", segments)
     montage = {
         "id": "montage",
         "workspace_id": "local",
@@ -443,7 +443,7 @@ def unchanged(f):
         f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
         == f.base.id
     )
-    assert f.repo.list_narration_segments("local", f.task.id, "script") == f.segments
+    assert f.repo.narration_records.list_narration_segments("local", f.task.id, "script") == f.segments
     assert f.repo.edit_records.get_edit_proposal("local", f.proposal.id).status == "proposed"
 
 
@@ -462,7 +462,7 @@ def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
     )
     assert f.repo.job_records.get_job_run("local", f.job.id).status == "succeeded"
     assert (
-        f.repo.list_narration_segments("local", f.task.id, "script")[1] == f.segments[1]
+        f.repo.narration_records.list_narration_segments("local", f.task.id, "script")[1] == f.segments[1]
     )
     changed = f.repo.get_creation_task_montage_plan("local", f.task.id)
     assert (
@@ -505,7 +505,7 @@ def test_waiting_stale_or_unauthorized_never_calls_provider(fixture, mutation):
                 (json.dumps(asdict(task), default=str), task.id),
             )
     elif mutation == "audio":
-        f.repo.save_narration_segments(
+        f.repo.narration_records.save_narration_segments(
             "local",
             f.task.id,
             "script",
@@ -579,7 +579,7 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
             context.check()
         commit = f.action(ws, task_id, context, proposal_id)
         if kind == "stale_after_generation":
-            f.repo.save_narration_segments(
+            f.repo.narration_records.save_narration_segments(
                 "local",
                 f.task.id,
                 "script",
@@ -610,7 +610,7 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
     )
     if kind != "stale_after_generation":
         assert (
-            f.repo.list_narration_segments("local", f.task.id, "script") == f.segments
+            f.repo.narration_records.list_narration_segments("local", f.task.id, "script") == f.segments
         )
 
 
@@ -706,7 +706,7 @@ def test_combination_rejects_other_segment_artifact_scope_before_dispatch(fixtur
         task_id="other-task" if scope == "other_task" else state.task.id,
         script_id="old-script" if scope == "old_script" else "script"))
     state.segments = [state.segments[0], replace(state.segments[1], audio_reference="narration://artifact/other-source")]
-    state.repo.save_narration_segments("local", state.task.id, "script", state.segments)
+    state.repo.narration_records.save_narration_segments("local", state.task.id, "script", state.segments)
     with pytest.raises(ValueError, match="合并配音产物不属于当前任务及文案版本"):
         submit(state)
     assert not state.calls
@@ -721,7 +721,7 @@ def test_combination_artifact_metadata_change_while_waiting_blocks_dispatch(fixt
     other = replace(record, id="other-source", cache_key="other-source")
     state.repo.save_narration_artifact(other)
     state.segments = [state.segments[0], replace(state.segments[1], audio_reference="narration://artifact/other-source")]
-    state.repo.save_narration_segments("local", state.task.id, "script", state.segments)
+    state.repo.narration_records.save_narration_segments("local", state.task.id, "script", state.segments)
     request = submit(state)
     state.repo.save_narration_artifact(replace(other, sample_rate=16000))
     state.resources.allowed = True

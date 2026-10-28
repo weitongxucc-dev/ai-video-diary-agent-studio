@@ -204,7 +204,7 @@ def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inpu
             states[window.section_id] = {'narration_reference': segment.audio_reference,
                 'montage': montage.creation_task_montage_plan_to_payload(local)}
         repository = SimpleNamespace(effective_creation_script=lambda *args: replace(task_inputs['script'], sections=sections),
-            list_narration_segments=lambda *args: audio, plan_records=SimpleNamespace(get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30)),
+            narration_records=SimpleNamespace(list_narration_segments=lambda *args: audio), plan_records=SimpleNamespace(get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30)),
             stage_segment_state=lambda ws, task, section: states[section])
         task = SimpleNamespace(workspace_id='workspace', id='task', plan_id='plan')
         plan = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=repository), task, plan)

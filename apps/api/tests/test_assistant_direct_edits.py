@@ -113,7 +113,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     state.repo.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
     segment=NarrationSegment("fixed-segment","ws",task.id,script.id,"section","原字幕",state.narration.audio_path,4,16000,
         "fixture-input","fixture-voice","1","zh","fixture-rules","ready")
-    state.repo.save_narration_segments("ws",task.id,script.id,[segment])
+    state.repo.narration_records.save_narration_segments("ws",task.id,script.id,[segment])
     state.base=replace(state.base,id="confirmed-input",parent_version_id=state.base.id,sequence=2,
         snapshot={**state.base.snapshot,"subtitle_track_ids":["confirmed-zh"],
                   "narration_segments":[json.loads(json.dumps(asdict(segment),default=str))]})

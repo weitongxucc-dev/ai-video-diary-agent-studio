@@ -165,7 +165,7 @@ def seed_narration(repo, media, tmp_path):
     repo.save_narration_artifact(narration)
     segment=NarrationSegment('segment','local',task.id,script.id,'section','合成配音',ref,.2,16000,None,None,None,'zh','',
         'ready',source_kind='recorded',source_artifact_ref=ref,source_sha256=artifact.sha256,source_script_digest=digest)
-    repo.save_narration_segments('local',task.id,script.id,[segment])
+    repo.narration_records.save_narration_segments('local',task.id,script.id,[segment])
     graph=narration_audio_timeline(ref,.2)
     plan=CreationTaskMontagePlan('montage','local',task.id,script.id,'输入文案','ready',[],[],.2,0,
         narration_audio_path=str(path),audio_timeline=graph)

@@ -1,4 +1,5 @@
 """Complete caller-connection reads with native isolated SQLite and canonical values."""
+from app.creation.task_input_reads import narration_segment_from_row
 from app.creation.task_input_reads import creation_task_from_payload, require_creation_task
 from app.creation import plan_contracts
 from contextlib import closing
@@ -112,7 +113,7 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
             decoded = task_input_reads.narration_segment_from_row(row)
             assert decoded == item
             assert isinstance(decoded, contracts.NarrationSegment)
-            assert production.ProductionRepository._narration_segment_from_row(row) == item
+            assert narration_segment_from_row(row) == item
         with pytest.raises(KeyError) as absent:
             task_input_reads.require_creation_task(conn, "ws", "absent")
         assert absent.value.args == ("absent",)
@@ -150,7 +151,7 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
         "actual_public_functions": [task_input_reads.require_creation_task.__module__ + "." + task_input_reads.require_creation_task.__name__,
                                     task_input_reads.creation_task_from_payload.__module__ + "." + task_input_reads.creation_task_from_payload.__name__,
                                     task_input_reads.narration_segment_from_row.__module__ + "." + task_input_reads.narration_segment_from_row.__name__],
-        "production_static_delegates_called": 1,
+        "production_static_delegates_called": 0,
         "task_record_column_visibility_differs_from_payload_only_require": True,
         "borrowed_adoption_write_rolled_back_and_idle_refused": True,
         "caller_uncommitted_visible_and_observer_invisible": True,
@@ -161,7 +162,9 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
     }, ensure_ascii=False, indent=2) + "\n")
 
 
-def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transaction(tmp_path):
+def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transaction(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
     task, segment = records()
     library = tmp_path / "library"
     library.mkdir()
@@ -180,6 +183,11 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
     segment = replace(segment, source_kind="generated", source_artifact_ref=None,
                       source_sha256=None, source_script_digest=None)
 
+    def forbidden_whole_input(*_args, **_kwargs):
+        pytest.fail("narration row reads must not enter complete-script ports")
+    for name in ("_decode_script", "_confirmed_script_digest", "_stage_segment_state"):
+        monkeypatch.setattr(repo.narration_records, name, forbidden_whole_input)
+
     def insert(conn, item):
         values = asdict(item)
         for name in ("created_at", "updated_at"):
@@ -189,9 +197,36 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
         conn.execute(f"INSERT INTO narration_segments ({columns}) VALUES ({placeholders})", tuple(values.values()))
 
     with closing(repo._connect()) as conn, closing(repo._connect()) as observer:
+        idle = repo.narration_records.iter_narration_segments("ws", task.id, "script", connection=conn)
+        with pytest.raises(ValueError, match="配音行读取必须属于原事务"):
+            next(idle)
+        assert not conn.in_transaction
         borrowed = replace(segment, id="borrowed", source_section_id="borrowed")
         insert(conn, borrowed)
         assert conn.in_transaction
+        assert repo.narration_records.get_narration_segment("ws", task.id, borrowed.id, connection=conn) == borrowed
+        assert repo.narration_records.list_narration_segments("ws", task.id, connection=conn) == [borrowed]
+        wrong_script = repo.narration_records.iter_narration_segments("ws", task.id, "other-script", connection=conn)
+        with pytest.raises(ValueError, match="配音行不属于当前确认文案"):
+            next(wrong_script)
+        closed = []
+        class TrackedCursor:
+            def __init__(self, cursor): self.cursor = cursor
+            def __iter__(self): return iter(self.cursor)
+            def fetchone(self): return self.cursor.fetchone()
+            def close(self):
+                closed.append(self.cursor)
+                self.cursor.close()
+        class TrackedConnection:
+            @property
+            def in_transaction(self): return conn.in_transaction
+            def execute(self, *args): return TrackedCursor(conn.execute(*args))
+        stream = repo.narration_records.iter_narration_segments("ws", task.id, "script", connection=TrackedConnection())
+        assert closed == []
+        assert next(stream) == borrowed
+        assert closed == []
+        stream.close()
+        assert len(closed) == 1 and conn.in_transaction
         statements = []
         conn.set_trace_callback(statements.append)
         raw = task_input_reads.narration_segment_row(conn, "ws", task.id, borrowed.id)
@@ -201,7 +236,7 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
         assert task_input_reads.narration_segment_rows(conn, "ws", "other", "script") == []
         assert observer.execute("SELECT COUNT(*) FROM narration_segments").fetchone()[0] == 0
         with pytest.raises(KeyError) as uncommitted:
-            repo.get_narration_segment("ws", task.id, borrowed.id)
+            repo.narration_records.get_narration_segment("ws", task.id, borrowed.id)
         assert uncommitted.value.args == (borrowed.id,)
         assert conn.in_transaction
         conn.set_trace_callback(None)
@@ -218,19 +253,19 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
     with repo._connect() as conn:
         for item in (b, first, a, override, empty):
             insert(conn, item)
-    assert repo.get_narration_segment("ws", task.id, first.id) == first
-    assert repo.list_narration_segments("ws", task.id) == [first, a, b]
-    assert repo.list_narration_segments("ws", task.id, "") == [first, a, b]
-    assert repo.list_narration_segments("ws", task.id, "override-script") == [override]
-    assert repo.list_narration_segments("ws", task.id, "missing-script") == []
+    assert repo.narration_records.get_narration_segment("ws", task.id, first.id) == first
+    assert repo.narration_records.list_narration_segments("ws", task.id) == [first, a, b]
+    assert repo.narration_records.list_narration_segments("ws", task.id, "") == [first, a, b]
+    assert repo.narration_records.list_narration_segments("ws", task.id, "override-script") == [override]
+    assert repo.narration_records.list_narration_segments("ws", task.id, "missing-script") == []
     with pytest.raises(KeyError) as absent:
-        repo.get_narration_segment("ws", task.id, "missing-segment")
+        repo.narration_records.get_narration_segment("ws", task.id, "missing-segment")
     assert absent.value.args == ("missing-segment",)
     with pytest.raises(KeyError) as wrong_workspace:
-        repo.get_narration_segment("other", task.id, first.id)
+        repo.narration_records.get_narration_segment("other", task.id, first.id)
     assert wrong_workspace.value.args == (task.id,)
     with pytest.raises(KeyError) as wrong_task:
-        repo.list_narration_segments("ws", "missing-task")
+        repo.narration_records.list_narration_segments("ws", "missing-task")
     assert wrong_task.value.args == ("missing-task",)
 
     def confirmed(value):
@@ -242,10 +277,10 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
                          (json.dumps(values), "ws", task.id))
 
     confirmed(None)
-    assert repo.list_narration_segments("ws", task.id) == []
-    assert repo.list_narration_segments("ws", task.id, "override-script") == [override]
+    assert repo.narration_records.list_narration_segments("ws", task.id) == []
+    assert repo.narration_records.list_narration_segments("ws", task.id, "override-script") == [override]
     confirmed("")
-    assert repo.list_narration_segments("ws", task.id) == [empty]
+    assert repo.narration_records.list_narration_segments("ws", task.id) == [empty]
     (tmp_path / "narration-read-observations.json").write_text(json.dumps({
         "actual_raw_readers": [task_input_reads.narration_segment_row.__module__ + ".narration_segment_row",
                                task_input_reads.narration_segment_rows.__module__ + ".narration_segment_rows"],

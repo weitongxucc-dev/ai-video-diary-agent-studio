@@ -91,7 +91,7 @@ class NarrationStageUseCase:
         script = self.repository.effective_creation_script(task.workspace_id,task.id)
         inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
             task_id=task.id,voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
-        previous = self.repository.get_narration_segment(task.workspace_id,task.id,
+        previous = self.repository.narration_records.get_narration_segment(task.workspace_id,task.id,
             self.segment_id(task.id,script.id,command.section_id))
         if previous.status!='ready' or (previous.voice_profile_id,previous.voice_version)!=(inputs.voice.id,inputs.voice.version):
             raise ValueError('原段落配音或声音版本已变化，尚未重生成局部改写')
@@ -282,7 +282,7 @@ class NarrationStageUseCase:
             raise ValueError('当前任务没有已确认文案')
         with self.repository.creation_execution_read() as conn:
             script, _ = self.repository.script_records.read_execution_script_metadata(conn, workspace_id, task.confirmed_script_id)
-            target = self.repository.get_narration_segment(workspace_id, task.id, segment_id, connection=conn)
+            target = self.repository.narration_records.get_narration_segment(workspace_id, task.id, segment_id, connection=conn)
         if target.script_id != script.id:
             raise ValueError('配音片段不属于当前确认文案')
         if plan.selected_voice is None:
@@ -390,7 +390,7 @@ class NarrationStageUseCase:
             if not receipt['finalized']:
                 return None
             target = self.repository.get_narration_artifact(workspace_id, candidate['cache_key'], connection=conn)
-            original = self.repository.get_narration_segment(workspace_id, task.id, candidate['segment_id'], connection=conn)
+            original = self.repository.narration_records.get_narration_segment(workspace_id, task.id, candidate['segment_id'], connection=conn)
             updated_target = replace(original, audio_reference=self.repository.narration_artifact_reference(target.cache_key),
                 duration_seconds=target.duration_seconds, sample_rate=target.sample_rate, model_id=target.model_id,
                 pronunciation_version=target.pronunciation_version, status='ready', updated_at=utc_now())

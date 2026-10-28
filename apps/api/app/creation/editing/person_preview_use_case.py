@@ -29,7 +29,7 @@ class PersonPreviewUseCase:
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
             clip = next((item for item in montage.clips if item.id == clip_id))
             cue = next((item for item in montage.cues if item.id == clip.cue_id))
-            segment = self.repository.get_narration_segment(workspace_id, task.id, cue.narration_segment_id)
+            segment = self.repository.narration_records.get_narration_segment(workspace_id, task.id, cue.narration_segment_id)
             creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
             person_provider = self.provider(creation_plan.lipsync_quality)
             selected_person = creation_plan.selected_person
@@ -96,7 +96,7 @@ class PersonPreviewUseCase:
         from app.audio_timeline import narration_source_range
         if clip.locked:
             raise ValueError('所选镜头已锁定，请先解锁。')
-        segments = self.repository.list_narration_segments(workspace_id, task.id, segment.script_id)
+        segments = self.repository.narration_records.list_narration_segments(workspace_id, task.id, segment.script_id)
         script = self.repository.get_creation_task_script(workspace_id, segment.script_id)
         by_section = {item.source_section_id: item for item in segments}
         offset = 0

@@ -207,7 +207,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
         item.sha256 for item in repo.execution_records.list_artifact_records("local", task_id)
         if item.logical_ref == saved["source_ref"]
     )
-    segment = repo.list_narration_segments("local", task_id)[0]
+    segment = repo.narration_records.list_narration_segments("local", task_id)[0]
     assert (segment.source_kind, segment.source_section_id, segment.text) == (
         "recorded", "section_1", "真实待制作文案")
     assert segment.model_id is None and segment.voice_profile_id is None and segment.voice_version is None
@@ -245,7 +245,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     restarted = ProductionRepository(repo.database_path, repo.video_library_path)
     reloaded = restarted.get_narration_artifact("local", task.narration_cache_key)
     assert reloaded == saved_artifact
-    assert restarted.list_narration_segments("local", task_id) == [segment]
+    assert restarted.narration_records.list_narration_segments("local", task_id) == [segment]
     current_script = restarted.get_creation_task_script("local", "script_recording")
     current_plan = restarted.plan_records.get_creation_plan("local", "plan_recording")
     execution = CreationExecution(
@@ -726,13 +726,13 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     assert client.get(state.route).json()['items'][0]['applied'] is True
     current = repo.task_records.get_creation_task('local',task.id)
     artifact = repo.get_narration_artifact('local',current.narration_cache_key)
-    segment, = repo.list_narration_segments('local',task.id)
+    segment, = repo.narration_records.list_narration_segments('local',task.id)
     assert (segment.source_kind,segment.source_section_id,segment.text)==('recorded','section_1','真实待制作文案')
     assert segment.model_id is None and segment.voice_profile_id is None and segment.voice_version is None
     assert artifact.source_sha256==state.source.sha256 and artifact.source_script_digest==segment.source_script_digest
     reopened = ProductionRepository(repo.database_path,repo.video_library_path)
     assert reopened.get_narration_artifact('local',current.narration_cache_key)==artifact
-    assert reopened.list_narration_segments('local',task.id)==[segment]
+    assert reopened.narration_records.list_narration_segments('local',task.id)==[segment]
     preview = client.get(f'/api/creation-tasks/{task.id}/execution/preview')
     assert preview.status_code==200,preview.text
     assert preview.json()['narration_source']=={'source_kind':'recorded','source_artifact_ref':state.source.logical_ref,'duration_seconds':1}
@@ -782,7 +782,7 @@ def test_recording_metadata_rejects_ambiguous_then_changed_script_without_partia
     assert changed.status_code==409
     current = repo.task_records.get_creation_task('local',task.id)
     assert current.stage=='narration' and current.narration_cache_key is None
-    assert repo.list_narration_segments('local',task.id)==[]
+    assert repo.narration_records.list_narration_segments('local',task.id)==[]
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM narration_artifacts WHERE workspace_id=?',('local',)).fetchone()[0]==0
     assert client.get(state.route).json()['items']==[]

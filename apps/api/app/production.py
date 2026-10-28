@@ -76,6 +76,9 @@ from app.creation.contracts import (
 )
 from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
 from app.creation.task_records import TaskRecordStore
+from app.creation.narration_segment_records import (
+    NarrationSegmentRecordStore, narration_segment_values, validate_narration_segment,
+)
 from app.creation.timeline_records import TimelineRecordStore, validate_timeline_version
 from app.creation.subtitle_records import SubtitleTrackRecordStore, validate_subtitle_track
 from app.creation.cover_records import CoverAssetRecordStore, validate_cover_asset
@@ -535,16 +538,6 @@ class ProductionRepository:
         self.edit_records = EditRecordStore(self._connect,
             current_source=EXACT_EDIT_SOURCE.get, decode_reference_list=_string_list_from_text,
             decode_object=_json_object_from_text, decode_timeline_version=self.timeline_records.timeline_version_from_row)
-        self.edit_adoption = EditAdoptionTransaction(self._connect,
-            require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
-            read_task=self.task_records.get_creation_task, read_proposal=self.edit_records.get_edit_proposal,
-            read_operation=self.edit_records.get_edit_operation, read_version=self.timeline_records.get_timeline_version,
-            read_narration_segment=self.get_narration_segment,
-            iter_narration_edit_segments=self.iter_narration_edit_segments,
-            replace_adopted_narration_segment=self.replace_adopted_narration_segment,
-            upsert_narration_segments=self._upsert_narration_segments,
-            validate_operation=validate_edit_operation, validate_version=validate_timeline_version,
-            validate_track=validate_subtitle_track, validate_cover=validate_cover_asset)
         self.preview_records = PreviewRecordStore(self._connect)
         self._media_authorizations = MediaAuthorizationStore(self._connect)
         self._profile_records = ProfileRecordStore(self._connect, self._media_authorizations)
@@ -603,6 +596,20 @@ class ProductionRepository:
             transition_task=self._script_task_transition, create_library_task=self._create_script_library_task,
             knowledge_inputs_current=self._knowledge_inputs_current, append_event=self.execution_records.append_task_event,
             get_event=self.execution_records.get_task_event, decode_event=self.execution_records.task_event_from_row)
+        self.narration_records = NarrationSegmentRecordStore(self._connect,
+            decode_script=self.script_records._creation_task_script_from_payload,
+            confirmed_script_digest=self.script_records.confirmed_creation_task_script_digest,
+            stage_segment_state=self.stage_segment_state)
+        self.edit_adoption = EditAdoptionTransaction(self._connect,
+            require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
+            read_task=self.task_records.get_creation_task, read_proposal=self.edit_records.get_edit_proposal,
+            read_operation=self.edit_records.get_edit_operation, read_version=self.timeline_records.get_timeline_version,
+            read_narration_segment=self.narration_records.get_narration_segment,
+            iter_narration_edit_segments=self.iter_narration_edit_segments,
+            replace_adopted_narration_segment=self.replace_adopted_narration_segment,
+            upsert_narration_segments=self.narration_records.upsert_narration_segments,
+            validate_operation=validate_edit_operation, validate_version=validate_timeline_version,
+            validate_track=validate_subtitle_track, validate_cover=validate_cover_asset)
         self.creation_requests = CreationRequestRecordStore(self._connect)
         self.creation_request_adoption = CreationRequestAdoptionUseCase(self._connect,
             records=self.creation_requests, decode_plan=self.plan_records.creation_plan_from_payload,
@@ -2904,7 +2911,7 @@ class ProductionRepository:
                 'AND source_section_id=? LIMIT 2', (task.workspace_id, task.id, script.id, section.id)).fetchmany(2)
             if len(rows) > 1:
                 raise ValueError('现有配音片段集不属于当前唯一文案段落')
-            segment = self._narration_segment_from_row(rows[0]) if rows else None
+            segment = narration_segment_from_row(rows[0]) if rows else None
             if segment is not None and segment.status == 'ready' and segment.text != section.content:
                 raise ValueError('已保存配音片段的文字与采用正文不匹配，须先核对原产物')
             yield section, segment
@@ -2934,7 +2941,7 @@ class ProductionRepository:
         if len(audio_rows) > 1:
             raise ValueError('现有配音片段不属于当前唯一文案段落')
         return {'ordinal': row['ordinal'], 'section': section, 'adopted': adopted,
-            'audio': self._narration_segment_from_row(audio_rows[0]) if audio_rows else None}
+            'audio': narration_segment_from_row(audio_rows[0]) if audio_rows else None}
 
     def creation_section_ids(self, task, script, *, offset, limit, connection):
         if not connection.in_transaction:
@@ -3641,9 +3648,9 @@ class ProductionRepository:
             'ORDER BY created_at ASC,id ASC', (task.workspace_id, task.id, header.id))
         try:
             for row in cursor:
-                current = self._narration_segment_from_row(row)
+                current = narration_segment_from_row(row)
                 segment = replacement if current.source_section_id == replacement.source_section_id else current
-                _validate_narration_segment(segment)
+                validate_narration_segment(segment)
                 section = self.read_creation_section_input(task, header, segment.source_section_id, connection=connection)['section']
                 if (adopted or segment.source_section_id != replacement.source_section_id) and segment.text != section.content:
                     raise ValueError('配音分段文字必须与已采用文案段落一致')
@@ -3809,7 +3816,7 @@ class ProductionRepository:
                     !=self._timeline_restore_business_facts(changed,conn)):
                 raise ValueError('此修改之后已有其他时间线成果；当前编辑尚不支持局部反向恢复，不能覆盖后来成果')
             if 'narration_segments' in changed.snapshot:
-                rows = self.list_narration_segments(workspace_id,task_id,task.confirmed_script_id,connection=conn)
+                rows = self.narration_records.list_narration_segments(workspace_id,task_id,task.confirmed_script_id,connection=conn)
                 def facts(items):
                     return [{key:value for key,value in item.items() if key not in {'created_at','updated_at'}} for item in items]
                 if facts([asdict(row) for row in rows])!=facts(changed.snapshot['narration_segments']):
@@ -4307,7 +4314,7 @@ class ProductionRepository:
             raise ValueError('原配音作业已开始或消耗未知，不能改选声音')
         task = require_creation_task(connection, job.workspace_id, job.task_id)
         if (task.narration_cache_key is not None
-                or self.list_narration_segments(job.workspace_id, job.task_id, task.confirmed_script_id, connection=connection)
+                or self.narration_records.list_narration_segments(job.workspace_id, job.task_id, task.confirmed_script_id, connection=connection)
                 or connection.execute("SELECT 1 FROM narration_artifacts WHERE workspace_id=? "
                     "AND json_extract(payload,'$.task_id')=? LIMIT 1", (job.workspace_id, job.task_id)).fetchone()):
             raise ValueError('原任务已有配音产物或片段，不能按未开始改选声音')
@@ -4393,10 +4400,10 @@ class ProductionRepository:
                     if count:
                         if segment is None or segment.text != section.content:
                             raise RecoveryBlocked('原配音片段集合与采用正文不匹配，不能覆盖恢复')
-                        _validate_narration_segment(segment)
+                        validate_narration_segment(segment)
                         continue
                     segment = pending_segment_for(task, header, section, resources)
-                    _validate_narration_segment(segment)
+                    validate_narration_segment(segment)
                     if ((segment.workspace_id, segment.task_id, segment.script_id, segment.source_section_id, segment.text)
                             != (task.workspace_id, task.id, header.id, section.id, section.content)
                             or segment.status != 'pending'):
@@ -4405,11 +4412,11 @@ class ProductionRepository:
                         '(id,workspace_id,task_id,script_id,source_section_id,text,audio_reference,duration_seconds,sample_rate,'
                         'model_id,voice_profile_id,voice_version,language,pronunciation_version,status,created_at,updated_at,'
                         'source_kind,source_artifact_ref,source_sha256,source_script_digest) '
-                        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', _narration_segment_values(segment))
+                        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', narration_segment_values(segment))
             else:
-                current_segments = self.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
+                current_segments = self.narration_records.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=conn)
                 if not current_segments:
-                    self.save_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, pending_segments, connection=conn)
+                    self.narration_records.save_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, pending_segments, connection=conn)
                 elif len(current_segments) != len(pending_segments):
                     raise RecoveryBlocked('原配音片段集合不完整，不能覆盖恢复')
             if job.kind != 'creation_task_narration_edit':
@@ -4796,49 +4803,8 @@ class ProductionRepository:
 
 
 
-    def save_narration_segments(
-        self,
-        workspace_id: str,
-        task_id: str,
-        script_id: str,
-        segments: list[_NarrationSegment],
-        *, connection: sqlite3.Connection | None = None,
-    ) -> list[_NarrationSegment]:
-        """Persist the complete current narration fact set for one confirmed script."""
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            self._upsert_narration_segments(
-                conn,
-                workspace_id=workspace_id,
-                task_id=task_id,
-                script_id=script_id,
-                segments=segments,
-            )
-        return self.list_narration_segments(workspace_id, task_id, script_id, connection=connection)
 
-    def get_narration_segment(
-        self, workspace_id: str, task_id: str, segment_id: str, *, connection=None
-    ) -> _NarrationSegment:
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            row = narration_segment_row(conn, workspace_id, task_id, segment_id)
-        if row is None:
-            raise KeyError(segment_id)
-        return self._narration_segment_from_row(row)
 
-    def iter_narration_segments(self, workspace_id, task_id, script_id, *, connection):
-        """Original manifest order; the caller owns the entire read snapshot."""
-        if not connection.in_transaction:
-            raise ValueError('配音行读取必须属于原事务')
-        task = require_creation_task(connection, workspace_id, task_id)
-        if task.confirmed_script_id != script_id:
-            raise ValueError('配音行不属于当前确认文案')
-        cursor = connection.execute('SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? '
-            'AND script_id=? ORDER BY created_at ASC,id ASC', (workspace_id, task_id, script_id))
-        try:
-            for row in cursor:
-                yield self._narration_segment_from_row(row)
-        finally:
-            cursor.close()
 
     def iter_narration_edit_segments(self, task, replacement, *, connection):
         """Validate the whole set, then emit the real prospective rows in script order."""
@@ -4849,17 +4815,6 @@ class ProductionRepository:
         for _, segment in self.iter_creation_narration_sections(task, header, connection=connection):
             yield replacement if segment.id == replacement.id else segment
 
-    def list_narration_segments(
-        self, workspace_id: str, task_id: str, script_id: str | None = None,
-        *, connection: sqlite3.Connection | None = None,
-    ) -> list[_NarrationSegment]:
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            task = require_creation_task(conn, workspace_id, task_id)
-            current_script_id = script_id or task.confirmed_script_id
-            if current_script_id is None:
-                return []
-            rows = narration_segment_rows(conn, workspace_id, task_id, current_script_id)
-        return [self._narration_segment_from_row(row) for row in rows]
 
     def create_person_render(self, render: PersonRender) -> PersonRender:
         return self._person_renders.create_person_render(render)
@@ -5245,138 +5200,6 @@ class ProductionRepository:
 
 
 
-    def _upsert_narration_segments(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        workspace_id: str,
-        task_id: str,
-        script_id: str,
-        segments: list[_NarrationSegment],
-    ) -> None:
-        task = require_creation_task(conn, workspace_id, task_id)
-        if task.confirmed_script_id != script_id:
-            raise ValueError("配音分段必须关联当前任务已确认的文案")
-        script_row = conn.execute(
-            """
-            SELECT payload FROM creation_task_scripts
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
-            """,
-            (workspace_id, task_id, script_id),
-        ).fetchone()
-        if script_row is None:
-            raise ValueError("配音分段关联的文案不属于当前工作区与任务")
-        script = self._creation_task_script_from_payload(
-            json.loads(str(script_row["payload"])), connection=conn
-        )
-        if script.selection_status != "confirmed":
-            raise ValueError("配音分段只能关联已确认文案")
-        script_digest = self.confirmed_creation_task_script_digest(
-            workspace_id, task_id, script_id,
-        )
-        sections = {section.id: section for section in script.sections}
-        for section_id, section in tuple(sections.items()):
-            adopted = self.stage_segment_state(workspace_id, task_id, section_id, connection=conn)
-            if adopted is not None and adopted['script_id'] == script_id:
-                sections[section_id] = replace(section, content=adopted['text'])
-        supplied_section_ids = [segment.source_section_id for segment in segments]
-        if (
-            not sections
-            or len(supplied_section_ids) != len(set(supplied_section_ids))
-            or set(supplied_section_ids) != set(sections)
-        ):
-            raise ValueError("必须为已确认文案的每个段落保存唯一配音分段")
-
-        existing_rows = conn.execute(
-            """
-            SELECT * FROM narration_segments
-            WHERE workspace_id = ? AND task_id = ? AND script_id = ?
-            """,
-            (workspace_id, task_id, script_id),
-        ).fetchall()
-        if existing_rows and len(existing_rows) != len(sections):
-            raise ValueError("已持久化的配音分段集不完整，不能覆盖")
-        existing_by_section = {
-            str(row["source_section_id"]): self._narration_segment_from_row(row)
-            for row in existing_rows
-        }
-
-        for segment in segments:
-            _validate_narration_segment(segment)
-            if (
-                segment.workspace_id != workspace_id
-                or segment.task_id != task_id
-                or segment.script_id != script_id
-            ):
-                raise ValueError("配音分段与当前工作区、任务或文案谱系不一致")
-            if segment.text != sections[segment.source_section_id].content:
-                raise ValueError("配音分段文字必须与已确认文案段落一致")
-            if segment.source_kind == "recorded" and segment.source_script_digest != script_digest:
-                raise ValueError("电脑录音必须绑定当前确认文案内容")
-            identity_row = conn.execute(
-                "SELECT * FROM narration_segments WHERE id = ?",
-                (segment.id,),
-            ).fetchone()
-            existing = existing_by_section.get(segment.source_section_id)
-            if identity_row is not None and (
-                existing is None or str(identity_row["id"]) != existing.id
-            ):
-                raise ValueError("配音分段 ID 已属于其他段落，不能覆盖")
-            if existing is None:
-                conn.execute(
-                    """
-                    INSERT INTO narration_segments
-                        (id, workspace_id, task_id, script_id, source_section_id,
-                         text, audio_reference, duration_seconds, sample_rate,
-                         model_id, voice_profile_id, voice_version, language,
-                         pronunciation_version, status, created_at, updated_at,
-                         source_kind, source_artifact_ref, source_sha256,
-                         source_script_digest)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    _narration_segment_values(segment),
-                )
-                continue
-            if existing.id != segment.id or existing.created_at != segment.created_at:
-                raise ValueError("配音分段稳定 ID 或创建时间不能覆盖")
-            if segment.updated_at < existing.updated_at:
-                raise ValueError("不能用过期状态覆盖配音分段")
-            if segment == existing:
-                continue
-            conn.execute(
-                """
-                UPDATE narration_segments
-                SET text = ?, audio_reference = ?, duration_seconds = ?,
-                    sample_rate = ?, model_id = ?, voice_profile_id = ?,
-                    voice_version = ?, language = ?, pronunciation_version = ?,
-                    status = ?, updated_at = ?, source_kind = ?,
-                    source_artifact_ref = ?, source_sha256 = ?, source_script_digest = ?
-                WHERE workspace_id = ? AND task_id = ? AND script_id = ?
-                  AND source_section_id = ? AND id = ?
-                """,
-                (
-                    segment.text,
-                    segment.audio_reference,
-                    segment.duration_seconds,
-                    segment.sample_rate,
-                    segment.model_id,
-                    segment.voice_profile_id,
-                    segment.voice_version,
-                    segment.language,
-                    segment.pronunciation_version,
-                    segment.status,
-                    segment.updated_at.isoformat(),
-                    segment.source_kind,
-                    segment.source_artifact_ref,
-                    segment.source_sha256,
-                    segment.source_script_digest,
-                    workspace_id,
-                    task_id,
-                    script_id,
-                    segment.source_section_id,
-                    segment.id,
-                ),
-            )
 
 
 
@@ -5801,7 +5624,7 @@ class ProductionRepository:
             ):
                 raise ValueError("录音产物与唯一采用的文案分段来源不一致")
             if segments is not None:
-                self._upsert_narration_segments(
+                self.narration_records.upsert_narration_segments(
                     conn,
                     workspace_id=artifact.workspace_id,
                     task_id=artifact.task_id,
@@ -6394,9 +6217,6 @@ class ProductionRepository:
 
 
 
-    @staticmethod
-    def _narration_segment_from_row(row: sqlite3.Row) -> _NarrationSegment:
-        return narration_segment_from_row(row)
 
 
 
@@ -6663,30 +6483,6 @@ def _string_list_from_text(value: str) -> list[str]:
 
 
 
-def _narration_segment_values(segment: _NarrationSegment) -> tuple[object, ...]:
-    return (
-        segment.id,
-        segment.workspace_id,
-        segment.task_id,
-        segment.script_id,
-        segment.source_section_id,
-        segment.text,
-        segment.audio_reference,
-        segment.duration_seconds,
-        segment.sample_rate,
-        segment.model_id,
-        segment.voice_profile_id,
-        segment.voice_version,
-        segment.language,
-        segment.pronunciation_version,
-        segment.status,
-        segment.created_at.isoformat(),
-        segment.updated_at.isoformat(),
-        segment.source_kind,
-        segment.source_artifact_ref,
-        segment.source_sha256,
-        segment.source_script_digest,
-    )
 
 
 
@@ -6703,48 +6499,6 @@ def _narration_segment_values(segment: _NarrationSegment) -> tuple[object, ...]:
 
 
 
-def _validate_narration_segment(segment: _NarrationSegment) -> None:
-    identity = (segment.id, segment.workspace_id, segment.task_id, segment.script_id,
-                segment.source_section_id, segment.text, segment.language)
-    if not all(value.strip() for value in identity):
-        raise ValueError("配音分段缺少必要谱系或文字")
-    if segment.source_kind == "generated":
-        if not all(value and value.strip() for value in
-                   (segment.model_id, segment.voice_profile_id, segment.voice_version)):
-            raise ValueError("生成配音分段必须有关联模型与声音版本")
-        if (segment.source_artifact_ref is not None or segment.source_sha256 is not None
-                or segment.source_script_digest is not None):
-            raise ValueError("生成配音不能携带电脑录音来源")
-    elif segment.source_kind == "recorded":
-        if (segment.model_id is not None or segment.voice_profile_id is not None
-                or segment.voice_version is not None
-                or not segment.source_artifact_ref
-                or not segment.source_sha256
-                or not segment.source_script_digest
-                or not re.fullmatch(r"[0-9a-f]{64}", segment.source_sha256)):
-            raise ValueError("电脑录音分段必须仅关联真实录音产物与SHA-256")
-        _validate_logical_reference(segment.source_artifact_ref, "电脑录音来源")
-    else:
-        raise ValueError("配音来源类型无效")
-    if segment.audio_reference is not None:
-        _validate_logical_reference(segment.audio_reference, "配音分段音频引用")
-    if segment.duration_seconds is not None and (
-        not math.isfinite(segment.duration_seconds) or segment.duration_seconds < 0
-    ):
-        raise ValueError("配音分段时长无效")
-    if segment.sample_rate is not None and segment.sample_rate <= 0:
-        raise ValueError("配音分段采样率无效")
-    if segment.status == "ready" and (
-        segment.audio_reference is None
-        or segment.duration_seconds is None
-        or segment.duration_seconds <= 0
-        or (segment.sample_rate is None and segment.source_kind != "recorded")
-    ):
-        raise ValueError("ready 配音分段必须有可定位音频、时长和采样率")
-    if segment.status not in {"pending", "generating", "ready", "failed"}:
-        raise ValueError("配音分段状态无效")
-    if segment.updated_at < segment.created_at:
-        raise ValueError("配音分段更新时间不能早于创建时间")
 
 
 

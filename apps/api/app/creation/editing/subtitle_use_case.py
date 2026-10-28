@@ -211,7 +211,7 @@ class SubtitleEditUseCase:
             cue.text = text
             refresh_montage_review_state(montage)
             montage, _ = prepare_changed_montage(montage, message='字幕已修改；配音和镜头保持不变，可以重新渲染。')
-            narration_segments = self.repository.list_narration_segments(workspace_id, task.id, task.confirmed_script_id) if task.confirmed_script_id else []
+            narration_segments = self.repository.narration_records.list_narration_segments(workspace_id, task.id, task.confirmed_script_id) if task.confirmed_script_id else []
             return self._persist_legacy_montage(workspace_id=workspace_id, task=task, proposal=proposal, base_version=base_version, updated_plan=montage, operation_type='UpdateSubtitleCue', operation_payload=dict(operation_payload), narration_segments=narration_segments)
         raise EditPreviewRejected(status_code=409, detail='unsupported legacy subtitle confirmation operation')
 

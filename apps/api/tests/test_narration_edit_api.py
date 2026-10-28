@@ -63,7 +63,7 @@ def test_queue_cancel_preserves_audio_and_version(narration_api):
 def test_confirm_rechecks_stale_audio_before_any_device_request(narration_api):
     state = narration_api
     state.segments[0] = replace(state.segments[0], audio_reference="narration://artifact/other")
-    state.repo.save_narration_segments("local", state.task.id, "script", state.segments)
+    state.repo.narration_records.save_narration_segments("local", state.task.id, "script", state.segments)
     response = state.client.post(state.confirm_url, json={})
     assert response.status_code == 409, response.text
     assert not state.calls
@@ -92,7 +92,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
     from app.narration import NarrationArtifact
     state = narration_api
     state.segments = [replace(item, language="zh") for item in state.segments]
-    state.repo.save_narration_segments("local", state.task.id, "script", state.segments)
+    state.repo.narration_records.save_narration_segments("local", state.task.id, "script", state.segments)
     asset = _asset(tmp_path / "library", workspace_id="local", owner_user_id=state.task.owner_user_id)
     state.repo._save_asset(asset)
     montage = CreationTaskMontagePlan("full-montage", "local", state.task.id, "script", "合成", "ready",
@@ -244,7 +244,7 @@ def test_draft_narration_retime_still_rejects_insufficient_source_footage(genera
     assert state.repo.job_records.get_job_run("local", queued.json()["job_id"]).status == "failed"
     current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id == state.base.id
-    assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
+    assert state.repo.narration_records.list_narration_segments("local", state.task.id, "script") == state.segments
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
 
 
@@ -315,7 +315,7 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     assert current.narration_cache_key == "2" * 64 and not current.output_ready
     assert state.repo.get_narration_artifact("local", "1" * 64) is not None
     assert state.repo.get_narration_artifact("local", "2" * 64) is not None
-    segments = state.repo.list_narration_segments("local", state.task.id, "script")
+    segments = state.repo.narration_records.list_narration_segments("local", state.task.id, "script")
     assert segments[0].audio_reference == "narration://artifact/" + "1" * 64
     assert segments[1] == state.segments[1]
     montage = state.repo.get_creation_task_montage_plan("local", state.task.id)
@@ -342,7 +342,7 @@ def test_actual_callback_failure_keeps_original_audio_and_version(generator_api,
     state.resources.allowed = True
     assert state.runtime.run_once()
     assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.list_narration_segments("local", state.task.id, "script") == state.segments
+    assert state.repo.narration_records.list_narration_segments("local", state.task.id, "script") == state.segments
     assert state.repo.get_narration_artifact("local", "1" * 64) is None
     assert state.repo.get_narration_artifact("local", "2" * 64) is None
     assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "failed"
@@ -354,7 +354,7 @@ def test_queue_seals_all_audio_and_montage_consumed_by_combination(generator_api
     response = state.client.post(state.confirm_url, json={})
     assert response.status_code == 202, response.text
     if mutation == "other_segment":
-        state.repo.save_narration_segments("local", state.task.id, "script",
+        state.repo.narration_records.save_narration_segments("local", state.task.id, "script",
             [state.segments[0], replace(state.segments[1], pronunciation_version="changed-rules")])
     elif mutation == "other_source":
         from pathlib import Path

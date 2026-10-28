@@ -442,7 +442,7 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
         task.narration_cache_key = "narration"
         task.stage = "montage"
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
-    repo.save_narration_segments(WORKSPACE, task.id, "script", [NarrationSegment(
+    repo.narration_records.save_narration_segments(WORKSPACE, task.id, "script", [NarrationSegment(
         'segment' if index == 0 else 'tail-segment', WORKSPACE, task.id, "script", section['id'], section['content'],
         "narration://artifact/narration", 1, 16000, "fixture", "voice", "v1", "zh", "v1", "ready")
         for index, section in enumerate(payload['sections'])])
@@ -882,7 +882,8 @@ def test_presenter_row_admission_preserves_original_json_key_and_resources(prese
     def forbidden(*args, **kwargs):
         pytest.fail('person admission must not hydrate whole script/segment inputs')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
-        monkeypatch.setattr(repo, name, forbidden)
+        monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments',) else repo, name, forbidden)
+    monkeypatch.setattr(repo.narration_records, '_decode_script', forbidden)
     with repo.creation_execution_read() as conn:
         snapshot = repo.read_creation_execution_snapshot(WORKSPACE, case.task.id, connection=conn)
         actual, measured = presenter_stage_facts(repo, snapshot.task, snapshot.script_header, plan,
@@ -936,7 +937,8 @@ def _stream_person_executor(case, monkeypatch, boundary):
     def forbidden(*args, **kwargs):
         pytest.fail('person stream must not hydrate whole input DTOs or execute a worker')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo, name, forbidden)
+        monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, forbidden)
+    monkeypatch.setattr(case.repo.narration_records, '_decode_script', forbidden)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
     return CreationJobUnitExecutor(case.repo, render_action=forbidden, render_is_valid=lambda *args: False,
         person_stage=stage)
@@ -1030,7 +1032,8 @@ def test_presenter_cpu_row_inputs_keep_actual_source_accounting_and_cache_revali
     def forbidden(*args, **kwargs):
         pytest.fail('person CPU admission must not load full input DTOs')
     for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo, name, forbidden)
+        monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, forbidden)
+    monkeypatch.setattr(case.repo.narration_records, '_decode_script', forbidden)
     with case.repo._connect() as idle:
         assert not idle.in_transaction
         key, resources = case.registration.owner.render_facts(idle, task, plan)

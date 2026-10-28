@@ -1738,7 +1738,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     assert production.get_narration_artifact(
         "workspace_a", initial_artifact.cache_key
     ) is None
-    assert production.list_narration_segments(
+    assert production.narration_records.list_narration_segments(
         "workspace_a", "task-narration", script_id
     ) == []
     assert production.task_records.get_creation_task(
@@ -1750,11 +1750,11 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         segments=initial_segments,
     )
     assert completed_task.narration_cache_key == initial_artifact.cache_key
-    assert production.list_narration_segments(
+    assert production.narration_records.list_narration_segments(
         "workspace_a", "task-narration", script_id
     ) == initial_segments
     with pytest.raises(KeyError):
-        production.get_narration_segment(
+        production.narration_records.get_narration_segment(
             "workspace_b", "task-narration", initial_segments[0].id
         )
 
@@ -1918,7 +1918,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     assert applied_regenerate.operation_type == "RegenerateNarrationSegment"
     assert pending_task.stage == "narration"
     assert pending_task.stage_status == "not_started"
-    persisted_pending = production.list_narration_segments(
+    persisted_pending = production.narration_records.list_narration_segments(
         "workspace_a", "task-narration"
     )
     assert persisted_pending[0].status == "pending"
@@ -2002,7 +2002,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     )
     assert applied_subtitle.operation_type == "UpdateSubtitleCue"
     assert subtitle_task.narration_cache_key == regenerated_artifact.cache_key
-    assert production.list_narration_segments(
+    assert production.narration_records.list_narration_segments(
         "workspace_a", "task-narration"
     ) == regenerated_segments
 
@@ -2032,7 +2032,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     assert applied_undo.operation_type == "UndoTimelineVersion"
     assert restored_task.current_timeline_version_id == restored_version.id
     assert restored_task.narration_cache_key == initial_artifact.cache_key
-    assert production.list_narration_segments(
+    assert production.narration_records.list_narration_segments(
         "workspace_a", "task-narration"
     ) == restored_segments
     assert production.get_creation_task_montage_plan(
@@ -2043,7 +2043,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    assert reloaded.list_narration_segments(
+    assert reloaded.narration_records.list_narration_segments(
         "workspace_a", "task-narration"
     ) == restored_segments
     assert reloaded.timeline_records.get_timeline_version(
@@ -2400,7 +2400,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         source_section_id=str(sections[1]["id"]),
         text=str(sections[1]["content"]),
     )
-    production.save_narration_segments(
+    production.narration_records.save_narration_segments(
         "workspace_a", "task-person", script_id, [segment, second_segment]
     )
 
@@ -4578,6 +4578,29 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
     forbidden = edit_adoption_no_execution(monkeypatch)
     repo = _repository(tmp_path)
     _save_creation_task(repo, workspace_id='workspace_a', task_id='task-a')
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from app.persistence_json import _json_payload
+    script = CreationTaskScript('pending-script', 'workspace_a', 'task-a', 'declared-run', 'declared-topic',
+        'row metadata', 'zh-CN', [
+            CreationTaskScriptSection('section-1', 'first', '第一段真实行事实。', 'declared', []),
+            CreationTaskScriptSection('section-2', 'second', '第二段真实行事实。', 'declared', []),
+        ], selection_status='confirmed')
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        payload = repo.script_records._script_payload(conn, script)
+        conn.execute('INSERT INTO creation_task_scripts '
+            '(id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
+            (script.id,script.workspace_id,script.task_id,script.run_id,payload,script.updated_at.isoformat()))
+        task = repo.task_records.get_creation_task('workspace_a', 'task-a', connection=conn)
+        task.confirmed_script_id = script.id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+                     (_json_payload(task),task.workspace_id,task.id))
+    segments = [NarrationSegment(f'pending-{index}', 'workspace_a', 'task-a', script.id,
+        section.id, section.content, None, None, None, 'declared-model', 'declared-voice', 'v1',
+        'zh-CN', 'v1', 'pending', created_at=script.created_at,
+        updated_at=script.created_at + timedelta(seconds=1))
+        for index, section in enumerate(script.sections, 1)]
+    assert repo.edit_adoption.upsert_narration_segments.__self__ is repo.narration_records
     base = repo.timeline_records.create_timeline_version(TimelineVersion('adoption-base','workspace_a','task-a',None,1,{},None))
     intent = EditIntent('adoption-intent','workspace_a','task-a','declared metadata','montage',[],None,
         'replace_visual',{}, {},1,'interpreted')
@@ -4596,6 +4619,7 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
         writer.execute('BEGIN IMMEDIATE')
         repo.edit_records.create_edit_intent(intent,connection=writer)
         repo.edit_records.create_edit_proposal(proposal,connection=writer)
+        assert repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,segments,connection=writer) == segments
         def verify(connection):
             assert connection is writer and connection.in_transaction
             assert connection.execute('SELECT id FROM edit_proposals WHERE id=?',(proposal.id,)).fetchone() is not None
@@ -4604,11 +4628,13 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
             for name in ('read_task','read_proposal','read_operation','read_version'):
                 readers.setattr(repo.edit_adoption,name,forbidden)
             confirmed, applied, adopted, current = repo.edit_adoption.confirm('workspace_a','task-a',proposal.id,
-                operation=operation,result_version=version,subtitle_tracks=[track],connection=writer,verify_sources=verify)
+                operation=operation,result_version=version,subtitle_tracks=[track],narration_segments=segments,connection=writer,verify_sources=verify)
         assert writer.in_transaction and checked==['source']
         assert confirmed.status=='confirmed' and applied==operation and adopted==version and current.current_timeline_version_id==version.id
         assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
         assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
+        assert repo.narration_records.list_narration_segments('workspace_a','task-a') == []
+        assert repo.narration_records.list_narration_segments('workspace_a','task-a',connection=writer) == segments
         writer.rollback()
     assert repo.edit_records.list_edit_proposals('workspace_a','task-a')==[]
     assert repo.subtitle_records.list_subtitle_tracks('workspace_a','task-a')==[]
@@ -4619,9 +4645,29 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
             "WHEN NEW.id='task-a' BEGIN SELECT RAISE(ABORT,'adoption task tail refused'); END")
     with pytest.raises(sqlite3.IntegrityError,match='task tail refused'):
         repo.edit_adoption.confirm('workspace_a','task-a',proposal.id,operation=operation,
-            result_version=version,subtitle_tracks=[track])
+            result_version=version,subtitle_tracks=[track],narration_segments=segments)
     assert repo.edit_records.get_edit_proposal('workspace_a',proposal.id).status=='proposed'
     assert repo.edit_records.list_edit_operations('workspace_a','task-a')==[]
     assert repo.subtitle_records.list_subtitle_tracks('workspace_a','task-a')==[]
     assert repo.timeline_records.list_timeline_versions('workspace_a','task-a')==[base]
     assert repo.task_records.get_creation_task('workspace_a','task-a').current_timeline_version_id==base.id
+
+    assert repo.narration_records.list_narration_segments('workspace_a','task-a') == []
+    assert repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,segments) == segments
+    with pytest.raises(ValueError, match='每个段落保存唯一配音分段'):
+        repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,segments[:1])
+    changed_head = replace(segments[0], status='failed', updated_at=segments[0].updated_at+timedelta(seconds=1))
+    with pytest.raises(ValueError, match='文字必须与已确认文案段落一致'):
+        repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,
+            [changed_head, replace(segments[1], text='wrong tail body')])
+    assert repo.narration_records.list_narration_segments('workspace_a','task-a') == segments
+    with pytest.raises(ValueError, match='稳定 ID 或创建时间不能覆盖'):
+        repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,
+            [replace(segments[0], id='different-id'), segments[1]])
+    with pytest.raises(ValueError, match='稳定 ID 或创建时间不能覆盖'):
+        repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,
+            [replace(segments[0], created_at=segments[0].created_at+timedelta(microseconds=1)), segments[1]])
+    with pytest.raises(ValueError, match='过期状态'):
+        repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,
+            [replace(segments[0], updated_at=segments[0].created_at+timedelta(milliseconds=500)), segments[1]])
+    assert repo.narration_records.list_narration_segments('workspace_a','task-a') == segments

@@ -40,7 +40,7 @@ def restore_state(tmp_path, *, empty=False):
             (json.dumps(asdict(task), default=str), task.id))
         conn.execute('INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
             (script.id, 'ws', task.id, script.run_id, json.dumps(asdict(script), default=str), stamp.isoformat()))
-    state.repo.save_narration_segments('ws', task.id, 'fixed-script', state.segments)
+    state.repo.narration_records.save_narration_segments('ws', task.id, 'fixed-script', state.segments)
     snapshot = {**state.base.snapshot,
         'narration_segments': json.loads(json.dumps([asdict(item) for item in state.segments], default=str))}
     if empty:
@@ -161,7 +161,7 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
         'persist_subtitle_edit', 'persist_subtitle_edit']
     assert branch_calls[0][1]['subtitle_source_version'].id == first.operation.result_version_id
     assert branch_calls[-1][1]['snapshot_source'] == render_only.snapshot
-    segments = state.repo.list_narration_segments('ws', state.task.id, 'fixed-script')
+    segments = state.repo.narration_records.list_narration_segments('ws', state.task.id, 'fixed-script')
     assert len(segments) == 1
     assert replace(segments[0], updated_at=state.segments[0].updated_at) == state.segments[0]
     assert segments[0].updated_at > state.segments[0].updated_at
@@ -196,7 +196,7 @@ def test_restore_explicit_empty_tracks_absent_cover_and_complete_narration(tmp_p
     assert version.snapshot['subtitle_track_ids'] == [] and 'cover_asset_id' not in version.snapshot
     assert [row['id'] for row in version.snapshot['narration_segments']] == ['fixed-segment']
     assert state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id) == []
-    assert len(state.repo.list_narration_segments('ws', state.task.id, 'fixed-script')) == 1
+    assert len(state.repo.narration_records.list_narration_segments('ws', state.task.id, 'fixed-script')) == 1
     assert undone.montage.message == '草稿已恢复；原成片依赖或产物已失效，请明确重新生成。'
     assert set(state.repo.edit_records.get_edit_proposal('ws', undone.operation.proposal_id).invalidated_refs) == {
         tracks[0].artifact_ref, cover.artifact_ref}

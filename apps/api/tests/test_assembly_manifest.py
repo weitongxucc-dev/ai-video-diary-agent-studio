@@ -125,7 +125,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     source_ref = case.repo.workspace_media_reference_for_asset('local', asset.id)
     with case.repo._connect() as conn:
         case.repo._claim_workspace_media_reference(conn, workspace_id='local', reference=source_ref)
-    segments = case.repo.list_narration_segments('local', case.task_id, case.script_id)
+    segments = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)
     graph = timeline([segments[i % 2].audio_reference for i in range(20)])
     for clip in graph.tracks[0].clips:
         clip.gain_db = -30

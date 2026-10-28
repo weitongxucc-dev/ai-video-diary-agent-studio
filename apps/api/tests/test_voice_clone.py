@@ -579,7 +579,7 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
         model_id="local", voice_profile_id="voice-language", voice_version="v1",
         language=language, pronunciation_version="", status="ready")
     monkeypatch.setattr(main, "production_repo", SimpleNamespace(
-        list_narration_segments=lambda *_: [segment],
+        narration_records=SimpleNamespace(list_narration_segments=lambda *_: [segment]),
         narration_artifact_reference=lambda _: artifact.audio_path))
     response = main._creation_task_narration_response(task, artifact).model_dump(mode="json")
     assert response["language"] == language

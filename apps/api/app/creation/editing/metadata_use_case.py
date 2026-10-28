@@ -335,7 +335,7 @@ class MetadataEditUseCase:
         # This complete immutable output is necessary; the input rows stream.
         return {'narration_segments': [json.loads(json.dumps(asdict(segment), ensure_ascii=False,
             default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value)))
-            for segment in self.repository.iter_narration_segments(workspace_id, task.id,
+            for segment in self.repository.narration_records.iter_narration_segments(workspace_id, task.id,
                 task.confirmed_script_id, connection=connection)], 'narration_cache_key': task.narration_cache_key,
             **({'stage_segments': version.snapshot['stage_segments']} if version and 'stage_segments' in version.snapshot else {})}
 
@@ -491,7 +491,7 @@ class MetadataEditUseCase:
         changed = deepcopy(plan)
         if track is None:
             next(item for item in changed.cues if item.id == cue_id).text = text
-            segments = self.repository.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id) if task.confirmed_script_id else []
+            segments = self.repository.narration_records.list_narration_segments(task.workspace_id, task.id, task.confirmed_script_id) if task.confirmed_script_id else []
             pair = make_metadata_proposal(command, [f'cue:{cue_id}'], '只修改所选字幕；配音和镜头保持不变。', payload)
             return pair, changed, None, None, segments
         payload.update(track_id=track.id, start_seconds=cue.start_seconds, end_seconds=cue.end_seconds,

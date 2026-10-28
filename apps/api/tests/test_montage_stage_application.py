@@ -212,7 +212,7 @@ def _montage_stream_case(tmp_path, monkeypatch):
     rows = [NarrationSegment('audio-'+section.id, 'local', task.id, script.id, section.id, section.content,
         repo.narration_artifact_reference('paid'), 2, 24000, 'fixture', 'voice_1', 'v1', 'zh', 'v1', 'ready',
         created_at=script.created_at-timedelta(seconds=i)) for i, section in enumerate(script.sections)]
-    repo.save_narration_segments('local', task.id, script.id, rows)
+    repo.narration_records.save_narration_segments('local', task.id, script.id, rows)
     task.narration_cache_key = 'paid'; task.stage = 'montage'
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
@@ -265,7 +265,8 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
     monkeypatch.setattr(MontagePlanner, '_build_creation_plan', observed)
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo, name, case.forbidden)
+        monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, case.forbidden)
+    monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
     try:
         result = case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,

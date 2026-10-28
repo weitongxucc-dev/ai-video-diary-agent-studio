@@ -49,7 +49,7 @@ class NarrationPreviewUseCase:
             raise edit_preview_failure(status_code=409, error='edit_intent_unsupported', reason=str(exc), impact='任务内容没有发生变化。', repair_action='输入“这句重新配音”或“这句读慢一点”。', retryable=True)
         segment_id = selected_ref.removeprefix('narration:')
         try:
-            segment = self.repository.get_narration_segment(workspace_id, task.id, segment_id)
+            segment = self.repository.narration_records.get_narration_segment(workspace_id, task.id, segment_id)
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
         except KeyError as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task narration edit target not found') from exc

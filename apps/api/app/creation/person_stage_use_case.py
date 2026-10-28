@@ -58,7 +58,7 @@ class PersonStageUseCase:
         if not provider.ready:
             raise capability_unavailable('avatar_lipsync', message=provider.message, impact='人物片段未生成，当前任务等待人物制作完成，尚未生成成片。', repair_action='配置本地人物口型运行环境后重试。')
         try:
-            segment = self.repository.get_narration_segment(workspace_id, task_id, payload.narration_segment_id)
+            segment = self.repository.narration_records.get_narration_segment(workspace_id, task_id, payload.narration_segment_id)
             if segment.status != 'ready' or not segment.audio_reference:
                 raise ValueError('人物片段只能使用已完成的配音分段')
             person = self.repository.get_person_profile(workspace_id, payload.person_profile_id, payload.person_version)
@@ -204,7 +204,7 @@ class PersonStageUseCase:
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
             clip = next((item for item in montage.clips if item.id == required_strings['clip_id']))
             cue = next((item for item in montage.cues if item.id == required_strings['cue_id']))
-            segment = self.repository.get_narration_segment(workspace_id, task.id, required_strings['narration_segment_id'])
+            segment = self.repository.narration_records.get_narration_segment(workspace_id, task.id, required_strings['narration_segment_id'])
         except (KeyError, StopIteration) as exc:
             raise PersonStageRejected(status_code=409, detail='person segment edit base no longer exists') from exc
         if clip.asset_id != required_strings['expected_asset_id'] or clip.segment_id != required_strings['expected_segment_id'] or clip.person_render_id != operation_payload.get('expected_person_render_id') or (cue.narration_segment_id != required_strings['narration_segment_id']):

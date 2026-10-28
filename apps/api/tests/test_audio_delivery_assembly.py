@@ -18,7 +18,7 @@ from test_packet_copy_assembly import _packet_case
 
 def _delivery_case(tmp_path, monkeypatch):
     def add_audio(case, montage):
-        segments = case.repo.list_narration_segments('local', case.task_id, case.script_id)
+        segments = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)
         graph = timeline([segments[0].audio_reference, segments[1].audio_reference, segments[0].audio_reference])
         for clip in graph.tracks[0].clips:
             clip.gain_db = -12

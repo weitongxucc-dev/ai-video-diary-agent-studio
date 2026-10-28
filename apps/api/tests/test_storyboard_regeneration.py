@@ -38,7 +38,7 @@ def state(tmp_path, monkeypatch):
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
     state.segments = [replace(item, audio_reference=state.repo.narration_artifact_reference(state.narration.cache_key))
         for item in state.segments]
-    state.repo.save_narration_segments("ws", state.task.id, "fixed-script", state.segments)
+    state.repo.narration_records.save_narration_segments("ws", state.task.id, "fixed-script", state.segments)
     old = creation_task_montage_plan_from_payload(state.repo.get_creation_task_montage_plan("ws", state.task.id))
     old.narration_audio_path = state.repo.narration_artifact_reference(state.narration.cache_key)
     old.graphic_overlays = [TextOverlay(text="保留人工文字", start_seconds=0, end_seconds=4, font_size=42).model_dump()]
@@ -142,7 +142,7 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     new_cover = state.repo.cover_records.get_cover_asset("ws", state.task.id, version.snapshot["cover_asset_id"])
     assert replace(new_cover, id=old_cover.id, timeline_version_id=old_cover.timeline_version_id,
         created_at=old_cover.created_at, updated_at=old_cover.updated_at) == old_cover
-    assert state.repo.list_narration_segments("ws", state.task.id, "fixed-script") == state.segments
+    assert state.repo.narration_records.list_narration_segments("ws", state.task.id, "fixed-script") == state.segments
     assert state.repo.timeline_records.get_timeline_version("ws", versions[-1].id) == versions[-1]
     count = len(state.repo.timeline_records.list_timeline_versions("ws", state.task.id))
     assert state.client.post(state.url, json=payload).json() == completed
@@ -164,7 +164,7 @@ def adopted(state):
     return (state.repo.task_records.get_creation_task("ws", state.task.id),
         state.repo.get_creation_task_montage_plan("ws", state.task.id),
         state.repo.timeline_records.list_timeline_versions("ws", state.task.id),
-        state.repo.list_narration_segments("ws", state.task.id, "fixed-script"))
+        state.repo.narration_records.list_narration_segments("ws", state.task.id, "fixed-script"))
 
 
 def enqueue(state, payload=None):
@@ -228,8 +228,8 @@ def test_granted_failure_or_cancellation_preserves_adopted_work(state, monkeypat
             state.repo.timeline_records.create_timeline_version(replace(base, id="manual-concurrent", parent_version_id=base.id,
                 sequence=base.sequence + 1))
         elif failure == "narration":
-            segment = state.repo.list_narration_segments("ws", state.task.id, "fixed-script")[0]
-            state.repo.save_narration_segments("ws", state.task.id, "fixed-script", [replace(segment, text="concurrent change")])
+            segment = state.repo.narration_records.list_narration_segments("ws", state.task.id, "fixed-script")[0]
+            state.repo.narration_records.save_narration_segments("ws", state.task.id, "fixed-script", [replace(segment, text="concurrent change")])
         elif failure == "material":
             state.source.write_bytes(b"changed physical source")
         return candidate
@@ -357,7 +357,7 @@ def test_original_ready_audio_replans_30_through_existing_storyboard_request(sta
     with state.repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
     before = state.repo.get_creation_task_montage_plan('ws', task.id)
-    segments = state.repo.list_narration_segments('ws', task.id, task.confirmed_script_id)
+    segments = state.repo.narration_records.list_narration_segments('ws', task.id, task.confirmed_script_id)
     state.executor.montage_stage = main._montage_stage_use_case(state.repo)
     receipt = enqueue(state)
     run(state)
@@ -370,7 +370,7 @@ def test_original_ready_audio_replans_30_through_existing_storyboard_request(sta
     assert after['narration_audio_path'] == before['narration_audio_path']
     assert after['graphic_overlays'] == before['graphic_overlays']
     assert after['clips'][-1]['timeline_end_seconds'] == 30
-    assert state.repo.list_narration_segments('ws', task.id, task.confirmed_script_id) == segments
+    assert state.repo.narration_records.list_narration_segments('ws', task.id, task.confirmed_script_id) == segments
 
 
 @pytest.mark.parametrize('aggregate', [False, True])
@@ -495,7 +495,7 @@ def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes
     from test_montage_stage_application import _montage_stream_case
     case = _montage_stream_case(tmp_path, monkeypatch)
     try:
-        rows = case.repo.list_narration_segments('local', case.task.id, case.script.id)
+        rows = case.repo.narration_records.list_narration_segments('local', case.task.id, case.script.id)
         references = dict.fromkeys([case.repo.narration_artifact_reference(case.record.cache_key),
             *(row.audio_reference for row in rows)])
         files = []
@@ -517,7 +517,8 @@ def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes
         base_key = 'montage_plan:' + hashlib.sha256(expected).hexdigest()
         for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                      'effective_creation_script', 'list_narration_segments'):
-            monkeypatch.setattr(case.repo, name, case.forbidden)
+            monkeypatch.setattr(case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, case.forbidden)
+        monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
         with case.repo.creation_execution_read() as conn:
             snapshot = case.repo.read_creation_execution_snapshot('local', case.task.id, connection=conn)
             key, resources = creation_stage_facts(case.repo, snapshot.task, snapshot.script_header, snapshot.plan,
@@ -558,7 +559,8 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence})
         for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                      'effective_creation_script', 'list_narration_segments'):
-            monkeypatch.setattr(repo, name, case.forbidden)
+            monkeypatch.setattr(repo.narration_records if name in ('list_narration_segments',) else repo, name, case.forbidden)
+        monkeypatch.setattr(repo.narration_records, '_decode_script', case.forbidden)
         monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
         observed = []
         original_build = case.stage.build_candidate

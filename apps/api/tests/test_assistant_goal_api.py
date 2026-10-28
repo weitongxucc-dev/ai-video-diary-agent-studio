@@ -1041,7 +1041,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
         assert client.post(locator['detail_url'],json={**payload,'automatically_confirm':True}).status_code==422
         audio_path=case.repo.resolve_authorized_narration_audio_reference('local',decision['audio']['artifact_reference'])
         before_audio=audio_path.read_bytes()
-        before_segments=case.repo.list_narration_segments('local',case.task_id,case.script_id)
+        before_segments=case.repo.narration_records.list_narration_segments('local',case.task_id,case.script_id)
         before_usage=case.repo.creation_narration_usage('local',job.id)
         monkeypatch.setattr(case.stage,'prepare_segment',lambda *a,**kw:pytest.fail('不能重新生成已保留配音'))
         if case_kind=='stale': payload['decision_digest']='0'*64
@@ -1072,7 +1072,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
             assert response.status_code in {403,409},response.text
             assert case.segments.video_preparation_id(case.job,'section_1') not in [e.id for e in case.repo.execution_records.list_task_events('local',case.task_id)]
         assert audio_path.read_bytes()==before_audio
-        assert case.repo.list_narration_segments('local',case.task_id,case.script_id)==before_segments
+        assert case.repo.narration_records.list_narration_segments('local',case.task_id,case.script_id)==before_segments
         assert case.repo.creation_narration_usage('local',job.id)==before_usage
     finally:
         case.scheduler.close()

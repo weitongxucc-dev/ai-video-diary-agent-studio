@@ -1107,7 +1107,7 @@ class SegmentProductionUseCase:
                 max_output_bytes=max(0,context.max_output_bytes-measured_bytes))
             segment = None
             if command and adopted:
-                previous = self.repository.get_narration_segment(job.workspace_id,job.task_id,prepared['segment']['id'])
+                previous = self.repository.narration_records.get_narration_segment(job.workspace_id,job.task_id,prepared['segment']['id'])
                 segment = replace(previous,**{key:prepared['segment'][key] for key in (
                     'text','audio_reference','duration_seconds','sample_rate','model_id','pronunciation_version','status')},
                     updated_at=utc_now())
