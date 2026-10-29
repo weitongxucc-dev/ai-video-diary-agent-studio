@@ -717,6 +717,12 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     state = recording_metadata
     repo, task, client = state.repo, state.task, state.client
     before_jobs = [job.id for job in repo.job_records.list_job_runs('local',task.id)]
+    with repo._connect() as conn:
+        before_missing = list(conn.iterdump())
+    missing = client.get(f'/api/creation-tasks/{task.id}/audio/artifacts/missing-artifact')
+    assert missing.status_code == 404 and missing.json()['detail'] == '当前任务的音频不存在'
+    with repo._connect() as conn:
+        assert list(conn.iterdump()) == before_missing
     assert client.get(state.route).json()['items'][0]['applied'] is False
     adopted = client.post(state.route+'/adopt',json=state.payload)
     assert adopted.status_code==200,adopted.text

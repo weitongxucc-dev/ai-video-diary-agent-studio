@@ -117,7 +117,7 @@ from app.mobile_transfers import MobileTransferActor
 from app.artifact_store import ArtifactStore
 from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies, bind_device_runtime
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
-from app.audio_timeline import AudioEditRequest, AudioListenRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
+from app.audio_timeline import AudioEditRequest, AudioTimeline, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
 from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewConflict, ClipPreviewUnavailable, prepare_clip_edit, needs_full_visual_preview
 from app.media.clip_preview import ClipPreviewExecutor
@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.task_audio_routes import build_task_audio_router
 from app.production_profile_routes import build_production_profile_router
 from app.legacy_voice_routes import build_legacy_voice_router
 from app.media_script_tool_routes import build_media_script_tool_router
@@ -349,7 +350,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -2715,93 +2716,56 @@ def _effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
     return metadata_effective_audio_timeline(plan)
 
 
-@app.post('/api/creation-tasks/{task_id}/audio/import')
-def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile=File(...)):
-    return _submit_audio_ingress(task_id, request, 'audio_import', 'audio_source', audio=audio)
+def _task_audio_http_router(route_names):
+    return build_task_audio_router(
+        submit_for=lambda: _submit_audio_ingress,
+        workspace_for=lambda: current_workspace_id,
+        task_for=lambda: _creation_task_or_404,
+        ingress_for=lambda: _audio_ingress_use_case,
+        outputs_for=lambda: _output_observation_use_case,
+        ingress_error_type_for=lambda: AudioIngressRejected,
+        http_error_type_for=lambda: HTTPException,
+        narration_for=lambda: _creation_task_narration_response,
+        records_for=lambda: production_repo,
+        media_kind_for=lambda: TASK_MEDIA_KIND,
+        actor_for=lambda: _require_permit_actor,
+        runtime_for=lambda: _creation_runtime,
+        actor_type_for=lambda: CreationExecutionActor,
+        audio_for=lambda: _task_audio,
+        file_response_for=lambda: FileResponse,
+        preview_for=lambda: _preview_audio_edit_request,
+        route_names=route_names,
+    )
 
 
-@app.get("/api/creation-tasks/{task_id}/audio/recordings")
-def list_creation_task_recordings(task_id: str, request: Request):
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    return _audio_ingress_use_case().list_recordings(task, outputs=_output_observation_use_case())
+app.include_router(_task_audio_http_router(("import_creation_task_audio",)))
 
 
-@app.post('/api/creation-tasks/{task_id}/audio/recordings')
-def save_creation_task_recording(task_id: str, request: Request, audio: UploadFile=File(...)):
-    return _submit_audio_ingress(task_id, request, 'recording_save', 'recording', audio=audio)
+app.include_router(_task_audio_http_router(("list_creation_task_recordings",)))
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/audio/recordings/adopt",
-    response_model=CreationTaskNarrationResponse,
-)
-def adopt_creation_task_recording(
-    task_id: str,
-    request: Request,
-    payload: CreationTaskRecordingAdoptRequest,
-) -> CreationTaskNarrationResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    try:
-        task, record = _audio_ingress_use_case().adopt_recording(task,
-            script_id=payload.script_id, source_section_id=payload.source_section_id,
-            source_ref=payload.source_ref, outputs=_output_observation_use_case())
-    except AudioIngressRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return _creation_task_narration_response(task, record)
+app.include_router(_task_audio_http_router(("save_creation_task_recording",)))
 
 
-def _require_task_media_artifact(record, request):
-    job = production_repo.job_records.get_job_run(record.workspace_id, record.producer_job_id)
-    if job.kind != TASK_MEDIA_KIND:
-        return
-    actor = _require_permit_actor(request, record.workspace_id)
-    runtime = _creation_runtime()
-    media = runtime.registrations["creation_job"].owner.task_media
-    original, event = media.read(record.workspace_id, job.id)
-    if CreationExecutionActor.from_event(record.workspace_id, event) != actor or media.verify_identity(actor) != "ready":
-        raise KeyError(record.id)
-    if original.status != "succeeded" or not _output_observation_use_case().published_outputs_current(original):
-        raise KeyError(record.id)
-    if record.kind not in {"audio_source", "task_recording"} and media.check(original, event, actor) != "ready":
-        raise KeyError(record.id)
+app.include_router(_task_audio_http_router(("adopt_creation_task_recording",)))
 
 
-@app.get("/api/creation-tasks/{task_id}/audio/artifacts/{artifact_id}")
-def get_creation_task_audio_artifact(task_id: str, artifact_id: str, request: Request):
-    workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
-    try:
-        record = production_repo.execution_records.get_artifact_record(workspace_id, artifact_id)
-        if record.task_id != task_id:
-            raise KeyError(artifact_id)
-        _require_task_media_artifact(record, request)
-        path = _task_audio().source(workspace_id, task_id, record.logical_ref, actor=_require_permit_actor(request, workspace_id))
-    except (KeyError, ValueError, FileNotFoundError, PermissionError) as exc:
-        raise HTTPException(status_code=404, detail="当前任务的音频不存在") from exc
-    audio_media_types = {".wav": "audio/wav", ".webm": "audio/webm", ".ogg": "audio/ogg",
-                         ".m4a": "audio/mp4", ".mp4": "audio/mp4"}
-    return FileResponse(path, media_type=audio_media_types.get(path.suffix))
 
 
-@app.get('/api/creation-tasks/{task_id}/audio/waveform/{clip_id}')
-def get_creation_task_audio_waveform(task_id: str, clip_id: str, request: Request):
-    return _submit_audio_ingress(task_id, request, 'audio_waveform', 'waveform', arguments={'clip_id': clip_id})
+app.include_router(_task_audio_http_router(("get_creation_task_audio_artifact",)))
 
 
-@app.post('/api/creation-tasks/{task_id}/audio/listen')
-def listen_creation_task_audio(task_id: str, request: Request, payload: AudioListenRequest):
-    return _submit_audio_ingress(task_id, request, 'audio_listen', 'audio_listen', arguments={'payload': payload.model_dump(mode='json', exclude_unset=True)})
+app.include_router(_task_audio_http_router(("get_creation_task_audio_waveform",)))
+
+
+app.include_router(_task_audio_http_router(("listen_creation_task_audio",)))
 
 
 def _preview_clip_original_audio(task_id: str, request: Request, payload: CreationTaskEditPreviewRequest):
     return _preview_audio_edit_request(task_id, request, payload, original_clip=True, queue_on_required=False)
 
 
-@app.post('/api/creation-tasks/{task_id}/audio/preview', response_model=CreationTaskEditPreviewResponse)
-def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEditRequest):
-    return _preview_audio_edit_request(task_id, request, payload, queue_on_required=True)
+app.include_router(_task_audio_http_router(("preview_creation_task_audio",)))
 
 
 @app.post("/api/creation-tasks/{task_id}/graphics/import")
