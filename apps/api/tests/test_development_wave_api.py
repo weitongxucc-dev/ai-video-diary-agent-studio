@@ -68,7 +68,7 @@ def test_sampling_http_persists_replay_and_keeps_member_ownership(tmp_path, monk
 
 
 def test_sampling_http_rejects_missing_or_forged_identity_and_unpaired_mobile(tmp_path, monkeypatch):
-    client, _, _, headers, _ = _sampling_context(tmp_path, monkeypatch)
+    client, repository, owner, headers, other = _sampling_context(tmp_path, monkeypatch)
     base = "/api/media/voice-sampling-tasks"
     create = {"request_id": str(uuid4()), "display_name": "我的声音"}
     assert client.post(base, json=create).status_code == 403
@@ -77,9 +77,31 @@ def test_sampling_http_rejects_missing_or_forged_identity_and_unpaired_mobile(tm
     task = client.post(base, json=create, headers=headers).json()
     response = client.post(f"{base}/{task['id']}/sample", headers=headers,
         data={"request_id": str(uuid4()), "purpose": "voice_profile", "text_version": task["text_version"], "source_device": "mobile"},
-        files={"audio": ("sample.wav", _pcm_sample(), "audio/wav")})
-    assert response.status_code == 422
+        files={"audio": ("sample.wav", b"opaque-unread-sample", "audio/wav")})
+    assert response.status_code == 401
     assert client.get(f"{base}/{task['id']}", headers=headers).json()["status"] == "awaiting_sample"
+
+    assert client.post(base, json=create, headers=headers).json() == task
+    assert client.post(base, json={**create, "display_name": "另一名称"}, headers=headers).status_code == 409
+    assert client.get(base, headers=headers).json() == {"items": [task], "total_count": 1}
+    assert client.get(base, headers=other).json() == {"items": [], "total_count": 0}
+    assert client.get(f"{base}/{task['id']}", headers=other).status_code == 404
+    rejected = client.post(f"{base}/{task['id']}/sample", headers=other,
+        data={"request_id": str(uuid4()), "purpose": "voice_profile", "text_version": task["text_version"], "source_device": "desktop"},
+        files={"audio": ("sample.wav", b"opaque-unread-sample", "audio/wav")})
+    assert rejected.status_code == 404
+    assert client.get(f"{base}/{task['id']}", headers=headers).json() == task
+    reopened = ProductionRepository(database_path=repository.database_path,
+                                    video_library_path=repository.video_library_path)
+    persisted = reopened.voice_sampling.get(task["workspace_id"], owner.member_id, task["id"])
+    assert persisted.status == "awaiting_sample"
+    assert persisted.last_error is None and persisted.submission_request_id is None
+    assert persisted.voice_profile_id is None
+    assert list(repository.video_library_path.iterdir()) == []
+    with reopened._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM voice_sampling_tasks").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM material_assets").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM versioned_voice_profiles").fetchone()[0] == 0
 
 
 def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp_path, monkeypatch):
