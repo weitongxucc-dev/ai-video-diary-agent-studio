@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
+from app.materials import link_routes
 from app import main as _main_placeholder  # noqa: F401  (ensure app import happens first)
 from app.media_link_import import MediaLinkImportService
 from app.local_members import LocalMemberService
@@ -40,6 +41,50 @@ def synthesize(path: Path, arguments: list[str]) -> bytes:
         capture_output=True,
     )
     return path.read_bytes()
+
+
+def link_metadata_no_execution(monkeypatch):
+    """Only MockTransport headers and isolated binding facts, never networking/media."""
+    import socket
+    import wave
+    from app import media_link_import
+    from app.materials import source_files
+
+    violations = []
+
+    def forbidden(*_args, **_kwargs):
+        violations.append("link HTTP metadata attempted networking, media or runtime")
+        raise AssertionError(violations[-1])
+
+    real_connect = socket.socket.connect
+
+    def local_portal_only(sock, address):
+        if sock.family == socket.AF_UNIX:
+            return real_connect(sock, address)
+        return forbidden(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", local_portal_only)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(wave, "open", forbidden)
+    monkeypatch.setattr(Image, "open", forbidden)
+    monkeypatch.setattr(Image, "new", forbidden)
+    monkeypatch.setattr(media_link_import, "_probe_file_media_type", forbidden)
+    monkeypatch.setattr(source_files, "_probe_file_media_type", forbidden)
+    monkeypatch.setattr(MediaLinkImportService, "_download", forbidden)
+    for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
+        monkeypatch.setattr(main_module, name, forbidden)
+    monkeypatch.setattr(ProductionRepository, "scan_library", forbidden)
+    monkeypatch.setattr(ProductionRepository, "analyze_asset", forbidden)
+    return violations
+
+
+@pytest.fixture
+def metadata_link_client(monkeypatch, request):
+    violations = link_metadata_no_execution(monkeypatch)
+    yield request.getfixturevalue("link_client")
+    assert violations == []
 
 
 @pytest.fixture
@@ -79,7 +124,7 @@ def link_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             **{**kwargs, "client_factory": client_factory, "resolver": lambda _host: [PUBLIC]}
         )
 
-    monkeypatch.setattr(main_module, "MediaLinkImportService", service_factory)
+    monkeypatch.setattr(link_routes, "MediaLinkImportService", service_factory)
     return SimpleNamespace(
         client=TestClient(main_module.app, headers={"X-Local-Member-Token": token}),
         repository=repository,
@@ -219,10 +264,18 @@ def test_directory_scan_leaves_non_video_assets_alone(link_client) -> None:
     ).media_type == "image"
 
 
-def test_a_page_or_a_non_media_file_is_never_registered(link_client) -> None:
+def test_a_page_or_a_non_media_file_is_never_registered(metadata_link_client) -> None:
+    link_client = metadata_link_client
     link_client.state.handler = lambda request: httpx.Response(
         200, text="<html>player</html>", headers={"content-type": "text/html; charset=utf-8"}
     )
+    checked = link_client.client.post(
+        "/api/production/materials/link/check", json={"url": VIDEO_URL}
+    )
+    assert checked.status_code == 422
+    assert checked.json()["detail"]["code"] == "web_page_not_media"
+    assert list(link_client.library.iterdir()) == []
+
     response = link_client.client.post(
         "/api/production/materials/link/import", json={"url": VIDEO_URL}
     )
@@ -263,8 +316,9 @@ def test_incomplete_download_registers_nothing(link_client) -> None:
     assert list(link_client.library.iterdir()) == []
 
 
-def test_import_refuses_when_the_intake_is_not_bound_to_this_workspace(link_client) -> None:
-    link_client.state.handler = serve(tmp_png(), "image/png")
+def test_import_refuses_when_the_intake_is_not_bound_to_this_workspace(metadata_link_client) -> None:
+    link_client = metadata_link_client
+    link_client.state.handler = serve(b"opaque metadata only", "image/png")
     response = link_client.client.post(
         "/api/production/materials/link/import",
         json={"url": PNG_URL},

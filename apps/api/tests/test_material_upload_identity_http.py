@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app.main as main_module
+from app.materials import link_routes
 from app.local_members import LocalMemberService
 from app.material_ingestion import MaterialIngestionService
 from app.production import ProductionRepository
@@ -64,7 +65,7 @@ def _setup(tmp_path, monkeypatch) -> dict[str, str]:
             **{**kwargs, "client_factory": client_factory, "resolver": lambda _host: [PUBLIC]}
         )
 
-    monkeypatch.setattr(main_module, "MediaLinkImportService", service_factory)
+    monkeypatch.setattr(link_routes, "MediaLinkImportService", service_factory)
 
     owner_member, owner_token = service.whoami(None)
     member_a, token_a = service.join(service.create_invite_code(), "甲")

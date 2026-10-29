@@ -10,6 +10,7 @@ from app.assistant.conversation_routes import ConversationHTTPAdapter, build_con
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
+from app.materials.link_routes import MaterialLinkHTTPAdapter, build_material_link_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -325,11 +326,6 @@ from app.quality_inspection import QualityCheckRepository
 from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND
 from app.creation.quality_execution import quality_check_registration
 from app.schemas import CreationTaskObservationRequest, CreationTaskObservationTarget, KnowledgeSearchResponse
-from app.media_link_import import (
-    DEFAULT_MAX_BYTES,
-    MediaLinkImportError,
-    MediaLinkImportService,
-)
 from app.subtitle_tracks import (
     SubtitleCue as SubtitleExecutionCue,
     SubtitleStyle as SubtitleExecutionStyle,
@@ -8902,95 +8898,26 @@ app.include_router(build_material_intake_router(_material_intake_http_adapter, (
 app.include_router(build_material_intake_router(_material_intake_http_adapter, ('scan_material_intake',)))
 
 
-def _media_link_service(
-    workspace_id: str, verified_owner_user_id: str | None = None,
-    local_diagnostic: bool = False,
-) -> MediaLinkImportService:
-    """Build the direct-link importer on top of the existing intake binding."""
-    repository = production_repo
-    try:
-        intake_root = repository.material_link_target(workspace_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return MediaLinkImportService(
-        # trust_env=False：不读环境里的代理设置，导入只能连到已判定的公开地址。
-        client_factory=lambda: httpx.Client(
-            follow_redirects=False, timeout=60.0, trust_env=False
-        ),
-        intake_root=intake_root,
-        provenance=MaterialLinkProvenanceSink(
-            repository, workspace_id, verified_owner_user_id, local_diagnostic,
-        ),
-        max_bytes=DEFAULT_MAX_BYTES,
-    )
 
 
 # 只有真正的边界拒绝才算客户端可修的问题；其余照实报告来源返回的状态。
-_MEDIA_LINK_STATUS = {
-    "invalid_url": 422,
-    "unsupported_scheme": 422,
-    "credentials_in_url": 422,
-    "social_page": 422,
-    "private_address": 422,
-    "host_unresolved": 422,
-    "web_page_not_media": 422,
-    "unsupported_media_type": 422,
-    "too_large": 413,
-    "credentials_required": 415,
-    "not_found": 404,
-}
 
 
-def _media_link_failure(exc: MediaLinkImportError) -> HTTPException:
-    return HTTPException(
-        status_code=_MEDIA_LINK_STATUS.get(exc.code, 502),
-        detail={"code": exc.code, "detail": exc.message},
+
+
+def _material_link_http_adapter():
+    return MaterialLinkHTTPAdapter(
+        records_for=lambda: production_repo,
+        workspace_for=current_workspace_id,
+        reader_for=_content_reader,
+        provenance_for=MaterialLinkProvenanceSink,
     )
 
 
-@app.post("/api/production/materials/link/check", response_model=MediaLinkCheckResponse)
-def check_production_material_link(
-    request: Request,
-    payload: MediaLinkCheckRequest,
-) -> MediaLinkCheckResponse:
-    workspace_id = current_workspace_id(request)
-    service = _media_link_service(workspace_id)
-    try:
-        result = service.check(payload.url)
-    except MediaLinkImportError as exc:
-        raise _media_link_failure(exc) from exc
-    return MediaLinkCheckResponse.model_validate(asdict(result))
+app.include_router(build_material_link_router(_material_link_http_adapter, ('check_production_material_link',)))
 
 
-@app.post("/api/production/materials/link/import", response_model=MediaLinkImportResponse)
-def import_production_material_link(
-    request: Request,
-    payload: MediaLinkImportRequest,
-) -> MediaLinkImportResponse:
-    workspace_id = current_workspace_id(request)
-    # 导入的素材归属这次请求的可信身份，不采信任何自填值。
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    service = _media_link_service(workspace_id, viewer_user_id, local_diagnostic)
-    try:
-        result = service.import_link(payload.url)
-        asset = production_repo.get_asset(workspace_id, result.asset_id)
-    except MediaLinkImportError as exc:
-        raise _media_link_failure(exc) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    return MediaLinkImportResponse(
-        url=result.url,
-        media_type=asset.media_type,
-        file_name=asset.file_name,
-        size_bytes=asset.size_bytes,
-        # 以已登记素材为准：同一原网址重复提交时，响应描述的仍是那条素材。
-        file_path=asset.path,
-        asset_id=asset.id,
-        provenance_id=result.provenance_id,
-        reused_existing_file=result.reused_existing_file,
-        analysis_status=asset.analysis_status,
-        analysis_message=asset.analysis_message,
-    )
+app.include_router(build_material_link_router(_material_link_http_adapter, ('import_production_material_link',)))
 
 
 app.include_router(build_material_intake_router(_material_intake_http_adapter, ('retry_material_intake',)))
