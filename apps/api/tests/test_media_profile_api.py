@@ -401,10 +401,13 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
     ],
 )
 def test_media_management_rejects_blank_required_values(
-    client: TestClient,
+    request: pytest.FixtureRequest,
     path: str,
     payload: dict[str, object],
 ) -> None:
+    client = request.getfixturevalue(
+        "authorization_client" if path == "/api/media/pronunciation-entries" else "client"
+    )
     if path == "/api/media/voice-profiles":
         assert client.post("/api/media/person-profiles", json=_person_payload()).status_code == 200
         payload = {
@@ -413,6 +416,43 @@ def test_media_management_rejects_blank_required_values(
             "reference": {"asset_id": client.voice_asset_id},
         }
     assert client.post(path, json=payload).status_code == 422
+
+    if path == "/api/media/pronunciation-entries":
+        endpoint = "/api/media/pronunciation-entries"
+        assert client.get(endpoint).json() == {"items": [], "total_count": 0}
+        first_payload = {**payload, "term": "Codex", "target_pronunciation": "KO-deks"}
+        first = client.post(endpoint, json=first_payload)
+        assert first.status_code == 200
+        first_body = first.json()
+        assert first_body["workspace_id"] == "workspace-a"
+        conflict = client.post(endpoint, json={**first_payload, "target_pronunciation": "changed"})
+        assert conflict.status_code == 409
+        missing_person = client.post(endpoint, json={**first_payload, "id": "missing-person-entry",
+                                                     "scope": "person", "scope_reference": "missing"})
+        assert missing_person.status_code == 404
+        second = client.post(endpoint, json={**first_payload, "version": "v2", "target_pronunciation": "new"})
+        assert second.status_code == 200
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(main_module, "production_repo", ProductionRepository(
+                database_path=client.authorization_database, video_library_path=client.authorization_library,
+            ))
+            entry_id = first_payload["id"]
+            assert client.get(f"{endpoint}/{entry_id}").json() == second.json()
+            assert client.get(f"{endpoint}/{entry_id}?version=v1").json() == first_body
+            assert client.get(f"{endpoint}/{entry_id}/versions").json() == {
+                "items": [second.json(), first_body], "total_count": 2,
+            }
+            assert client.get(endpoint).json() == {"items": [second.json()], "total_count": 1}
+            assert client.get(f"{endpoint}/{entry_id}?version=missing").status_code == 404
+            assert client.get(f"{endpoint}/missing-person-entry").status_code == 404
+            foreign = {"x-test-workspace": "workspace-b"}
+            assert client.get(endpoint, headers=foreign).json() == {"items": [], "total_count": 0}
+            for suffix in [entry_id, f"{entry_id}?version=v1", f"{entry_id}/versions"]:
+                assert client.get(f"{endpoint}/{suffix}", headers=foreign).status_code == 404
+            saved_foreign = client.post(endpoint, headers=foreign,
+                                        json={**first_payload, "target_pronunciation": "foreign"})
+            assert saved_foreign.status_code == 200
+            assert client.get(f"{endpoint}/{entry_id}?version=v1").json() == first_body
 
 
 def test_media_management_rejects_semantic_change_without_new_version_and_reports_capabilities(

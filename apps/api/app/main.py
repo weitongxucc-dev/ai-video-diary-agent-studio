@@ -101,7 +101,7 @@ from app.subtitle_style import compile_subtitle_style_command
 from app.subtitle_edits import normalize_subtitle_text_and_breaks, update_subtitle_cue
 from app.subtitle_schedule import subtitle_schedule, narration_schedule, retime_subtitle_tracks, new_subtitle_gap_intervals
 from app.avatar_lipsync import (compile_person_edit_command, AvatarAndLipSyncService, AvatarPreviewService, avatar_lipsync_cache_key, avatar_lipsync_provider_from_settings)
-from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, PronunciationEntry, VoiceProfile as VersionedVoiceProfile, profile_use_failure)
+from app.profiles.contracts import (Authorization, PersonProfile, ProfileReference, VoiceProfile as VersionedVoiceProfile, profile_use_failure)
 from app.auth import (
     AuthDependencyUnavailableError,
     AuthPrincipal,
@@ -172,6 +172,7 @@ from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.local_member_routes import build_local_member_router
 from app.profiles.authorization_routes import build_authorization_router
+from app.profiles.pronunciation_routes import build_pronunciation_router
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
@@ -505,9 +506,6 @@ from app.schemas import (
     PersonProfileResponse,
     PersonProfilesResponse,
     PersonProfileUpsertRequest,
-    PronunciationEntriesResponse,
-    PronunciationEntryResponse,
-    PronunciationEntryUpsertRequest,
     RetakeReportResponse,
     RuntimeHealthResponse,
     RuntimeSettingsResponse,
@@ -1770,10 +1768,6 @@ def _versioned_voice_profile_response(voice: VersionedVoiceProfile, request: Req
         reference_url=f"/api/media/voice-profiles/{quote(voice.id, safe='')}/reference?version={quote(voice.version, safe='')}" if path else None)
 
 
-def _pronunciation_entry_response(entry: PronunciationEntry) -> PronunciationEntryResponse:
-    return PronunciationEntryResponse.model_validate(entry, from_attributes=True)
-
-
 app.include_router(build_authorization_router(
     records_for=lambda: production_repo,
     workspace_for=lambda request: current_workspace_id(request),
@@ -2113,90 +2107,12 @@ def list_media_voice_profile_versions(
     )
 
 
-@app.get(
-    "/api/media/pronunciation-entries",
-    response_model=PronunciationEntriesResponse,
-)
-def list_media_pronunciation_entries(request: Request) -> PronunciationEntriesResponse:
-    entries = production_repo.list_pronunciation_entries(current_workspace_id(request))
-    return PronunciationEntriesResponse(
-        items=[_pronunciation_entry_response(item) for item in entries],
-        total_count=len(entries),
-    )
-
-
-@app.post(
-    "/api/media/pronunciation-entries",
-    response_model=PronunciationEntryResponse,
-)
-def save_media_pronunciation_entry(
-    request: Request,
-    payload: PronunciationEntryUpsertRequest,
-) -> PronunciationEntryResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        scope_reference = (
-            _required_media_text(payload.scope_reference, "scope reference")
-            if payload.scope_reference is not None
-            else None
-        )
-        saved = production_repo.save_pronunciation_entry(
-            PronunciationEntry(
-                id=_required_media_text(payload.id, "pronunciation entry id"),
-                workspace_id=workspace_id,
-                term=_required_media_text(payload.term, "term"),
-                language=payload.language,
-                target_pronunciation=_required_media_text(
-                    payload.target_pronunciation, "target pronunciation"
-                ),
-                scope=payload.scope,
-                scope_reference=scope_reference,
-                version=_required_media_text(payload.version, "pronunciation version"),
-            )
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="person profile not found") from exc
-    except ValueError as exc:
-        raise _media_write_error(exc) from exc
-    return _pronunciation_entry_response(saved)
-
-
-@app.get(
-    "/api/media/pronunciation-entries/{entry_id}",
-    response_model=PronunciationEntryResponse,
-)
-def get_media_pronunciation_entry(
-    entry_id: str,
-    request: Request,
-    version: str | None = None,
-) -> PronunciationEntryResponse:
-    try:
-        entry = production_repo.get_pronunciation_entry(
-            current_workspace_id(request), entry_id, version
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="pronunciation entry not found") from exc
-    return _pronunciation_entry_response(entry)
-
-
-@app.get(
-    "/api/media/pronunciation-entries/{entry_id}/versions",
-    response_model=PronunciationEntriesResponse,
-)
-def list_media_pronunciation_entry_versions(
-    entry_id: str,
-    request: Request,
-) -> PronunciationEntriesResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_pronunciation_entry(workspace_id, entry_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="pronunciation entry not found") from exc
-    items = production_repo.list_pronunciation_entry_versions(workspace_id, entry_id)
-    return PronunciationEntriesResponse(
-        items=[_pronunciation_entry_response(item) for item in items],
-        total_count=len(items),
-    )
+app.include_router(build_pronunciation_router(
+    records_for=lambda: production_repo,
+    workspace_for=lambda request: current_workspace_id(request),
+    required_text_for=lambda value, field: _required_media_text(value, field),
+    write_error_for=lambda exc: _media_write_error(exc),
+))
 
 
 def _capability_unavailable(
