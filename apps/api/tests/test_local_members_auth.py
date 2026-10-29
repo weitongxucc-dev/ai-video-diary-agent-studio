@@ -177,6 +177,17 @@ def test_owner_token_passes_member_write_routes(tmp_path, monkeypatch):
     assert invite_response.status_code == 200
     assert invite_response.json()["invite_code"]
 
+    member_id = add_response.json()["member_id"]
+    promoted = client.patch(f"/api/members/{member_id}", json={"role": "owner"}, headers=headers)
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "owner"
+    reopened = LocalMemberService(tmp_path / "agent.sqlite3")
+    assert next(m for m in reopened.list_members() if m.member_id == member_id).role == "owner"
+    removed = client.delete(f"/api/members/{member_id}", headers=headers)
+    assert removed.status_code == 200
+    assert removed.json() == {"deleted": member_id}
+    assert all(m.member_id != member_id for m in reopened.list_members())
+
 
 def test_invalid_token_is_unauthorized(tmp_path, monkeypatch):
     _member_service(tmp_path, monkeypatch)

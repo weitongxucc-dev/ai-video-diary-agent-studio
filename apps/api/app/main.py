@@ -170,6 +170,7 @@ from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptTool
 from app.visual_effects import VisualEditRequest, VisualEffects, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
+from app.local_member_routes import build_local_member_router
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
@@ -1057,80 +1058,11 @@ async def accept_device_invite(request: Request, payload: DeviceInviteAcceptRequ
     )
 
 
-LOCAL_MEMBERS_ERROR_STATUS: dict[str, int] = {
-    "invalid": 400,
-    "not_found": 404,
-    "conflict": 409,
-}
-
-
-class MemberResponse(BaseModel):
-    member_id: str
-    name: str
-    role: str
-    created_at: str
-
-
-class MemberListResponse(BaseModel):
-    members: list[MemberResponse]
-
-
-class AddMemberRequest(BaseModel):
-    name: str
-    role: str = "member"
-
-
-class SetMemberRoleRequest(BaseModel):
-    role: str
-
-
-class JoinMemberRequest(BaseModel):
-    code: str
-    name: str
-
-
-class InviteCodeResponse(BaseModel):
-    invite_code: str
-
-
-class MemberWithTokenResponse(MemberResponse):
-    """Join/whoami response: the only places a member's bearer token is exposed."""
-
-    member_token: str
-
-
 LOCAL_MEMBER_TOKEN_HEADER = "X-Local-Member-Token"
 
 
 def _local_member_token(request: Request) -> str:
     return request.headers.get(LOCAL_MEMBER_TOKEN_HEADER, "").strip()
-
-
-def _member_response(member) -> MemberResponse:
-    return MemberResponse(
-        member_id=member.member_id,
-        name=member.name,
-        role=member.role,
-        created_at=member.created_at,
-    )
-
-
-def _member_with_token_response(member, token: str) -> MemberWithTokenResponse:
-    return MemberWithTokenResponse(
-        member_id=member.member_id,
-        name=member.name,
-        role=member.role,
-        created_at=member.created_at,
-        member_token=token,
-    )
-
-
-def _local_members_error_response(exc: LocalMembersError) -> JSONResponse:
-    status = LOCAL_MEMBERS_ERROR_STATUS.get(exc.kind, 500)
-    return JSONResponse(
-        status_code=status,
-        content={"error": exc.kind, "detail": str(exc)},
-    )
 
 
 def _local_member_write_guard(request: Request) -> JSONResponse | None:
@@ -1334,75 +1266,11 @@ _runtime_routes_insert_at = len(app.router.routes)
 _bound_runtime_routes = []
 
 
-@app.get("/api/members")
-def list_local_members() -> MemberListResponse:
-    return MemberListResponse(
-        members=[_member_response(m) for m in local_members_service.list_members()]
-    )
-
-
-@app.post("/api/members")
-def add_local_member(request: Request, payload: AddMemberRequest):
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    try:
-        member = local_members_service.add_member(payload.name, payload.role)
-    except LocalMembersError as exc:
-        return _local_members_error_response(exc)
-    return _member_response(member)
-
-
-@app.delete("/api/members/{member_id}")
-def remove_local_member(member_id: str, request: Request):
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    try:
-        local_members_service.remove_member(member_id)
-    except LocalMembersError as exc:
-        return _local_members_error_response(exc)
-    return {"deleted": member_id}
-
-
-@app.patch("/api/members/{member_id}")
-def set_local_member_role(member_id: str, request: Request, payload: SetMemberRoleRequest):
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    try:
-        member = local_members_service.set_role(member_id, payload.role)
-    except LocalMembersError as exc:
-        return _local_members_error_response(exc)
-    return _member_response(member)
-
-
-@app.post("/api/members/invite-code")
-def create_local_invite_code(request: Request) -> InviteCodeResponse:
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    return InviteCodeResponse(invite_code=local_members_service.create_invite_code())
-
-
-@app.post("/api/members/join")
-def join_local_member(payload: JoinMemberRequest):
-    try:
-        member, token = local_members_service.join(payload.code, payload.name)
-    except LocalMembersError as exc:
-        return _local_members_error_response(exc)
-    return _member_with_token_response(member, token)
-
-
-@app.get("/api/members/whoami")
-def whoami_local_member(request: Request):
-    try:
-        member, token = local_members_service.whoami(
-            _local_member_token(request) or None
-        )
-    except LocalMembersError as exc:
-        return _local_members_error_response(exc)
-    return _member_with_token_response(member, token)
+app.include_router(build_local_member_router(
+    service_for=lambda: local_members_service,
+    write_guard=lambda request: _local_member_write_guard(request),
+    token_for=lambda request: _local_member_token(request),
+))
 
 
 def get_episode_or_404(episode_id: str) -> Episode:
