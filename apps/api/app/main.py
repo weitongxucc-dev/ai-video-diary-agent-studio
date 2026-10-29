@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.legacy_voice_routes import build_legacy_voice_router
 from app.media_script_tool_routes import build_media_script_tool_router
 from app.video_intake_routes import build_video_intake_router
 from app.device_session_routes import build_device_session_router
@@ -347,7 +348,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VoiceProfileUpsertRequest, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -1283,125 +1284,28 @@ def update_production_profile(
     return ProductionProfileResponse.model_validate(saved, from_attributes=True)
 
 
-@app.get("/api/production/voices", response_model=VoiceProfilesResponse)
-def list_production_voices(request: Request) -> VoiceProfilesResponse:
-    """Read historical voice rows only; new writes use versioned media profiles."""
-    voices = production_repo.list_voice_profiles(current_workspace_id(request))
-    return VoiceProfilesResponse(
-        voices=[
-            VoiceProfileResponse.model_validate(voice, from_attributes=True)
-            for voice in voices
-        ],
-        total_count=len(voices),
-    )
+app.include_router(build_legacy_voice_router(
+    records_for=lambda: production_repo,
+    workspace_for=lambda: current_workspace_id,
+    profiles_type_for=lambda: VoiceProfilesResponse,
+    profile_type_for=lambda: VoiceProfileResponse,
+    http_error_type_for=lambda: HTTPException,
+    capability_for=lambda: _capability_unavailable,
+    selection_type_for=lambda: EpisodeVoiceSelectionResponse,
+    episodes_for=lambda: repo,
+    authority_type_for=lambda: MediaAuthorityError,
+    authority_error_for=lambda: _media_authority_http_error,
+))
 
 
-@app.post("/api/production/voices", response_model=VoiceProfileResponse)
-def create_production_voice(
-    request: Request,
-    payload: VoiceProfileUpsertRequest,
-) -> VoiceProfileResponse:
-    del request, payload
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "legacy_voice_profile_write_retired",
-            "impact": "旧声音档案不会再作为创作任务的配音事实源。",
-            "repair_action": "使用 /api/media/voice-profiles 保存带人物、授权和版本的声音档案。",
-            "retryable": False,
-        },
-    )
 
 
-@app.put(
-    "/api/production/voices/{voice_profile_id}",
-    response_model=VoiceProfileResponse,
-)
-def update_production_voice(
-    voice_profile_id: str,
-    request: Request,
-    payload: VoiceProfileUpsertRequest,
-) -> VoiceProfileResponse:
-    del voice_profile_id, request, payload
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "legacy_voice_profile_write_retired",
-            "impact": "旧声音档案不会再作为创作任务的配音事实源。",
-            "repair_action": "使用 /api/media/voice-profiles 创建新的声音版本。",
-            "retryable": False,
-        },
-    )
 
 
-@app.get("/api/production/voices/{voice_profile_id}/media")
-def get_production_voice_media(
-    voice_profile_id: str,
-    request: Request,
-) -> FileResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_voice_profile(workspace_id, voice_profile_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    raise _capability_unavailable(
-        "voice_reference_mapping",
-        message="声音参考仅保存为工作区逻辑引用，当前 API 未配置已授权媒体根映射。",
-        impact="不能直接读取或返回声音参考媒体。",
-        repair_action="配置工作区已授权媒体根映射后重试。",
-    )
 
 
-def _episode_voice_selection_response(
-    workspace_id: str,
-    episode_id: str,
-) -> EpisodeVoiceSelectionResponse:
-    identity = production_repo.selected_episode_versioned_voice_identity(
-        workspace_id,
-        episode_id,
-    )
-    if identity is None:
-        return EpisodeVoiceSelectionResponse(
-            episode_id=episode_id,
-            voice_profile_id=None,
-            voice_version=None,
-            language=None,
-            authorization_id=None,
-            authorization_version=None,
-            pronunciation_entry_ids=[],
-            source="none",
-        )
-    inputs = production_repo.resolve_episode_narration_inputs(workspace_id, episode_id)
-    voice = inputs.voice
-    return EpisodeVoiceSelectionResponse(
-        episode_id=episode_id,
-        voice_profile_id=voice.id,
-        voice_version=voice.version,
-        language=voice.language,
-        authorization_id=voice.authorization.id,
-        authorization_version=voice.authorization.version,
-        pronunciation_entry_ids=[entry.id for entry in inputs.pronunciation_entries],
-        source="episode",
-    )
 
 
-@app.get(
-    "/api/production/episodes/{episode_id}/voice",
-    response_model=EpisodeVoiceSelectionResponse,
-)
-def get_episode_voice_selection(
-    episode_id: str,
-    request: Request,
-) -> EpisodeVoiceSelectionResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        repo.get(episode_id, workspace_id=workspace_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="episode not found") from exc
-    try:
-        return _episode_voice_selection_response(workspace_id, episode_id)
-    except MediaAuthorityError as exc:
-        raise _media_authority_http_error(exc) from exc
 
 
 
