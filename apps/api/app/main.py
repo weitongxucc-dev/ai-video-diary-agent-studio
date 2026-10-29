@@ -171,6 +171,7 @@ from app.visual_effects import VisualEditRequest, VisualEffects, compile_crop_co
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.local_member_routes import build_local_member_router
+from app.profiles.authorization_routes import build_authorization_router
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
@@ -362,7 +363,6 @@ from app.schemas import (
     AssistantConversationUpdateRequest,
     ScriptLibrarySourceResponse,
     AuthorizationResponse,
-    AuthorizationsResponse,
     AuthorizationUpsertRequest,
     AvatarLipSyncPreviewRequest,
     ContentTemplatesResponse,
@@ -1774,62 +1774,13 @@ def _pronunciation_entry_response(entry: PronunciationEntry) -> PronunciationEnt
     return PronunciationEntryResponse.model_validate(entry, from_attributes=True)
 
 
-@app.get("/api/media/authorizations", response_model=AuthorizationsResponse)
-def list_media_authorizations(request: Request) -> AuthorizationsResponse:
-    authorizations = production_repo.list_authorizations(current_workspace_id(request))
-    return AuthorizationsResponse(
-        items=[_authorization_response(item) for item in authorizations],
-        total_count=len(authorizations),
-    )
-
-
-@app.post("/api/media/authorizations", response_model=AuthorizationResponse)
-def save_media_authorization(
-    request: Request,
-    payload: AuthorizationUpsertRequest,
-) -> AuthorizationResponse:
-    try:
-        saved = production_repo.save_authorization(
-            _authorization_from_request(current_workspace_id(request), payload)
-        )
-    except ValueError as exc:
-        raise _media_write_error(exc) from exc
-    return _authorization_response(saved)
-
-
-@app.get("/api/media/authorizations/{authorization_id}", response_model=AuthorizationResponse)
-def get_media_authorization(
-    authorization_id: str,
-    request: Request,
-    version: str | None = None,
-) -> AuthorizationResponse:
-    try:
-        authorization = production_repo.get_authorization(
-            current_workspace_id(request), authorization_id, version
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="authorization not found") from exc
-    return _authorization_response(authorization)
-
-
-@app.get(
-    "/api/media/authorizations/{authorization_id}/versions",
-    response_model=AuthorizationsResponse,
-)
-def list_media_authorization_versions(
-    authorization_id: str,
-    request: Request,
-) -> AuthorizationsResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_authorization(workspace_id, authorization_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="authorization not found") from exc
-    items = production_repo.list_authorization_versions(workspace_id, authorization_id)
-    return AuthorizationsResponse(
-        items=[_authorization_response(item) for item in items],
-        total_count=len(items),
-    )
+app.include_router(build_authorization_router(
+    records_for=lambda: production_repo,
+    workspace_for=lambda request: current_workspace_id(request),
+    authorization_for=lambda workspace_id, payload: _authorization_from_request(workspace_id, payload),
+    response_for=lambda authorization: _authorization_response(authorization),
+    write_error_for=lambda exc: _media_write_error(exc),
+))
 
 
 def _readable_profiles(request: Request, items):

@@ -444,7 +444,22 @@ def test_media_management_rejects_semantic_change_without_new_version_and_report
     assert "media_url" not in avatar_capability.json()["detail"]
 
 
-def test_media_requests_reject_forged_workspace(client: TestClient) -> None:
+@pytest.fixture
+def authorization_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    database = tmp_path / "authorization.sqlite3"
+    library = tmp_path / "metadata-library"
+    repository = ProductionRepository(database_path=database, video_library_path=library)
+    monkeypatch.setattr(main_module, "production_repo", repository)
+    monkeypatch.setattr(main_module, "current_workspace_id",
+                        lambda request: request.headers.get("x-test-workspace", "workspace-a"))
+    client = TestClient(main_module.app)
+    client.authorization_database = database
+    client.authorization_library = library
+    return client
+
+
+def test_media_requests_reject_forged_workspace(authorization_client: TestClient, monkeypatch) -> None:
+    client = authorization_client
     response = client.post(
         "/api/media/authorizations",
         json={
@@ -454,6 +469,38 @@ def test_media_requests_reject_forged_workspace(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+    assert client.get("/api/media/authorizations").json() == {"items": [], "total_count": 0}
+    payload = _authorization_payload("authorization-a")
+    first = client.post("/api/media/authorizations", json=payload)
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["workspace_id"] == "workspace-a"
+    conflict = client.post("/api/media/authorizations", json={**payload, "rights_holder": "其他人"})
+    assert conflict.status_code == 409
+    invalid = client.post("/api/media/authorizations", json={**payload, "rights_holder": "   "})
+    assert invalid.status_code == 422
+    assert client.get("/api/media/authorizations/authorization-a?version=v1").json() == first_body
+    revoked = client.post("/api/media/authorizations", json={**payload, "version": "v2", "status": "revoked"})
+    assert revoked.status_code == 200
+    monkeypatch.setattr(main_module, "production_repo", ProductionRepository(
+        database_path=client.authorization_database, video_library_path=client.authorization_library,
+    ))
+    assert client.get("/api/media/authorizations/authorization-a").json() == revoked.json()
+    assert client.get("/api/media/authorizations/authorization-a?version=v1").json() == first_body
+    history = client.get("/api/media/authorizations/authorization-a/versions").json()
+    assert history == {"items": [revoked.json(), first_body], "total_count": 2}
+    assert client.get("/api/media/authorizations").json() == {"items": [revoked.json()], "total_count": 1}
+    foreign = {"x-test-workspace": "workspace-b"}
+    assert client.get("/api/media/authorizations", headers=foreign).json() == {"items": [], "total_count": 0}
+    for path in ["authorization-a", "authorization-a/versions", "authorization-a?version=v1", "missing"]:
+        assert client.get("/api/media/authorizations/" + path, headers=foreign).status_code == 404
+    assert client.get("/api/media/authorizations/authorization-a?version=missing").status_code == 404
+    foreign_save = client.post("/api/media/authorizations", headers=foreign,
+                               json={**payload, "rights_holder": "其他空间"})
+    assert foreign_save.status_code == 200
+    assert client.get("/api/media/authorizations/authorization-a?version=v1").json() == first_body
 
 
 @pytest.mark.parametrize(
