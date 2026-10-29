@@ -66,6 +66,23 @@ def test_knowledge_correction_is_owned_versioned_and_does_not_modify_source(clie
     assert client.put(route, json=payload, headers={"X-Local-Member-Token": token}).status_code == 403
     assert client.get(f"/api/knowledge-items/{saved['id']}").json()["version"] == "2"
 
+    detail = f"/api/knowledge-items/{saved['id']}"
+    peer = {"X-Local-Member-Token": token}
+    assert client.get(detail, headers=peer).status_code == 404
+    assert client.get("/api/knowledge-items/search", params={"query": "修订"}, headers=peer).json()["total_count"] == 0
+    found = client.get("/api/knowledge-items/search", params={"query": "修订", "limit": 1}).json()
+    assert found["total_count"] == 1 and found["items"][0]["id"] == saved["id"]
+    assert found["items"][0]["version"] == "2" and found["next_offset"] is None
+    shared = client.put(detail + "/visibility", json={"visibility": "shared"})
+    assert shared.status_code == 200 and shared.json()["visibility"] == "shared"
+    assert client.get(detail, headers=peer).json()["version"] == "2"
+    assert client.get("/api/knowledge-items/search", params={"query": "修订"}, headers=peer).json()["total_count"] == 1
+    private = client.put(detail + "/visibility", json={"visibility": "private"})
+    assert private.status_code == 200 and private.json()["visibility"] == "private"
+    assert client.get(detail, headers=peer).status_code == 404
+    assert client.get("/api/knowledge-items/search", params={"query": "修订"}, headers=peer).json()["total_count"] == 0
+    assert main_module.source_repository.get_source_item("workspace-a", source["id"]).body == "原始内容"
+
 
 def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client):
     rejected_workspace = client.post(
@@ -122,6 +139,12 @@ def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client)
     assert client.get(
         f"/api/source-connectors/{source['connector_id']}", headers=other_workspace
     ).status_code == 404
+
+    original = f"/api/knowledge-items/{knowledge['id']}/versions/{knowledge['version']}/original"
+    missing_original = client.get(original)
+    assert missing_original.status_code == 404
+    assert client.get(original, headers=other_workspace).status_code == 404
+    assert client.get(f"/api/knowledge-items/{knowledge['id']}").json()["version"] == "1"
 
 
 def test_unimplemented_connector_is_not_reported_as_success(client, monkeypatch):

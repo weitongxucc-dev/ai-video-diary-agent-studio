@@ -319,7 +319,7 @@ from app.task_runtime import JobFailure, JobResult
 from app.quality_inspection import QualityCheckRepository
 from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND
 from app.creation.quality_execution import quality_check_registration
-from app.schemas import CreationTaskObservationRequest, CreationTaskObservationTarget, KnowledgeSearchResponse
+from app.schemas import CreationTaskObservationRequest, CreationTaskObservationTarget
 from app.subtitle_tracks import (
     SubtitleCue as SubtitleExecutionCue,
     SubtitleStyle as SubtitleExecutionStyle,
@@ -350,8 +350,9 @@ from app.workspace_settings import (
     workspace_settings,
 )
 from app.source_connector_routes import build_source_connector_router
-from app.source_repository import KnowledgeVersionConflict, SourceRepository
-from app.knowledge_file_store import KnowledgeOriginalUnavailable, KnowledgeOriginalIntegrityError, KnowledgeOriginalStorageError
+from app.knowledge_routes import build_knowledge_router
+from app.source_repository import SourceRepository
+from app.knowledge_file_store import KnowledgeOriginalIntegrityError, KnowledgeOriginalStorageError
 from app.home_aggregation import aggregate_home
 from app.schemas import (
     AssistantConversationCreateRequest,
@@ -449,8 +450,6 @@ from app.schemas import (
     EpisodeVoiceSelectionResponse,
     FeedbackEventResponse,
     KnowledgeNoteResponse,
-    KnowledgeItemResponse,
-    KnowledgeItemsResponse,
     ManualSourceItemRequest,
     ManualLinkRequest,
     MaterialAssetResponse,
@@ -513,15 +512,10 @@ from app.schemas import (
     SourceItemDetailResponse,
     SourceItemDetailsResponse,
     KnowledgeFileImportRequest,
-    KnowledgeItemDetailResponse,
-    KnowledgeItemVersionResponse,
     ContentVisibilityRequest,
-    KnowledgeItemVisibilityRequest,
-    KnowledgeItemContentRequest,
     SourceItemResponse,
     SourceRunEvidenceResponse,
     SourceItemsResponse,
-    SaveSourceItemToKnowledgeRequest,
     SourceSyncRetryResponse,
     SystemStatusResponse,
     TopicEvidenceItemResponse,
@@ -554,7 +548,7 @@ from app.platform_publish import (
     recover_platform_publish_jobs,
 )
 from app.sources import ObsidianVault
-from app.source_types import KnowledgeItem, SourceConnector, SourceItem
+from app.source_types import SourceConnector, SourceItem
 from app.source_policy import content_allows_use
 from app.source_sync import SourceBoundaryError, SourceSyncFailedError, sync_source_connector
 
@@ -8746,10 +8740,14 @@ def _source_item_response(item: SourceItem) -> SourceItemDetailResponse:
     return SourceItemDetailResponse.model_validate(item, from_attributes=True)
 
 
-def _knowledge_item_response(item: KnowledgeItem, visibility: str) -> KnowledgeItemResponse:
-    response = KnowledgeItemResponse.model_validate(item, from_attributes=True)
-    response.visibility = visibility
-    return response
+def _knowledge_http_router(route_names):
+    return build_knowledge_router(
+        records_for=lambda: source_repository,
+        workspace_for=lambda request: current_workspace_id(request),
+        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        write_guard=lambda request: _local_member_write_guard(request),
+        route_names=route_names,
+    )
 
 
 def _source_run_response(run) -> SourceRunEvidenceResponse:
@@ -9004,42 +9002,7 @@ def create_manual_source_item(
     return _source_item_response(item)
 
 
-@app.post(
-    "/api/source-items/{source_item_id}/save-to-knowledge",
-    response_model=KnowledgeItemResponse,
-)
-def save_source_item_to_knowledge(
-    source_item_id: str,
-    request: Request,
-    payload: SaveSourceItemToKnowledgeRequest,
-) -> KnowledgeItemResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        item = source_repository.save_source_item_to_knowledge(
-            workspace_id,
-            source_item_id,
-            verified_owner_user_id=_content_reader(request, workspace_id)[0],
-        )
-    except (KeyError, PermissionError) as exc:
-        raise HTTPException(status_code=404, detail="source item not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    response = _knowledge_item_response(
-        item, source_repository.get_knowledge_item_visibility(workspace_id, item.id)
-    )
-    response.saved_source_item_id = source_item_id
-    # 重复结果只来自解析链：内容指纹命中已有历史版本时给出对应版本号。
-    if item.content_hash is not None and response.duplicate_of_version is None:
-        source = source_repository.get_source_item(workspace_id, source_item_id)
-        if source.content_hash != item.content_hash:
-            stored = source_repository.find_version_by_content_hash(
-                workspace_id,
-                source.content_hash,
-                knowledge_item_id=item.id if source.source_label == "web_snapshot" else None,
-                verified_owner_user_id=_content_reader(request, workspace_id)[0],
-            )
-            response.duplicate_of_version = stored.version if stored else None
-    return response
+app.include_router(_knowledge_http_router(("save_source_item_to_knowledge",)))
 
 
 @app.post("/api/source-items/file", response_model=SourceItemDetailResponse)
@@ -9100,138 +9063,22 @@ def import_knowledge_file(
     return _source_item_response(item)
 
 
-@app.get("/api/knowledge-items/{knowledge_item_id}/versions/{version}/original")
-def download_knowledge_original(knowledge_item_id: str, version: str, request: Request):
-    workspace_id = current_workspace_id(request)
-    owner, diagnostic = _content_reader(request, workspace_id)
-    try:
-        original = source_repository.read_knowledge_original(workspace_id, knowledge_item_id, version,
-            user_id=owner, local_diagnostic=diagnostic)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到可访问的资料原件或固定版本。") from exc
-    except KnowledgeOriginalUnavailable as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except KnowledgeOriginalIntegrityError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (KnowledgeOriginalStorageError, OSError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return Response(original.content, media_type=original.content_type, headers={
-        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(original.filename, safe='')}",
-        "ETag": f'"{original.content_hash}"', "X-Content-Type-Options": "nosniff"})
+app.include_router(_knowledge_http_router(("download_knowledge_original",)))
 
 
-@app.get("/api/knowledge-items/search", response_model=KnowledgeSearchResponse)
-def search_knowledge_items(request: Request, query: str, limit: int = 5, offset: int = 0):
-    if not 1 <= len(query.strip()) <= 120 or not 1 <= limit <= 20 or offset < 0:
-        raise HTTPException(status_code=422, detail="资料检索须为 1–120 字，分页大小 1–20，偏移非负")
-    workspace_id = current_workspace_id(request)
-    user_id, diagnostic = _content_reader(request, workspace_id)
-    try:
-        items, total = source_repository.search_knowledge_items(workspace_id, query=query,
-            limit=limit, offset=offset, user_id=user_id, local_diagnostic=diagnostic)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return KnowledgeSearchResponse(items=items, total_count=total, limit=limit, offset=offset,
-                                   next_offset=offset + len(items) if offset + len(items) < total else None)
+app.include_router(_knowledge_http_router(("search_knowledge_items",)))
 
 
-@app.get("/api/knowledge-items/{knowledge_item_id}", response_model=KnowledgeItemDetailResponse)
-def get_knowledge_item_detail(
-    knowledge_item_id: str,
-    request: Request,
-) -> KnowledgeItemDetailResponse:
-    workspace_id = current_workspace_id(request)
-    user_id, local_diagnostic = _content_reader(request, workspace_id)
-    try:
-        item = source_repository.get_knowledge_item_readable_by(
-            workspace_id, knowledge_item_id, user_id=user_id, local_diagnostic=local_diagnostic,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    visibility = source_repository.get_knowledge_item_visibility(item.workspace_id, item.id)
-    versions = source_repository.list_knowledge_item_versions(item.workspace_id, item.id)
-    detail = KnowledgeItemDetailResponse.model_validate(item, from_attributes=True)
-    detail.visibility = visibility
-    detail.versions = [
-        KnowledgeItemVersionResponse.model_validate(version, from_attributes=True)
-        for version in versions
-    ]
-    return detail
+app.include_router(_knowledge_http_router(("get_knowledge_item_detail",)))
 
 
-@app.put("/api/knowledge-items/{knowledge_item_id}/content", response_model=KnowledgeItemDetailResponse)
-def edit_knowledge_item_content(
-    knowledge_item_id: str, request: Request, payload: KnowledgeItemContentRequest,
-) -> KnowledgeItemDetailResponse:
-    workspace_id = current_workspace_id(request)
-    user_id, local_diagnostic = _content_reader(request, workspace_id)
-    try:
-        source_repository.edit_knowledge_item(
-            workspace_id, knowledge_item_id, expected_version=payload.expected_version,
-            title=payload.title, body=payload.body, verified_user_id=user_id,
-            local_diagnostic=local_diagnostic,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="资料不存在或不属于当前工作区") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except KnowledgeVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return get_knowledge_item_detail(knowledge_item_id, request)
+app.include_router(_knowledge_http_router(("edit_knowledge_item_content",)))
 
 
-@app.put(
-    "/api/knowledge-items/{knowledge_item_id}/visibility",
-    response_model=KnowledgeItemResponse,
-)
-def set_knowledge_item_visibility_route(
-    knowledge_item_id: str,
-    request: Request,
-    payload: KnowledgeItemVisibilityRequest,
-) -> KnowledgeItemResponse:
-    """显式共享或收回：把私有内容放进/移出团队共享范围。"""
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    workspace_id = current_workspace_id(request)
-    try:
-        visibility = source_repository.set_knowledge_item_visibility(
-            workspace_id, knowledge_item_id, payload.visibility
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="knowledge item not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    item = source_repository.get_knowledge_item(workspace_id, knowledge_item_id)
-    return _knowledge_item_response(item, visibility)
+app.include_router(_knowledge_http_router(("set_knowledge_item_visibility_route",)))
 
 
-@app.get("/api/knowledge-items", response_model=KnowledgeItemsResponse)
-def list_knowledge_items(request: Request) -> KnowledgeItemsResponse:
-    workspace_id = current_workspace_id(request)
-    user_id, local_diagnostic = _content_reader(request, workspace_id)
-    try:
-        items = source_repository.list_knowledge_items_readable_by(
-            workspace_id, user_id=user_id, local_diagnostic=local_diagnostic
-        )
-    except ValueError as exc:
-        # 已开认证却没有可信身份：没有可读身份就是没有可读内容，不退回只看共享。
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return KnowledgeItemsResponse(
-        items=[
-            _knowledge_item_response(
-                item, source_repository.get_knowledge_item_visibility(item.workspace_id, item.id)
-            )
-            for item in items
-        ],
-        total_count=len(items),
-    )
+app.include_router(_knowledge_http_router(("list_knowledge_items",)))
 
 
 @app.get("/api/sources/items", response_model=SourceItemsResponse)

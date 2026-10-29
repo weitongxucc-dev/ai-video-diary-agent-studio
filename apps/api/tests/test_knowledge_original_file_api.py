@@ -19,10 +19,11 @@ def original_api(client_state, tmp_path, monkeypatch):
     monkeypatch.setattr(main, 'source_repository', repo)
     for path, handler, methods in [
         ('/api/source-items/file', main.import_knowledge_file, ['POST']),
-        ('/api/source-items/{source_item_id}/save-to-knowledge', main.save_source_item_to_knowledge, ['POST']),
-        ('/api/knowledge-items/{knowledge_item_id}/versions/{version}/original', main.download_knowledge_original, ['GET']),
     ]:
         c.client.app.add_api_route(path, handler, methods=methods)
+    c.client.app.include_router(main._knowledge_http_router((
+        "save_source_item_to_knowledge", "download_knowledge_original",
+    )))
     return c, repo, store
 
 
