@@ -111,6 +111,9 @@ def test_unavailable_assistant_turn_retains_partial_reply_and_persisted_failure(
 
 
 def test_assistant_draft_cas_and_unpersisted_recovery_preserve_newer_text(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main_module, "_creation_task_script_generator_for", forbidden)
     repo = ConversationRepository(tmp_path / "assistant.sqlite3")
     members = LocalMemberService(tmp_path / "members.sqlite3")
     _member, token = members.join(members.create_invite_code(), "成员甲")
@@ -129,6 +132,16 @@ def test_assistant_draft_cas_and_unpersisted_recovery_preserve_newer_text(tmp_pa
         "draft_text": "需要恢复的原句", "expected_draft_version": conversation["draft_version"],
     })
     assert saved.status_code == 200 and saved.json()["draft_version"] == 1
+    # A stale draft must not independently change the title that follows it.
+    rejected = client.patch(path, headers=headers, json={
+        "draft_text": "不能覆盖原句", "expected_draft_version": 0,
+        "title": "不能提前保存的名称",
+    })
+    assert rejected.status_code == 409
+    unchanged = client.get(path, headers=headers).json()
+    assert unchanged["draft_text"] == saved.json()["draft_text"]
+    assert unchanged["draft_version"] == saved.json()["draft_version"]
+    assert unchanged["title"] == saved.json()["title"]
 
     request_id = str(uuid4())
     restore_payload = {

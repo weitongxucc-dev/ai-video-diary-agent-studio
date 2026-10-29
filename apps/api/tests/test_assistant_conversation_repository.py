@@ -11,7 +11,7 @@ def request_url(chat, request_id):
 
 def add_locator(c):
     c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}/requests/{client_request_id}",
-        main.get_assistant_conversation_request, methods=["GET"])
+        main._conversation_http_adapter().get_request, methods=["GET"])
 
 
 def test_request_locator_reads_original_identity_and_current_real_turn_status(client_state, monkeypatch):

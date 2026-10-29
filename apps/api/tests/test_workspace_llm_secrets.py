@@ -320,7 +320,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
         client=SimpleNamespace(host="127.0.0.1"),
         headers={},
     )
-    main_module.update_assistant_conversation(
+    main_module._conversation_http_adapter().update(
         conversation["id"], request, AssistantConversationUpdateRequest(
             draft_text="帮我列个提纲", expected_draft_version=conversation["draft_version"],
         ),

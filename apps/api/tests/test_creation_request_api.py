@@ -553,7 +553,7 @@ def test_original_turn_scope_and_exact_saved_request_recovery(client_state):
     assert saved["material_scope"] == {"kind": "workspace_library"}
     assert saved["clarification_questions"] == []
     c.conversations.finish_turn(turn["id"], "completed", "已保存", {"kind": "conversation", "creation_request_id": None})
-    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main.get_assistant_conversation, methods=["GET"])
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main._conversation_http_adapter().get_conversation, methods=["GET"])
     restored = c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.alice)
     assert restored.status_code == 200, restored.text
     assert restored.json()["turns"][0]["result"]["creation_request_id"] == saved["id"]
@@ -570,7 +570,7 @@ def test_request_recovery_does_not_match_a_similar_goal(client_state):
     turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id, message, str(uuid4()), 1)
     create(c, goal=message, target_count=1)
     c.conversations.finish_turn(turn["id"], "completed", "已保存", {"kind": "conversation"})
-    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main.get_assistant_conversation, methods=["GET"])
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main._conversation_http_adapter().get_conversation, methods=["GET"])
     restored = c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.alice).json()
     assert restored["turns"][0]["result"] == {"kind": "conversation"}
 
@@ -614,6 +614,6 @@ def test_interrupted_follow_up_does_not_restore_original_creation_request(client
     create(c, goal=message, target_count=1, assistant_turn_id=turn["id"], request_key=turn["id"])
     c.conversations.append_event(turn["id"], {"type": "assistant_input", "input_id": str(uuid4()), "target_turn_id": turn["id"], "status": "interrupted"})
     c.conversations.finish_turn(turn["id"], "completed", "后续澄清", {"kind": "conversation"})
-    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main.get_assistant_conversation, methods=["GET"])
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}", main._conversation_http_adapter().get_conversation, methods=["GET"])
     restored = c.client.get("/api/assistant/conversations/"+chat["id"], headers=c.alice).json()
     assert restored["turns"][0]["result"]["kind"] == "conversation"

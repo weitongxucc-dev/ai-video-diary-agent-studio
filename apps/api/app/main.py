@@ -6,6 +6,7 @@ from app.assistant.execution_binding import AssistantExecutionBinding, Execution
 from app.assistant import home_plan_turn_use_case as home_plan
 from app.assistant.stream_response import AssistantStreamTransport
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
+from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -4861,32 +4862,6 @@ def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict |
             return completed.value
 
 
-def _assistant_conversation_response(row: dict, request: Request) -> dict:
-    turns = conversation_repo.list_turns(row["id"])
-    for index, turn in enumerate(turns):
-        if (turn.get('result') or {}).get('kind') == 'task_turn':
-            context = conversation_repo.consumed_turn_request_context(turn['id'], row['id'], row['workspace_id'], row['member_id'])
-            if (context.get('kind') == 'task' and context.get('task_id')
-                    and (row['scope_kind'] != 'task' or context['task_id'] == row['scope_id'])):
-                from app.assistant.inputs import latest_consumed_input
-                from app.assistant.result_projection import refresh_original_receipts
-                consumed = latest_consumed_input(turn['events'])
-                input_id = consumed['input_id'] if consumed else context.get('source_input_id')
-                task_id, ws = context['task_id'], row['workspace_id']
-                def read_actor():
-                    try:
-                        return _require_permit_actor(request, ws)
-                    except HTTPException as exc:
-                        raise PermissionError('当前原请求读取身份不可核实') from exc
-                turns[index] = refresh_original_receipts(turn, task_id=task_id, input_id=input_id,
-                    read_segment=lambda request_id: _segment_production_use_case().read_request(ws, task_id, request_id, read_actor()),
-                    read_restore=lambda request_id: _timeline_restore_use_case().read_request(ws, task_id, request_id, read_actor()))
-        if turn["status"] != "completed" or (turn.get("result") or {}).get("kind") != "conversation":
-            continue
-        saved = _assistant_creation_request_for_turn(request, turn)
-        if saved is not None:
-            turn["result"] = {**turn["result"], "kind": "creation_request", "creation_request_id": saved["id"]}
-    return {**row, "turns": turns}
 
 
 def _assistant_conversation_for_request(request: Request, conversation_id: str) -> tuple[str, str, dict]:
@@ -4898,88 +4873,37 @@ def _assistant_conversation_for_request(request: Request, conversation_id: str) 
     return workspace_id, member_id, row
 
 
-@app.post("/api/assistant/conversations/current", response_model=AssistantConversationResponse)
-def current_assistant_conversation(request: Request, payload: AssistantConversationCurrentRequest):
-    workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
-    _validate_assistant_scope(request, payload.scope_kind, payload.scope_id)
-    row = conversation_repo.current_or_create(workspace_id, member_id, payload.scope_kind, payload.scope_id)
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
 
 
-@app.post("/api/assistant/conversations", response_model=AssistantConversationResponse)
-def create_assistant_conversation(request: Request, payload: AssistantConversationCreateRequest):
-    workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
-    if _assistant_text_without_credentials(payload.title, workspace_id) != payload.title:
-        raise HTTPException(status_code=422, detail="会话名称不能包含密钥或口令。")
-    _validate_assistant_scope(request, payload.scope_kind, payload.scope_id)
-    row = conversation_repo.create(workspace_id, member_id, payload.scope_kind, payload.scope_id, payload.title)
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
 
 
-@app.get("/api/assistant/conversations", response_model=AssistantConversationListResponse)
-def list_assistant_conversations(request: Request, scope_kind: str, scope_id: str):
-    workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
-    _validate_assistant_scope(request, scope_kind, scope_id)
-    rows = conversation_repo.list_for_scope(workspace_id, member_id, scope_kind, scope_id)
-    if scope_kind == "material" and scope_id == "library":
-        visible_rows = []
-        for row in rows:
-            try:
-                _validate_assistant_scope(request, row["scope_kind"], row["scope_id"])
-            except HTTPException as exc:
-                if exc.status_code not in {404, 422}:
-                    raise
-                continue
-            visible_rows.append(row)
-        rows = visible_rows
-    return AssistantConversationListResponse.model_validate({
-        "items": [_assistant_conversation_response(row, request) for row in rows],
-    })
 
 
-@app.get("/api/assistant/conversations/{conversation_id}", response_model=AssistantConversationResponse)
-def get_assistant_conversation(conversation_id: str, request: Request):
-    _workspace_id, _member_id, row = _assistant_conversation_for_request(request, conversation_id)
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(row, request))
 
 
-@app.get("/api/assistant/conversations/{conversation_id}/requests/{client_request_id}", response_model=AssistantConversationRequestResponse)
-def get_assistant_conversation_request(conversation_id: str, client_request_id: UUID, request: Request):
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    receipt = conversation_repo.get_request_receipt(str(client_request_id), conversation_id, workspace_id, member_id)
-    if receipt is None:
-        raise HTTPException(status_code=404, detail="当前对话中没有这次请求的保存回执。")
-    return AssistantConversationRequestResponse.model_validate(receipt)
 
 
-@app.post("/api/assistant/conversations/{conversation_id}/resume", response_model=AssistantConversationResponse)
-def resume_assistant_conversation(conversation_id: str, request: Request):
-    workspace_id, member_id, row = _assistant_conversation_for_request(request, conversation_id)
-    selected = conversation_repo.select_current(conversation_id, workspace_id, member_id, workspace_session=True)
-    assert selected is not None
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(selected, request))
 
 
-@app.post(
-    "/api/assistant/conversations/{conversation_id}/turns/{turn_id}/plan-preview",
-    response_model=CreationPlanPreviewResponse,
-)
-def update_assistant_plan_preview(
-    conversation_id: str, turn_id: UUID, request: Request, payload: CreationPlanPreviewRequest,
-):
-    workspace_id, _member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
-    turn = conversation_repo.get_turn(str(turn_id))
-    if (turn is None or turn["conversation_id"] != conversation_id or turn["status"] != "completed"
-        or not isinstance(turn["result"], dict) or turn["result"].get("kind") != "plan_preview"):
-        raise HTTPException(status_code=409, detail="所选对话轮次没有可更新的制作方案预览。")
-    plan = _creation_plan_preflight(request, workspace_id, payload)
-    response = _creation_plan_preview_response(plan)
-    if not conversation_repo.update_completed_plan_preview(str(turn_id), response.model_dump(mode="json")):
-        raise HTTPException(status_code=409, detail="方案轮次已变化，请重新读取这段对话后再调整。")
-    return response
+
+
+def _conversation_http_adapter():
+    return ConversationHTTPAdapter(
+        conversations_for=lambda: conversation_repo,
+        workspace_for=current_workspace_id, member_for=_assistant_member_id,
+        validate_scope=_validate_assistant_scope,
+        owned_conversation=_assistant_conversation_for_request,
+        clean_text=_assistant_text_without_credentials,
+        validate_reference=_validate_saved_assistant_reference,
+        recover_request=_assistant_creation_request_for_turn,
+        require_actor=_require_permit_actor,
+        segment_for=_segment_production_use_case, restore_for=_timeline_restore_use_case,
+        input_context=lambda request, context, reference: _task_turn_http_adapter().input_context(request, context, reference),
+        preflight=_creation_plan_preflight, render_plan=_creation_plan_preview_response,
+    )
+
+
+app.include_router(build_conversation_router(_conversation_http_adapter))
 
 
 def _validate_saved_assistant_reference(request: Request, reference: dict | None) -> dict | None:
@@ -5014,146 +4938,22 @@ def _validate_saved_assistant_reference(request: Request, reference: dict | None
     return reference
 
 
-def _assistant_reference_response(request: Request, row: dict) -> dict:
-    reference = row["selected_reference"]
-    reason = None
-    try:
-        _validate_saved_assistant_reference(request, reference)
-    except HTTPException as exc:
-        if exc.status_code not in (404,409):
-            raise
-        reason = str(exc.detail)
-    return {"selected_reference":reference,"reference_version":row["reference_version"],
-            "status":"unavailable" if reason else "ready","reason":reason}
-
-
-@app.get("/api/assistant/conversations/{conversation_id}/reference", response_model=AssistantConversationReferenceResponse)
-def get_assistant_conversation_reference(conversation_id: str, request: Request):
-    _workspace_id, _member_id, row = _assistant_conversation_for_request(request, conversation_id)
-    return _assistant_reference_response(request, row)
-
-
-@app.patch("/api/assistant/conversations/{conversation_id}/reference", response_model=AssistantConversationReferenceResponse)
-def save_assistant_conversation_reference(conversation_id: str, request: Request, payload: AssistantConversationReferenceRequest):
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    reference = _validate_saved_assistant_reference(request, payload.selected_reference.model_dump(mode="json",exclude_none=True) if payload.selected_reference else None)
-    try:
-        saved = conversation_repo.save_reference(conversation_id, workspace_id, member_id, reference, payload.expected_reference_version)
-    except ConversationReferenceVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _assistant_reference_response(request, saved)
-
-
-@app.patch("/api/assistant/conversations/{conversation_id}", response_model=AssistantConversationResponse)
-def update_assistant_conversation(
-    conversation_id: str, request: Request, payload: AssistantConversationUpdateRequest,
-):
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    if payload.title is not None and _assistant_text_without_credentials(payload.title, workspace_id) != payload.title:
-        raise HTTPException(status_code=422, detail="会话名称不能包含密钥或口令。")
-    if payload.draft_text is not None and _assistant_text_without_credentials(payload.draft_text, workspace_id) != payload.draft_text:
-        raise HTTPException(status_code=422, detail="对话草稿不能包含密钥或口令。")
-    if payload.draft_text is not None:
-        try:
-            updated = conversation_repo.save_draft(
-                conversation_id, workspace_id, member_id, payload.draft_text,
-                payload.expected_draft_version,
-            )
-        except ConversationDraftVersionConflict as exc:
-            raise HTTPException(status_code=409, detail={
-                "error": "assistant_draft_conflict",
-                "message": "草稿已在其他位置更新；当前较新的草稿已保留，请重新读取后继续。",
-                "current_draft_version": exc.current["draft_version"],
-            }) from exc
-    else:
-        updated = conversation_repo.get(conversation_id, workspace_id, member_id)
-    if updated is not None and payload.title is not None:
-        updated = conversation_repo.update_title(conversation_id, workspace_id, member_id, payload.title)
-    assert updated is not None
-    return AssistantConversationResponse.model_validate(_assistant_conversation_response(updated, request))
-
-
-@app.post(
-    "/api/assistant/conversations/{conversation_id}/restore-unpersisted-turn",
-    response_model=AssistantConversationDraftRestoreResponse,
-)
-def restore_unpersisted_assistant_turn_draft(
-    conversation_id: str, request: Request, payload: AssistantConversationDraftRestoreRequest,
-):
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    if _assistant_text_without_credentials(payload.user_message, workspace_id) != payload.user_message:
-        raise HTTPException(status_code=422, detail="未发送草稿不能包含密钥或口令。")
-    try:
-        conversation, status = conversation_repo.restore_unpersisted_turn_draft(
-            conversation_id, workspace_id, member_id, str(payload.client_request_id),
-            payload.user_message, payload.expected_draft_version,
-        )
-    except ConversationDraftVersionConflict as exc:
-        raise HTTPException(status_code=409, detail={
-            "error": "assistant_draft_conflict",
-            "message": "草稿版本已经变化；较新的草稿已保留，未恢复旧句子。",
-            "current_draft_version": exc.current["draft_version"],
-        }) from exc
-    except ConversationTurnRequestConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="对话不存在或当前成员无权访问。")
-    return AssistantConversationDraftRestoreResponse.model_validate({
-        "status": status,
-        "conversation": _assistant_conversation_response(conversation, request),
-    })
 
 
 
 
-@app.get("/api/assistant/conversations/{conversation_id}/inputs")
-def list_assistant_inputs(conversation_id: str, request: Request):
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    return {"items": conversation_repo.list_inputs(conversation_id, workspace_id, member_id)}
 
 
-@app.post("/api/assistant/conversations/{conversation_id}/inputs")
-def enqueue_assistant_input(conversation_id: str, request: Request, payload: AssistantConversationInputRequest):
-    workspace_id, member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
-    if _assistant_text_without_credentials(payload.message, workspace_id) != payload.message:
-        raise HTTPException(status_code=422, detail="请勿在对话中粘贴密钥或口令。")
-    context = conversation_repo.consumed_turn_request_context(
-        str(payload.target_turn_id), conversation_id, workspace_id, member_id)
-    if not context:
-        raise HTTPException(status_code=404, detail="目标轮次不存在或当前不可访问。")
-    previous = next((item for item in conversation_repo.list_inputs(conversation_id, workspace_id, member_id)
-                     if item["input_id"] == str(payload.client_request_id)), None)
-    if previous is not None:
-        context = previous["request_context"]
-    else:
-        if conversation["reference_version"] != payload.expected_reference_version:
-            raise HTTPException(status_code=409, detail="选中引用已变化，请重新读取后发送。")
-        reference = _validate_saved_assistant_reference(request, conversation["selected_reference"])
-        context = _task_turn_http_adapter().input_context(request, context, reference)
-        context["expected_reference_version"] = payload.expected_reference_version
-    try:
-        item, _created = conversation_repo.enqueue_input(
-            conversation_id, workspace_id, member_id,
-            target_turn_id=str(payload.target_turn_id), client_request_id=str(payload.client_request_id),
-            message=payload.message, mode=payload.mode, expected_draft_version=payload.expected_draft_version,
-            expected_reference_version=payload.expected_reference_version, request_context=context,
-        )
-    except AssistantInputConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="目标会话或轮次不存在。") from exc
-    return {"input": item, "draft_version": payload.expected_draft_version + 1}
 
 
-@app.post("/api/assistant/conversations/{conversation_id}/inputs/{input_id}/withdraw")
-def withdraw_assistant_input(conversation_id: str, input_id: str, request: Request):
-    workspace_id, member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    try:
-        return conversation_repo.transition_input(conversation_id, workspace_id, member_id, input_id, "withdrawn")
-    except AssistantInputConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="追加输入不存在。") from exc
+
+
+
+
+
+
+
+
 
 
 @app.get("/api/assistant/capabilities")

@@ -130,6 +130,9 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
 
 
 def test_running_input_http_replays_original_receipt_and_consumes_at_sdk_boundary(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
     from app.conversation_repository import ConversationRepository
     client, _, owner, headers, other = _sampling_context(tmp_path, monkeypatch)
     conversations = ConversationRepository(tmp_path / "conversations.sqlite3")
