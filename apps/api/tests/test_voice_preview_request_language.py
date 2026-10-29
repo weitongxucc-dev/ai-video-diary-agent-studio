@@ -23,7 +23,9 @@ def test_voice_preview_request_passes_explicit_language_without_inference(monkey
         SimpleNamespace(identity_payload=lambda: {"member_id": "member"}))
     monkeypatch.setattr(main, "_creation_runtime", lambda: object())
     with pytest.raises(HTTPException, match="captured before model execution"):
-        main.request_voice_preview(Request({"type": "http"}), payload)
+        router = main._media_preview_http_router()
+        endpoint = next(route.endpoint for route in router.routes if route.name == "request_voice_preview")
+        endpoint(Request({"type": "http"}), payload)
     assert boundary.call_args.kwargs["language"] == language
 
 
