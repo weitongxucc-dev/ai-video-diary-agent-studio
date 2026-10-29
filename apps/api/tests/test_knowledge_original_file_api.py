@@ -17,10 +17,7 @@ def original_api(client_state, tmp_path, monkeypatch):
     store.mkdir()
     repo = SourceRepository(tmp_path / 'sources.sqlite3', file_store=KnowledgeFileStore(store))
     monkeypatch.setattr(main, 'source_repository', repo)
-    for path, handler, methods in [
-        ('/api/source-items/file', main.import_knowledge_file, ['POST']),
-    ]:
-        c.client.app.add_api_route(path, handler, methods=methods)
+    c.client.app.include_router(main._source_item_http_router(("import_knowledge_file",)))
     c.client.app.include_router(main._knowledge_http_router((
         "save_source_item_to_knowledge", "download_knowledge_original",
     )))

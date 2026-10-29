@@ -275,6 +275,18 @@ def test_payloads_match_the_web_source_api_contract(client):
     # 来源绑定只属于本次保存回执，不冒充列表对象本身的来源字段。
     assert listed["items"][0]["saved_source_item_id"] is None
 
+    legacy = client.get("/api/sources/items")
+    assert legacy.status_code == 200
+    assert legacy.json()["total_count"] == 1
+    assert legacy.json()["items"] == [{
+        "source_type": source["source_label"], "title": source["title"],
+        "ref": source["source_url"], "excerpt": source["body"],
+    }]
+    before = main_module.source_repository.list_runs("workspace-a")
+    unknown = client.post("/api/sources/not-a-known-key/retry")
+    assert unknown.status_code == 404
+    assert main_module.source_repository.list_runs("workspace-a") == before
+
 
 def test_connector_sync_payload_matches_the_web_source_api_contract(client, monkeypatch):
     class HermesClient:

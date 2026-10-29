@@ -34,7 +34,6 @@ from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStag
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
 from app.creation.narration_stage_use_case import NarrationStageUseCase,NarrationStageRejected
 
-import base64
 import hashlib
 import hmac
 import ipaddress
@@ -48,7 +47,6 @@ import shutil
 import subprocess
 import threading
 import time
-from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -242,7 +240,7 @@ from app.edit_plan import (
     build_edit_plan_workspace,
     safe_processed_video_path,
 )
-from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
+from app.external_sources import HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
     script_generator_from_settings,
@@ -351,194 +349,12 @@ from app.workspace_settings import (
 )
 from app.source_connector_routes import build_source_connector_router
 from app.knowledge_routes import build_knowledge_router
+from app.source_item_routes import build_source_item_router
 from app.source_repository import SourceRepository
-from app.knowledge_file_store import KnowledgeOriginalIntegrityError, KnowledgeOriginalStorageError
 from app.home_aggregation import aggregate_home
-from app.schemas import (
-    AssistantConversationCreateRequest,
-    AssistantConversationCurrentRequest,
-    AssistantConversationReferenceRequest,
-    AssistantConversationReferenceResponse,
-    AssistantConversationDraftRestoreRequest,
-    AssistantConversationDraftRestoreResponse,
-    AssistantConversationListResponse,
-    AssistantConversationResponse,
-    AssistantConversationRequestResponse,
-    AssistantConversationStopRequest,
-    AssistantConversationUpdateRequest,
-    ScriptLibrarySourceResponse,
-    AuthorizationResponse,
-    AuthorizationUpsertRequest,
-    ContentTemplatesResponse,
-    CreationPlanConfirmRequest,
-    CreationPlanPreviewRequest,
-    SaveVideoTemplateRequest,
-    VideoTemplateVersionRequest,
-    CreationPlanPreviewResponse,
-    CreationPlanResponse,
-    CreationRequestCreateRequest,
-    CreationRequestReviseRequest,
-    CreationRequestWindowPreviewRequest,
-    CreationRequestWindowConfirmRequest,
-    CreationRequestWindowReplanRequest,
-    CreationRequestResponse,
-    CreationRequestItemsResponse,
-    CreationTaskTopicConfirmRequest,
-    CreationTaskTopicGenerateRequest,
-    CreationTaskTopicsResponse,
-    CreationTaskScriptConfirmRequest,
-    CreationTaskScriptDraftRequest,
-    TaskKnowledgeAdoptionRequest,
-    TaskKnowledgeAdoptionResponse,
-    AssistantReplyScriptTransferRequest,
-    CreationTaskScriptResponse,
-    CreationTaskScriptsResponse,
-    CreationTaskNarrationResponse,
-    CreationTaskRecordingAdoptRequest,
-    CreationTaskNarrationVoiceSelectionRequest,
-    CreationTaskNarrationVoiceSelectionResponse,
-    CreationTaskPersonRenderRequest,
-    CreationTaskPersonRenderResponse,
-    CreationTaskPersonRendersResponse,
-    CreationTaskMontagePlanResponse,
-    StoryboardRegenerationRequest,
-    AssistantStoryboardRegenerationReceipt,
-    AssistantStoryboardRegenerationFailure,
-    CreationTaskMontageClipUpdateRequest,
-    CreationTaskMontageRenderRequest,
-    CreationTaskQualityCheckRequest,
-    QualityContinuationResponse,
-    CreationTaskQualityCheckResponse,
-    CreationTaskEditConfirmResponse,
-    CreationTaskEditQueuedResponse,
-    CreationTaskEditPreviewRequest,
-    CreationTaskAssistantTurnRequest,
-    CreationTaskAssistantTurnResponse,
-    AssistantScriptWindowRequestResponse,
-    CreationTaskAssistantHistoryResponse,
-    AssistantStreamEvent,
-    MaterialAssistantTurnRequest,
-    MaterialAssistantTurnResponse,
-    MaterialAssistantResultResponse,
-    WorkspaceAssistantPlanTurnRequest,
-    WorkspaceAssistantPlanTurnResponse,
-    CompoundEditSelectionRequest,
-    CreationTaskEditPreviewResponse,
-    CreationTaskExactEditRequest,
-    CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse,
-    AssistantEditRequestLocator,
-    AssistantScriptToolReceipt,
-    MediaScriptPreviewRequest,
-    TaskMediaJobResponse,
-    MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest,
-    EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS,
-    CreationTaskSubtitleCueUpdateRequest,
-    CreationTaskTimelineUndoRequest,
-    CreationTaskTimelineRestoreRequest,
-    CreationTaskWorkspaceResponse,
-    CreationTasksResponse,
-    CreatorProfileResponse,
-    DraftAssetResponse,
-    DraftEnvironmentResponse,
-    DraftStatusResponse,
-    EditPlanResponse,
-    EpisodeHistoryItemResponse,
-    EpisodeHistoryResponse,
-    EpisodeListResponse,
-    EpisodeResponse,
-    EpisodeSummaryResponse,
-    EpisodeVoiceSelectionResponse,
-    FeedbackEventResponse,
-    KnowledgeNoteResponse,
-    ManualSourceItemRequest,
-    ManualLinkRequest,
-    MaterialAssetResponse,
-    MaterialAssetNotesRequest,
-    MaterialAssetNotesResponse,
-    MaterialBusinessObjectCreateRequest,
-    MaterialBusinessObjectResponse,
-    MaterialBusinessObjectsResponse,
-    MaterialAssetBusinessObjectsSaveRequest,
-    MaterialAssetTagsRequest,
-    MaterialIntakeBindRequest,
-    MaterialIntakeStatusResponse,
-    MaterialCopyCompleteRequest,
-    MaterialCopyCompleteResponse,
-    MaterialUsageRecordsResponse,
-    MediaLinkCheckRequest,
-    MediaLinkCheckResponse,
-    MediaLinkImportRequest,
-    MediaLinkImportResponse,
-    MaterialBatchTagsRequest,
-    MaterialBatchTagsResponse,
-    MaterialCollectionCreateRequest,
-    MaterialCollectionResponse,
-    MaterialCollectionsResponse,
-    MaterialLibraryInsightsResponse,
-    MaterialLibraryResponse,
-    HomeAggregationResponse,
-    MaterialReviewRequest,
-    MaterialUseStateRequest,
-    MaterialSegmentMatchResponse,
-    MaterialSegmentSearchResponse,
-    MaterialSegmentUpdateRequest,
-    MediaCapabilityResponse,
-    ModelCatalogResponse,
-    ModelInstallJobResponse,
-    ModelInstallRequest,
-    MontageClipCandidateResponse,
-    MontageClipResponse,
-    MontagePlanResponse,
-    MontagePlansResponse,
-    NarrationCueResponse,
-    OnboardingCompletionResponse,
-    PendingVideoResponse,
-    ProcessedVideoResponse,
-    ProcessVideoRequest,
-    ProductionBatchesResponse,
-    ProductionBatchResponse,
-    ProductionChainResponse,
-    ProductionFoundationResponse,
-    ProductionProfileResponse,
-    ProductionProfileUpdateRequest,
-    PersonProfileResponse,
-    RetakeReportResponse,
-    RuntimeHealthResponse,
-    RuntimeSettingsResponse,
-    RuntimeSettingsUpdateRequest,
-    SetupPreflightResponse,
-    SourceFileStatesResponse,
-    SourceConnectorResponse,
-    SourceItemDetailResponse,
-    SourceItemDetailsResponse,
-    KnowledgeFileImportRequest,
-    ContentVisibilityRequest,
-    SourceItemResponse,
-    SourceRunEvidenceResponse,
-    SourceItemsResponse,
-    SourceSyncRetryResponse,
-    SystemStatusResponse,
-    TopicEvidenceItemResponse,
-    TopicEvidenceResponse,
-    VoiceProfileResponse,
-    VoiceReferenceImportResponse,
-    VoiceProfilesResponse,
-    VoiceProfileUpsertRequest,
-    VersionedVoiceProfileResponse,
-    VoiceTranscriptionResponse,
-    WorkflowStatusResponse,
-    CoverAssetResponse,
-    SubtitleTrackResponse,
-    TimelineVersionArtifactResponse,
-    TimelineVersionDetailResponse,
-    TimelineVersionListResponse,
-    TimelineVersionNarrationSegmentResponse,
-    TimelineVersionShotResponse,
-    TimelineVersionSummaryResponse,
-    validate_logical_media_reference,
-)
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EditPlanResponse, EpisodeHistoryItemResponse, EpisodeHistoryResponse, EpisodeListResponse, EpisodeResponse, EpisodeSummaryResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, ModelCatalogResponse, ModelInstallJobResponse, ModelInstallRequest, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, OnboardingCompletionResponse, PendingVideoResponse, ProcessedVideoResponse, ProcessVideoRequest, ProductionBatchesResponse, ProductionBatchResponse, ProductionChainResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, RetakeReportResponse, RuntimeHealthResponse, RuntimeSettingsResponse, RuntimeSettingsUpdateRequest, SetupPreflightResponse, SourceFileStatesResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, TopicEvidenceItemResponse, TopicEvidenceResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VoiceProfileUpsertRequest, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
-from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
 from app.knowledge_grants import VerifiedMemberGrantTargetResolver
 from app.platform_auth.service import PlatformAuthService
@@ -8736,8 +8552,20 @@ def _source_connector_response(connector: SourceConnector) -> SourceConnectorRes
     return SourceConnectorResponse.model_validate(connector, from_attributes=True)
 
 
-def _source_item_response(item: SourceItem) -> SourceItemDetailResponse:
-    return SourceItemDetailResponse.model_validate(item, from_attributes=True)
+def _source_item_http_router(route_names):
+    return build_source_item_router(
+        records_for=lambda: source_repository,
+        workspace_for=lambda request: current_workspace_id(request),
+        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        sync_for=lambda workspace_id, connector: _sync_connector(workspace_id, connector),
+        failure_for=lambda failure: _source_failure_http_exception(failure),
+        html_client_for=lambda urls: HtmlPageSourceClient(urls),
+        parse_for=lambda filename, data: parse_knowledge_file(filename, data),
+        hermes_path_for=lambda: settings.hermes_radar_path,
+        topic_urls_for=lambda: settings.topic_source_urls,
+        urls_required_for=lambda: _EXTERNAL_URLS_CONFIGURATION_REQUIRED,
+        route_names=route_names,
+    )
 
 
 def _knowledge_http_router(route_names):
@@ -8754,52 +8582,8 @@ def _source_run_response(run) -> SourceRunEvidenceResponse:
     return SourceRunEvidenceResponse.model_validate(run, from_attributes=True)
 
 
-def _manual_connector(workspace_id: str) -> SourceConnector:
-    connector_id = f"manual:{workspace_id}"
-    try:
-        return source_repository.get_connector(workspace_id, connector_id)
-    except KeyError:
-        return source_repository.upsert_connector(
-            SourceConnector(
-                id=connector_id,
-                workspace_id=workspace_id,
-                platform="manual",
-                protocol="local",
-                account_or_rule="user-provided content",
-                frequency="on_demand",
-                permissions=("write:source_items",),
-            )
-        )
 
 
-def _compat_connector(
-    workspace_id: str,
-    key: str,
-    *,
-    platform: str,
-    protocol: str,
-    account_or_rule: str,
-) -> SourceConnector:
-    connector_id = f"compat:{key}:{workspace_id}"
-    try:
-        existing = source_repository.get_connector(workspace_id, connector_id)
-        if existing.account_or_rule != account_or_rule:
-            return source_repository.upsert_connector(
-                replace(existing, account_or_rule=account_or_rule)
-            )
-        return existing
-    except KeyError:
-        return source_repository.upsert_connector(
-            SourceConnector(
-                id=connector_id,
-                workspace_id=workspace_id,
-                platform=platform,
-                protocol=protocol,
-                account_or_rule=account_or_rule,
-                frequency="on_demand",
-                permissions=("read:source_items",),
-            )
-        )
 
 
 def _connector_urls(connector: SourceConnector) -> list[str]:
@@ -8895,24 +8679,6 @@ def _sync_connector(
         raise _source_failure_http_exception(exc) from exc
 
 
-def _legacy_source_items_response(
-    workspace_id: str,
-    items: list[SourceItem],
-) -> SourceItemsResponse:
-    source_items = [
-        SourceItemResponse(
-            source_type=item.source_label,
-            title=item.title,
-            ref=item.source_url or item.file_reference or item.id,
-            excerpt=item.body or item.subtitles or "",
-        )
-        for item in items
-    ]
-    return SourceItemsResponse(
-        items=source_items,
-        total_count=len(source_items),
-        source_counts=dict(Counter(item.source_type for item in source_items)),
-    )
 
 
 def _source_connector_http_router(route_names):
@@ -8941,126 +8707,16 @@ app.include_router(_source_connector_http_router(('list_source_connectors', 'cre
 
 
 
-@app.get("/api/source-items", response_model=SourceItemDetailsResponse)
-def list_persisted_source_items(
-    request: Request,
-    connector_id: str | None = None,
-) -> SourceItemDetailsResponse:
-    items = source_repository.list_source_items(
-        current_workspace_id(request), connector_id
-    )
-    return SourceItemDetailsResponse(
-        items=[_source_item_response(item) for item in items],
-        total_count=len(items),
-    )
+app.include_router(_source_item_http_router(("list_persisted_source_items",)))
 
 
-@app.post("/api/source-items/manual", response_model=SourceItemDetailResponse)
-def create_manual_source_item(
-    request: Request,
-    payload: ManualSourceItemRequest,
-) -> SourceItemDetailResponse:
-    workspace_id = current_workspace_id(request)
-    connector = _manual_connector(workspace_id)
-    source_url = payload.source_url.strip() if payload.source_url else None
-    if source_url:
-        parsed = urlparse(source_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise HTTPException(
-                status_code=422,
-                detail="manual source_url must use http or https",
-            )
-    try:
-        item = source_repository.save_source_items(
-            workspace_id,
-            [
-                SourceItem(
-                    id=f"source_{uuid4().hex}",
-                    workspace_id=workspace_id,
-                    connector_id=connector.id,
-                    source_label="manual",
-                    source_url=source_url,
-                    content_type=payload.content_type.strip(),
-                    author=payload.author.strip() if payload.author else None,
-                    published_at=payload.published_at,
-                    body=payload.body,
-                    subtitles=payload.subtitles,
-                    media_references=tuple(payload.media_references),
-                    license=payload.license.strip(),
-                    title=payload.title.strip(),
-                    file_reference=(
-                        payload.file_reference.strip()
-                        if payload.file_reference
-                        else None
-                    ),
-                    use_state=payload.use_state,
-                )
-            ],
-        )[0]
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _source_item_response(item)
+app.include_router(_source_item_http_router(("create_manual_source_item",)))
 
 
 app.include_router(_knowledge_http_router(("save_source_item_to_knowledge",)))
 
 
-@app.post("/api/source-items/file", response_model=SourceItemDetailResponse)
-def import_knowledge_file(
-    request: Request,
-    payload: KnowledgeFileImportRequest,
-) -> SourceItemDetailResponse:
-    """导入 Markdown/文本/PDF/Word/Excel 文件：保存全文、真实出处和显式参数。
-
-    解析失败（不支持格式、扫描件无文本层）直接报错，不写入伪造正文。
-    """
-    workspace_id = current_workspace_id(request)
-    try:
-        data = base64.b64decode(payload.content_base64, validate=True)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="文件内容不是合法的 base64") from exc
-    try:
-        parsed = parse_knowledge_file(payload.filename.strip(), data)
-    except KnowledgeFileError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    connector = _compat_connector(
-        workspace_id,
-        "knowledge_files",
-        platform="knowledge_files",
-        protocol="local_file",
-        account_or_rule="知识文件导入",
-    )
-    try:
-        item = source_repository.save_source_file(
-            workspace_id,
-                SourceItem(
-                    id=f"source_{uuid4().hex}",
-                    workspace_id=workspace_id,
-                    connector_id=connector.id,
-                    source_label="file_import",
-                    source_url=None,
-                    content_type=parsed.content_type,
-                    author=None,
-                    published_at=None,
-                    body=parsed.full_text,
-                    subtitles=None,
-                    media_references=(),
-                    license="user_provided",
-                    title=parsed.title,
-                    file_reference=parsed.filename,
-                    content_hash=parsed.content_hash,
-                    sections=parsed.sections,
-                    parameters=parsed.parameters,
-                    use_state=payload.use_state,
-                ), data, verified_owner_user_id=_content_reader(request, workspace_id)[0],
-        )
-    except KnowledgeOriginalIntegrityError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (KnowledgeOriginalStorageError, OSError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _source_item_response(item)
+app.include_router(_source_item_http_router(("import_knowledge_file",)))
 
 
 app.include_router(_knowledge_http_router(("download_knowledge_original",)))
@@ -9081,145 +8737,16 @@ app.include_router(_knowledge_http_router(("set_knowledge_item_visibility_route"
 app.include_router(_knowledge_http_router(("list_knowledge_items",)))
 
 
-@app.get("/api/sources/items", response_model=SourceItemsResponse)
-def get_source_items(request: Request) -> SourceItemsResponse:
-    workspace_id = current_workspace_id(request)
-    return _legacy_source_items_response(
-        workspace_id, source_repository.list_source_items(workspace_id)
-    )
+app.include_router(_source_item_http_router(("get_source_items",)))
 
 
-@app.post("/api/sources/sync", response_model=SourceItemsResponse)
-def sync_source_items(request: Request) -> SourceItemsResponse:
-    workspace_id = current_workspace_id(request)
-    connectors = [
-        _compat_connector(
-            workspace_id,
-            "hermes_radar",
-            platform="hermes_radar",
-            protocol="local_file",
-            account_or_rule=str(settings.hermes_radar_path or ""),
-        )
-    ]
-    if settings.topic_source_urls:
-        connectors.append(
-            _compat_connector(
-                workspace_id,
-                "external_urls",
-                platform="external_urls",
-                protocol="https",
-                account_or_rule="\n".join(settings.topic_source_urls),
-            )
-        )
-    for connector in connectors:
-        _sync_connector(workspace_id, connector)
-    return _legacy_source_items_response(
-        workspace_id, source_repository.list_source_items(workspace_id)
-    )
+app.include_router(_source_item_http_router(("sync_source_items",)))
 
 
-@app.post("/api/sources/links", response_model=SourceItemsResponse)
-def ingest_manual_link(
-    request: Request,
-    payload: ManualLinkRequest,
-) -> SourceItemsResponse:
-    url = payload.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
-    workspace_id = current_workspace_id(request)
-    connector = _manual_connector(workspace_id)
-    try:
-        topic_items = HtmlPageSourceClient([url]).fetch_items()
-    except ExternalSourceResponseError as exc:
-        failure = SourceSyncFailedError(
-            source_repository.record_sync_failure(
-                workspace_id,
-                connector.id,
-                reason=str(exc),
-                impact=exc.impact,
-                repair_action=exc.repair_action,
-                retryable=exc.retryable,
-                connection_status=exc.kind,
-            )
-        )
-        raise _source_failure_http_exception(failure) from exc
-    source_repository.save_source_items(
-        workspace_id,
-        [replace(item.to_source_item(workspace_id, connector.id), use_state=payload.use_state)
-         for item in topic_items],
-    )
-    return _legacy_source_items_response(
-        workspace_id,
-        source_repository.list_source_items(workspace_id, connector.id),
-    )
+app.include_router(_source_item_http_router(("ingest_manual_link",)))
 
 
-@app.post("/api/source-items/link", response_model=SourceItemDetailResponse)
-def capture_web_snapshot(
-    request: Request,
-    payload: ManualLinkRequest,
-) -> SourceItemDetailResponse:
-    """抓一个普通网址的完整正文快照，保存用户输入的原网址和抓取时间。
-
-    原网址就是用户填的那个地址，并按它串版本；重定向到的地址作为附加事实记录，
-    不替换原网址。相同正文不新增版本（保存到知识库时由内容指纹判定）；网址内容
-    更新时另存新版本，旧版本及其快照保持不变。登录、不可达或没有正文按真实失败。
-    """
-    url = payload.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
-    workspace_id = current_workspace_id(request)
-    connector = _compat_connector(
-        workspace_id,
-        "web_snapshot",
-        platform="web_snapshot",
-        protocol="https",
-        account_or_rule="网页快照",
-    )
-    try:
-        fetched = HtmlPageSourceClient([url]).fetch_page(url)
-    except ExternalSourceResponseError as exc:
-        failure = SourceSyncFailedError(
-            source_repository.record_sync_failure(
-                workspace_id,
-                connector.id,
-                reason=str(exc),
-                impact=exc.impact,
-                repair_action=exc.repair_action,
-                retryable=exc.retryable,
-                connection_status=exc.kind,
-            )
-        )
-        raise _source_failure_http_exception(failure) from exc
-    snapshot = fetched.snapshot
-    item = source_repository.save_source_items(
-        workspace_id,
-        [
-            SourceItem(
-                id=f"source_{uuid4().hex}",
-                workspace_id=workspace_id,
-                connector_id=connector.id,
-                source_label="web_snapshot",
-                source_url=url,
-                content_type="article",
-                author=None,
-                published_at=None,
-                body=snapshot.full_text,
-                subtitles=None,
-                media_references=(),
-                license="user_provided",
-                title=snapshot.title,
-                # 版本链按用户填的原网址串，不按重定向后的地址，也不按随机条目 id。
-                file_reference=url,
-                content_hash=snapshot.content_hash,
-                sections=snapshot.sections,
-                parameters=(),
-                fetched_at=fetched.fetched_at,
-                use_state=payload.use_state,
-            )
-        ],
-    )[0]
-    return _source_item_response(item)
+app.include_router(_source_item_http_router(("capture_web_snapshot",)))
 
 
 app.include_router(_source_connector_http_router(("get_source_sync_status",)))
@@ -9583,42 +9110,7 @@ def list_episode_history(
     )
 
 
-@app.post("/api/sources/{key}/retry", response_model=SourceSyncRetryResponse)
-def retry_source_sync(key: str, request: Request) -> SourceSyncRetryResponse:
-    """Compatibility retry route backed by the same persistent connectors."""
-    workspace_id = current_workspace_id(request)
-    if key == "manual":
-        connector = _manual_connector(workspace_id)
-    elif key == "hermes_radar":
-        connector = _compat_connector(
-            workspace_id,
-            key,
-            platform="hermes_radar",
-            protocol="local_file",
-            account_or_rule=str(settings.hermes_radar_path or ""),
-        )
-    elif key == "external_urls":
-        connector = _compat_connector(
-            workspace_id,
-            key,
-            platform="external_urls",
-            protocol="https",
-            account_or_rule=(
-                "\n".join(settings.topic_source_urls)
-                if settings.topic_source_urls
-                else _EXTERNAL_URLS_CONFIGURATION_REQUIRED
-            ),
-        )
-    else:
-        raise HTTPException(status_code=404, detail=f"Unknown source key: {key}")
-
-    run = _sync_connector(workspace_id, connector)
-    return SourceSyncRetryResponse(
-        source_type=key,
-        status="success",
-        message=f"{connector.platform} sync completed: {run.item_count} items",
-        item_count=run.item_count,
-    )
+app.include_router(_source_item_http_router(("retry_source_sync",)))
 
 
 app.include_router(_preference_http_router((
