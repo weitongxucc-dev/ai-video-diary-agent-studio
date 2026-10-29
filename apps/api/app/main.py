@@ -175,7 +175,7 @@ from app.profiles.preview_routes import build_preview_router
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
-    DeviceHeartbeatRequest, HostBudgetUncalibrated, MemberDeviceAccess,
+    HostBudgetUncalibrated, MemberDeviceAccess,
     creation_job_registration, find_member, permit_actor, resolve_member_token,
 )
 from app.device_resource_configuration import resolve_device_resources
@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.device_session_routes import build_device_session_router
 from app.task_media_routes import build_task_media_router
 from app.runtime_settings_routes import build_runtime_settings_router
 from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
@@ -8953,92 +8954,30 @@ app.include_router(build_creation_execution_router(
     read_bound_result=lambda task_id, request, job_id: _read_bound_execution_result(task_id, request, job_id),
 ))
 
-def _creation_job_for_request(workspace_id: str, request_id: str):
-    return _creation_execution_control().job_for_request(workspace_id, request_id)
 
 
-@app.post("/api/device/session/heartbeat")
-def report_device_session(payload: DeviceHeartbeatRequest, request: Request) -> dict[str, object]:
-    """上报一次真实会话活动。
-
-    身份与工作区都由服务端从本机名册判定，客户端自报的字段里没有这两项；
-    成员被移除后，下一次心跳就会因为名册里查不到而失败，旧会话不能续用。
-    """
-    workspace_id = current_workspace_id(request)
-    actor = _require_permit_actor(request, workspace_id)
-    runtime = _creation_runtime()
-    try:
-        runtime.scheduler.heartbeat_session(
-            SessionHeartbeat(
-                session_id=payload.session_id, workspace_id=workspace_id,
-                playing=payload.playing, recording=payload.recording,
-                editing=payload.editing, interaction=payload.interaction,
-            ),
-            actor,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return {"session_id": payload.session_id, "workspace_id": workspace_id,
-            "member_id": actor.member_id}
 
 
-@app.get("/api/device/queue")
-def read_device_queue(request: Request) -> dict[str, object]:
-    """本机整机队列：自己的执行单元加上匿名的忙闲汇总。"""
-    workspace_id = current_workspace_id(request)
-    actor = _require_permit_actor(request, workspace_id)
-    runtime = _creation_runtime()
-    try:
-        return runtime.scheduler.list_queue_for(actor)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-@app.post("/api/device/queue/{request_id}/cancel")
-def cancel_device_request(request_id: str, request: Request) -> dict[str, object]:
-    """释放一条执行单元的整机许可，并把背后的制作作业一并停下。
 
-    权限由调度器按作业归属判定：不是自己的单元就拒绝，取消方向不要求
-    成员仍在名册内——撤权必须总是可行。
-    """
-    workspace_id = current_workspace_id(request)
-    actor = _request_permit_actor(request, workspace_id)
-    if actor is None:
-        raise HTTPException(status_code=403, detail="缺少可核查的原制作身份，不能取消")
-    runtime = _creation_runtime()
-    try:
-        detail = runtime.scheduler.cancel(request_id, actor)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="该执行单元不存在") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    quality = runtime.registrations.get(QUALITY_KIND)
-    if quality is not None:
-        quality.executor.request_cancel(request_id, actor=actor)
-    registration = runtime.registrations.get("creation_job")
-    executor = getattr(registration, "executor", None)
-    if isinstance(executor, CreationJobUnitExecutor):
-        job = _creation_job_for_request(workspace_id, request_id)
-        if job is not None:
-            try:
-                if job.kind == COVER_JOB_KIND:
-                    if detail["state"] == "cancelled" and job.status in {"queued", "interrupted"}:
-                        production_repo.job_records.finish_job_run(workspace_id, job.id, status="cancelled",
-                            failure_reason="user_cancelled", impact="当前时间线保持不变。",
-                            repair_action="查询原封面请求后重新发起。")
-                elif job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND, TASK_MEDIA_KIND, 'creation_task_segment_revision'}:
-                    if job.status in {"queued", "interrupted", "running"}:
-                        production_repo.job_records.finish_job_run(workspace_id, job.id, status="cancelled",
-                            failure_reason="user_cancelled", impact="目标片段和当前版本保持不变。",
-                            repair_action="需要时重新预览该片段修改。")
-                else:
-                    creation_execution.cancel(workspace_id, job.task_id, member_id=actor.member_id)
-            except PermissionError as exc:
-                raise HTTPException(status_code=403, detail=str(exc)) from exc
-            except ValueError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-        executor.request_cancel(request_id)
-    return detail
+
+app.include_router(build_device_session_router(
+    workspace_for=lambda: current_workspace_id,
+    require_actor_for=lambda: _require_permit_actor,
+    request_actor_for=lambda: _request_permit_actor,
+    runtime_for=lambda: _creation_runtime,
+    control_for=lambda: _creation_execution_control,
+    repository_for=lambda: production_repo,
+    execution_for=lambda: creation_execution,
+    heartbeat_type_for=lambda: SessionHeartbeat,
+    executor_type_for=lambda: CreationJobUnitExecutor,
+    quality_kind_for=lambda: QUALITY_KIND,
+    cover_kind_for=lambda: COVER_JOB_KIND,
+    person_kind_for=lambda: PERSON_EDIT_KIND,
+    narration_kind_for=lambda: NARRATION_EDIT_KIND,
+    task_media_kind_for=lambda: TASK_MEDIA_KIND,
+))
 
 
 creation_execution: CreationExecution

@@ -249,7 +249,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         assert isinstance(owner_row,sqlite3.Row) and owner_row['owner_id']==first_job
         assert repo.creation_job_for_device_request_row('other-workspace',request_id) is None
         assert repo.creation_job_for_device_request_row('local','missing-request') is None
-        assert main._creation_job_for_request('local',request_id).id==first_job
+        assert main._creation_execution_control().job_for_request('local',request_id).id==first_job
         bound=client.get(url+'/execution',params={'job_id':first_job})
         assert bound.status_code==200 and bound.json()['job']['id']==first_job,bound.text
         # Keep the current original Job and immutable start receipt. A new trusted
