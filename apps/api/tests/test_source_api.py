@@ -124,7 +124,7 @@ def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client)
     ).status_code == 404
 
 
-def test_unimplemented_connector_is_not_reported_as_success(client):
+def test_unimplemented_connector_is_not_reported_as_success(client, monkeypatch):
     connector = _create_connector(client)
 
     response = client.post(f"/api/source-connectors/{connector['id']}/sync")
@@ -134,6 +134,33 @@ def test_unimplemented_connector_is_not_reported_as_success(client):
     assert error["error"] == "capability_unavailable"
     assert error["run"]["status"] == "failed"
     assert error["run"]["connector_id"] == connector["id"]
+
+    run = error["run"]
+    database = main_module.source_repository._database_path
+    monkeypatch.setattr(main_module, "source_repository", SourceRepository(database))
+    base = f"/api/source-connectors/{connector['id']}"
+    assert client.get(base).json()["connection_status"] == "capability_unavailable"
+    assert client.get("/api/source-connectors").json()["total_count"] == 1
+    assert client.get(base + "/runs").json() == {"items": [run], "total_count": 1}
+    assert client.get(base + "/runs/latest").json() == run
+    assert client.get(base + f"/runs/{run['id']}").json() == run
+    status = client.get("/api/sources/sync-status").json()["statuses"]
+    assert len(status) == 1
+    assert status[0]["configured"] is False
+    assert status[0]["last_success_at"] is None
+    assert status[0]["last_sync_at"] == run["finished_at"]
+    assert status[0]["last_failure_at"] == run["finished_at"]
+    assert status[0]["error_message"] == run["reason"]
+    other = _create_connector(client, platform="manual")
+    assert client.get(f"/api/source-connectors/{other['id']}/runs/latest").status_code == 404
+    assert client.get(f"/api/source-connectors/{other['id']}/runs/{run['id']}").status_code == 404
+    foreign = {"x-test-workspace": "workspace-b"}
+    assert client.get("/api/source-connectors", headers=foreign).json() == {"items": [], "total_count": 0}
+    assert client.get("/api/sources/sync-status", headers=foreign).json() == {"statuses": []}
+    for suffix in ("", "/runs", "/runs/latest", f"/runs/{run['id']}"):
+        assert client.get(base + suffix, headers=foreign).status_code == 404
+    assert main_module.source_repository.list_source_items("workspace-a") == []
+    assert len(main_module.source_repository.list_runs("workspace-a", connector["id"])) == 1
 
 
 @pytest.mark.parametrize(

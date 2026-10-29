@@ -349,6 +349,7 @@ from app.workspace_settings import (
     WorkspaceSecretStoreError,
     workspace_settings,
 )
+from app.source_connector_routes import build_source_connector_router
 from app.source_repository import KnowledgeVersionConflict, SourceRepository
 from app.knowledge_file_store import KnowledgeOriginalUnavailable, KnowledgeOriginalIntegrityError, KnowledgeOriginalStorageError
 from app.home_aggregation import aggregate_home
@@ -508,9 +509,7 @@ from app.schemas import (
     RuntimeSettingsUpdateRequest,
     SetupPreflightResponse,
     SourceFileStatesResponse,
-    SourceConnectorCreateRequest,
     SourceConnectorResponse,
-    SourceConnectorsResponse,
     SourceItemDetailResponse,
     SourceItemDetailsResponse,
     KnowledgeFileImportRequest,
@@ -521,13 +520,9 @@ from app.schemas import (
     KnowledgeItemContentRequest,
     SourceItemResponse,
     SourceRunEvidenceResponse,
-    SourceRunEvidencesResponse,
-    SourceSyncResponse,
     SourceItemsResponse,
     SaveSourceItemToKnowledgeRequest,
     SourceSyncRetryResponse,
-    SourceSyncStatusesResponse,
-    SourceSyncStatusResponse,
     SystemStatusResponse,
     TopicEvidenceItemResponse,
     TopicEvidenceResponse,
@@ -8922,131 +8917,30 @@ def _legacy_source_items_response(
     )
 
 
-@app.get("/api/source-connectors", response_model=SourceConnectorsResponse)
-def list_source_connectors(request: Request) -> SourceConnectorsResponse:
-    connectors = source_repository.list_connectors(current_workspace_id(request))
-    return SourceConnectorsResponse(
-        items=[_source_connector_response(item) for item in connectors],
-        total_count=len(connectors),
+def _source_connector_http_router(route_names):
+    return build_source_connector_router(
+        records_for=lambda: source_repository,
+        workspace_for=lambda request: current_workspace_id(request),
+        connector_response_for=lambda connector: _source_connector_response(connector),
+        run_response_for=lambda run: _source_run_response(run),
+        sync_for=lambda workspace_id, connector: _sync_connector(workspace_id, connector),
+        route_names=route_names,
     )
 
 
-@app.post("/api/source-connectors", response_model=SourceConnectorResponse)
-def create_source_connector(
-    request: Request,
-    payload: SourceConnectorCreateRequest,
-) -> SourceConnectorResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        connector = source_repository.upsert_connector(
-            SourceConnector(
-                id=f"connector_{uuid4().hex}",
-                workspace_id=workspace_id,
-                platform=payload.platform,
-                protocol=payload.protocol,
-                account_or_rule=payload.account_or_rule,
-                frequency=payload.frequency,
-                permissions=tuple(item.strip() for item in payload.permissions if item.strip()),
-            )
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _source_connector_response(connector)
+app.include_router(_source_connector_http_router(('list_source_connectors', 'create_source_connector', 'get_source_connector', 'list_source_connector_runs', 'get_latest_source_connector_run', 'get_source_connector_run', 'sync_source_connector_endpoint')))
 
 
-@app.get("/api/source-connectors/{connector_id}", response_model=SourceConnectorResponse)
-def get_source_connector(
-    connector_id: str,
-    request: Request,
-) -> SourceConnectorResponse:
-    try:
-        connector = source_repository.get_connector(
-            current_workspace_id(request), connector_id
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="source connector not found") from exc
-    return _source_connector_response(connector)
 
 
-@app.get(
-    "/api/source-connectors/{connector_id}/runs",
-    response_model=SourceRunEvidencesResponse,
-)
-def list_source_connector_runs(
-    connector_id: str,
-    request: Request,
-) -> SourceRunEvidencesResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        source_repository.get_connector(workspace_id, connector_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="source connector not found") from exc
-    runs = source_repository.list_runs(workspace_id, connector_id)
-    return SourceRunEvidencesResponse(
-        items=[_source_run_response(run) for run in runs],
-        total_count=len(runs),
-    )
 
 
-@app.get(
-    "/api/source-connectors/{connector_id}/runs/latest",
-    response_model=SourceRunEvidenceResponse,
-)
-def get_latest_source_connector_run(
-    connector_id: str,
-    request: Request,
-) -> SourceRunEvidenceResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        source_repository.get_connector(workspace_id, connector_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="source connector not found") from exc
-    runs = source_repository.list_runs(workspace_id, connector_id)
-    if not runs:
-        raise HTTPException(status_code=404, detail="source run not found")
-    return _source_run_response(runs[0])
 
 
-@app.get(
-    "/api/source-connectors/{connector_id}/runs/{run_id}",
-    response_model=SourceRunEvidenceResponse,
-)
-def get_source_connector_run(
-    connector_id: str,
-    run_id: str,
-    request: Request,
-) -> SourceRunEvidenceResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        source_repository.get_connector(workspace_id, connector_id)
-        run = source_repository.get_run(workspace_id, run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="source run not found") from exc
-    if run.connector_id != connector_id:
-        raise HTTPException(status_code=404, detail="source run not found")
-    return _source_run_response(run)
 
 
-@app.post(
-    "/api/source-connectors/{connector_id}/sync",
-    response_model=SourceSyncResponse,
-)
-def sync_source_connector_endpoint(
-    connector_id: str,
-    request: Request,
-) -> SourceSyncResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        connector = source_repository.get_connector(workspace_id, connector_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="source connector not found") from exc
-    run = _sync_connector(workspace_id, connector)
-    return SourceSyncResponse(
-        connector=_source_connector_response(
-            source_repository.get_connector(workspace_id, connector_id)
-        ),
-        run=_source_run_response(run),
-    )
+
+
 
 
 @app.get("/api/source-items", response_model=SourceItemDetailsResponse)
@@ -9481,34 +9375,7 @@ def capture_web_snapshot(
     return _source_item_response(item)
 
 
-@app.get(
-    "/api/sources/sync-status",
-    response_model=SourceSyncStatusesResponse,
-)
-def get_source_sync_status(request: Request) -> SourceSyncStatusesResponse:
-    workspace_id = current_workspace_id(request)
-    statuses = []
-    for connector in source_repository.list_connectors(workspace_id):
-        runs = source_repository.list_runs(workspace_id, connector.id)
-        latest = runs[0] if runs else None
-        latest_success = next((run for run in runs if run.status == "succeeded"), None)
-        latest_failure = next((run for run in runs if run.status == "failed"), None)
-        statuses.append(
-            {
-                "source_type": connector.platform,
-                "configured": connector.connection_status != "capability_unavailable",
-                "last_sync_at": latest.finished_at if latest else None,
-                "last_success_at": latest_success.finished_at if latest_success else None,
-                "last_failure_at": latest_failure.finished_at if latest_failure else None,
-                "error_message": latest_failure.reason if latest_failure else None,
-            }
-        )
-    return SourceSyncStatusesResponse(
-        statuses=[
-            SourceSyncStatusResponse(**status)
-            for status in statuses
-        ],
-    )
+app.include_router(_source_connector_http_router(("get_source_sync_status",)))
 
 
 def _preference_http_router(route_names):
