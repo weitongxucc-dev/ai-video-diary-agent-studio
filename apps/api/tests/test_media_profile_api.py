@@ -406,16 +406,33 @@ def test_media_management_rejects_blank_required_values(
     payload: dict[str, object],
 ) -> None:
     client = request.getfixturevalue(
-        "authorization_client" if path == "/api/media/pronunciation-entries" else "client"
+        "authorization_client" if path in {"/api/media/pronunciation-entries",
+                                         "/api/media/person-profiles", "/api/media/voice-profiles"} else "client"
     )
     if path == "/api/media/voice-profiles":
-        assert client.post("/api/media/person-profiles", json=_person_payload()).status_code == 200
-        payload = {
-            **payload,
-            "reference_audio_path": client.voice_reference,
-            "reference": {"asset_id": client.voice_asset_id},
-        }
-    assert client.post(path, json=payload).status_code == 422
+        # Blank-name validation precedes source resolution; no successful media
+        # registration is needed to prove this rejection.
+        payload = {**payload, "person_profile_id": "", "person_version": "",
+                   "reference_audio_path": "workspace://metadata/unused.wav", "reference": {}}
+    rejected = client.post(path, json=payload)
+    assert rejected.status_code == 422
+
+    if path in {"/api/media/person-profiles", "/api/media/voice-profiles"}:
+        assert rejected.json()["detail"] == ("display name must not be blank"
+            if path == "/api/media/person-profiles" else "独立声音需要名称")
+        assert client.get(path).json() == {"items": [], "total_count": 0}
+        assert client.get(path + "/missing").status_code == 404
+        assert client.get(path + "/missing/versions").status_code == 404
+        kind = path.rsplit("/", 1)[-1]
+        assert client.get(f"/api/media/{kind}/missing/reference?version=v1").status_code == 404
+        foreign = {"x-test-workspace": "workspace-b"}
+        assert client.get(path, headers=foreign).json() == {"items": [], "total_count": 0}
+        if path == "/api/media/voice-profiles":
+            assert client.get("/api/media/default-voice").json() is None
+            assert client.put("/api/media/default-voice", json={"profile_id": "missing", "version": "v1"}).status_code == 422
+        with main_module.production_repo._connect() as conn:
+            for table in ("person_profiles", "versioned_voice_profiles", "media_authorizations"):
+                assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
 
     if path == "/api/media/pronunciation-entries":
         endpoint = "/api/media/pronunciation-entries"

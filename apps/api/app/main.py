@@ -173,6 +173,7 @@ from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.local_member_routes import build_local_member_router
 from app.profiles.authorization_routes import build_authorization_router
 from app.profiles.pronunciation_routes import build_pronunciation_router
+from app.profiles.profile_routes import build_profile_router
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
@@ -501,11 +502,8 @@ from app.schemas import (
     ProductionChainResponse,
     ProductionFoundationResponse,
     ProductionProfileResponse,
-    FixedProfileReference,
     ProductionProfileUpdateRequest,
     PersonProfileResponse,
-    PersonProfilesResponse,
-    PersonProfileUpsertRequest,
     RetakeReportResponse,
     RuntimeHealthResponse,
     RuntimeSettingsResponse,
@@ -541,8 +539,6 @@ from app.schemas import (
     VoiceProfilesResponse,
     VoiceProfileUpsertRequest,
     VersionedVoiceProfileResponse,
-    VersionedVoiceProfilesResponse,
-    VersionedVoiceProfileUpsertRequest,
     VoiceTranscriptionResponse,
     WorkflowStatusResponse,
     CoverAssetResponse,
@@ -1777,140 +1773,45 @@ app.include_router(build_authorization_router(
 ))
 
 
-def _readable_profiles(request: Request, items):
-    user_id, diagnostic = _content_reader(request, current_workspace_id(request))
-    return [item for item in items if production_repo.profile_readable(item, user_id, diagnostic)]
 
 
-@app.get("/api/media/default-voice", response_model=VersionedVoiceProfileResponse | None)
-def get_default_media_voice(request: Request):
-    voice = production_repo.get_default_versioned_voice(current_workspace_id(request))
-    user, diagnostic = _content_reader(request, current_workspace_id(request))
-    return _versioned_voice_profile_response(voice, request) if voice and production_repo.profile_readable(voice, user, diagnostic) else None
-
-
-@app.put("/api/media/default-voice", response_model=VersionedVoiceProfileResponse)
-def set_default_media_voice(request: Request, payload: FixedProfileReference):
-    selected = payload
-    ws = current_workspace_id(request)
-    user, diagnostic = _content_reader(request, ws)
-    try:
-        voice = production_repo.set_default_versioned_voice(ws, selected.profile_id, selected.version,
-            viewer_user_id=user, local_diagnostic=diagnostic)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _versioned_voice_profile_response(voice, request)
-
-
-@app.get("/api/media/{profile_kind}/{profile_id}/reference")
-def stream_profile_reference(profile_kind: Literal["person-profiles", "voice-profiles"], profile_id: str, request: Request, version: str):
-    ws = current_workspace_id(request)
-    try:
-        profile = (production_repo.get_person_profile(ws, profile_id, version) if profile_kind == "person-profiles"
-                   else production_repo.get_versioned_voice_profile(ws, profile_id, version))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="profile not found") from exc
-    path, reason, _, _ = _profile_read_facts(profile, request)
-    if path is None:
-        raise HTTPException(status_code=409, detail=reason)
-    return FileResponse(path)
-
-
-@app.get("/api/media/person-profiles", response_model=PersonProfilesResponse)
-def list_media_person_profiles(request: Request) -> PersonProfilesResponse:
-    people = _readable_profiles(request, production_repo.list_person_profiles(current_workspace_id(request)))
-    return PersonProfilesResponse(
-        items=[_person_profile_response(item, request) for item in people],
-        total_count=len(people),
+def _profile_http_router(route_names):
+    return build_profile_router(
+        records_for=lambda: production_repo,
+        workspace_for=lambda request: current_workspace_id(request),
+        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        voice_response_for=lambda voice, request: _versioned_voice_profile_response(voice, request),
+        person_response_for=lambda person, request: _person_profile_response(person, request),
+        read_facts_for=lambda profile, request: _profile_read_facts(profile, request),
+        required_text_for=lambda value, field: _required_media_text(value, field),
+        optional_texts_for=lambda values, field: _optional_media_text_values(values, field),
+        authorization_for=lambda workspace_id, payload: _authorization_from_request(workspace_id, payload),
+        write_error_for=lambda exc: _media_write_error(exc),
+        route_names=route_names,
     )
 
 
-def _profile_save_use_state(workspace_id, payload, *, person):
-    if "use_state" in payload.model_fields_set:
-        return payload.use_state
-    try:
-        previous = (production_repo.get_person_profile(workspace_id, payload.id) if person
-                    else production_repo.get_versioned_voice_profile(workspace_id, payload.id))
-    except KeyError:
-        return payload.use_state
-    return previous.use_state
+app.include_router(_profile_http_router(("get_default_media_voice",)))
 
 
-@app.post("/api/media/person-profiles", response_model=PersonProfileResponse)
-def save_media_person_profile(
-    request: Request,
-    payload: PersonProfileUpsertRequest,
-) -> PersonProfileResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        saved = production_repo.save_person_profile(
-            PersonProfile(
-                id=_required_media_text(payload.id, "person id"),
-                workspace_id=workspace_id,
-                display_name=_required_media_text(payload.display_name, "display name"),
-                version=payload.version or f"v-{uuid4().hex}",
-                avatar_reference=validate_logical_media_reference(
-                    payload.avatar_reference,
-                    field="avatar reference",
-                    allowed_schemes={"asset", "workspace"},
-                ),
-                background_capabilities=_optional_media_text_values(
-                    payload.background_capabilities, "background capabilities"
-                ),
-                shot_capabilities=_optional_media_text_values(
-                    payload.shot_capabilities, "shot capabilities"
-                ),
-                authorization=_authorization_from_request(workspace_id, payload.authorization) if payload.authorization else None,
-                reference=ProfileReference(**payload.reference.model_dump()) if payload.reference else ProfileReference(),
-                use_state=_profile_save_use_state(workspace_id, payload, person=True),
-            ), verified_owner_user_id=_content_reader(request, workspace_id)[0],
-            local_diagnostic=_content_reader(request, workspace_id)[1],
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise _media_write_error(exc) from exc
-    return _person_profile_response(saved, request)
+app.include_router(_profile_http_router(("set_default_media_voice",)))
 
 
-@app.get(
-    "/api/media/person-profiles/{person_id}",
-    response_model=PersonProfileResponse,
-)
-def get_media_person_profile(
-    person_id: str,
-    request: Request,
-    version: str | None = None,
-) -> PersonProfileResponse:
-    try:
-        person = production_repo.get_person_profile(
-            current_workspace_id(request), person_id, version
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="person profile not found") from exc
-    return _person_profile_response(person, request)
+app.include_router(_profile_http_router(("stream_profile_reference",)))
 
 
-@app.get(
-    "/api/media/person-profiles/{person_id}/versions",
-    response_model=PersonProfilesResponse,
-)
-def list_media_person_profile_versions(
-    person_id: str,
-    request: Request,
-) -> PersonProfilesResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_person_profile(workspace_id, person_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="person profile not found") from exc
-    items = _readable_profiles(request, production_repo.list_person_profile_versions(workspace_id, person_id))
-    return PersonProfilesResponse(
-        items=[_person_profile_response(item, request) for item in items],
-        total_count=len(items),
-    )
+app.include_router(_profile_http_router(("list_media_person_profiles",)))
+
+
+
+
+app.include_router(_profile_http_router(("save_media_person_profile",)))
+
+
+app.include_router(_profile_http_router(("get_media_person_profile",)))
+
+
+app.include_router(_profile_http_router(("list_media_person_profile_versions",)))
 
 
 @app.post(
@@ -1958,98 +1859,16 @@ app.include_router(build_voice_sampling_router(
 ))
 
 
-@app.get("/api/media/voice-profiles", response_model=VersionedVoiceProfilesResponse)
-def list_media_voice_profiles(request: Request) -> VersionedVoiceProfilesResponse:
-    voices = _readable_profiles(request, production_repo.list_versioned_voice_profiles(current_workspace_id(request)))
-    return VersionedVoiceProfilesResponse(
-        items=[_versioned_voice_profile_response(item, request) for item in voices],
-        total_count=len(voices),
-    )
+app.include_router(_profile_http_router(("list_media_voice_profiles",)))
 
 
-@app.post("/api/media/voice-profiles", response_model=VersionedVoiceProfileResponse)
-def save_media_voice_profile(
-    request: Request,
-    payload: VersionedVoiceProfileUpsertRequest,
-) -> VersionedVoiceProfileResponse:
-    workspace_id = current_workspace_id(request)
-    person_pair = (payload.person_profile_id, payload.person_version)
-    if not {"person_profile_id", "person_version"} & payload.model_fields_set:
-        try:
-            previous = production_repo.get_versioned_voice_profile(workspace_id, payload.id)
-            person_pair = (previous.person_profile_id, previous.person_version)
-        except KeyError:
-            pass  # A new independent voice has no historical person restriction.
-    try:
-        saved = production_repo.save_versioned_voice_profile(
-            VersionedVoiceProfile(
-                id=_required_media_text(payload.id, "voice profile id"),
-                workspace_id=workspace_id,
-                person_profile_id=person_pair[0],
-                person_version=person_pair[1],
-                version=payload.version or f"v-{uuid4().hex}",
-                language=payload.language,
-                reference_audio_path=validate_logical_media_reference(
-                    payload.reference_audio_path,
-                    field="reference audio path",
-                    allowed_schemes={"asset", "workspace"},
-                ),
-                reference_text=payload.reference_text,
-                display_name=payload.display_name,
-                model_id=payload.model_id,
-                authorization=_authorization_from_request(workspace_id, payload.authorization) if payload.authorization else None,
-                reference=ProfileReference(**payload.reference.model_dump()) if payload.reference else ProfileReference(),
-                use_state=_profile_save_use_state(workspace_id, payload, person=False),
-            ), verified_owner_user_id=_content_reader(request, workspace_id)[0],
-            local_diagnostic=_content_reader(request, workspace_id)[1],
-        )
-    except (KeyError, ValueError, PermissionError) as exc:
-        if isinstance(exc, PermissionError):
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        if isinstance(exc, KeyError):
-            raise HTTPException(status_code=404, detail="person profile not found") from exc
-        raise _media_write_error(exc) from exc
-    return _versioned_voice_profile_response(saved, request)
+app.include_router(_profile_http_router(("save_media_voice_profile",)))
 
 
-@app.get(
-    "/api/media/voice-profiles/{voice_profile_id}",
-    response_model=VersionedVoiceProfileResponse,
-)
-def get_media_voice_profile(
-    voice_profile_id: str,
-    request: Request,
-    version: str | None = None,
-) -> VersionedVoiceProfileResponse:
-    try:
-        voice = production_repo.get_versioned_voice_profile(
-            current_workspace_id(request), voice_profile_id, version
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    return _versioned_voice_profile_response(voice, request)
+app.include_router(_profile_http_router(("get_media_voice_profile",)))
 
 
-@app.get(
-    "/api/media/voice-profiles/{voice_profile_id}/versions",
-    response_model=VersionedVoiceProfilesResponse,
-)
-def list_media_voice_profile_versions(
-    voice_profile_id: str,
-    request: Request,
-) -> VersionedVoiceProfilesResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_versioned_voice_profile(workspace_id, voice_profile_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="voice profile not found") from exc
-    items = _readable_profiles(request, production_repo.list_versioned_voice_profile_versions(
-        workspace_id, voice_profile_id
-    ))
-    return VersionedVoiceProfilesResponse(
-        items=[_versioned_voice_profile_response(item, request) for item in items],
-        total_count=len(items),
-    )
+app.include_router(_profile_http_router(("list_media_voice_profile_versions",)))
 
 
 app.include_router(build_pronunciation_router(
