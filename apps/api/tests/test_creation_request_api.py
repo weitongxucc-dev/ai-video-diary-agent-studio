@@ -1,3 +1,4 @@
+from app.materials.library_routes import MaterialLibraryHTTPAdapter
 """Member boundary, bounded windows and live preflight revalidation over SQLite."""
 from dataclasses import replace
 from types import SimpleNamespace
@@ -579,7 +580,7 @@ def test_request_recovery_does_not_match_a_similar_goal(client_state):
 def test_material_tag_receipt_still_requires_exact_bound_object(client_state, monkeypatch, result_asset, expected_status):
     from datetime import datetime, timezone
     c = client_state
-    monkeypatch.setattr(main, "get_production_material", lambda *_args, **_kwargs: SimpleNamespace(
+    monkeypatch.setattr(MaterialLibraryHTTPAdapter, "get_production_material", lambda _adapter, *_args, **_kwargs: SimpleNamespace(
         id="asset-a", updated_at=datetime(2026, 10, 16, tzinfo=timezone.utc), segments=[]))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _workspace: SimpleNamespace(
         effective_llm_provider="test", effective_llm_model="test", effective_llm_api_key=None))

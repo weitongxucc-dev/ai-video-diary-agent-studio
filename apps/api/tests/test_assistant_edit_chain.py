@@ -199,7 +199,7 @@ def test_task_clip_snapshot_binds_both_revisions_and_never_falls_back_from_perso
     state = material_edit_state
     monkeypatch.setattr(main.settings, "video_inbox_path", str(Path(state.asset.path).parent), raising=False)
     selection = main._assistant_task_clip_material_selection(state.request, state.task, [f"clip:{state.clip.id}"])
-    asset = main.get_production_material(state.clip.asset_id, state.request)
+    asset = main._material_library_http_adapter().get_production_material(state.clip.asset_id, state.request)
     segment = next(item for item in asset.segments if item.id == state.clip.segment_id)
     assert selection == {"scope": "segment", "asset_id": asset.id, "segment_id": segment.id,
         "expected_updated_at": asset.updated_at.isoformat(), "expected_segment_updated_at": segment.updated_at.isoformat(),

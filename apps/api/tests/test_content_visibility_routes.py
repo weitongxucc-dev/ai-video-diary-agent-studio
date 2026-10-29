@@ -17,6 +17,22 @@ from app.production import ProductionRepository
 client = TestClient(main_module.app)
 
 
+def material_library_no_execution(monkeypatch):
+    """HTTP metadata facts only; fail before any provider/media/runtime work."""
+    import subprocess
+    import wave
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("material HTTP metadata must not execute media or runtime")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(wave, "open", forbidden)
+    for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
+        monkeypatch.setattr(main_module, name, forbidden)
+    monkeypatch.setattr(ProductionRepository, "scan_library", forbidden)
+    monkeypatch.setattr(ProductionRepository, "analyze_asset", forbidden)
+
+
 def _setup(tmp_path, monkeypatch):
     library = tmp_path / "library"
     library.mkdir()
@@ -63,6 +79,7 @@ def _confirm_task(production, workspace_id: str, owner_user_id: str):
 
 
 def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     from app.production import MaterialAsset
     from datetime import datetime
@@ -75,6 +92,9 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
         owner_user_id=owner_member_id,
     ))
 
+    _other, other_token = _service.join(_service.create_invite_code(), "另一成员")
+    hidden = client.get("/api/production/materials/asset-vis", headers=_headers(other_token))
+    assert hidden.status_code == 404
     detail = client.get("/api/production/materials/asset-vis", headers=_headers(owner_token))
     assert detail.status_code == 200
     assert detail.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
@@ -86,6 +106,7 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
     )
     assert shared.status_code == 200, shared.text
     assert shared.json()["visibility"] == CONTENT_VISIBILITY_LEGACY
+    assert client.get("/api/production/materials/asset-vis", headers=_headers(other_token)).status_code == 200
 
     revoked = client.put(
         "/api/production/materials/asset-vis/visibility",
@@ -99,6 +120,7 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
     )
     assert after_revoke.status_code == 200
     assert after_revoke.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
+    assert client.get("/api/production/materials/asset-vis", headers=_headers(other_token)).status_code == 404
 
 
 def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):

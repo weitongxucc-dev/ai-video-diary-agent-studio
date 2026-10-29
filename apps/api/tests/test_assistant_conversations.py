@@ -1,3 +1,4 @@
+from app.materials.library_routes import MaterialLibraryHTTPAdapter
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 from uuid import uuid4
@@ -183,7 +184,7 @@ def test_material_library_turn_without_selection_is_read_only_and_replayed_once(
         effective_llm_provider="test-provider", effective_llm_model="test-model",
         effective_llm_api_key=None,
     ))
-    monkeypatch.setattr(main_module, "get_production_material", lambda *_args, **_kwargs:
+    monkeypatch.setattr(MaterialLibraryHTTPAdapter, "get_production_material", lambda _adapter, *_args, **_kwargs:
                         (_ for _ in ()).throw(AssertionError("No material may be guessed without selection")))
     calls = []
     monkeypatch.setattr(main_module, "run_plan_turn", lambda _settings, **kwargs:

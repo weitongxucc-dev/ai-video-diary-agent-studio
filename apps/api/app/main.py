@@ -7,6 +7,7 @@ from app.assistant import home_plan_turn_use_case as home_plan
 from app.assistant.stream_response import AssistantStreamTransport
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
+from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -1270,12 +1271,12 @@ def _validate_assistant_scope(request: Request, kind: str, scope_id: str) -> Non
     if kind == "material" and scope_id.startswith("asset:"):
         asset_id = scope_id.removeprefix("asset:")
         if asset_id:
-            get_production_material(asset_id, request)
+            _material_library_http_adapter().get_production_material(asset_id, request)
             return
     if kind == "material" and scope_id.startswith("segment:"):
         parts = scope_id.split(":", 2)
         if len(parts) == 3 and parts[1] and parts[2]:
-            asset = get_production_material(parts[1], request)
+            asset = _material_library_http_adapter().get_production_material(parts[1], request)
             if any(segment.id == parts[2] and segment.asset_id == asset.id for segment in asset.segments):
                 return
             raise HTTPException(status_code=404, detail="所选素材片段不存在")
@@ -5147,7 +5148,7 @@ def material_assistant_turn(
 
 def _assistant_material_selection_snapshot(request: Request, selection: dict, *, replay: bool = False) -> tuple[dict, object]:
     selection = dict(selection)
-    asset = get_production_material(selection["asset_id"], request)
+    asset = _material_library_http_adapter().get_production_material(selection["asset_id"], request)
     expected = selection.get("expected_updated_at")
     if not replay and expected is not None and datetime.fromisoformat(str(expected).replace("Z","+00:00")) != asset.updated_at:
         raise HTTPException(status_code=409, detail="所选素材已更新，请重新查看后发送。")
@@ -5174,7 +5175,7 @@ def _assistant_task_clip_material_selection(request: Request, task, selected_ref
         # clips happen to retain an asset identity. Never fall back to that asset.
         if clip is None or clip.person_render_id or clip.asset_id.startswith("person:") or clip.source_path.startswith("person-render://"):
             return None
-        asset = get_production_material(clip.asset_id, request)
+        asset = _material_library_http_adapter().get_production_material(clip.asset_id, request)
         segment = next((item for item in asset.segments if item.id == clip.segment_id and item.asset_id == asset.id), None)
         if segment is None:
             return None
@@ -8829,6 +8830,19 @@ def get_production_home(
     )
 
 
+def _material_library_http_adapter():
+    return MaterialLibraryHTTPAdapter(
+        records_for=lambda: production_repo,
+        search_for=lambda: production_repo.material_search,
+        workspace_for=current_workspace_id,
+        reader_for=_content_reader,
+        visible=_content_visible,
+        write_guard=_local_member_write_guard,
+        library_root=lambda: settings.video_inbox_path,
+        asset_response=_material_asset_response,
+    )
+
+
 @app.get(
     "/api/production/materials/insights",
     response_model=MaterialLibraryInsightsResponse,
@@ -8850,46 +8864,7 @@ def get_material_library_insights(
     )
 
 
-@app.get(
-    "/api/production/materials",
-    response_model=MaterialLibraryResponse,
-)
-def list_production_materials(
-    request: Request,
-    limit: int = 24,
-    offset: int = 0,
-    q: str | None = None,
-    tag: str | None = None,
-    review_status: str | None = None,
-    media_type: str | None = None,
-) -> MaterialLibraryResponse:
-    if limit < 1 or limit > 100 or offset < 0:
-        raise HTTPException(status_code=422, detail="invalid material pagination")
-    if review_status not in {None, "raw", "approved", "rejected"}:
-        raise HTTPException(status_code=422, detail="invalid material review status")
-    if media_type not in {None, "video", "audio", "image"}:
-        raise HTTPException(status_code=422, detail="invalid material media type")
-    workspace_id = current_workspace_id(request)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    assets, total = production_repo.list_assets_page(
-        workspace_id,
-        limit=limit,
-        offset=offset,
-        query=q,
-        tag=tag,
-        review_status=review_status,
-        media_type=media_type,
-        include_private=local_diagnostic,
-        viewer_user_id=viewer_user_id,
-        local_diagnostic=local_diagnostic,
-    )
-    return MaterialLibraryResponse(
-        assets=[_material_asset_response(asset) for asset in assets],
-        total_count=total,
-        limit=limit,
-        offset=offset,
-        has_more=offset + len(assets) < total,
-    )
+app.include_router(build_material_library_router(_material_library_http_adapter, ('list_production_materials',)))
 
 
 def _material_binding_status(workspace_id: str, repository: ProductionRepository) -> MaterialIntakeStatusResponse:
@@ -9133,59 +9108,13 @@ def retry_material_intake(asset_id: str, request: Request) -> MaterialAssetRespo
     return _material_asset_response(asset)
 
 
-@app.put("/api/production/materials/{asset_id}/tags", response_model=MaterialAssetResponse)
-def update_material_asset_tags(asset_id: str, request: Request, payload: MaterialAssetTagsRequest) -> MaterialAssetResponse:
-    get_production_material(asset_id, request)
-    try:
-        asset = production_repo.update_asset_tags(current_workspace_id(request), asset_id, payload.user_tags, expected_asset_updated_at=payload.expected_asset_updated_at)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
-    except MaterialVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _material_asset_response(asset)
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_asset_tags',)))
 
 
-@app.post("/api/production/materials/tags/batch", response_model=MaterialBatchTagsResponse)
-def update_material_asset_tags_batch(request: Request, payload: MaterialBatchTagsRequest) -> MaterialBatchTagsResponse:
-    try:
-        assets = production_repo.update_assets_tags_batch(
-            current_workspace_id(request), payload.asset_ids,
-            add=payload.add, remove=payload.remove,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="所选素材有不属于当前工作区的项目，未做任何修改") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return MaterialBatchTagsResponse(assets=[_material_asset_response(asset) for asset in assets])
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_asset_tags_batch',)))
 
 
-@app.put("/api/production/materials/notes", response_model=MaterialAssetNotesResponse)
-def update_material_asset_notes(request: Request, payload: MaterialAssetNotesRequest) -> MaterialAssetNotesResponse:
-    """Save each named material's own text and the batch background it arrived with.
-
-    Only the materials named in the request are touched, and the repository
-    refuses the whole batch if any one of them is not this workspace's, so the
-    user is never told a note is stored that was not written.
-    """
-    try:
-        assets = production_repo.update_asset_notes(
-            current_workspace_id(request),
-            [
-                MaterialAssetNote(
-                    asset_id=item.asset_id,
-                    user_description=item.user_description,
-                    upload_context=item.upload_context,
-                )
-                for item in payload.items
-            ],
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="所选素材有不属于当前工作区的项目，未做任何修改") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return MaterialAssetNotesResponse(assets=[_material_asset_response(asset) for asset in assets])
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_asset_notes',)))
 
 
 def _material_business_object_response(entry: MaterialBusinessObject) -> MaterialBusinessObjectResponse:
@@ -9253,103 +9182,16 @@ def save_material_asset_business_objects(
     )
 
 
-@app.get(
-    "/api/production/materials/{asset_id}/usage-records",
-    response_model=MaterialUsageRecordsResponse,
-)
-def list_material_segment_usage_records(
-    request: Request, asset_id: str, segment_id: str
-) -> MaterialUsageRecordsResponse:
-    """Show what used one segment of one material, read from real render rows."""
-    workspace_id = current_workspace_id(request)
-    try:
-        asset = production_repo.get_asset(workspace_id, asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区") from exc
-    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
-        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区")
-    try:
-        records = production_repo.list_segment_usage_records(workspace_id, asset_id, segment_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材或片段不存在或不属于当前工作区") from exc
-    return MaterialUsageRecordsResponse(items=records, total_count=len(records))
+app.include_router(build_material_library_router(_material_library_http_adapter, ('list_material_segment_usage_records',)))
 
 
-@app.get("/api/production/materials/{asset_id}/unmatched-corrections")
-def get_unmatched_material_corrections(asset_id: str, request: Request) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_asset(workspace_id, asset_id)
-        items = production_repo.list_unmatched_material_corrections(workspace_id, asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
-    return {"asset_id": asset_id, "items": items}
+app.include_router(build_material_library_router(_material_library_http_adapter, ('get_unmatched_material_corrections',)))
 
 
-@app.get(
-    "/api/production/materials/search",
-    response_model=list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse,
-)
-def search_production_material_segments(
-    request: Request,
-    q: str = "",
-    usage_role: str | None = None,
-    tags: str | None = None,
-    min_duration_seconds: float | None = None,
-    max_duration_seconds: float | None = None,
-    limit: int = 20,
-    purpose: Literal['manual','automatic'] = 'manual',
-    include_eligibility: bool = False,
-) -> list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse:
-    if usage_role not in {None, "a_roll", "b_roll"}:
-        raise HTTPException(status_code=422, detail="invalid material usage role")
-    workspace_id = current_workspace_id(request)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    try:
-        matches = production_repo.material_search.search_material_segments(
-            workspace_id,
-            query=q,
-            usage_roles=[usage_role] if usage_role else ["a_roll", "b_roll"],
-            tags=[item.strip() for item in tags.split(",") if item.strip()]
-            if tags
-            else None,
-            min_duration_seconds=min_duration_seconds,
-            max_duration_seconds=max_duration_seconds,
-            limit=limit,
-            viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic,
-            purpose=purpose,
-            include_eligibility=include_eligibility,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if include_eligibility:
-        return MaterialSegmentSearchResponse.model_validate({**matches,'matches':[asdict(item) for item in matches['matches']]})
-    return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
+app.include_router(build_material_library_router(_material_library_http_adapter, ('search_production_material_segments',)))
 
 
-@app.put(
-    "/api/production/materials/{asset_id}/visibility",
-    response_model=MaterialAssetResponse,
-)
-def set_production_material_visibility(
-    asset_id: str,
-    request: Request,
-    payload: ContentVisibilityRequest,
-) -> MaterialAssetResponse:
-    """显式共享或收回一条素材；响应回读同一列。"""
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    try:
-        asset = production_repo.set_asset_visibility(
-            current_workspace_id(request), asset_id, payload.visibility
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _material_asset_response(asset)
+app.include_router(build_material_library_router(_material_library_http_adapter, ('set_production_material_visibility',)))
 
 
 @contextmanager
@@ -9431,58 +9273,10 @@ def preview_discovered_material(session_id: str, candidate_id: str, request: Req
         return FileResponse(path, filename=path.name, content_disposition_type="inline")
 
 
-@app.get(
-    "/api/production/materials/{asset_id}",
-    response_model=MaterialAssetResponse,
-)
-def get_production_material(
-    asset_id: str,
-    request: Request,
-) -> MaterialAssetResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        asset = production_repo.get_asset(workspace_id, asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
-        raise HTTPException(status_code=404, detail="material asset not found")
-    return _material_asset_response(asset)
+app.include_router(build_material_library_router(_material_library_http_adapter, ('get_production_material',)))
 
 
-@app.get("/api/production/materials/{asset_id}/media")
-def stream_production_material(asset_id: str, request: Request) -> FileResponse:
-    """Stream a workspace-scoped library asset for the desktop review player."""
-    workspace_id = current_workspace_id(request)
-    try:
-        asset = production_repo.get_asset(workspace_id, asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    if not _content_visible(request, workspace_id, asset.visibility, asset.owner_user_id):
-        raise HTTPException(status_code=404, detail="material asset not found")
-    root = Path(settings.video_inbox_path).expanduser().resolve()
-    path = Path(asset.path).expanduser().resolve()
-    try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="material asset is outside the library") from exc
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="material file not found")
-    media_type = {
-        ".mp4": "video/mp4",
-        ".mov": "video/quicktime",
-        ".m4v": "video/x-m4v",
-        ".webm": "video/webm",
-        ".mp3": "audio/mpeg",
-        ".m4a": "audio/mp4",
-        ".aac": "audio/aac",
-        ".wav": "audio/wav",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-    }.get(path.suffix.lower(), "application/octet-stream")
-    return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
+app.include_router(build_material_library_router(_material_library_http_adapter, ('stream_production_material',)))
 
 
 @app.post(
@@ -9532,68 +9326,13 @@ def analyze_production_material(
     return _material_asset_response(asset)
 
 
-@app.put("/api/production/materials/{asset_id}/use-state", response_model=MaterialAssetResponse)
-def update_material_use_state(asset_id: str, request: Request, payload: MaterialUseStateRequest) -> MaterialAssetResponse:
-    try:
-        asset = production_repo.update_asset_use_state(current_workspace_id(request), asset_id, payload.use_state)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    return _material_asset_response(asset)
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_use_state',)))
 
 
-@app.put(
-    "/api/production/materials/{asset_id}/review",
-    response_model=MaterialAssetResponse,
-)
-def review_production_material(
-    asset_id: str,
-    request: Request,
-    payload: MaterialReviewRequest,
-) -> MaterialAssetResponse:
-    try:
-        asset = production_repo.update_asset_review(
-            current_workspace_id(request),
-            asset_id,
-            review_status=payload.review_status,
-            usage_role=payload.usage_role,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    return _material_asset_response(asset)
+app.include_router(build_material_library_router(_material_library_http_adapter, ('review_production_material',)))
 
 
-@app.put(
-    "/api/production/materials/{asset_id}/segments/{segment_id}",
-    response_model=MaterialAssetResponse,
-)
-def update_production_material_segment(
-    asset_id: str,
-    segment_id: str,
-    request: Request,
-    payload: MaterialSegmentUpdateRequest,
-) -> MaterialAssetResponse:
-    get_production_material(asset_id, request)
-    try:
-        asset = production_repo.update_segment(
-            current_workspace_id(request),
-            asset_id,
-            segment_id,
-            description=payload.description,
-            transcript=payload.transcript,
-            review_status=payload.review_status,
-            usage_role=payload.usage_role,
-            user_tags=payload.user_tags,
-            collection_ids=payload.collection_ids,
-            expected_asset_updated_at=payload.expected_asset_updated_at,
-            expected_segment_updated_at=payload.expected_segment_updated_at,
-        )
-    except MaterialVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material segment not found") from exc
-    return _material_asset_response(asset)
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment',)))
 
 
 @app.get(
