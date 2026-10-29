@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.media_script_tool_routes import build_media_script_tool_router
 from app.video_intake_routes import build_video_intake_router
 from app.device_session_routes import build_device_session_router
 from app.task_media_routes import build_task_media_router
@@ -3193,43 +3194,34 @@ def _script_tool_error(exc):
 
 
 
-@app.post("/api/creation-tasks/{task_id}/media-script-tools")
-def save_media_script_tool(task_id: str, request: Request, payload: MediaScriptToolSaveRequest):
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    actor = _require_permit_actor(request, task.workspace_id)
-    if payload.assistant_turn_id is not None:
-        try:
-            source = conversation_repo.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        _require_assistant_input_origin(request, {**source, "assistant_turn_id": str(payload.assistant_turn_id)})
-        version = production_repo.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-        snapshot = source["context"].get("target_snapshot", {})
-        if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (task.current_timeline_version_id, version.sequence if version else 0):
-            raise HTTPException(status_code=409, detail="保存配方的原任务目标已变化")
-    try:
-        producer = production_repo.job_records.get_job_run(task.workspace_id, payload.producer_job_id)
-        if producer.task_id != task_id:
-            raise KeyError(payload.producer_job_id)
-        return _media_script_tools().create_from_job(actor, producer.id, request_id=payload.request_id,
-            name=payload.name, description=payload.description, parameter_schema=payload.parameter_schema)
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        _script_tool_error(exc)
+def _media_script_tool_http_router(route_names):
+    return build_media_script_tool_router(
+        access_for=lambda: _exact_edit_access,
+        actor_for=lambda: _require_permit_actor,
+        conversations_for=lambda: conversation_repo,
+        origin_for=lambda: _require_assistant_input_origin,
+        repository_for=lambda: production_repo,
+        tools_for=lambda: _media_script_tools,
+        script_error_type_for=lambda: ScriptToolError,
+        error_for=lambda: _script_tool_error,
+        workspace_for=lambda: current_workspace_id,
+        capabilities_for=lambda: _script_tool_capability_facts,
+        command_for=lambda: _media_script_submission_command,
+        runner_for=lambda: _run_media_script_submission,
+        submission_for=lambda: _media_script_submission_use_case,
+        json_response_for=lambda: JSONResponse,
+        http_error_type_for=lambda: HTTPException,
+        route_names=route_names,
+    )
 
 
-@app.get("/api/media-script-tools/requests/{request_id}")
-def get_media_script_tool_creation(request_id: UUID, request: Request):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    try:
-        return _media_script_tools().get_created_for_request(actor, request_id)
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        _script_tool_error(exc)
+app.include_router(_media_script_tool_http_router(("save_media_script_tool",)))
 
 
-@app.get("/api/media-script-tools/capabilities")
-def media_script_tool_capabilities(request: Request):
-    _require_permit_actor(request,current_workspace_id(request))
-    return _script_tool_capability_facts()
+app.include_router(_media_script_tool_http_router(("get_media_script_tool_creation",)))
+
+
+app.include_router(_media_script_tool_http_router(("media_script_tool_capabilities",)))
 
 
 def _script_tool_capability_facts():
@@ -3240,49 +3232,19 @@ def _script_tool_capability_facts():
         "invocation_phase": "script", "result_kind": "graphic_source"}
 
 
-@app.get("/api/media-script-tools")
-def list_media_script_tools(request: Request, include_inactive: bool = False):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    try:
-        values = _media_script_tools().list(actor, include_inactive=include_inactive, limit=25)
-        return {"items": values[:24], "truncated": len(values) > 24}
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        _script_tool_error(exc)
+app.include_router(_media_script_tool_http_router(("list_media_script_tools",)))
 
 
-@app.get("/api/media-script-tools/{tool_id}")
-def get_media_script_tool(tool_id: str, request: Request, version: int | None = None):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    try:
-        return _media_script_tools().get(actor, tool_id, version=version)
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        _script_tool_error(exc)
+app.include_router(_media_script_tool_http_router(("get_media_script_tool",)))
 
 
-@app.patch("/api/media-script-tools/{tool_id}")
-def update_media_script_tool(tool_id: str, request: Request, payload: MediaScriptToolUpdateRequest):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    try:
-        return _media_script_tools().update_from_job(actor, tool_id, expected_version=payload.expected_version,
-            job_id=payload.producer_job_id, name=payload.name, description=payload.description, parameter_schema=payload.parameter_schema)
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        _script_tool_error(exc)
+app.include_router(_media_script_tool_http_router(("update_media_script_tool",)))
 
 
-@app.post("/api/media-script-tools/{tool_id}/revoke")
-def revoke_media_script_tool(tool_id: str, request: Request, payload: MediaScriptToolRevokeRequest):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    try:
-        return _media_script_tools().revoke(actor, tool_id, expected_version=payload.expected_version)
-    except (KeyError, PermissionError, ScriptToolError) as exc:
-        _script_tool_error(exc)
+app.include_router(_media_script_tool_http_router(("revoke_media_script_tool",)))
 
 
-@app.post("/api/creation-tasks/{task_id}/media-script-tools/{tool_id}/preview", response_model=TaskMediaJobResponse)
-def preview_media_script_tool(task_id: str, tool_id: str, request: Request, payload: MediaScriptToolPreviewRequest):
-    command = _media_script_submission_command(task_id, payload, tool_id=tool_id)
-    result = _run_media_script_submission(request, _media_script_submission_use_case().submit(command))
-    return JSONResponse(status_code=result.status_code, content=result.body)
+app.include_router(_media_script_tool_http_router(("preview_media_script_tool",)))
 
 
 @app.get("/api/creation-tasks/{task_id}/graphics/sources")

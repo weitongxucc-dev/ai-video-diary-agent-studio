@@ -8,6 +8,7 @@ import pytest
 
 import app.main as main
 from app.creation_execution import CreationExecutionActor
+from app.media_script_tools import MediaScriptTools
 from app.conversation_repository import ConversationRepository
 from test_media_script_api import state as script_state, submit  # noqa: F401
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
@@ -58,6 +59,28 @@ def test_save_replays_original_v1_after_update_and_rejects_changed_input(receipt
     assert state.client.post(state.base_url + "/media-script-tools", json={**state.save_payload, "name": "different"}).status_code == 409
     assert state.client.patch(f"/api/media-script-tools/{tool_id}", json={
         "expected_version": 1, **{key: value for key, value in state.save_payload.items() if key != "request_id"}}).status_code == 409
+
+    capabilities = state.client.get('/api/media-script-tools/capabilities')
+    assert capabilities.status_code == 200
+    assert set(capabilities.json()['schemas']) == {'save', 'update', 'revoke', 'invoke'}
+    page = state.client.get('/api/media-script-tools')
+    assert page.status_code == 200 and not page.json()['truncated']
+    assert [item['tool_id'] for item in page.json()['items']] == [tool_id]
+    assert page.json()['items'][0]['version'] == 2 and 'definition' not in page.json()['items'][0]
+    head = state.client.get(f'/api/media-script-tools/{tool_id}')
+    original = state.client.get(f'/api/media-script-tools/{tool_id}?version=1')
+    assert head.status_code == original.status_code == 200
+    assert head.json()['name'] == '新版卡片' and original.json()['name'] == state.tool['name']
+    revoked = state.client.post(f'/api/media-script-tools/{tool_id}/revoke', json={'expected_version': 2})
+    assert revoked.status_code == 200 and revoked.json()['active'] is False, revoked.text
+    from app.production import ProductionRepository
+    reopened = ProductionRepository(state.production.database_path, state.production.video_library_path)
+    registry = main._media_script_tools(reopened)
+    assert registry.get(state.actor, tool_id)['active'] is False
+    assert registry.get(state.actor, tool_id, version=1)['name'] == state.tool['name']
+    assert state.client.get('/api/media-script-tools').json()['items'] == []
+    inactive = state.client.get('/api/media-script-tools?include_inactive=true').json()['items']
+    assert len(inactive) == 1 and inactive[0]['tool_id'] == tool_id and inactive[0]['active'] is False
 
 
 def test_discovery_returns_actual_four_schemas_and_private_recipe(state):
@@ -354,7 +377,7 @@ def test_unknown_tool_save_reopens_and_gets_only_original_receipt(assistant_stat
     reopened = ConversationRepository(state.conversations.database_path)
     monkeypatch.setattr(main, "conversation_repo", reopened)
     monkeypatch.setattr(main, "run_task_turn", lambda *_args, **_kwargs: pytest.fail("receipt recovery must never call a model"))
-    monkeypatch.setattr(main, "save_media_script_tool", lambda *_args, **_kwargs: pytest.fail("receipt recovery must never POST save"))
+    monkeypatch.setattr(MediaScriptTools, "create_from_job", lambda *_args, **_kwargs: pytest.fail("receipt recovery must never POST save"))
     before = reopened.get_turn(turn_id)
     job_count = len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id))
     main.start_assistant_continuation_driver()
@@ -648,7 +671,7 @@ def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, m
     assert advanced.status_code == 200 and advanced.json()['version'] == 2, advanced.text
     reopened = ConversationRepository(state.conversations.database_path)
     monkeypatch.setattr(main, 'conversation_repo', reopened)
-    monkeypatch.setattr(main, 'save_media_script_tool', lambda *a, **k: pytest.fail('recovery must never POST save'))
+    monkeypatch.setattr(MediaScriptTools, 'create_from_job', lambda *a, **k: pytest.fail('recovery must never POST save'))
     before = reopened.get_turn(state.turn_id)
     jobs = [job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)]
     assert main._reconcile_assistant_business_results() == 1
