@@ -169,7 +169,7 @@ def test_short_and_full_tail_visual_preview_use_real_native_media(visual_applica
             'start_event':event,'replay':replay.json(),'successful_retry_refusal':retry.json(),
             'records':[asdict(r) for r in records],'visuals':visuals})
     assert not hasattr(main,'_TASK_MEDIA_HANDLERS')
-    assert not hasattr(main.preview_creation_task_visual,'__wrapped__')
+    assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_creation_task_visual'),'__wrapped__')
     with state.production._connect() as conn:
         permit=dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())
     assert permit['state']=='free'

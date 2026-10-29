@@ -164,7 +164,7 @@ from app.creation import media_script_submission_use_case as script_submission
 from app.media_script import MediaScriptError
 from app.media_script_jobs import read_script_toolchain, MediaScriptPreviewUseCase, MEDIA_SCRIPT_ACTIONS
 from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptToolConflict, ScriptToolUnknown
-from app.visual_effects import VisualEditRequest, VisualEffects, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
+from app.visual_effects import VisualEffects, compile_crop_command, compile_visual_command, fade_filters, with_visual_effects
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError, LocalMemberService
 from app.local_member_routes import build_local_member_router
@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.task_visual_routes import build_task_visual_router
 from app.task_audio_routes import build_task_audio_router
 from app.production_profile_routes import build_production_profile_router
 from app.legacy_voice_routes import build_legacy_voice_router
@@ -2768,15 +2769,36 @@ def _preview_clip_original_audio(task_id: str, request: Request, payload: Creati
 app.include_router(_task_audio_http_router(("preview_creation_task_audio",)))
 
 
-@app.post("/api/creation-tasks/{task_id}/graphics/import")
-def import_creation_task_graphic(task_id: str, request: Request, image: UploadFile = File(...)):
-    from PIL import Image
-    workspace_id=current_workspace_id(request)
-    _creation_task_or_404(workspace_id,task_id)
-    try:
-        return import_graphic_source(production_repo,artifact_store,settings.effective_temporary_root_path,workspace_id,task_id,image)
-    except (ValueError,OSError,Image.DecompressionBombError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "图片导入失败，请检查格式、尺寸和外接盘") from exc
+def _task_visual_http_router(route_names):
+    return build_task_visual_router(
+        workspace_for=lambda: current_workspace_id,
+        task_for=lambda: _creation_task_or_404,
+        import_for=lambda: import_graphic_source,
+        records_for=lambda: production_repo,
+        store_for=lambda: artifact_store,
+        settings_for=lambda: settings,
+        http_error_type_for=lambda: HTTPException,
+        access_for=lambda: _exact_edit_access,
+        sources_for=lambda: graphic_sources,
+        resolve_source_for=lambda: resolve_graphic_source,
+        file_response_for=lambda: FileResponse,
+        media_required_type_for=lambda: TaskMediaRequired,
+        actor_for=lambda: _require_permit_actor,
+        runtime_for=lambda: _creation_runtime,
+        plan_from_for=lambda: creation_task_montage_plan_from_payload,
+        base_for=lambda: _ensure_montage_base_version,
+        receipt_for=lambda: _media_result_receipt,
+        json_response_for=lambda: JSONResponse,
+        preview_case_for=lambda: _visual_preview_use_case,
+        needs_full_for=lambda: needs_full_visual_preview,
+        clip_submit_for=lambda: _submit_clip_preview,
+        edit_response_for=lambda: _edit_preview_response,
+        picture_error_type_for=lambda: PicturePreviewRejected,
+        route_names=route_names,
+    )
+
+
+app.include_router(_task_visual_http_router(("import_creation_task_graphic",)))
 
 
 def _script_configuration():
@@ -2993,94 +3015,22 @@ app.include_router(_media_script_tool_http_router(("revoke_media_script_tool",))
 app.include_router(_media_script_tool_http_router(("preview_media_script_tool",)))
 
 
-@app.get("/api/creation-tasks/{task_id}/graphics/sources")
-def get_creation_task_graphic_sources(task_id: str, request: Request):
-    workspace_id=current_workspace_id(request)
-    _exact_edit_access(task_id,request)
-    return graphic_sources(production_repo,workspace_id,task_id,artifact_store)
+app.include_router(_task_visual_http_router(("get_creation_task_graphic_sources",)))
 
 
-@app.get("/api/creation-tasks/{task_id}/graphics/source/{artifact_id}")
-def get_creation_task_graphic_source(task_id: str,artifact_id: str,request: Request):
-    workspace_id=current_workspace_id(request)
-    _exact_edit_access(task_id,request)
-    try:
-        record=production_repo.execution_records.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id!=task_id or record.kind!='graphic_source':
-            raise KeyError(artifact_id)
-        path=resolve_graphic_source(production_repo,artifact_store,workspace_id,task_id,record.logical_ref)
-    except (KeyError,ValueError,FileNotFoundError) as exc:
-        raise HTTPException(status_code=404,detail="当前任务图片不存在") from exc
-    return FileResponse(path,media_type="image/png")
+app.include_router(_task_visual_http_router(("get_creation_task_graphic_source",)))
 
 
-@app.get("/api/creation-tasks/{task_id}/visual/artifacts/{artifact_id}")
-def get_creation_task_visual_preview(task_id: str, artifact_id: str, request: Request):
-    workspace_id=current_workspace_id(request)
-    _creation_task_or_404(workspace_id,task_id)
-    try:
-        record=production_repo.execution_records.get_artifact_record(workspace_id,artifact_id)
-        if record.task_id != task_id or record.kind not in {"color_preview", "speed_preview", "canvas_preview", "subtitle_style_preview", "transition_preview", "graphic_preview", "compound_preview", "silence_preview"}:
-            raise KeyError(artifact_id)
-        path=artifact_store.resolve_file(record.logical_ref)
-    except (KeyError,ValueError,FileNotFoundError) as exc:
-        raise HTTPException(status_code=404,detail="当前任务的画面预览不存在") from exc
-    return FileResponse(path,media_type="image/png" if path.suffix == ".png" else "video/mp4")
+app.include_router(_task_visual_http_router(("get_creation_task_visual_preview",)))
 
 
 def _visual_preview_projection(plan, clip_ids, patch, tracks=()):
     return _visual_preview_use_case().project(plan, clip_ids, patch, tracks)
 
 
-@app.post("/api/creation-tasks/{task_id}/visual/preview",response_model=CreationTaskEditPreviewResponse)
-def preview_creation_task_visual(task_id: str, request: Request, payload: VisualEditRequest):
-    try:
-        return _preview_visual_request(task_id, request, payload)
-    except TaskMediaRequired as required:
-        media_kind = required.kind
-    workspace_id = current_workspace_id(request)
-    actor = _require_permit_actor(request, workspace_id)
-    task = _creation_task_or_404(workspace_id, task_id)
-    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
-        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
-    values = {'_media_kind':media_kind,'_draft':request.query_params.get('draft')=='true' or request.url.path.endswith('/edits/exact'),
-        'payload':payload.model_dump(mode='json',exclude_unset=True)}
-    if values['payload'].get('base_version_id') is None:
-        values['payload']['base_version_id'] = task.current_timeline_version_id
-    try:
-        runtime = _creation_runtime()
-        media = runtime.registrations['creation_job'].owner.task_media
-        if task.montage_plan_id and task.current_timeline_version_id is None:
-            media.facts(workspace_id,task_id,'visual_edit_preview',values,actor)
-            if media.verify_identity(actor)!='ready':
-                raise PermissionError('媒体处理身份失效或无法复核')
-            plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-            values['payload']['base_version_id']=_ensure_montage_base_version(workspace_id,task,plan).id
-        job=media.submit(runtime,actor,task_id,'visual_edit_preview',values,'edit_preview')
-        receipt=_media_result_receipt(media,job,actor,runtime)
-        receipt['result']=None
-        return JSONResponse(status_code=202,content=receipt)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (ValueError,KeyError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc)) from exc
+app.include_router(_task_visual_http_router(("preview_creation_task_visual",)))
 
 
-def _preview_visual_request(task_id, request, payload, *, execution=None, source=None):
-    draft_only = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    case = _visual_preview_use_case()
-    try:
-        prepared = case.prepare(task, payload)
-        plan, patch, clips, changed_clips = prepared
-        if not needs_full_visual_preview(clips[0], changed_clips[clips[0].id]):
-            return _submit_clip_preview(task_id, request, base_version_id=payload.base_version_id,
-                operation_type="AdjustVisualEffects", clip_ids=payload.clip_ids, values=patch, raw_command=payload.raw_command)
-        return _edit_preview_response(*case.preview_full(task, payload, prepared,
-            draft_only=draft_only,source=source,execution=execution))
-    except PicturePreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def _creation_task_montage_response(
