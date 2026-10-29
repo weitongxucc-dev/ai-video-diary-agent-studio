@@ -9,6 +9,7 @@ from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
+from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -2817,41 +2818,17 @@ def stream_media_preview_output(
     return FileResponse(output_path, media_type=media_type, filename=output_path.name)
 
 
-@app.get(
-    "/api/production/material-collections",
-    response_model=MaterialCollectionsResponse,
-)
-def list_material_collections(request: Request) -> MaterialCollectionsResponse:
-    collections = production_repo.list_collections(current_workspace_id(request))
-    return MaterialCollectionsResponse(
-        collections=[
-            MaterialCollectionResponse.model_validate(item, from_attributes=True)
-            for item in collections
-        ],
-        total_count=len(collections),
+def _material_catalog_http_adapter():
+    return MaterialCatalogHTTPAdapter(
+        records_for=lambda: production_repo,
+        workspace_for=current_workspace_id,
     )
 
 
-@app.post(
-    "/api/production/material-collections",
-    response_model=MaterialCollectionResponse,
-)
-def create_material_collection(
-    request: Request,
-    payload: MaterialCollectionCreateRequest,
-) -> MaterialCollectionResponse:
-    workspace_id = current_workspace_id(request)
-    collection = MaterialCollection(
-        id=f"collection_{uuid4().hex[:10]}",
-        workspace_id=workspace_id,
-        name=payload.name.strip(),
-        parent_id=payload.parent_id,
-    )
-    try:
-        saved = production_repo.save_collection(collection)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="parent collection not found") from exc
-    return MaterialCollectionResponse.model_validate(saved, from_attributes=True)
+app.include_router(build_material_catalog_router(_material_catalog_http_adapter, ('list_material_collections',)))
+
+
+app.include_router(build_material_catalog_router(_material_catalog_http_adapter, ('create_material_collection',)))
 
 
 def _material_workspace_reference(asset) -> str | None:
@@ -9028,69 +9005,18 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_asset_notes',)))
 
 
-def _material_business_object_response(entry: MaterialBusinessObject) -> MaterialBusinessObjectResponse:
-    return MaterialBusinessObjectResponse(id=entry.id, kind=entry.kind, name=entry.name)
 
 
-@app.get("/api/production/business-objects", response_model=MaterialBusinessObjectsResponse)
-def list_material_business_objects(request: Request) -> MaterialBusinessObjectsResponse:
-    """List this workspace's product/dish/person name entries.
-
-    Entries are scoped to the calling workspace, and creating one attaches it to
-    nothing: the user still chooses which materials carry it.
-    """
-    entries = production_repo.list_business_objects(current_workspace_id(request))
-    return MaterialBusinessObjectsResponse(
-        items=[_material_business_object_response(entry) for entry in entries],
-        total_count=len(entries),
-    )
+app.include_router(build_material_catalog_router(_material_catalog_http_adapter, ('list_material_business_objects',)))
 
 
-@app.post("/api/production/business-objects", response_model=MaterialBusinessObjectResponse, status_code=201)
-def create_material_business_object(
-    request: Request, payload: MaterialBusinessObjectCreateRequest
-) -> MaterialBusinessObjectResponse:
-    """Add one name entry without associating it to any material yet."""
-    try:
-        entry = production_repo.create_business_object(current_workspace_id(request), payload.kind, payload.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _material_business_object_response(entry)
+app.include_router(build_material_catalog_router(_material_catalog_http_adapter, ('create_material_business_object',)))
 
 
-@app.get("/api/production/materials/{asset_id}/business-objects", response_model=MaterialBusinessObjectsResponse)
-def list_material_asset_business_objects(request: Request, asset_id: str) -> MaterialBusinessObjectsResponse:
-    """Read back the name entries attached to one material."""
-    try:
-        entries = production_repo.list_asset_business_objects(current_workspace_id(request), asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材不存在或不属于当前工作区") from exc
-    return MaterialBusinessObjectsResponse(
-        items=[_material_business_object_response(entry) for entry in entries],
-        total_count=len(entries),
-    )
+app.include_router(build_material_catalog_router(_material_catalog_http_adapter, ('list_material_asset_business_objects',)))
 
 
-@app.put("/api/production/materials/{asset_id}/business-objects", response_model=MaterialBusinessObjectsResponse)
-def save_material_asset_business_objects(
-    request: Request, asset_id: str, payload: MaterialAssetBusinessObjectsSaveRequest
-) -> MaterialBusinessObjectsResponse:
-    """Save exactly the name entries the user selected for this one material.
-
-    Only the material named in the path is touched, and the repository refuses
-    the whole selection if any entry belongs to another workspace, so the user is
-    never shown associations that were not written. An empty list clears them.
-    """
-    try:
-        entries = production_repo.set_asset_business_objects(
-            current_workspace_id(request), asset_id, list(payload.business_object_ids)
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材或名称条目不属于当前工作区，未做任何修改") from exc
-    return MaterialBusinessObjectsResponse(
-        items=[_material_business_object_response(entry) for entry in entries],
-        total_count=len(entries),
-    )
+app.include_router(build_material_catalog_router(_material_catalog_http_adapter, ('save_material_asset_business_objects',)))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('list_material_segment_usage_records',)))

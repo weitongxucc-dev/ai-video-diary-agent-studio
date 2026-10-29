@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.production import ProductionRepository
+from test_collection_consumer_wiring import catalog_metadata_no_execution, catalog_member_headers
 
 WORKSPACE = "workspace-objects"
 OTHER_WORKSPACE = "workspace-other-objects"
@@ -132,10 +133,13 @@ def test_a_blank_or_unknown_kind_is_refused(tmp_path: Path) -> None:
 
 @pytest.fixture
 def objects_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    violations = catalog_metadata_no_execution(monkeypatch)
+    headers = catalog_member_headers(tmp_path, monkeypatch)
     repo, library = make_repo(tmp_path)
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda request: request.headers.get("x-test-workspace", WORKSPACE))
-    return SimpleNamespace(client=TestClient(main_module.app), repository=repo, library=library)
+    yield SimpleNamespace(client=TestClient(main_module.app, headers=headers), repository=repo, library=library)
+    assert violations == []
 
 
 def test_the_four_frozen_routes_round_trip_one_material(objects_client) -> None:
@@ -169,6 +173,25 @@ def test_the_four_frozen_routes_round_trip_one_material(objects_client) -> None:
     assert client.get(f"/api/production/materials/{asset_id}/business-objects").json() == {"items": [entry], "total_count": 1}
 
 
+    replacement = client.post("/api/production/business-objects", json={
+        "kind": "product", "name": "第二名称",
+    })
+    assert replacement.status_code == 201
+    second = replacement.json()
+    changed = client.put(f"/api/production/materials/{asset_id}/business-objects", json={
+        "business_object_ids": [second["id"]],
+    })
+    assert changed.status_code == 200
+    assert changed.json() == {"items": [second], "total_count": 1}
+    assert client.get(f"/api/production/materials/{asset_id}/business-objects").json() == {"items": [second], "total_count": 1}
+    cleared = client.put(f"/api/production/materials/{asset_id}/business-objects", json={
+        "business_object_ids": [],
+    })
+    assert cleared.status_code == 200
+    assert cleared.json() == {"items": [], "total_count": 0}
+    assert objects_client.repository.list_asset_business_objects(WORKSPACE, asset_id) == []
+
+
 def test_the_save_route_refuses_another_workspaces_entries(objects_client) -> None:
     asset_id = register(objects_client.repository, objects_client.library, "接口本区.mp4")
     client = objects_client.client
@@ -189,6 +212,17 @@ def test_the_save_route_refuses_another_workspaces_entries(objects_client) -> No
 
     assert response.status_code == 404
     assert objects_client.repository.list_asset_business_objects(WORKSPACE, asset_id) == []
+
+    prior = client.put(f"/api/production/materials/{asset_id}/business-objects", json={
+        "business_object_ids": [mine["id"]],
+    })
+    assert prior.status_code == 200
+    rejected = client.put(f"/api/production/materials/{asset_id}/business-objects", json={
+        "business_object_ids": [mine["id"], theirs["id"]],
+    })
+    assert rejected.status_code == 404
+    assert client.get(f"/api/production/materials/{asset_id}/business-objects").json() == {"items": [mine], "total_count": 1}
+    assert [entry.id for entry in objects_client.repository.list_asset_business_objects(WORKSPACE, asset_id)] == [mine["id"]]
 
 
 def test_the_routes_reject_a_blank_name_and_an_unknown_kind(objects_client) -> None:
