@@ -198,7 +198,8 @@ def test_settings_routes_scope_reads_and_writes_to_the_request_workspace(real_ke
             ),
             client=SimpleNamespace(host="127.0.0.1"),
         )
-        return main_module.update_runtime_settings(
+        return next(route.endpoint for route in main_module._runtime_settings_http_router(("update_runtime_settings",)).routes
+             if route.name == "update_runtime_settings")(
             request, RuntimeSettingsUpdateRequest(**payload)
         )
 
@@ -229,7 +230,8 @@ def test_settings_route_reports_a_refused_keychain_instead_of_success(monkeypatc
     )
 
     with pytest.raises(HTTPException) as refused:
-        main_module.update_runtime_settings(
+        next(route.endpoint for route in main_module._runtime_settings_http_router(("update_runtime_settings",)).routes
+             if route.name == "update_runtime_settings")(
             request, RuntimeSettingsUpdateRequest(llm_api_key="key-a")
         )
 

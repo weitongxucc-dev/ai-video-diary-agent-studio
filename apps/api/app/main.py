@@ -104,7 +104,6 @@ from app.auth import (
     AuthDependencyUnavailableError,
     AuthPrincipal,
     ForbiddenError,
-    OnboardingStateError,
     SupabaseAuthContext,
     UnauthorizedError,
 )
@@ -245,8 +244,9 @@ from app.hermes_radar import HermesRadarSourceClient
 from app.llm import (
     script_generator_from_settings,
 )
-from app.model_installer import ModelInstaller, ModelInstallError
+from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.runtime_settings_routes import build_runtime_settings_router
 from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
 from app.models import EpisodeStatus, FeedbackEvent, ScriptPackage, ScriptSection, VideoJobStatus, utc_now
 from app.montage import (
@@ -329,14 +329,12 @@ from app.repository import (
 )
 from app.runtime_health import runtime_health, model_catalog_from_settings
 from app.runtime_settings import (
-    RuntimeSettingsSaveError,
     apply_runtime_settings_save,
     device_runtime_settings_values,
     is_local_client_host,
     runtime_settings_updates,
 )
 from app.workspace_settings import (
-    WorkspaceSecretStoreError,
     workspace_settings,
 )
 from app.source_connector_routes import build_source_connector_router
@@ -345,7 +343,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, OnboardingCompletionResponse, PendingVideoResponse, ProcessedVideoResponse, ProcessVideoRequest, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, RuntimeHealthResponse, RuntimeSettingsResponse, RuntimeSettingsUpdateRequest, SetupPreflightResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VoiceProfileUpsertRequest, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProcessVideoRequest, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VoiceProfileUpsertRequest, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -8232,133 +8230,49 @@ def _require_feature(feature: str) -> None:
         )
 
 
-@app.get("/api/runtime/health", response_model=RuntimeHealthResponse)
-def get_runtime_health(request: Request) -> RuntimeHealthResponse:
-    workspace_id = current_workspace_id(request)
-    return RuntimeHealthResponse.model_validate(runtime_health(_workspace_settings_for(workspace_id), workspace_id))
-
-
-@app.get("/api/setup/preflight", response_model=SetupPreflightResponse)
-def get_setup_preflight() -> SetupPreflightResponse:
-    """Run a native setup preflight and return a stable consumable structure.
-
-    Returns overall ready|blocked with per-check details including
-    status, summary, impact, repair_action, and optional settings_target.
-    Never leaks secrets or absolute sensitive content.
-    """
-    return SetupPreflightResponse.model_validate(setup_preflight(settings))
-
-
-@app.post(
-    "/api/onboarding/complete",
-    response_model=OnboardingCompletionResponse,
-)
-def complete_onboarding(request: Request) -> OnboardingCompletionResponse:
-    """Initialize the trusted workspace after its minimum storage check."""
-    principal = getattr(request.state, "principal", None)
-    if auth_context.enabled and (
-        principal is None or not principal.user_id or not principal.workspace_id
-    ):
-        raise HTTPException(status_code=403, detail="workspace context is required")
-
-    preflight = workspace_preflight(settings)
-    if preflight.get("overall") != "ready":
-        raise HTTPException(
-            status_code=409,
-            detail="workspace storage is not ready",
-        )
-
-    if not auth_context.enabled:
-        return OnboardingCompletionResponse(
-            workspace_id=LEGACY_WORKSPACE_ID,
-            completed=True,
-        )
-
-    try:
-        auth_context.complete_onboarding(
-            principal.user_id,
-            principal.workspace_id,
-            principal.access_token or "",
-        )
-    except OnboardingStateError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="unable to persist onboarding state",
-        ) from exc
-
-    return OnboardingCompletionResponse(
-        workspace_id=principal.workspace_id,
-        completed=True,
+def _runtime_settings_http_router(route_names):
+    return build_runtime_settings_router(
+        workspace_for=lambda: current_workspace_id,
+        settings_for=lambda: settings,
+        auth_for=lambda: auth_context,
+        workspace_settings_for=lambda: _workspace_settings_for,
+        health_for=lambda: runtime_health,
+        setup_for=lambda: setup_preflight,
+        storage_preflight_for=lambda: workspace_preflight,
+        local_host_for=lambda: is_local_client_host,
+        device_values_for=lambda: device_runtime_settings_values,
+        env_updates_for=lambda: runtime_settings_updates,
+        settings_type_for=lambda: Settings,
+        catalog_builder_for=lambda: model_catalog_from_settings,
+        installer_for=lambda: model_installer,
+        reload_lock_for=lambda: _runtime_reload_lock,
+        reload_allowed_for=lambda: _assert_runtime_reload_allowed,
+        prepare_reload_for=lambda: _prepare_runtime_reload,
+        quiesce_for=lambda: _quiesced_runtime_drivers,
+        save_for=lambda: apply_runtime_settings_save,
+        activate_for=lambda: _activate_runtime_reload,
+        env_path_for=lambda: runtime_env_path,
+        route_names=route_names,
     )
 
 
-@app.get("/api/settings/runtime", response_model=RuntimeSettingsResponse)
-def get_runtime_settings(request: Request) -> RuntimeSettingsResponse:
-    return RuntimeSettingsResponse.model_validate(
-        _workspace_settings_for(current_workspace_id(request)).safe_runtime_settings(
-            current_workspace_id(request)
-        )
-    )
+app.include_router(_runtime_settings_http_router(("get_runtime_health",)))
 
 
-@app.post("/api/settings/runtime", response_model=RuntimeSettingsResponse)
-def update_runtime_settings(
-    request: Request,
-    payload: RuntimeSettingsUpdateRequest,
-) -> RuntimeSettingsResponse:
-    client_host = request.client.host if request.client else None
-    if not is_local_client_host(client_host):
-        raise HTTPException(
-            status_code=403,
-            detail="runtime settings can only be updated from a local client",
-        )
-    workspace_id = current_workspace_id(request)
-    submitted = payload.model_dump()
-    device_values = device_runtime_settings_values(submitted)
-    try:
-        with _runtime_reload_lock:
-            _assert_runtime_reload_allowed()
-            prospective_environment = {**os.environ, **runtime_settings_updates(device_values)}
-            prospective_settings = Settings.from_env(prospective_environment)
-            candidate_catalog = model_catalog_from_settings(prospective_settings)
-            with model_installer.guard_catalog_update(candidate_catalog):
-                prepared = _prepare_runtime_reload(prospective_settings)
-                with _quiesced_runtime_drivers() as drivers:
-                    changed = apply_runtime_settings_save(workspace_id, runtime_env_path, submitted)
-                    if changed:
-                        try:
-                            _activate_runtime_reload(prepared, drivers)
-                        except Exception as exc:
-                            raise HTTPException(status_code=503, detail="配置已保存，运行重载失败；请检查运行状态。") from exc
-    except RuntimeSettingsSaveError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except WorkspaceSecretStoreError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ModelInstallError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return RuntimeSettingsResponse.model_validate(
-        _workspace_settings_for(workspace_id).safe_runtime_settings(workspace_id)
-    )
+app.include_router(_runtime_settings_http_router(("get_setup_preflight",)))
+
+
+app.include_router(_runtime_settings_http_router(("complete_onboarding",)))
+
+
+app.include_router(_runtime_settings_http_router(("get_runtime_settings",)))
+
+
+app.include_router(_runtime_settings_http_router(("update_runtime_settings",)))
 
 
 
-@app.get("/api/is_setup")
-async def is_setup():
-    """Check whether the minimum backend configuration is ready."""
-    current_settings = Settings.from_env()
-    preflight = setup_preflight(current_settings)
-    missing = [
-        str(check["id"])
-        for check in preflight["checks"]
-        if check["status"] in {"missing", "invalid"}
-        and check["required"]
-    ]
-    configured = preflight["overall"] == "ready"
-    return {
-        "configured": configured,
-        "missing": missing,
-        "next_step": "/welcome" if missing else "",
-    }
+app.include_router(_runtime_settings_http_router(("is_setup",)))
 
 
 def _assert_runtime_reload_allowed() -> None:

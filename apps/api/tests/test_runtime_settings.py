@@ -181,6 +181,7 @@ def test_runtime_settings_response_includes_bgm_path_when_configured(tmp_path, m
 
     settings = Settings(draft_background_music_path="/tmp/bgm.mp3")
     monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "_workspace_settings_for", lambda workspace_id: settings)
     monkeypatch.setattr(main_module, "repo", main_module.repo)
 
     client = TestClient(main_module.app, client=("127.0.0.1", 50000))
