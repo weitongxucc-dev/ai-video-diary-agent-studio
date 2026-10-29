@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 import pytest
 
 from app import main
+from app.creation.video_template_routes import VideoTemplateHTTPAdapter
 from app.creation.plan_preflight_use_case import CreationPlanPreflightUseCase
 from app.source_types import source_item_identity
 from app.materials.contracts import MaterialSegmentMatch
@@ -94,11 +95,11 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
         assert ws == workspace
         return reader, False
 
-    resolver = main._video_template_or_404
+    resolver = VideoTemplateHTTPAdapter.read_template
 
-    def observe_resolver(*args):
+    def observe_resolver(adapter, *args):
         trace.append("template")
-        return resolver(*args)
+        return resolver(adapter, *args)
 
     prepare = CreationPlanPreflightUseCase.prepare
 
@@ -123,7 +124,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     monkeypatch.setattr(main, "model_catalog", CatalogFacts())
     monkeypatch.setattr(main, "_lipsync_provider", lazy_provider)
     monkeypatch.setattr(main, "_content_reader", trusted_reader)
-    monkeypatch.setattr(main, "_video_template_or_404", observe_resolver)
+    monkeypatch.setattr(VideoTemplateHTTPAdapter, "read_template", observe_resolver)
     monkeypatch.setattr(CreationPlanPreflightUseCase, "prepare", observe_prepare)
     monkeypatch.setattr(production, "automatic_material_segments", material_facts)
     monkeypatch.setattr(production.material_search, "search_material_segments", search_facts)

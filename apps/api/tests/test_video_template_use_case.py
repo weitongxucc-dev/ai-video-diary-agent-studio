@@ -15,9 +15,11 @@ from app.content_templates import list_content_templates
 from app.creation.video_template_use_case import VideoTemplateUseCase
 from app.production import ProductionRepository, VideoTemplate
 from app.schemas import SaveVideoTemplateRequest, VideoTemplateVersionRequest
+from test_content_visibility_routes import material_library_no_execution
 
 
 def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     workspace, owner = "template-metadata", "declared-owner"
     database = tmp_path / "templates.sqlite3"
     repository = ProductionRepository(database, tmp_path / "unused-library")
@@ -60,7 +62,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     monkeypatch.setattr(repository, "get_video_template", observe_template)
     monkeypatch.setattr(repository, "save_video_template", observe_save)
     request = Request({"type": "http", "method": "POST", "path": "/metadata", "headers": []})
-    appended = main.create_video_template_version(original.id, request,
+    appended = main._video_template_http_adapter().create_video_template_version(original.id, request,
         VideoTemplateVersionRequest(expected_version=1, name=" 新名称 ", style_instruction=" 新风格 "))
     append_trace = list(trace)
     assert append_trace == ["workspace", "reader:" + owner, "template.read",
@@ -142,7 +144,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     monkeypatch.setattr(main, "_current_subtitle_tracks", track_facts)
     monkeypatch.setattr(repository.script_records, "list_creation_task_scripts", script_facts)
     trace.clear()
-    saved = main.save_creation_task_template(task_id, request,
+    saved = main._video_template_http_adapter().save_creation_task_template(task_id, request,
         SaveVideoTemplateRequest(name=" 新模板 ", style_instruction=" 新任务风格 "))
     task_trace = list(trace)
     assert task_trace == ["workspace", "task", "plan", "montage", "qualified-output-port", "nonempty-stat",
@@ -159,7 +161,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     serialized = json.dumps(saved["settings"], ensure_ascii=False)
     assert all(value not in serialized for value in ("old-clip", "old-asset", "old-segment", "old-output", "OLD TEXT", "OLD ONE"))
     trace.clear()
-    builtins = main._builtin_video_templates(workspace)
+    builtins = VideoTemplateUseCase(main.production_repo).builtin_templates(workspace)
     catalog = list_content_templates()
     assert trace == [] and len(builtins) == len(catalog) and builtins
     first = builtins[0]

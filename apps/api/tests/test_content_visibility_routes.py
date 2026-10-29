@@ -152,6 +152,7 @@ def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
 
 
 def test_template_visibility_round_trips_and_a_new_version_inherits(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     from app.production import VideoTemplate
 

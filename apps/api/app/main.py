@@ -11,6 +11,7 @@ from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_mater
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
 from app.materials.link_routes import MaterialLinkHTTPAdapter, build_material_link_router
+from app.creation.video_template_routes import VideoTemplateHTTPAdapter, build_video_template_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -301,7 +302,7 @@ from app.creation.topic_contracts import (
 from app.creation.contracts import CreationTask, NarrationSegment
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 from app.creation.publish_output_qualification_use_case import PublishOutputQualificationUseCase
-from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
+from app.creation.video_template_use_case import VideoTemplateUseCase
 from app.creation import request_workflow_use_case as request_workflow
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
     CreationPlanPreflightRejected, CreationPlanPreflightUseCase)
@@ -1549,124 +1550,34 @@ def get_content_templates() -> ContentTemplatesResponse:
     )
 
 
-def _builtin_video_templates(workspace_id: str) -> list[VideoTemplate]:
-    return VideoTemplateUseCase(production_repo).builtin_templates(workspace_id)
 
 
-def _video_template_or_404(request: Request, workspace_id: str, template_id: str, version: int) -> VideoTemplate:
-    case = VideoTemplateUseCase(production_repo)
-    item = case.builtin_template(workspace_id, template_id, version)
-    if item is not None:
-        return item
-    try:
-        item = production_repo.get_video_template(workspace_id, template_id, version)
-        user_id, local_diagnostic = _content_reader(request, workspace_id)
-        case.require_readable(item, template_id, reader_user_id=user_id, local_diagnostic=local_diagnostic)
-        return item
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="当前工作区找不到这个模板版本。") from exc
 
 
-@app.put("/api/video-templates/{template_id}/visibility")
-def set_video_template_visibility_route(
-    template_id: str,
-    request: Request,
-    payload: ContentVisibilityRequest,
-) -> dict[str, object]:
-    """显式共享或收回一个用户模板；返回同一列的回读值。"""
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    workspace_id = current_workspace_id(request)
-    user_id, _ = _content_reader(request, workspace_id)
-    versions = production_repo.list_video_templates(workspace_id, viewer_user_id=user_id)
-    previous = next((item for item in versions if item.id == template_id), None)
-    if previous is None:
-        raise HTTPException(status_code=404, detail="当前工作区找不到这个模板。")
-    if user_id is None or previous.owner_user_id != user_id:
-        raise HTTPException(status_code=403, detail="只有这个模板的所有者可以修改可见范围。")
-    try:
-        template = production_repo.set_video_template_visibility(
-            workspace_id, template_id, payload.visibility
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="video template not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"item": asdict(template)}
+def _video_template_http_adapter():
+    return VideoTemplateHTTPAdapter(
+        case_for=lambda: VideoTemplateUseCase(production_repo),
+        records_for=lambda: production_repo,
+        workspace_for=current_workspace_id,
+        reader_for=_content_reader,
+        write_guard=_local_member_write_guard,
+        task_for=_creation_task_or_404,
+        plan_for=_creation_plan_for_task_or_404,
+        output_for=_creation_task_output_path,
+        tracks_for=_current_subtitle_tracks,
+    )
 
 
-@app.get("/api/video-templates")
-def list_video_templates(request: Request) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    user_id, local_diagnostic = _content_reader(request, workspace_id)
-    return {"items": [
-        {**asdict(item), "can_edit":item.origin == "user" and user_id is not None and item.owner_user_id == user_id}
-        for item in [
-            *_builtin_video_templates(workspace_id),
-            *production_repo.list_video_templates(
-                workspace_id, viewer_user_id=user_id, local_diagnostic=local_diagnostic
-            ),
-        ]
-    ]}
+app.include_router(build_video_template_router(_video_template_http_adapter, ('set_video_template_visibility_route',)))
 
 
-@app.post("/api/video-templates/{template_id}/versions")
-def create_video_template_version(template_id: str, request: Request, payload: VideoTemplateVersionRequest) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    user_id, _diagnostic = _content_reader(request, workspace_id)
-    previous = _video_template_or_404(request,workspace_id,template_id,payload.expected_version)
-    case = VideoTemplateUseCase(production_repo)
-    try:
-        saved = case.append_version(previous, expected_version=payload.expected_version,
-            name=payload.name, style_instruction=payload.style_instruction, user_id=user_id)
-    except VideoTemplateRejected as exc:
-        status = {"field_builtin_readonly": 409, "field_not_owner": 403, "persist_conflict": 409}[exc.code]
-        failure = HTTPException(status_code=status, detail=exc.message)
-        if exc.__cause__ is not None:
-            raise failure from exc.__cause__
-        raise failure from None
-    return {**asdict(saved),"can_edit":True}
+app.include_router(build_video_template_router(_video_template_http_adapter, ('list_video_templates',)))
 
 
-@app.post("/api/creation-tasks/{task_id}/templates")
-def save_creation_task_template(task_id: str, request: Request, payload: SaveVideoTemplateRequest) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    case = VideoTemplateUseCase(production_repo)
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    try:
-        montage = case.rendered_source(workspace_id, task_id, task)
-        try:
-            output = _creation_task_output_path(workspace_id, task_id, subtitle=False)
-            case.require_nonempty_output(output)
-        except (HTTPException, OSError) as exc:
-            raise HTTPException(status_code=409, detail="当前成片文件不可用，请恢复文件或重新渲染后再保存模板。") from exc
-        case.check_save_target(payload.template_id, payload.expected_version)
-        if payload.template_id:
-            previous = _video_template_or_404(request, workspace_id, payload.template_id, payload.expected_version)
-            case.check_save_template_origin(previous)
-            reader_id, _ = _content_reader(request, workspace_id)
-            case.require_save_owner(previous, reader_id=reader_id)
-        tracks = _current_subtitle_tracks(workspace_id, task, montage=montage)
-        template = case.build_from_task(workspace_id, task_id, task, plan, montage, tracks,
-            name=payload.name, style_instruction=payload.style_instruction,
-            template_id=payload.template_id, expected_version=payload.expected_version)
-        # Keep both trusted reads and their workspace resolution at the original late point.
-        _, template_local_diagnostic = _content_reader(request, current_workspace_id(request))
-        try:
-            return asdict(case.persist_task_template(template,
-                verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
-                local_diagnostic=template_local_diagnostic))
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except VideoTemplateRejected as exc:
-        status = {"task_not_rendered": 409, "target_pair_incomplete": 422,
-            "task_builtin_overwrite": 409, "task_not_owner": 403, "persist_conflict": 409}[exc.code]
-        failure = HTTPException(status_code=status, detail=exc.message)
-        if exc.__cause__ is not None:
-            raise failure from exc.__cause__
-        raise failure from None
+app.include_router(build_video_template_router(_video_template_http_adapter, ('create_video_template_version',)))
+
+
+app.include_router(build_video_template_router(_video_template_http_adapter, ('save_creation_task_template',)))
 
 
 @app.get(
@@ -3029,7 +2940,7 @@ def _creation_plan_preflight(
         lipsync_provider_for=_lipsync_provider)
     try:
         case.check_template_selection(values)
-        template = (_video_template_or_404(request, workspace_id, values.template_id, values.template_version)
+        template = (_video_template_http_adapter().read_template(request, workspace_id, values.template_id, values.template_version)
                     if values.template_id is not None else None)
         values = case.inherit_template(values, template)
         user_id, local_diagnostic = _content_reader(request, workspace_id)
@@ -5280,7 +5191,7 @@ def _run_creation_request_workflow(request: Request, steps):
                 elif isinstance(stage, request_workflow.ReadReply):
                     answer = _verified_assistant_reply(request, stage.conversation_id, stage.turn_id, None)
                 elif isinstance(stage, request_workflow.ReadTemplate):
-                    answer = _video_template_or_404(request, stage.workspace_id, stage.template_id, stage.version)
+                    answer = _video_template_http_adapter().read_template(request, stage.workspace_id, stage.template_id, stage.version)
                 elif isinstance(stage, request_workflow.NormalizeDelivery):
                     answer = _creation_request_delivery(stage.requirements)
                 elif isinstance(stage, request_workflow.NormalizeWindow):
@@ -11653,7 +11564,7 @@ def _automation_runtime() -> AutomationRuntime:
     if automation_runtime is None:
         automation_runtime = AutomationRuntime(
             production_repo,source_repository,verify_identity=_verify_creation_identity,
-            list_templates=lambda actor:[*_builtin_video_templates(actor.workspace_id),
+            list_templates=lambda actor:[*VideoTemplateUseCase(production_repo).builtin_templates(actor.workspace_id),
                 *production_repo.list_video_templates(actor.workspace_id,
                     viewer_user_id=actor.user_id or actor.member_id,local_diagnostic=False)],
             preflight=_creation_plan_preflight,preview_response=_creation_plan_preview_response,
