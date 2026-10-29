@@ -31,7 +31,7 @@ def test_generation_http_acceptance_query_and_early_stop_keep_one_original_run(a
     app.include_router(build_script_generation_router(
         accept=main._accept_script_generation, read=main._read_script_generation, execute=dispatched.append))
     app.add_api_route("/api/assistant/conversations/{conversation_id}/stop",
-                      main.stop_assistant_conversation_turn, methods=["POST"])
+                      main._task_turn_http_adapter().stop, methods=["POST"])
     client = TestClient(app, headers=dict(api_state.client.headers))
     chat = conversations.current_or_create("local", api_state.owner.member_id, "task", "task")
     with conversations._connect() as conn:

@@ -243,7 +243,7 @@ def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, 
     assert records == [{"current_source": True, "input_id": "input-old"}]
     assert execution_locator_id("turn", "input-new") != event.id
     assert execution_locator_id("turn") == "event_assistant_execution_locator_turn"
-    proofs = main._assistant_goal_action_proofs("local", "task", "turn",
+    proofs = main._task_turn_http_adapter().case().action_proofs("local", "task", "turn",
         media_job=None, edit_preview=None, edit_request=None, execution_status=receipt)
     assert proofs == [{"kind": "execution_status", "id": "job", "input_id": "input-old"}]
 

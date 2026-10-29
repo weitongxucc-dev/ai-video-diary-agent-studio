@@ -185,7 +185,7 @@ def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_
         "status": status, "applied_edit": {"kind": "edit_applied", "task_id": state.task.id, "request_id": request_id,
         "phase": "apply", "query_url": state.url+"/assistant/edit-requests/"+request_id+"?phase=apply"}}
     request = Request({"type": "http", "headers": [(b"x-local-member-token", state.token.encode())]})
-    result = main._finish_task_assistant_turn(state.task.id, request, payload, turn["id"], "真实回执", details, "montage")
+    result = main._task_turn_http_adapter().finish(state.task.id, request, payload, turn["id"], "真实回执", details, "montage")
     assert result.timeline_action == "apply" and str(result.edit_request.request_id) == request_id
     assert result.edit_request.result["operation"]["result_version_id"] == edit_id
     assert conversations.get_turn(turn["id"])["status"] == "completed"

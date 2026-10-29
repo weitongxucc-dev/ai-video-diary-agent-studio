@@ -205,7 +205,7 @@ def test_stream_in_progress_refuses_reload_before_configuration_write(isolated_h
         entered.set()
         assert release.wait(5)
         return SimpleNamespace(model_dump=lambda **kwargs: {}, turn_status="completed")
-    stream = main._assistant_stream_response(execute, workspace_id=LEGACY_WORKSPACE_ID)
+    stream = main._assistant_stream_transport().response(execute, workspace_id=LEGACY_WORKSPACE_ID)
     async def consume():
         async for _ in stream.body_iterator:
             pass

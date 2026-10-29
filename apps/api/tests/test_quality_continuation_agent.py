@@ -156,7 +156,7 @@ def test_quality_turn_persists_owner_receipt_for_original_input(failed_quality, 
         request = Request({'type': 'http', 'method': 'POST', 'path': '/', 'headers': [
             (key.lower().encode(), value.encode()) for key, value in system[4].items()]})
         payload = SimpleNamespace(conversation_id=binding['conversation_id'], expected_draft_version=1)
-        finish = lambda details: main._finish_task_assistant_turn('task', request, payload,
+        finish = lambda details: main._task_turn_http_adapter().finish('task', request, payload,
             turn_id, '质检通过，视频完成', details, 'review').model_dump(mode='json')
     with pytest.raises((HTTPException, TaskBusinessRejected)):
         finish({**preview, 'invocation_input_id': 'another-input'})
@@ -188,10 +188,10 @@ def test_completed_quality_response_replays_and_new_turn_rejects_old_input(faile
     monkeypatch.setattr(main, '_goal_service', lambda: SimpleNamespace(register_turn=lambda _: None))
     details = {'kind': 'quality_continuation', 'task_id': 'task', 'job_id': failed['owner_id'],
         'failed_request_id': failed['id'], 'invocation_input_id': binding['input_id'] or binding['turn_id']}
-    result = main._finish_task_assistant_turn('task', request, SimpleNamespace(
+    result = main._task_turn_http_adapter().finish('task', request, SimpleNamespace(
         conversation_id=binding['conversation_id'], expected_draft_version=1),
         binding['turn_id'], '查询原质检', details, 'review')
-    replay = main._replay_assistant_turn(binding['turn_id'], CreationTaskAssistantTurnResponse,
+    replay = main._task_turn_http_adapter().replay(binding['turn_id'], CreationTaskAssistantTurnResponse,
         provider='unused', model='unused', draft_version=99)
     assert replay == result and replay.quality_continuation.status == 'unknown'
     chat = conversations.get(binding['conversation_id'], 'local', binding['member_id'])
@@ -200,7 +200,7 @@ def test_completed_quality_response_replays_and_new_turn_rejects_old_input(faile
         chat['draft_text'], str(uuid4()), chat['draft_version'],
         request_context={'kind': 'task', 'task_id': 'task', 'stage': 'review'})
     with pytest.raises(HTTPException) as invalid:
-        main._finish_task_assistant_turn('task', request, SimpleNamespace(
+        main._task_turn_http_adapter().finish('task', request, SimpleNamespace(
             conversation_id=chat['id'], expected_draft_version=chat['draft_version']),
             turn['id'], '旧结果', details, 'review')
     assert invalid.value.status_code == 502

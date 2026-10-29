@@ -7,11 +7,20 @@ from fastapi import Request
 import pytest
 
 import app.main as main
+from app.assistant.task_turn_use_case import TaskAssistantTurnUseCase
 from app.conversation_repository import ConversationRepository
 from app.schemas import CreationTaskScriptWindowStartRequest
 from test_creation_task_script_grounding import (
     api_state, agent_payload, draft, reviewed, set_agent_reviewer,  # noqa: F401
 )
+
+
+@pytest.fixture(autouse=True)
+def window_turn_metadata_boundary(request, monkeypatch):
+    if request.node.originalname == 'test_tool_receipt_survives_model_end_before_final_response':
+        from test_production_foundation import edit_adoption_no_execution
+        forbidden = edit_adoption_no_execution(monkeypatch)
+        monkeypatch.setattr(main, '_creation_task_script_generator_for', forbidden)
 
 
 def test_window_receipt_finishes_conversation_without_full_script_projection(api_state, monkeypatch):
@@ -29,7 +38,7 @@ def test_window_receipt_finishes_conversation_without_full_script_projection(api
     monkeypatch.setattr(main, '_goal_service', lambda: SimpleNamespace(register_turn=lambda _: None,
         record_script_adoption=lambda *args, **kwargs: pytest.fail('reading a saved window cannot adopt it')))
     monkeypatch.setattr(main, '_wake_assistant_continuations', lambda: None)
-    monkeypatch.setattr(main, '_assistant_goal_action_proofs', lambda *args, **kwargs: [])
+    monkeypatch.setattr(TaskAssistantTurnUseCase, 'action_proofs', lambda *args, **kwargs: [])
     calls = []
     set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
     request = Request({'type': 'http', 'method': 'POST', 'path': '/', 'headers': [
@@ -43,7 +52,7 @@ def test_window_receipt_finishes_conversation_without_full_script_projection(api
         'status': 'unknown', 'submission_effect': 'unknown'}
     monkeypatch.setattr(state.repository.script_records, 'get_creation_task_script', lambda *args, **kwargs:
         pytest.fail('window turn response must not hydrate whole script'))
-    result = main._finish_task_assistant_turn('task', request, SimpleNamespace(
+    result = main._task_turn_http_adapter().finish('task', request, SimpleNamespace(
         conversation_id=UUID(conversation['id']), expected_draft_version=conversation['draft_version']),
         turn['id'], '已经完成', preview, 'script')
     assert result.script_draft is None
@@ -106,9 +115,9 @@ def test_tool_receipt_survives_model_end_before_final_response(api_state, monkey
                 'invocation_input_id': kwargs['turn_id'], 'input_id': None, 'input_turn_id': None}}}))
         assert event.get('invocation_input_id') == kwargs['turn_id']
         binding = dict(workspace_id='local', member_id=member, task_id='task', turn_id=kwargs['turn_id'])
-        assert main._record_script_window_tool_event({**event, 'invocation_input_id': str(uuid4())}, **binding) is False
+        assert main._task_turn_http_adapter().case().record_window_event({**event, 'invocation_input_id': str(uuid4())}, **binding) is False
         mismatched = {**event['script_window_request'], 'input_id': 'other-input', 'input_turn_id': kwargs['turn_id']}
-        assert main._record_script_window_tool_event({**event, 'invocation_input_id': 'other-input',
+        assert main._task_turn_http_adapter().case().record_window_event({**event, 'invocation_input_id': 'other-input',
             'script_window_request': mismatched}, **binding) is False
         assert conversations.get_turn(kwargs['turn_id'])['result'] is None
         kwargs['on_event'](event)
@@ -127,7 +136,7 @@ def test_tool_receipt_survives_model_end_before_final_response(api_state, monkey
         raise main.AssistantUnavailable('model ended after original tool')
     monkeypatch.setattr(main, 'run_task_turn', tool_then_interrupt)
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/assistant/turn',
-        main.creation_task_assistant_turn, methods=['POST'])
+        main._task_turn_http_adapter().task_turn, methods=['POST'])
     response = state.client.post('/api/creation-tasks/task/assistant/turn', json={
         'conversation_id': conversation['id'], 'client_request_id': str(uuid4()),
         'expected_draft_version': conversation['draft_version'], 'message': '保存文案窗口',

@@ -450,7 +450,7 @@ def test_stream_tool_summary_uses_the_real_material_details_field():
 def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
     monkeypatch.setattr(main_module, "_workspace_settings_for",
                         lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
-    sanitizer = main_module._AssistantStreamTextSanitizer("local")
+    sanitizer = main_module._assistant_stream_transport().sanitizer("local")
     emitted = sanitizer.feed("先说结论：fixture-sec")
     emitted += sanitizer.feed("ret-123 已核实。")
     emitted += sanitizer.feed("", final=True)
@@ -458,7 +458,7 @@ def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
     assert "fixture-secret-123" not in emitted
     assert "[已隐藏凭据]" in emitted
 
-    marked = main_module._AssistantStreamTextSanitizer("local")
+    marked = main_module._assistant_stream_transport().sanitizer("local")
     redacted = marked.feed("说明 api_key=fixture-")
     redacted += marked.feed("secret-123 可以读取。")
     redacted += marked.feed("", final=True)
@@ -489,7 +489,7 @@ def test_assistant_stream_response_sends_safe_events_then_authoritative_result(m
             publish({"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
                      "summary": "当前任务和所选对象状态已读取。", "result": {"token": "fixture-secret-123"}})
             return SimpleNamespace(model_dump=lambda mode: {"reply": "当前制作条件已回读。"})
-        return main_module._assistant_stream_response(execute, workspace_id="local",turn_id=turn['id'])
+        return main_module._assistant_stream_transport().response(execute, workspace_id="local",turn_id=turn['id'])
 
     response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
     assert response.status_code == 200
@@ -556,7 +556,7 @@ def test_assistant_stream_reports_version_rejection_before_turn_started(monkeypa
     def stream():
         def execute(_publish):
             raise HTTPException(status_code=409, detail="当前任务版本已变化，请重新查看选中对象后发送。")
-        return main_module._assistant_stream_response(execute, workspace_id="local")
+        return main_module._assistant_stream_transport().response(execute, workspace_id="local")
 
     response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]

@@ -167,7 +167,7 @@ def test_stream_other_http_detail_does_not_expose_arbitrary_fields(chat):
         def execute(_publish):
             raise HTTPException(status_code=409, detail={"error": "other_conflict",
                 "message": "private detail", "private": "must not escape"})
-        return main._assistant_stream_response(execute, workspace_id="ws")
+        return main._assistant_stream_transport().response(execute, workspace_id="ws")
     response = TestClient(app).get("/stream")
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
     assert [event for event in events if event["type"] == "error"] == [{"type": "error", "status": 409,

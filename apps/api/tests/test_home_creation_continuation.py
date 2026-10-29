@@ -1,3 +1,4 @@
+from app.assistant.task_turn_routes import TaskTurnHTTPAdapter
 import copy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -124,10 +125,10 @@ def test_home_response_and_live_replay_register_the_same_actual_tasks(client_sta
     monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(c.repository.database_path)))
     chat, source, saved, message = adopted(c, finish=False)
     created = [True]
-    monkeypatch.setattr(main, "_begin_assistant_turn", lambda *args, **kwargs: (source["id"], created[0], source))
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "begin", lambda *args, **kwargs: (source["id"], created[0], source))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda workspace: Settings(deepseek_api_key="test-only"))
-    monkeypatch.setattr(main, "_frozen_assistant_references", lambda *args: [])
-    monkeypatch.setattr(main, "_assistant_input_delivery", lambda *args: None)
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "frozen_references", lambda *args: [])
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "input_delivery", lambda *args: None)
     model_boundary = Mock(return_value=("已采用任务。", {"kind": "creation_request", "request": saved}))
     monkeypatch.setattr(main, "run_plan_turn", model_boundary)
     monkeypatch.setattr(main, "_wake_assistant_continuations", Mock())
@@ -150,8 +151,8 @@ def test_home_saved_request_planning_keeps_save_only_and_second_unavailable(clie
     from app.assistant.failures import AssistantUnavailable
     c = client_state
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: Settings(deepseek_api_key="test-only"))
-    monkeypatch.setattr(main, "_frozen_assistant_references", lambda *_: [])
-    monkeypatch.setattr(main, "_assistant_input_delivery", lambda *_: None)
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "frozen_references", lambda *_: [])
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "input_delivery", lambda *_: None)
     monkeypatch.setattr(main, "_wake_assistant_continuations", Mock())
     request = Request({"type": "http", "headers": [(key.lower().encode(), value.encode()) for key, value in c.alice.items()]})
     for mode in ("continue", "save_only", "second_unavailable"):
@@ -222,8 +223,8 @@ def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_st
         return "已读取任务，未执行模型或媒体。", None
     monkeypatch.setattr(main, "run_task_turn", model)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda workspace: Settings(deepseek_api_key="test-only"))
-    monkeypatch.setattr(main, "_frozen_assistant_references", lambda *args: [])
-    monkeypatch.setattr(main, "_assistant_input_delivery", lambda *args: None)
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "frozen_references", lambda *args: [])
+    monkeypatch.setattr(TaskTurnHTTPAdapter, "input_delivery", lambda *args: None)
     # This metadata-only plan fixture has no imported sources. Content and
     # provider behavior are covered separately; here verify the actual runner.
     monkeypatch.setattr(main.CreationSourceInputs, "prepare", lambda *args, **kwargs: ((), [], {}))

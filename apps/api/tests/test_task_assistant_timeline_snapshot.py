@@ -17,13 +17,20 @@ from app.creation.contracts import CreationTask, TimelineVersion
 
 @pytest.fixture
 def task_client(tmp_path, monkeypatch):
-    members = LocalMemberService(tmp_path / "members.sqlite3")
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
+    members = LocalMemberService(tmp_path / "conversation.sqlite3")
     member, token = members.join(members.create_invite_code(), "任务成员")
-    production = ProductionRepository(tmp_path / "production.sqlite3", tmp_path / "library")
+    production = ProductionRepository(tmp_path / "conversation.sqlite3", tmp_path / "library")
     conversations = ConversationRepository(tmp_path / "conversation.sqlite3")
     monkeypatch.setattr(main, "production_repo", production)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "local_members_service", members)
+    # Real local identity, Task, Conversation and authorization owners share this
+    # isolated store; no actor/verifier or business permission gate is mocked.
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "qa")
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(production.database_path)))
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "qa")
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="controlled", effective_llm_model="fixture", effective_llm_api_key=None,

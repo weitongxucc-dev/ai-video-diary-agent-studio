@@ -262,7 +262,7 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
         def execute(publish):
             publish(event)
             return SimpleNamespace(model_dump=lambda mode: {"reply": "先读取原请求。"})
-        return main._assistant_stream_response(execute, workspace_id="workspace", turn_id=turn["id"])
+        return main._assistant_stream_transport().response(execute, workspace_id="workspace", turn_id=turn["id"])
 
     response = TestClient(app).get("/stream")
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]

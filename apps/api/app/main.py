@@ -4,6 +4,8 @@ from app.creation.media_result_use_case import MediaResultUseCase, MediaResultRe
 from app.assistant.media_result_binding import AssistantMediaResultBinding
 from app.assistant.execution_binding import AssistantExecutionBinding, ExecutionBindingRejected
 from app.assistant import home_plan_turn_use_case as home_plan
+from app.assistant.stream_response import AssistantStreamTransport
+from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -5102,34 +5104,6 @@ def restore_unpersisted_assistant_turn_draft(
     })
 
 
-@app.post("/api/assistant/conversations/{conversation_id}/stop")
-def stop_assistant_conversation_turn(
-    conversation_id: str, request: Request, payload: AssistantConversationStopRequest,
-):
-    _workspace_id, _member_id, _row = _assistant_conversation_for_request(request, conversation_id)
-    turn = conversation_repo.get_turn(str(payload.turn_id))
-    if turn is None or turn["conversation_id"] != conversation_id:
-        raise HTTPException(status_code=404, detail="对话轮次不存在。")
-    if turn["status"] != "running":
-        raise HTTPException(status_code=409, detail="这一轮已经结束，未重复执行停止。")
-    context = conversation_repo.consumed_turn_request_context(
-        str(payload.turn_id), conversation_id, _workspace_id, _member_id)
-    if context.get("kind") == "script_generation":
-        try:
-            _script_generation_intent(_workspace_id).request_stop(
-                _workspace_id, context["task_id"], context["generation_request_id"], _member_id)
-        except KeyError as exc:
-            raise HTTPException(404, "原生成请求不存在") from exc
-        except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        request_stop_turn(str(payload.turn_id))
-        return {"turn_id": str(payload.turn_id), "status": "stopping"}
-    if not request_stop_turn(str(payload.turn_id)):
-        raise HTTPException(status_code=409, detail="这一轮已结束或没有可停止的助手进程。")
-    _goal_service().invalidate(str(payload.turn_id), "user_stopped")
-    return {"turn_id": str(payload.turn_id), "status": "stopping"}
 
 
 @app.get("/api/assistant/conversations/{conversation_id}/inputs")
@@ -5155,7 +5129,7 @@ def enqueue_assistant_input(conversation_id: str, request: Request, payload: Ass
         if conversation["reference_version"] != payload.expected_reference_version:
             raise HTTPException(status_code=409, detail="选中引用已变化，请重新读取后发送。")
         reference = _validate_saved_assistant_reference(request, conversation["selected_reference"])
-        context = _assistant_input_context(request, context, reference)
+        context = _task_turn_http_adapter().input_context(request, context, reference)
         context["expected_reference_version"] = payload.expected_reference_version
     try:
         item, _created = conversation_repo.enqueue_input(
@@ -5204,177 +5178,14 @@ def assistant_capabilities(request: Request):
     }
 
 
-def _begin_assistant_turn(
-    request: Request, conversation_id: str, scope_kind: str, scope_id: str | None,
-    message: str, client_request_id: UUID, expected_draft_version: int,
-    request_context: dict[str, object], on_event, *, expected_reference_version: int | None = None,
-) -> tuple[str, bool, dict]:
-    workspace_id, member_id, conversation = _assistant_conversation_for_request(request, conversation_id)
-    # Scope is historical metadata. The destination route has already verified
-    # this turn's business object; conversation ownership grants no object access.
-    if _assistant_text_without_credentials(message, workspace_id) != message:
-        raise HTTPException(status_code=422, detail="请勿在对话中粘贴密钥或口令。")
-    previous = conversation_repo.request_context(str(client_request_id), conversation_id, workspace_id, member_id)
-    if expected_reference_version is None:
-        if any(request_context.get(key) for key in ("selection", "profile_reference", "knowledge_reference", "selected_object_refs")):
-            raise HTTPException(status_code=409, detail="请重新读取当前选中引用后再发送。")
-        reference = None
-    elif previous is not None:
-        reference = previous.get("selected_reference")
-    else:
-        if conversation["reference_version"] != expected_reference_version:
-            raise HTTPException(status_code=409, detail="选中引用已变化，请重新读取后再发送。")
-        reference = _validate_saved_assistant_reference(request, conversation["selected_reference"])
-    if expected_reference_version is not None:
-        request_context = {**request_context, "selected_reference": reference,
-            "expected_reference_version": expected_reference_version}
-        target = dict(request_context.get("target_snapshot") or {})
-        target["selected_references"] = reference["items"] if reference and reference["kind"] == "selection" else [reference] if reference else []
-        request_context["target_snapshot"] = target
-        if previous is not None:
-            request_context["target_snapshot"] = previous.get("target_snapshot")
-            if request_context.get("kind") == "task":
-                request_context["selected_object_refs"] = previous.get("selected_object_refs", [])
-        elif request_context.get("kind") == "task":
-            frozen = _assistant_input_context(request, request_context, reference)
-            request_context["selected_object_refs"] = frozen["selected_object_refs"]
-            request_context["target_snapshot"] = {**target,
-                "material_selection": frozen["target_snapshot"].get("material_selection")}
-    try:
-        turn, created = conversation_repo.create_turn_idempotent(
-            conversation_id, workspace_id, member_id, message, str(client_request_id),
-            expected_draft_version, request_context,
-            expected_reference_version=expected_reference_version,
-        )
-    except ConversationReferenceVersionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ConversationTurnAlreadyRunning as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ConversationDraftVersionConflict as exc:
-        raise HTTPException(status_code=409, detail={
-            "error": "assistant_draft_conflict",
-            "message": "发送前草稿版本或正文已变化；较新的草稿已保留，请重新读取后再发送。",
-            "current_draft_version": exc.current["draft_version"],
-        }) from exc
-    except ConversationTurnRequestConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if turn is None:
-        raise HTTPException(status_code=404, detail="对话不存在或当前成员无权访问。")
-    if created:
-        register_turn_control(turn["id"])
-        if conversation["title"] == "新对话":
-            conversation_repo.update_title(conversation_id, workspace_id, member_id, message[:36])
-    if on_event is not None:
-        on_event({"type": "turn_started", "turn_id": turn["id"], "turn_state": turn["status"],
-                  "draft_version": expected_draft_version + 1})
-        if not created and turn["status"] != "running":
-            on_event({"type": "turn_status", "turn_id": turn["id"], "turn_state": turn["status"]})
-    return turn["id"], created, turn
 
 
-def _assistant_input_context(request: Request, context: dict, reference: dict | None) -> dict:
-    items = reference["items"] if reference and reference["kind"] == "selection" else [reference] if reference else []
-    workspace_id = current_workspace_id(request)
-    snapshot = {"selected_references": items}
-    context = {**context, "selected_reference": reference}
-    profiles = [item for item in items if item["kind"] in {"person", "voice"}]
-    knowledge = [item for item in items if item["kind"] == "knowledge"]
-    profile = profiles[0] if len(profiles) == 1 else None
-    knowledge_item = knowledge[0] if len(knowledge) == 1 else None
-    context["profile_reference"] = ({key: profile[key] for key in ("kind", "profile_id", "version")} if profile else None)
-    context["knowledge_reference"] = ({key: knowledge_item[key] for key in ("knowledge_item_id", "version", "locator") if key in knowledge_item} if knowledge_item else None)
-    snapshot["profile_reference"] = (_assistant_profile_snapshot(request, profile["kind"], profile["profile_id"], profile["version"]) if profile else None)
-    snapshot["knowledge_reference"] = (_assistant_knowledge_snapshot(request, knowledge_item["knowledge_item_id"], knowledge_item["version"], knowledge_item.get("locator")) if knowledge_item else None)
-    if context["kind"] == "task":
-        task, _member_id = _exact_edit_access(context["task_id"], request)
-        tracks = production_repo.subtitle_records.list_subtitle_tracks(workspace_id, task.id)
-        try:
-            refs = timeline_object_refs(items, task.id, subtitle_tracks=tracks)
-        except AssistantReferenceConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        stage, refs = _assistant_turn_scope(workspace_id, task, SimpleNamespace(
-            context_stage=context["stage"], selected_object_refs=refs, playhead_ms=None))
-        version = (_timeline_version_or_404(workspace_id, task.id, task.current_timeline_version_id)
-                   if task.current_timeline_version_id else None)
-        context.update(stage=stage, selected_object_refs=refs, playhead_ms=None,
-                       expected_timeline_version_id=task.current_timeline_version_id,
-                       expected_timeline_sequence=version.sequence if version else 0)
-        snapshot.update(timeline_version_id=task.current_timeline_version_id,
-                        timeline_sequence=version.sequence if version else 0,
-                        material_selection=_assistant_task_clip_material_selection(request, task, refs))
-    elif context["kind"] == "material":
-        materials = [item for item in items if item["kind"] == "material"]
-        selection = materials[0]["selection"] if len(materials) == 1 else None
-        context["selection"] = selection
-        if selection:
-            selection, _asset = _assistant_material_selection_snapshot(request, selection)
-            snapshot.update(selection)
-    context["target_snapshot"] = snapshot
-    return context
 
 
-def _assistant_input_delivery(request: Request, conversation_id: str, turn_id: str):
-    workspace_id, member_id, _conversation = _assistant_conversation_for_request(request, conversation_id)
-
-    def verify(item):
-        try:
-            current_workspace, current_member, _current = _assistant_conversation_for_request(request, conversation_id)
-            if (current_workspace, current_member) != (workspace_id, member_id):
-                raise PermissionError("当前成员或工作区已变化，请重新发送。")
-            frozen = item["request_context"]
-            reference = _validate_saved_assistant_reference(request, frozen.get("selected_reference"))
-            fresh = _assistant_input_context(request, frozen, reference)
-            snapshot = fresh["target_snapshot"]
-            if frozen["kind"] == "task" and any(snapshot.get(key) != frozen["target_snapshot"].get(key)
-                    for key in ("timeline_version_id", "timeline_sequence")):
-                raise ValueError("接收追加输入后任务版本发生变化，请重新查看对象后发送；未改绑新版。")
-        except HTTPException as exc:
-            raise ValueError(str(exc.detail)) from exc
-        material = snapshot.get("material_selection") if fresh["kind"] == "task" else fresh.get("selection")
-        delta = {
-            "INPUT_ID": item["input_id"], "INPUT_TURN_ID": turn_id,
-            "USER_INSTRUCTION": item["message"], "SELECTED_REFS": json.dumps(fresh.get("selected_object_refs", [])),
-            "SELECTED_REFERENCES": json.dumps(snapshot.get("selected_references", []), ensure_ascii=False),
-            "PLAYHEAD_MS": "", "MATERIAL_SELECTION": json.dumps(material) if material else "",
-            "PROFILE_REFERENCE": json.dumps(snapshot["profile_reference"]) if snapshot.get("profile_reference") else "",
-            "KNOWLEDGE_REFERENCE": json.dumps(snapshot["knowledge_reference"]) if snapshot.get("knowledge_reference") else "",
-            "TASK_VERSION": json.dumps({key: snapshot[key] for key in ("timeline_version_id", "timeline_sequence")}) if fresh["kind"] == "task" else "",
-            "TASK_READ_READY": "", "SCRIPT_DRAFT_UPDATED_AT": "", "EDIT_CAPABILITIES": "",
-            "MEDIA_SCRIPT_CAPABILITIES": "", "SCRIPT_TOOL_CAPABILITIES": "",
-        }
-        return {"environment": {f"AI_VIDEO_DIARY_AGENT_{key}": value for key, value in delta.items()},
-                "frozen_context": {"kind": fresh["kind"], "task_id": fresh.get("task_id"),
-                    "selected_object_refs": fresh.get("selected_object_refs", []), "target_snapshot": snapshot}}
-
-    return AssistantInputDelivery(conversation_repo, conversation_id=conversation_id, workspace_id=workspace_id,
-        member_id=member_id, turn_id=turn_id, verify=verify)
 
 
-def _frozen_assistant_references(request: Request, conversation_id: str, turn_id: str) -> list[dict]:
-    workspace_id, member_id = _member_owned_content_scope(request)
-    context = conversation_repo.consumed_turn_request_context(
-        turn_id, conversation_id, workspace_id, member_id)
-    return (context.get("target_snapshot") or {}).get("selected_references", [])
 
 
-def _replay_assistant_turn(turn_id: str, response_model, *, provider: str, model: str,
-                           draft_version: int):
-    turn = conversation_repo.get_turn(turn_id)
-    if turn is None:
-        raise HTTPException(status_code=404, detail="对话轮次不存在。")
-    if turn["status"] == "failed":
-        failure = turn.get("result") or {}
-        raise HTTPException(status_code=503, detail=failure.get("message", "上一轮已失败，请检查后明确重试。"))
-    if turn["status"] in {"completed", "stopped"}:
-        stored = turn.get("result")
-        response = stored.get("response") if isinstance(stored, dict) else None
-        if not isinstance(response, dict):
-            raise HTTPException(status_code=500, detail="已持久化轮次缺少原始结果，未重复执行工具。")
-        return response_model.model_validate(response)
-    return response_model(
-        reply=turn["assistant_text"], provider=provider, model=model,
-        turn_id=turn_id, turn_status="running", draft_version=draft_version,
-    )
 
 
 @app.post(
@@ -5387,7 +5198,7 @@ def workspace_assistant_plan_turn(
 ) -> WorkspaceAssistantPlanTurnResponse:
     if "text/event-stream" in request.headers.get("accept", "").lower():
         workspace_id = current_workspace_id(request)
-        return _assistant_stream_response(
+        return _assistant_stream_transport().response(
             lambda on_event: _workspace_assistant_plan_turn(request, payload, on_event),
             workspace_id=workspace_id,
         )
@@ -5409,14 +5220,14 @@ def _workspace_assistant_plan_turn(
     knowledge_reference = (_assistant_knowledge_snapshot(request, payload.selected_knowledge_reference.knowledge_item_id,
                            payload.selected_knowledge_reference.version, payload.selected_knowledge_reference.locator)
                            if payload.selected_knowledge_reference is not None else None)
-    turn_id, created, turn = _begin_assistant_turn(
+    turn_id, created, turn = _task_turn_http_adapter().begin(
         request, str(payload.conversation_id), "home", "home", payload.message.strip(),
         payload.client_request_id, payload.expected_draft_version, {"kind": "home", "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None, "target_snapshot": {"profile_reference": profile_reference, "knowledge_reference": knowledge_reference, "material_selection": material_selection}}, on_event,
         expected_reference_version=payload.expected_reference_version,
     )
     if not created:
         settings_for_replay = _workspace_settings_for(workspace_id)
-        response = _replay_assistant_turn(
+        response = _task_turn_http_adapter().replay(
             turn_id, WorkspaceAssistantPlanTurnResponse,
             provider=settings_for_replay.effective_llm_provider,
             model=settings_for_replay.effective_llm_model,
@@ -5442,8 +5253,8 @@ def _workspace_assistant_plan_turn(
                         cookie=request.headers.get("cookie"),
                         on_event=on_event,
                         turn_id=turn_id,
-                        selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
-                        input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
+                        selected_references=_task_turn_http_adapter().frozen_references(request, str(payload.conversation_id), turn_id),
+                        input_handler=_task_turn_http_adapter().input_delivery(request, str(payload.conversation_id), turn_id),
                         profile_reference=profile_reference,
                         knowledge_reference=knowledge_reference,
                         keep_turn_control=True, material_selection=material_selection,
@@ -5456,8 +5267,8 @@ def _workspace_assistant_plan_turn(
                         conversation_id=str(payload.conversation_id), message=payload.message.strip(),
                         authorization=request.headers.get("authorization"), cookie=request.headers.get("cookie"),
                         on_event=on_event, turn_id=turn_id, profile_reference=profile_reference,
-                        selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
-                        input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
+                        selected_references=_task_turn_http_adapter().frozen_references(request, str(payload.conversation_id), turn_id),
+                        input_handler=_task_turn_http_adapter().input_delivery(request, str(payload.conversation_id), turn_id),
                         knowledge_reference=knowledge_reference,
                         creation_request=_creation_request_response(stage.latest_request).model_dump(mode="json"),
                         keep_turn_control=True, material_selection=material_selection,
@@ -5481,7 +5292,7 @@ def _workspace_assistant_plan_turn(
                     material = MaterialAssistantResultResponse.model_validate(stage.value)
                     answer = home_plan.MaterialResult(material.scope, material.asset_ref, material.segment_ref, material)
                 elif isinstance(stage, home_plan.ReadFrozenSelections):
-                    answer = _frozen_assistant_references(request, str(payload.conversation_id), turn_id)
+                    answer = _task_turn_http_adapter().frozen_references(request, str(payload.conversation_id), turn_id)
                 elif isinstance(stage, home_plan.RecoverSavedRequest):
                     answer = _assistant_creation_request_for_turn(request, stage.turn)
                 elif isinstance(stage, home_plan.BuildCompletedResponse):
@@ -5527,7 +5338,7 @@ def material_assistant_turn(
 ) -> MaterialAssistantTurnResponse:
     if "text/event-stream" in request.headers.get("accept", "").lower():
         workspace_id = current_workspace_id(request)
-        return _assistant_stream_response(
+        return _assistant_stream_transport().response(
             lambda on_event: _material_assistant_turn(request, payload, on_event),
             workspace_id=workspace_id,
         )
@@ -6441,202 +6252,86 @@ def _assistant_stream_safe_text(value: str, workspace_id: str) -> str:
     return re.sub(r"(?:file://)?(?:/Users/|/Volumes/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", "[本机路径]", safe)
 
 
-class _AssistantStreamTextSanitizer:
-    """Hold only suffixes that could complete a known secret or sensitive marker."""
 
-    _markers = (
-        "authorization: bearer ", "api_key=", "api_key: ", "api-key=", "api-key: ",
-        "api key=", "api key: ", "token=", "token: ", "password=", "password: ",
-        "secret=", "secret: ", "sk-", "file://", "/users/", "/private/", "/tmp/", "/var/folders/",
+
+
+
+def _assistant_stream_transport():
+    return AssistantStreamTransport(
+        conversations_for=lambda: conversation_repo,
+        runtime_lock=_runtime_reload_lock, workers=_assistant_stream_workers,
+        safe_text=_assistant_stream_safe_text,
+        known_secrets_for=lambda workspace_id: (
+            _workspace_settings_for(workspace_id).effective_llm_api_key,
+            settings.tencentcloud_secret_id, settings.tencentcloud_secret_key),
+        forget_control=lambda turn_id: forget_turn_control(turn_id), logger=logger,
     )
-    _sensitive_patterns = (
-        re.compile(r"(?i)\bauthorization\s*:\s*bearer\s+\S+"),
-        re.compile(r"(?i)\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+"),
-        re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
-        re.compile(r"(?:file://)?(?:/Users/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", re.IGNORECASE),
+
+
+def _task_turn_http_adapter():
+    return TaskTurnHTTPAdapter(
+        conversations_for=lambda: conversation_repo,
+        window_case_for=lambda workspace_id, member_id: _script_draft_use_case(workspace_id,
+            validate_inputs=lambda ws, plan, refs: _validate_script_input_sources(ws, plan, refs, member_id)),
+        workspace_for=current_workspace_id,
+        read_task=_creation_task_or_404,
+        read_task_record=lambda ws, task_id: production_repo.task_records.get_creation_task(ws, task_id),
+        read_caller=_content_reader,
+        content_visible=_content_visible,
+        read_member=_assistant_member_id,
+        conversation_owner=_assistant_conversation_for_request,
+        member_scope=_member_owned_content_scope,
+        clean_text=_assistant_text_without_credentials,
+        safe_text=_assistant_stream_safe_text,
+        validate_reference=_validate_saved_assistant_reference,
+        profile_snapshot=_assistant_profile_snapshot,
+        knowledge_snapshot=_assistant_knowledge_snapshot,
+        access_task=_exact_edit_access,
+        read_subtitles=lambda ws, task_id: production_repo.subtitle_records.list_subtitle_tracks(ws, task_id),
+        resolve_scope=_assistant_turn_scope,
+        read_timeline=lambda ws, version_id: production_repo.timeline_records.get_timeline_version(ws, version_id),
+        timeline_for_task=_timeline_version_or_404,
+        clip_material=_assistant_task_clip_material_selection,
+        material_snapshot=_assistant_material_selection_snapshot,
+        settings_for=_workspace_settings_for,
+        local_token=_local_member_token,
+        request_actor=_request_permit_actor,
+        require_actor=_require_permit_actor,
+        native_handler=_ordinary_native_handler,
+        run_task=lambda *args, **values: run_task_turn(*args, **values),
+        register_control=lambda turn_id: register_turn_control(turn_id),
+        forget_control=lambda turn_id: forget_turn_control(turn_id),
+        stop_control=lambda turn_id: request_stop_turn(turn_id),
+        stream_for=_assistant_stream_transport,
+        applied_edit=_assistant_applied_edit_receipt,
+        storyboard=_resolve_assistant_storyboard_regeneration,
+        script_tool=_resolve_assistant_script_tool,
+        related_media=_related_media_result,
+        edit_request=_resolve_assistant_edit_request,
+        media_binding=_media_result_binding,
+        completed_media=_completed_media_result,
+        read_media=_read_media_result,
+        read_script=lambda ws, script_id: production_repo.script_records.get_creation_task_script(ws, script_id),
+        bound_execution=_read_bound_execution_result,
+        bind_observation=_bind_assistant_execution_observation,
+        bind_execution=_bind_assistant_execution_result,
+        read_proposal=lambda ws, proposal_id: production_repo.edit_records.get_edit_proposal(ws, proposal_id),
+        read_intent=lambda ws, intent_id: production_repo.edit_records.get_edit_intent(ws, intent_id),
+        render_edit_preview=_edit_preview_response,
+        read_event=lambda ws, event_id: production_repo.execution_records.get_task_event(ws, event_id),
+        list_events=lambda ws, task_id: production_repo.execution_records.list_task_events(ws, task_id),
+        goal_for=_goal_service,
+        bind_goal_scope=_bind_goal_business_scope,
+        wake=_wake_assistant_continuations,
+        read_quality=_read_creation_quality_continuation,
+        read_window=_read_creation_script_window_request,
+        read_segment=lambda ws, task_id, request_id, actor: _segment_production_use_case().read_request(ws, task_id, request_id, actor),
+        read_restore=lambda ws, task_id, request_id, actor: _timeline_restore_use_case().read_request(ws, task_id, request_id, actor),
+        generation_for=_script_generation_intent,
     )
 
-    def __init__(self, workspace_id: str) -> None:
-        self._workspace_id = workspace_id
-        self._pending = ""
-        key = _workspace_settings_for(workspace_id).effective_llm_api_key
-        self._known_secrets = tuple(secret for secret in (
-            key, settings.tencentcloud_secret_id, settings.tencentcloud_secret_key,
-        ) if secret and len(secret) >= 8)
 
-    def feed(self, delta: str, *, final: bool = False) -> str:
-        combined = self._pending + delta
-        if final:
-            self._pending = ""
-            return _assistant_stream_safe_text(combined, self._workspace_id)
-
-        safe_end = len(combined)
-        lowered = combined.lower()
-        for marker in self._markers:
-            max_length = min(len(marker), len(lowered))
-            for length in range(max_length, 0, -1):
-                if lowered.endswith(marker[:length]):
-                    safe_end = min(safe_end, len(combined) - length)
-                    break
-
-        for secret in self._known_secrets:
-            lowered_secret = secret.lower()
-            max_length = min(len(lowered_secret), len(lowered))
-            for length in range(max_length, 0, -1):
-                if lowered.endswith(lowered_secret[:length]):
-                    safe_end = min(safe_end, len(combined) - length)
-                    break
-            offset = combined.find(secret)
-            while offset >= 0:
-                end = offset + len(secret)
-                if offset < safe_end < end:
-                    safe_end = offset
-                offset = combined.find(secret, offset + 1)
-
-        for pattern in self._sensitive_patterns:
-            for match in pattern.finditer(combined):
-                if match.start() < safe_end and (match.end() == len(combined) or match.start() < safe_end < match.end()):
-                    safe_end = match.start()
-
-        safe_text = combined[:safe_end]
-        self._pending = combined[safe_end:]
-        return _assistant_stream_safe_text(safe_text, self._workspace_id) if safe_text else ""
-
-
-def _assistant_stream_response(
-    execute,
-    *,
-    workspace_id: str,
-    turn_id: str | None = None,
-) -> StreamingResponse:
-    events: queue.Queue[dict[str, object] | None] = queue.Queue()
-    disconnected = threading.Event()
-    text_sanitizer = _AssistantStreamTextSanitizer(workspace_id)
-    turn_ref = {"id": turn_id}
-
-    def publish(raw_event: dict[str, object]) -> None:
-        event_type = raw_event.get("type")
-        if event_type == 'context_compaction':
-            diagnostic = _safe_compaction_event(raw_event)
-            if diagnostic is not None and turn_ref['id']:
-                stream_conversation_repo.append_event(turn_ref['id'],diagnostic)
-            return  # Diagnostic history does not extend the existing SSE schema.
-        if event_type == "text_delta" and isinstance(raw_event.get("delta"), str):
-            delta = text_sanitizer.feed(str(raw_event["delta"]))
-            if not delta:
-                return
-            event = {"type": "text_delta", "delta": delta}
-        elif event_type == "tool_start":
-            event = {
-                "type": "tool_start", "tool_id": raw_event["tool_id"],
-                "label": _assistant_stream_safe_text(str(raw_event.get("label", "助手操作")), workspace_id),
-            }
-        elif event_type == "tool_end":
-            event = {
-                "type": "tool_end", "tool_id": raw_event["tool_id"],
-                "label": _assistant_stream_safe_text(str(raw_event.get("label", "助手操作")), workspace_id),
-                "ok": bool(raw_event.get("ok")),
-                "summary": _assistant_stream_safe_text(str(raw_event.get("summary", "")), workspace_id),
-            }
-            if isinstance(raw_event.get("failure"), dict):
-                event["failure"] = {key: _assistant_stream_safe_text(value, workspace_id) if isinstance(value, str) else value
-                    for key, value in _safe_business_failure(raw_event["failure"]).items()}
-        elif event_type == "turn_started":
-            event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state", "draft_version") if key in raw_event}
-            turn_ref["id"] = str(raw_event["turn_id"])
-        elif event_type == "turn_status":
-            event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state") if key in raw_event}
-        else:
-            return
-        validated = AssistantStreamEvent.model_validate(event)
-        safe_event = validated.model_dump(mode="json", exclude_none=True)
-        if turn_ref["id"] and event_type in {"text_delta", "tool_start", "tool_end"}:
-            stream_conversation_repo.append_event(turn_ref["id"], safe_event)
-        if not disconnected.is_set():
-            events.put(safe_event)
-
-    def work() -> None:
-        terminal_event: dict[str, object] | None = None
-        try:
-            result = execute(publish)
-            if turn_ref["id"]:
-                publish({"type": "turn_status", "turn_id": turn_ref["id"], "turn_state": getattr(result, "turn_status", "completed")})
-            if not disconnected.is_set():
-                terminal_event = AssistantStreamEvent(
-                    type="result", result=result.model_dump(mode="json"),
-                ).model_dump(mode="json", exclude_none=True)
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, str) else "对话未能完成，请查看当前任务状态。"
-            failure = None
-            if (isinstance(exc.detail, dict)
-                    and exc.detail.get("error") == "creation_task_timeline_version_conflict"
-                    and isinstance(exc.detail.get("message"), str)):
-                detail = exc.detail["message"]
-                failure = {"code": "creation_task_timeline_version_conflict"}
-            if turn_ref["id"]:
-                forget_turn_control(turn_ref["id"])
-                stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
-                    "kind": "failure", "message": _assistant_stream_safe_text(detail, workspace_id),
-                })
-            if not disconnected.is_set():
-                terminal_event = AssistantStreamEvent(
-                    type="error", status=exc.status_code,
-                    message=_assistant_stream_safe_text(detail, workspace_id), failure=failure,
-                ).model_dump(mode="json", exclude_none=True)
-        except Exception as exc:
-            if turn_ref["id"]:
-                forget_turn_control(turn_ref["id"])
-                stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
-                    "kind": "failure", "message": "对话服务未能完整返回结果，请查看当前任务状态。",
-                })
-            logger.error("assistant stream worker failed (%s)", type(exc).__name__)
-            if not disconnected.is_set():
-                terminal_event = AssistantStreamEvent(
-                    type="error", status=500,
-                    message="对话服务未能完整返回结果，请查看当前任务状态。",
-                ).model_dump(exclude_none=True)
-        finally:
-            tail = text_sanitizer.feed("", final=True)
-            if tail:
-                publish({"type": "text_delta", "delta": tail})
-            if terminal_event is not None and not disconnected.is_set():
-                events.put(terminal_event)
-            events.put(None)
-            with _runtime_reload_lock:
-                _assistant_stream_workers.discard(thread)
-
-    with _runtime_reload_lock:
-        stream_conversation_repo = conversation_repo
-        thread = threading.Thread(target=work, name="assistant-stream-response", daemon=True)
-        _assistant_stream_workers.add(thread)
-
-    def body():
-        if turn_id:
-            started = AssistantStreamEvent(type="turn_started", turn_id=turn_id, turn_state="running")
-            yield f"data: {json.dumps(started.model_dump(mode='json', exclude_none=True), ensure_ascii=False, separators=(',', ':'))}\n\n"
-        thread.start()
-        result_seen = False
-        error_seen = False
-        try:
-            while True:
-                event = events.get()
-                if event is None:
-                    if not result_seen and not error_seen:
-                        incomplete = AssistantStreamEvent(
-                            type="error", message="连接中断，未收到完整的对话结果。",
-                        ).model_dump(mode="json", exclude_none=True)
-                        yield f"data: {json.dumps(incomplete, ensure_ascii=False)}\n\n"
-                    break
-                result_seen = result_seen or event.get("type") == "result"
-                error_seen = error_seen or event.get("type") == "error"
-                yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
-        finally:
-            disconnected.set()
-
-    return StreamingResponse(body(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-cache, no-transform",
-        "X-Accel-Buffering": "no",
-    })
+app.include_router(build_task_turn_router(_task_turn_http_adapter))
 
 
 def _task_turn_scope_use_case():
@@ -6662,22 +6357,6 @@ def _assistant_turn_scope(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/assistant/turn",
-    response_model=CreationTaskAssistantTurnResponse,
-)
-def creation_task_assistant_turn(
-    task_id: str,
-    request: Request,
-    payload: CreationTaskAssistantTurnRequest,
-) -> CreationTaskAssistantTurnResponse:
-    if "text/event-stream" in request.headers.get("accept", "").lower():
-        workspace_id = current_workspace_id(request)
-        return _assistant_stream_response(
-            lambda on_event: _creation_task_assistant_turn(task_id, request, payload, on_event),
-            workspace_id=workspace_id,
-        )
-    return _creation_task_assistant_turn(task_id, request, payload, None)
 
 
 def _assistant_result_binding(task_id, request, turn_id, details):
@@ -6744,140 +6423,8 @@ def _resolve_assistant_script_tool(task_id, request, turn_id, details):
 
 
 
-def _record_script_window_tool_event(event, *, workspace_id, member_id, task_id, turn_id):
-    if event.get('type') != 'tool_end' or not isinstance(event.get('script_window_request'), dict):
-        return False
-    window = event['script_window_request']
-    if event.get('invocation_input_id') != (window.get('input_id') or turn_id):
-        return False
-    from app.assistant.script_window_persistence import record_script_window_receipt
-    case = _script_draft_use_case(workspace_id, validate_inputs=lambda ws, plan, refs:
-        _validate_script_input_sources(ws, plan, refs, member_id))
-    return record_script_window_receipt(
-        conversations=conversation_repo, turn_id=turn_id, workspace_id=workspace_id,
-        member_id=member_id, task_id=task_id, value=window,
-        read_original=lambda request_id, operation, script_id: case.window_request_result(
-            workspace_id, task_id, request_id, member_id=member_id,
-            operation=operation, script_id=script_id))
 
 
-def _creation_task_assistant_turn(
-    task_id: str,
-    request: Request,
-    payload: CreationTaskAssistantTurnRequest,
-    on_event,
-) -> CreationTaskAssistantTurnResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    # 先按可信身份确认这条任务读得到，再让助手碰它：读不到的任务不应被助手读到。
-    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
-        raise HTTPException(status_code=404, detail="creation task not found")
-    member_id = _assistant_member_id(request, workspace_id)
-    previous_context = conversation_repo.request_context(str(payload.client_request_id), str(payload.conversation_id), workspace_id, member_id)
-    current_version = None
-    if task.current_timeline_version_id is not None:
-        try:
-            current_version = production_repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=409, detail="当前任务的时间线版本不可用") from exc
-        if current_version.task_id != task.id:
-            raise HTTPException(status_code=409, detail="当前时间线不属于此任务")
-    task_version = {"timeline_version_id": task.current_timeline_version_id,
-                    "timeline_sequence": current_version.sequence if current_version is not None else 0}
-    if previous_context is None and payload.expected_timeline_sequence is not None and (payload.expected_timeline_sequence != task_version["timeline_sequence"]
-            or payload.expected_timeline_version_id != task.current_timeline_version_id):
-        raise HTTPException(status_code=409, detail={"error": "creation_task_timeline_version_conflict",
-            "message": "当前任务版本已变化，请重新查看选中对象后发送。"})
-    trusted_stage, trusted_refs = _assistant_turn_scope(workspace_id, task, payload)
-    material_selection = (previous_context.get("target_snapshot", {}).get("material_selection")
-                          if previous_context is not None else _assistant_task_clip_material_selection(request, task, trusted_refs))
-    profile_reference = (_assistant_profile_snapshot(request, payload.selected_profile_reference.kind,
-                         payload.selected_profile_reference.profile_id, payload.selected_profile_reference.version)
-                         if payload.selected_profile_reference is not None else None)
-    message = payload.message.strip()
-    if _assistant_text_without_credentials(message, workspace_id) != message:
-        raise HTTPException(status_code=422, detail="请勿在创作要求中粘贴密钥或口令。")
-    knowledge_reference = (_assistant_knowledge_snapshot(request, payload.selected_knowledge_reference.knowledge_item_id,
-                           payload.selected_knowledge_reference.version, payload.selected_knowledge_reference.locator)
-                           if payload.selected_knowledge_reference is not None else None)
-    turn_id, created, _turn = _begin_assistant_turn(
-        request, str(payload.conversation_id), "task", task_id, message,
-        payload.client_request_id, payload.expected_draft_version,
-        {"kind": "task", "task_id": task_id, "stage": trusted_stage,
-         "selected_object_refs": sorted(trusted_refs), "playhead_ms": payload.playhead_ms,
-         "expected_timeline_version_id": payload.expected_timeline_version_id, "expected_timeline_sequence": payload.expected_timeline_sequence,
-         "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None,
-         "target_snapshot": {**task_version, "profile_reference": profile_reference, "knowledge_reference": knowledge_reference,
-                             **({"material_selection": material_selection} if len(trusted_refs) == 1 and trusted_refs[0].startswith("clip:") else {})}}, on_event,
-        expected_reference_version=payload.expected_reference_version,
-    )
-    if not created:
-        replay_settings = _workspace_settings_for(workspace_id)
-        return _replay_assistant_turn(
-            turn_id, CreationTaskAssistantTurnResponse,
-            provider=replay_settings.effective_llm_provider,
-            model=replay_settings.effective_llm_model,
-            draft_version=payload.expected_draft_version + 1,
-        )
-    frozen_context = conversation_repo.consumed_turn_request_context(
-        turn_id, str(payload.conversation_id), workspace_id, member_id)
-    trusted_refs = frozen_context.get("selected_object_refs", trusted_refs)
-    material_selection = (frozen_context.get("target_snapshot") or {}).get("material_selection")
-    def record_event(event):
-        _record_script_window_tool_event(event, workspace_id=workspace_id,
-            member_id=member_id, task_id=task_id, turn_id=turn_id)
-        if on_event is not None:
-            on_event(event)
-    try:
-        native_actor = _request_permit_actor(request,workspace_id)
-        native_binding = {'workspace_id':workspace_id,'member_id':member_id,'task_id':task_id,
-            'conversation_id':str(payload.conversation_id),'turn_id':turn_id,'input_id':None,'task_version':task_version}
-        native_handler = _ordinary_native_handler(native_actor,native_binding) if native_actor is not None else None
-        reply, preview = run_task_turn(
-            _workspace_settings_for(workspace_id),
-            workspace_id=workspace_id,
-            local_member_token=_local_member_token(request) or None,
-            caller_user_id=caller_user_id if not local_diagnostic else None,
-            task_id=task_id,
-            conversation_id=str(payload.conversation_id),
-            message=message,
-            stage=trusted_stage,
-            selected_refs=trusted_refs,
-            playhead_ms=payload.playhead_ms,
-            authorization=request.headers.get("authorization"),
-            cookie=request.headers.get("cookie"),
-            on_event=record_event,
-            turn_id=turn_id,
-            native_handler=native_handler,source_binding=native_binding,
-            selected_references=_frozen_assistant_references(request, str(payload.conversation_id), turn_id),
-            input_handler=_assistant_input_delivery(request, str(payload.conversation_id), turn_id),
-            profile_reference=profile_reference,
-            knowledge_reference=knowledge_reference,
-            task_version=task_version,
-            material_selection=material_selection,
-        )
-    except AssistantStopped:
-        saved = conversation_repo.get_turn(turn_id)
-        response = CreationTaskAssistantTurnResponse(
-            reply=saved["assistant_text"] if saved else "",
-            provider=_workspace_settings_for(workspace_id).effective_llm_provider,
-            model=_workspace_settings_for(workspace_id).effective_llm_model,
-            turn_id=turn_id,
-            turn_status="stopped",
-            draft_version=payload.expected_draft_version + 1,
-            script_window_request=((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'),
-            quality_continuation=((saved or {}).get('result') or {}).get('response', {}).get('quality_continuation'),
-        )
-        conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "task_turn", "response": response.model_dump(mode="json")})
-        return response
-    except AssistantUnavailable as exc:
-        forget_turn_control(turn_id)
-        conversation_repo.finish_turn(turn_id, "failed", result={
-            "kind": "failure", "message": _assistant_stream_safe_text(str(exc), workspace_id),
-        })
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, preview, trusted_stage)
 
 
 def _assistant_applied_edit_receipt(task_id, request, turn_id, details):
@@ -6933,216 +6480,6 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _finish_task_assistant_turn(task_id, request, payload, turn_id, reply, preview, trusted_stage):
-    workspace_id = current_workspace_id(request)
-    reply = _assistant_text_without_credentials(reply, workspace_id)
-    script_draft = None
-    execution_action = None
-    execution_status = None
-    topic_candidates = None
-    storyboard_regeneration = None
-    script_window_request = None
-    quality_continuation = None
-    timeline_action = None
-    media_job, edit_request, script_tool, segment_revision, timeline_restore = None, None, None, None, None
-    if isinstance(preview, dict) and preview.get("kind") in {"execution_action", "execution_result"} and preview.get("applied_edit") is not None:
-        edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview["applied_edit"])
-        timeline_action = "apply"
-    if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
-        from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
-        origin = conversation_repo.task_turn_source(str(turn_id), workspace_id,
-            _assistant_member_id(request, workspace_id), task_id)
-        try:
-            quality_continuation = resolve_quality_continuation(preview, task_id=task_id,
-                invocation_input_id=origin.get('input_id') or str(turn_id),
-                read_original=lambda job_id, failed_request_id: _read_creation_quality_continuation(
-                    request, task_id, job_id, failed_request_id))
-        except ValueError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        reply = quality_continuation_message(quality_continuation)
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
-        from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
-        origin = conversation_repo.task_turn_source(str(turn_id), workspace_id,
-            _assistant_member_id(request, workspace_id), task_id)
-        if preview.get('input_id') != origin.get('input_id'):
-            raise HTTPException(status_code=502, detail="文案原请求不属于当前输入")
-        resolved = resolve_script_window_request(preview, task_id=task_id,
-            read_original=lambda request_id, operation, script_id: _read_creation_script_window_request(
-                request, task_id, request_id, operation, script_id))
-        script_window_request = AssistantScriptWindowRequestResponse.model_validate(resolved)
-        reply = script_window_message(resolved)
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get('kind') == 'segment_revision':
-        from app.assistant.result_projection import resolve_segment_revision, segment_revision_message
-        actor = _require_permit_actor(request, workspace_id)
-        origin=conversation_repo.task_turn_source(str(turn_id),workspace_id,
-            _assistant_member_id(request,workspace_id),task_id)
-        segment_revision = resolve_segment_revision(preview, task_id=task_id, input_id=origin['input_id'],
-            read_original=lambda request_id: _segment_production_use_case().read_request(
-                workspace_id, task_id, request_id, actor))
-        reply = segment_revision_message(segment_revision)
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get('kind') == 'timeline_restore_request':
-        from app.assistant.result_projection import resolve_timeline_restore, timeline_restore_message
-        actor = _require_permit_actor(request, workspace_id)
-        timeline_restore = resolve_timeline_restore(preview, task_id=task_id,
-            read_original=lambda request_id: _timeline_restore_use_case().read_request(workspace_id, task_id, request_id, actor))
-        reply = timeline_restore_message(timeline_restore)
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") in {"storyboard_regeneration_receipt", "storyboard_regeneration_unknown", "storyboard_regeneration_rejected"}:
-        from app.assistant.result_projection import storyboard_regeneration_message
-        storyboard_regeneration = _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, preview)
-        reply = storyboard_regeneration_message(storyboard_regeneration.model_dump(mode="json"))
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") in {"media_script_tool_result", "media_script_tool_status"}:
-        script_tool, reply = _resolve_assistant_script_tool(task_id, request, turn_id, preview)
-        if preview.get("related_media_job") is not None:
-            media_job = _related_media_result(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") == "edit_applied":
-        edit_request = _assistant_applied_edit_receipt(task_id, request, turn_id, preview)
-        timeline_action = "apply"
-        edit_preview = None
-        reply = "修改已保存，可撤销；重新生成后可播放更新的成片。"
-    elif isinstance(preview, dict) and preview.get("kind") == "edit_request_status":
-        edit_request = _resolve_assistant_edit_request(task_id, request, turn_id, preview)
-        if preview.get("related_media_job") is not None:
-            media_job = _related_media_result(task_id, request, turn_id, str(payload.conversation_id), preview["related_media_job"])
-        edit_preview = None
-        reply = "原编辑请求定位已保存；尚未确认修改完成。" if edit_request.status == "unknown" else "原编辑请求已回读，请查看实际状态；没有重复提交。"
-    elif isinstance(preview, dict) and preview.get("kind") == "media_job":
-        try:
-            selected = _media_result_binding().select_finish(turn_id, preview.get("media_job"))
-        except MediaResultRejected as exc:
-            raise HTTPException(exc.status_code, exc.detail) from exc
-        if selected.completed_slot is not None:
-            slot = selected.completed_slot
-            task, _member_id = _exact_edit_access(task_id, request, write=True)
-            media_job = TaskMediaJobResponse.model_validate(_completed_media_result(task, request, turn_id, slot,
-                contract=slot["requested_output"], input_refs=slot["input_refs"]))
-        else:
-            media_job = TaskMediaJobResponse.model_validate(_read_media_result(task_id, selected.job_id, request))
-        edit_preview = None
-    elif isinstance(preview, dict) and "script_id" in preview and "proposal" not in preview:
-        script_id = preview.get("script_id") if isinstance(preview, dict) else None
-        if not isinstance(script_id, str):
-            raise HTTPException(status_code=502, detail="对话没有返回可核实的文案草稿。")
-        try:
-            candidate = production_repo.script_records.get_creation_task_script(workspace_id, script_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=502, detail="对话返回的文案草稿不存在。") from exc
-        adopted = (candidate.selection_status == "confirmed" and candidate.adoption
-            and production_repo.task_records.get_creation_task(workspace_id, task_id).confirmed_script_id == candidate.id)
-        if candidate.task_id != task_id or candidate.selection_status != "draft" and not adopted:
-            raise HTTPException(status_code=502, detail="对话返回的文案草稿不属于当前任务。")
-        script_draft = CreationTaskScriptResponse.model_validate(asdict(candidate))
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") == "topic_generation":
-        try:
-            topics = CreationTaskTopicsResponse.model_validate(preview.get("topics"))
-        except ValidationError as exc:
-            raise HTTPException(status_code=502, detail="对话没有返回可核实的选题候选。") from exc
-        if topics.task.id != task_id:
-            raise HTTPException(status_code=502, detail="对话生成的选题不属于当前任务。")
-        topic_candidates = topics
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") == "execution_result":
-        status = preview.get("status")
-        if not isinstance(status, dict) or status.get("task_id") != task_id or not isinstance(status.get("job"), dict):
-            raise HTTPException(status_code=502, detail="没有返回可核验的原制作作业")
-        try:
-            execution_status = _read_bound_execution_result(task_id, request, status["job"]["id"])
-            if preview.get("input_id") and execution_status["job"]["status"] in {"queued", "running"}:
-                execution_status = _bind_assistant_execution_observation(task_id, request, turn_id, preview, execution_status)
-        except HTTPException as exc:
-            if edit_request is None:
-                raise
-            execution_status = None
-            reply = "修改已保存，可撤销；原制作作业回读未通过核验。" + _assistant_stream_safe_text(str(exc.detail), workspace_id)
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") == "execution_action":
-        action = preview.get("action")
-        status = preview.get("status")
-        if (action not in {"start", "resume", "cancel"} or not isinstance(status, dict)
-                or status.get("task_id") != task_id):
-            raise HTTPException(status_code=502, detail="对话没有返回可核实的制作作业状态。")
-        execution_action = action
-        try:
-            execution_status = (_read_bound_execution_result(task_id, request, status["job"]["id"])
-                                if action == "cancel" else _bind_assistant_execution_result(task_id, request, turn_id, status))
-        except HTTPException as exc:
-            if edit_request is None:
-                raise
-            execution_action, execution_status = None, None
-            reply = "修改已保存，可撤销；后续制作回执未通过核验。" + _assistant_stream_safe_text(str(exc.detail), workspace_id)
-        edit_preview = None
-    elif isinstance(preview, dict) and preview.get("kind") == "edit_control":
-        action = preview.get("action")
-        if action not in {"undo", "redo", "reject"} or preview.get("task_id") != task_id:
-            raise HTTPException(status_code=502, detail="没有返回可核验的当前编辑控制结果。")
-        timeline_action = action
-        edit_preview = None
-    elif preview is not None:
-        edit_preview = CreationTaskEditPreviewResponse.model_validate(preview)
-        if edit_preview.proposal.task_id != task_id or edit_preview.proposal.workspace_id != workspace_id:
-            raise HTTPException(status_code=502, detail="对话工具返回了不属于当前任务的编辑提案。")
-        try:
-            actual_proposal = production_repo.edit_records.get_edit_proposal(workspace_id, edit_preview.proposal.id)
-            actual_intent = production_repo.edit_records.get_edit_intent(workspace_id, actual_proposal.intent_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=502, detail="工具提案没有真实持久结果") from exc
-        if actual_proposal.task_id != task_id:
-            raise HTTPException(status_code=502, detail="工具提案不属于当前任务")
-        edit_preview = _edit_preview_response(actual_intent, actual_proposal)
-    else:
-        edit_preview = None
-    if edit_request is not None and isinstance(edit_request.result,dict):
-        from app.assistant.result_projection import execution_readiness_message
-        readiness_message=execution_readiness_message(edit_request.result.get('execution_readiness'))
-        if readiness_message:
-            reply+=' '+readiness_message
-    response = CreationTaskAssistantTurnResponse(
-        quality_continuation=quality_continuation,
-        script_window_request=script_window_request,
-        storyboard_regeneration=storyboard_regeneration,
-        segment_revision=segment_revision,
-        timeline_restore=timeline_restore,
-        script_tool=script_tool,
-        edit_request=edit_request,
-        reply=reply,
-        provider=_workspace_settings_for(workspace_id).effective_llm_provider,
-        model=_workspace_settings_for(workspace_id).effective_llm_model,
-        edit_preview=edit_preview,
-        script_draft=script_draft,
-        execution_action=execution_action,
-        execution_status=execution_status,
-        topic_candidates=topic_candidates,
-        timeline_action=timeline_action,
-        media_job=media_job,
-        turn_id=turn_id,
-        draft_version=payload.expected_draft_version + 1,
-    )
-    forget_turn_control(turn_id)
-    conversation_repo.finish_turn(turn_id, "completed", reply, {
-        "kind": "task_turn",
-        "goal_business_actions": _assistant_goal_action_proofs(workspace_id, task_id, turn_id,
-            media_job=media_job, edit_preview=edit_preview, edit_request=edit_request, execution_status=execution_status),
-        "edit_preview": bool(edit_preview),
-        "script_draft": script_draft.id if script_draft else None,
-        "execution_action": execution_action,
-        "execution_status": execution_status.get("job", {}).get("status")
-            if isinstance(execution_status, dict) and isinstance(execution_status.get("job"), dict) else None,
-        "topic_candidates": bool(topic_candidates),
-        "timeline_action": timeline_action,
-        "storyboard_regeneration": storyboard_regeneration.model_dump(mode="json") if storyboard_regeneration else None,
-        "response": response.model_dump(mode="json"),
-    })
-    registered_goal=_goal_service().register_turn(turn_id)
-    if registered_goal is not None:
-        _bind_goal_business_scope(request,registered_goal)
-    _wake_assistant_continuations()
-    return response
 
 
 @app.get(
@@ -13331,9 +12668,9 @@ def _run_goal_turn(claim, fresh):
         conversation_repo.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
         forget_turn_control(turn_id)
         return
-    sanitizer = _AssistantStreamTextSanitizer(workspace_id)
+    sanitizer = _assistant_stream_transport().sanitizer(workspace_id)
     def on_event(event):
-        _record_script_window_tool_event(event, workspace_id=workspace_id,
+        _task_turn_http_adapter().case().record_window_event(event, workspace_id=workspace_id,
             member_id=goal['member_id'], task_id=task_id, turn_id=turn_id)
         if event.get('type') == 'context_compaction':
             diagnostic = _safe_compaction_event(event)
@@ -13461,29 +12798,6 @@ def _read_bound_execution_result(task_id, request, job_id):
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _assistant_goal_action_proofs(workspace_id, task_id, turn_id, *, media_job, edit_preview, edit_request, execution_status):
-    proofs = []
-
-    def append(kind, identity, source):
-        if source.get("assistant_turn_id") == turn_id:
-            proofs.append({"kind": kind, "id": identity,
-                           **({"input_id": source["input_id"]} if source.get("input_id") else {})})
-
-    if media_job:
-        start = production_repo.execution_records.get_task_event(workspace_id, f"event_{media_job.job_id}_start").payload
-        append("media_job", media_job.job_id, start["arguments"].get("_typed_source", {}))
-    if edit_preview:
-        intent = production_repo.edit_records.get_edit_intent(workspace_id, edit_preview.proposal.intent_id)
-        append("edit_preview", edit_preview.proposal.id, intent.constraints.get("request_source", {}))
-    if edit_request or execution_status:
-        for event in production_repo.execution_records.list_task_events(workspace_id, task_id):
-            if (edit_request and event.event_type == "assistant_edit_request_located"
-                    and event.payload["locator"]["request_id"] == str(edit_request.request_id)):
-                append("edit_request", str(edit_request.request_id), event.payload["source"])
-            if (execution_status and event.event_type == "assistant_execution_located"
-                    and event.job_id == execution_status["job"]["id"]):
-                append("execution_status", event.job_id, event.payload["source"])
-    return proofs
 
 
 
