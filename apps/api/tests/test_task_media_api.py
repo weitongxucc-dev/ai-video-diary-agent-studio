@@ -147,12 +147,39 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
         second = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
         assert second.id != job.id
         assert client.get(f'/api/creation-tasks/task/media-jobs/{second.id}').json()['resource_wait'] is None
+        # A queued retry is rejected before any scheduler retry/wake or durable write.
+        with monkeypatch.context() as rejected_retry:
+            def forbidden_retry(*args, **kwargs):
+                pytest.fail('queued retry must reject before scheduler retry or wake')
+            rejected_retry.setattr(runtime.scheduler, 'retry_existing', forbidden_retry)
+            rejected_retry.setattr(runtime, 'wake', forbidden_retry)
+            with repo._connect() as conn:
+                before_retry = list(conn.iterdump())
+            retry = client.post(f'/api/creation-tasks/task/media-jobs/{second.id}/retry')
+            assert retry.status_code == 409
+            assert retry.json()['detail'] == '只有失败或已取消的媒体作业可以显式重试'
+            with repo._connect() as conn:
+                assert list(conn.iterdump()) == before_retry
         stale = client.get(url).json()
         assert stale['status'] == 'stale' and stale['resource_wait']['context'] == 'history'
         cancelled = client.post(url+'/cancel').json()
         assert cancelled['status'] == 'cancelled' and cancelled['failure_reason'] == 'user_cancelled'
         assert cancelled['resource_wait']['context'] == 'history'
         assert cancelled['resource_wait']['checked_at'] == pending.resource_wait.checked_at.isoformat().replace('+00:00','Z')
+        stored = repo.job_records.get_job_run('local', job.id)
+        assert stored.status == 'cancelled' and stored.failure_reason == 'user_cancelled'
+        with repo._connect() as conn:
+            requests = [dict(row) for row in conn.execute(
+                "SELECT id,state,wait_reason FROM device_work_requests WHERE workspace_id=? AND owner_id=?",
+                ('local', job.id)).fetchall()]
+            before_repeat = list(conn.iterdump())
+        assert requests and all(row['state'] == 'cancelled' and row['wait_reason'] == 'user_cancelled'
+                                for row in requests)
+        repeated = client.post(url+'/cancel')
+        assert repeated.status_code == 200 and repeated.json() == cancelled
+        with repo._connect() as conn:
+            assert list(conn.iterdump()) == before_repeat
+        assert repo.job_records.get_job_run('local', job.id).status == 'cancelled'
         monkeypatch.setattr(main, '_require_permit_actor', lambda *args:replace(actor,member_id='other'))
         assert client.get(url).status_code == 404
     finally:
@@ -340,6 +367,7 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
 
 def test_list_is_bounded_member_filtered_and_restores_same_jobs(tmp_path, monkeypatch):
     from dataclasses import replace
+    _result_read_guards(monkeypatch)
     repo, actor, state, factory, build, media = case(tmp_path)
     runtime = build(media)
     own = [media.submit(runtime, actor, 'task','audio_listen', {'position':i},'audio_listen') for i in range(3)]
