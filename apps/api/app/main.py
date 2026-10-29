@@ -246,6 +246,7 @@ from app.llm import (
     script_generator_from_settings,
 )
 from app.model_installer import ModelInstaller, ModelInstallError
+from app.model_install_routes import build_model_install_router
 from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
 from app.models import EpisodeStatus, FeedbackEvent, ScriptPackage, ScriptSection, VideoJobStatus, utc_now
 from app.montage import (
@@ -344,7 +345,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, ModelCatalogResponse, ModelInstallJobResponse, ModelInstallRequest, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, OnboardingCompletionResponse, PendingVideoResponse, ProcessedVideoResponse, ProcessVideoRequest, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, RuntimeHealthResponse, RuntimeSettingsResponse, RuntimeSettingsUpdateRequest, SetupPreflightResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VoiceProfileUpsertRequest, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, OnboardingCompletionResponse, PendingVideoResponse, ProcessedVideoResponse, ProcessVideoRequest, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, RuntimeHealthResponse, RuntimeSettingsResponse, RuntimeSettingsUpdateRequest, SetupPreflightResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VoiceProfileUpsertRequest, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -655,47 +656,15 @@ def production_profile_with_model_status(workspace_id: str) -> ProductionProfile
     )
 
 
-@app.get("/api/models", response_model=ModelCatalogResponse)
-def list_local_models() -> ModelCatalogResponse:
-    return ModelCatalogResponse(
-        models=[status.as_dict() for status in model_catalog.list_statuses()]
-    )
+app.include_router(build_model_install_router(
+    catalog_for=lambda: model_catalog,
+    installer_for=lambda: model_installer,
+    is_local_host=lambda host: is_local_client_host(host),
+))
 
 
-@app.post(
-    "/api/models/{model_id}/install",
-    response_model=ModelInstallJobResponse,
-    status_code=202,
-)
-def install_local_model(
-    request: Request,
-    model_id: str,
-    payload: ModelInstallRequest,
-) -> ModelInstallJobResponse:
-    client_host = request.client.host if request.client else None
-    if not is_local_client_host(client_host):
-        raise HTTPException(
-            status_code=403,
-            detail="local models can only be installed from a local client",
-        )
-    try:
-        job = model_installer.start(
-            model_id,
-            license_accepted=payload.license_accepted,
-        )
-    except ModelInstallError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ModelInstallJobResponse.model_validate(job)
 
 
-@app.get(
-    "/api/model-install-jobs/{job_id}",
-    response_model=ModelInstallJobResponse,
-)
-def get_model_install_job(job_id: str) -> ModelInstallJobResponse:
-    return ModelInstallJobResponse.model_validate(model_installer.get_job(job_id))
 
 
 @app.middleware("http")

@@ -14,13 +14,67 @@ from app.model_install_jobs import InstallJobStore
 from app import model_install_execution as execution
 
 
-def test_installer_requires_explicit_license_acceptance(tmp_path):
-    installer = ModelInstaller(
-        ModelCatalog(tmp_path / "models", tmp_path / "python", tmp_path / "worker.py")
-    )
+def test_installer_requires_explicit_license_acceptance(tmp_path, monkeypatch):
+    import app.main as main
+    from fastapi.testclient import TestClient
+
+    violations = []
+
+    def forbidden_installation(*args, **kwargs):
+        violations.append(True)
+        pytest.fail("metadata/license refusal must not claim or execute installation, download or runtime")
+
+    # Block installation entry points before constructing owners/seeding a job.
+    # AnyIO's own TestClient worker threads are intentionally left available.
+    for name in ("_claim_job", "_run_owned_job", "_download_model", "_ensure_runtime"):
+        monkeypatch.setattr(ModelInstaller, name, forbidden_installation)
+    monkeypatch.setattr(main, "_creation_runtime", forbidden_installation)
+    monkeypatch.setattr(main, "_reload_runtime_dependencies", forbidden_installation)
+    catalog = ModelCatalog(tmp_path / "models", tmp_path / "python", tmp_path / "worker.py")
+    installer = ModelInstaller(catalog)
 
     with pytest.raises(ValueError, match="许可证"):
         installer.run_sync(CHINESE_CLIP_VIT_B16.id, license_accepted=False)
+
+    monkeypatch.setattr(main, "model_catalog", catalog)
+    monkeypatch.setattr(main, "model_installer", installer)
+    local = TestClient(main.app, client=("127.0.0.1", 50000))
+    models = local.get("/api/models")
+    assert models.status_code == 200
+    known = next(row for row in models.json()["models"] if row["model"]["id"] == CHINESE_CLIP_VIT_B16.id)
+    assert known["state"] == "missing_runtime" and known["ready"] is False
+    endpoint = f"/api/models/{CHINESE_CLIP_VIT_B16.id}/install"
+    denied = local.post(endpoint, json={"license_accepted": False})
+    assert denied.status_code == 400
+    assert "许可证" in denied.json()["detail"]
+    remote = TestClient(main.app, client=("203.0.113.1", 50000))
+    assert remote.post(endpoint, json={"license_accepted": True}).status_code == 403
+    assert not installer.jobs_path.exists()
+    identity = "a" * 32
+    timestamp = "2026-10-30T00:00:00Z"
+    job = {
+        "id": identity, "model_id": CHINESE_CLIP_VIT_B16.id,
+        "display_name": CHINESE_CLIP_VIT_B16.display_name,
+        "status": "interrupted", "phase": "interrupted", "message": "metadata fixture only",
+        "bytes_downloaded": 0, "bytes_total": 100, "progress": 0.0,
+        "license_name": CHINESE_CLIP_VIT_B16.license_name,
+        "license_url": CHINESE_CLIP_VIT_B16.license_url,
+        "license_accepted_at": timestamp, "created_at": timestamp, "updated_at": timestamp,
+        "model_root_path": str(catalog.model_root_path), "external_volume": None,
+        "free_bytes": 1000, "required_bytes": 100,
+    }
+    installer.jobs_path.mkdir(parents=True)
+    path = installer.jobs_path / f"{identity}.json"
+    path.write_text(json.dumps(job), encoding="utf-8")
+    before = path.read_bytes()
+    result = local.get(f"/api/model-install-jobs/{identity}")
+    assert result.status_code == 200
+    assert result.json() == job
+    assert installer.get_job(identity) == job
+    assert path.read_bytes() == before
+    assert set(installer.jobs_path.iterdir()) == {path}
+    assert violations == []
+    assert installer._active_thread is None and installer._writer is None
 
 
 def test_installer_blocks_unmounted_external_volume_without_fallback(monkeypatch):
