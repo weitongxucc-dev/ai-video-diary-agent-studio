@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.production_profile_routes import build_production_profile_router
 from app.legacy_voice_routes import build_legacy_voice_router
 from app.media_script_tool_routes import build_media_script_tool_router
 from app.video_intake_routes import build_video_intake_router
@@ -348,7 +349,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, ProductionProfileUpdateRequest, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, CreationTaskQualityCheckRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -646,17 +647,6 @@ def current_workspace_id(request: Request) -> str:
     return active_workspace_id()
 
 
-def production_profile_with_model_status(workspace_id: str) -> ProductionProfile:
-    profile = production_repo.get_profile(workspace_id)
-    status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
-    model_status = "ready" if status.ready else (
-        "failed" if status.state == "invalid" else "blocked"
-    )
-    return replace(
-        profile,
-        voice_model_status=model_status,
-        voice_model_message=status.message,
-    )
 
 
 app.include_router(build_model_install_router(
@@ -1142,146 +1132,34 @@ app.include_router(build_video_template_router(_video_template_http_adapter, ('c
 app.include_router(build_video_template_router(_video_template_http_adapter, ('save_creation_task_template',)))
 
 
-@app.get(
-    "/api/production/foundation",
-    response_model=ProductionFoundationResponse,
-)
-def get_production_foundation(request: Request) -> ProductionFoundationResponse:
-    workspace_id = current_workspace_id(request)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    profile = production_profile_with_model_status(workspace_id)
-    return ProductionFoundationResponse(
-        profile=ProductionProfileResponse.model_validate(
-            profile,
-            from_attributes=True,
-        ),
-        readiness=production_repo.readiness(
-            workspace_id, profile=profile, viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic,
-            topic_sources_configured=topic_sources_configured(settings, vault),
-        ),
-        recent_batches=[
-            _production_batch_response(batch)
-            for batch in production_repo.list_batches(workspace_id)[:8]
-        ],
-        recent_montage_plans=[
-            _montage_plan_response(plan)
-            for plan in montage_repo.recent(workspace_id, limit=8)
-        ],
-        eligible_episodes=[
-            {
-                "id": episode.id,
-                "title": (
-                    episode.script.title_options[0]
-                    if episode.script and episode.script.title_options
-                    else f"Episode {episode.day_number}"
-                ),
-                "status": episode.status,
-            }
-            for episode in repo.all(workspace_id=workspace_id)
-            if episode.script is not None
-            and episode.status
-            in {
-                EpisodeStatus.SCRIPT_APPROVED,
-                EpisodeStatus.WAITING_VIDEO,
-                EpisodeStatus.VIDEO_PROCESSING,
-                EpisodeStatus.DRAFT_READY,
-                EpisodeStatus.PUBLISHED,
-            }
-        ][:50],
+def _production_profile_http_router(route_names):
+    return build_production_profile_router(
+        records_for=lambda: production_repo,
+        catalog_for=lambda: model_catalog,
+        voice_spec_for=lambda: QWEN3_TTS_06B_BASE_8BIT,
+        replace_for=lambda: replace,
+        workspace_for=lambda: current_workspace_id,
+        reader_for=lambda: _content_reader,
+        foundation_type_for=lambda: ProductionFoundationResponse,
+        profile_response_type_for=lambda: ProductionProfileResponse,
+        sources_configured_for=lambda: topic_sources_configured,
+        settings_for=lambda: settings,
+        vault_for=lambda: vault,
+        batch_response_for=lambda: _production_batch_response,
+        montage_response_for=lambda: _montage_plan_response,
+        montages_for=lambda: montage_repo,
+        episodes_for=lambda: repo,
+        episode_status_for=lambda: EpisodeStatus,
+        http_error_type_for=lambda: HTTPException,
+        profile_type_for=lambda: ProductionProfile,
+        route_names=route_names,
     )
 
 
-@app.put(
-    "/api/production/profile",
-    response_model=ProductionProfileResponse,
-)
-def update_production_profile(
-    request: Request,
-    payload: ProductionProfileUpdateRequest,
-) -> ProductionProfileResponse:
-    workspace_id = current_workspace_id(request)
-    current = production_repo.get_profile(workspace_id)
-    updates = payload.model_dump()
-    legacy_voice_fields = {
-        "voice_name": str(updates["voice_name"]).strip(),
-        "voice_reference_path": updates["voice_reference_path"],
-        "voice_reference_text": str(updates["voice_reference_text"]).strip(),
-        "voice_consent_confirmed": bool(updates["voice_consent_confirmed"]),
-    }
-    current_legacy_voice_fields = {
-        "voice_name": current.voice_name,
-        "voice_reference_path": current.voice_reference_path,
-        "voice_reference_text": current.voice_reference_text,
-        "voice_consent_confirmed": current.voice_consent_confirmed,
-    }
-    submitted_legacy_voice_fields = payload.model_fields_set.intersection(
-        legacy_voice_fields
-    )
-    if any(
-        legacy_voice_fields[field] != current_legacy_voice_fields[field]
-        for field in submitted_legacy_voice_fields
-    ):
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "error": "legacy_profile_voice_write_retired",
-                "impact": "生产档案中的旧声音字段不会再用于创作任务或新声音登记。",
-                "repair_action": "使用 /api/media/voice-profiles 保存带人物、授权和版本的声音档案。",
-                "retryable": False,
-            },
-        )
-    duration_min = (
-        int(updates["target_duration_min_seconds"])
-        if updates["target_duration_min_seconds"] is not None
-        else current.target_duration_min_seconds
-    )
-    duration_max = (
-        int(updates["target_duration_max_seconds"])
-        if updates["target_duration_max_seconds"] is not None
-        else current.target_duration_max_seconds
-    )
-    if duration_min > duration_max:
-        raise HTTPException(status_code=400, detail="目标时长下限不能大于上限")
-    voice_runtime_status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
-    profile = ProductionProfile(
-        workspace_id=workspace_id,
-        workspace_name=str(updates["workspace_name"]).strip(),
-        brand_name=str(updates["brand_name"]).strip(),
-        primary_platform="douyin",
-        aspect_ratio="9:16",
-        target_duration_min_seconds=duration_min,
-        target_duration_max_seconds=duration_max,
-        brand_template_name=str(updates["brand_template_name"]).strip(),
-        brand_colors=[str(item).strip() for item in updates["brand_colors"] if str(item).strip()],
-        subtitle_style=str(updates["subtitle_style"]).strip(),
-        intro_text=str(updates["intro_text"]).strip(),
-        outro_text=str(updates["outro_text"]).strip(),
-        background_music_path=updates["background_music_path"],
-        voice_name=current.voice_name,
-        voice_reference_path=current.voice_reference_path,
-        voice_reference_text=current.voice_reference_text,
-        voice_consent_confirmed=current.voice_consent_confirmed,
-        # Model readiness is maintained by the local model lifecycle, never by
-        # an untrusted profile update from the browser.
-        voice_model_status=(
-            "ready"
-            if voice_runtime_status.ready
-            else (
-                "failed"
-                if voice_runtime_status.state == "invalid"
-                else "blocked"
-            )
-        ),
-        voice_model_message=voice_runtime_status.message,
-        source_urls=[str(item).strip() for item in updates["source_urls"] if str(item).strip()],
-        use_obsidian=bool(updates["use_obsidian"]),
-        use_hermes=bool(updates["use_hermes"]),
-        factuality_gate_enabled=bool(updates["factuality_gate_enabled"]),
-        cloud_enhancement_enabled=bool(updates["cloud_enhancement_enabled"]),
-    )
-    saved = production_repo.save_profile(profile)
-    return ProductionProfileResponse.model_validate(saved, from_attributes=True)
+app.include_router(_production_profile_http_router(("get_production_foundation",)))
+
+
+app.include_router(_production_profile_http_router(("update_production_profile",)))
 
 
 app.include_router(build_legacy_voice_router(

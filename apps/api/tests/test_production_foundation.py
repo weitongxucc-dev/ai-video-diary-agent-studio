@@ -2267,8 +2267,46 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
     assert production.readiness("workspace_a", local_diagnostic=True)["approved_segment_count"] == 1
 
 
-def test_production_api_exposes_foundation_and_retires_batch_creation(tmp_path, monkeypatch):
+@pytest.fixture
+def production_profile_metadata(tmp_path, monkeypatch):
+    from test_task_media_api import _result_read_guards
+    from app.auth import SupabaseAuthContext
+    from app.asr import LocalWhisperTranscriber, TencentCloudASRTranscriber
+    from app.model_installer import ModelInstaller
+    from app.montage import MontageRepository
+    from app.sources import ObsidianVault
+    from app.repository import EpisodeRepository
+    from app.video import FfmpegVideoProcessor
+    _result_read_guards(monkeypatch)
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append('execution')
+        pytest.fail('production profile metadata forbids media/model/runtime execution')
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(FfmpegVideoProcessor, 'process', forbidden)
+    monkeypatch.setattr(LocalWhisperTranscriber, 'transcribe', forbidden)
+    monkeypatch.setattr(TencentCloudASRTranscriber, 'transcribe', forbidden)
+    monkeypatch.setattr(ModelInstaller, 'start', forbidden)
+    monkeypatch.setattr(main_module.narration_generator, 'generate_for_creation_task', forbidden)
     production = _repository(tmp_path)
+    settings = Settings(database_path=str(production.database_path),
+        video_inbox_path=str(production.video_library_path), video_output_path=str(tmp_path/'output'),
+        draft_output_path=str(tmp_path/'drafts'), jianying_draft_root_path=str(tmp_path/'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, topic_source_urls=(), product_hunt_token=None,
+        supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, 'settings', settings)
+    monkeypatch.setattr(main_module, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main_module, 'vault', ObsidianVault(None))
+    monkeypatch.setattr(main_module, 'montage_repo', MontageRepository(production.database_path))
+    monkeypatch.setattr(main_module, 'repo', EpisodeRepository())
+    monkeypatch.setattr(main_module, 'local_members_service', LocalMemberService(production.database_path))
+    monkeypatch.setattr(main_module, 'active_workspace_id', lambda: LEGACY_WORKSPACE_ID)
+    yield production
+    assert calls == []
+
+
+def test_production_api_exposes_foundation_and_retires_batch_creation(tmp_path, monkeypatch, production_profile_metadata):
+    production = production_profile_metadata
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
     client = TestClient(main_module.app)
@@ -3950,11 +3988,14 @@ def test_voice_reference_import_uses_bytes_and_returns_registered_logical_refere
     assert len(list((production.video_library_path / "approved" / "voices").glob("*.wav"))) == 1
 
 
-def test_profile_api_retires_legacy_voice_writes(tmp_path, monkeypatch):
-    production = _repository(tmp_path)
+def test_profile_api_retires_legacy_voice_writes(tmp_path, monkeypatch, production_profile_metadata):
+    production = production_profile_metadata
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
     client = TestClient(main_module.app)
+
+    with production._connect() as conn:
+        before = list(conn.iterdump())
 
     response = client.put(
         "/api/production/profile",
@@ -3984,9 +4025,12 @@ def test_profile_api_retires_legacy_voice_writes(tmp_path, monkeypatch):
     assert response.json()["detail"]["error"] == "legacy_profile_voice_write_retired"
     assert "/api/media/voice-profiles" in response.json()["detail"]["repair_action"]
 
+    with production._connect() as conn:
+        assert list(conn.iterdump()) == before
 
-def test_profile_duration_is_configurable_beyond_ninety_seconds(tmp_path, monkeypatch):
-    production = _repository(tmp_path)
+
+def test_profile_duration_is_configurable_beyond_ninety_seconds(tmp_path, monkeypatch, production_profile_metadata):
+    production = production_profile_metadata
     production.save_profile(
         ProductionProfile(
             workspace_id=LEGACY_WORKSPACE_ID,
@@ -4015,6 +4059,11 @@ def test_profile_duration_is_configurable_beyond_ninety_seconds(tmp_path, monkey
     assert response.json()["target_duration_min_seconds"] == 240
     assert response.json()["target_duration_max_seconds"] == 300
     assert response.json()["voice_name"] == "历史声音"
+    reopened = ProductionRepository(production.database_path, production.video_library_path)
+    saved = reopened.get_profile(LEGACY_WORKSPACE_ID)
+    assert (saved.target_duration_min_seconds, saved.target_duration_max_seconds) == (240, 300)
+    assert (saved.voice_name, saved.voice_reference_path, saved.voice_reference_text, saved.voice_consent_confirmed) == (
+        '历史声音', 'workspace://approved/legacy.wav', '历史声音参考文字', True)
 
 
 
