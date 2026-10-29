@@ -14,6 +14,35 @@ from app.local_members import LocalMemberService
 from app.production import ProductionRepository
 
 
+def material_intake_no_execution(monkeypatch):
+    """Only controlled tmp metadata and opaque copies; never real work or roots."""
+    import subprocess
+    import wave
+    from app.materials import discovery as discovery_module
+
+    violations = []
+
+    def forbidden(*_args, **_kwargs):
+        violations.append("execution outside intake HTTP metadata scope")
+        raise AssertionError(violations[-1])
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(wave, "open", forbidden)
+    for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
+        monkeypatch.setattr(main_module, name, forbidden)
+    for name in ("start", "_run", "discover_and_submit_hashes"):
+        monkeypatch.setattr(MaterialIngestionService, name, forbidden)
+    monkeypatch.setattr(ProductionRepository, "analyze_asset", forbidden)
+    monkeypatch.setattr(discovery_module, "system_roots", forbidden)
+    # The constructor's default provider is a bound function object, so patch it
+    # too. The discovery node supplies its explicit tmp-only root_provider.
+    constructor = discovery_module.MaterialDiscoveryService.__init__
+    monkeypatch.setattr(constructor, "__kwdefaults__", {
+        **constructor.__kwdefaults__, "root_provider": forbidden,
+    })
+    return violations
+
+
 @pytest.fixture
 def intake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     library = tmp_path / "materials"
@@ -32,6 +61,14 @@ def intake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main_module, "local_members_service", members)
     _, token = members.whoami(None)
     return TestClient(main_module.app, headers={"X-Local-Member-Token": token}), repo, service, duration
+
+
+@pytest.fixture
+def metadata_intake(monkeypatch, request):
+    violations = material_intake_no_execution(monkeypatch)
+    # Install guards before constructing even the original isolated repository.
+    yield request.getfixturevalue("intake")
+    assert violations == []
 
 
 def bind(client: TestClient, repo: ProductionRepository) -> None:
@@ -66,8 +103,8 @@ def test_external_pending_list_confirmation_and_readback(intake) -> None:
         assert conn.execute("SELECT workspace_id, confirmation_source FROM material_ingestion_files").fetchall() == [("one", "manual")]
 
 
-def test_stale_revision_rejected_and_foreign_binding_not_exposed(intake, monkeypatch: pytest.MonkeyPatch) -> None:
-    client, repo, service, duration = intake
+def test_stale_revision_rejected_and_foreign_binding_not_exposed(metadata_intake, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, repo, service, duration = metadata_intake
     path = repo.video_library_path / "external.mp4"
     path.write_bytes(b"old")
     bind(client, repo)

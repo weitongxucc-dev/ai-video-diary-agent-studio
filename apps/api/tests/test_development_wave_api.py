@@ -83,6 +83,8 @@ def test_sampling_http_rejects_missing_or_forged_identity_and_unpaired_mobile(tm
 
 
 def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp_path, monkeypatch):
+    from test_material_copy_confirmation_api import material_intake_no_execution
+    violations = material_intake_no_execution(monkeypatch)
     client, repository, owner, headers, other = _sampling_context(tmp_path, monkeypatch)
     source = tmp_path / "source"
     source.mkdir()
@@ -127,6 +129,7 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
     assert len(list(repository.video_library_path.iterdir())) == 1
     assert client.get(f"{target}/candidates/{chosen['id']}/preview", headers=other).status_code == 404
     assert client.get(f"{target}/candidates/{chosen['id']}/preview", headers=headers).content == b"isolated source A"
+    assert violations == []
 
 
 def test_running_input_http_replays_original_receipt_and_consumes_at_sdk_boundary(tmp_path, monkeypatch):

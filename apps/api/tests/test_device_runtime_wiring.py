@@ -7,6 +7,8 @@ import pytest
 from fastapi import HTTPException, Request
 
 from app import main as main_module
+from app.materials import intake_routes
+from test_material_copy_confirmation_api import material_intake_no_execution
 from app.member_permits import HostBudgetUncalibrated, cpu_render_budget_from_env, creation_stage_budgets_from_env, host_budget_from_env
 from app.production import ProductionRepository
 
@@ -63,7 +65,7 @@ def _material_routes(monkeypatch: pytest.MonkeyPatch, database_path=None) -> Moc
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "workspace-one")
     monkeypatch.setattr(
-        main_module, "_material_binding_status",
+        intake_routes, "material_binding_status",
         lambda workspace_id, repo: SimpleNamespace(
             bound_to_current_workspace=True, directory_state="ready", directory_message="",
         ),
@@ -73,13 +75,14 @@ def _material_routes(monkeypatch: pytest.MonkeyPatch, database_path=None) -> Moc
 
 
 def test_scheduled_material_routes_reject_missing_driver_before_heavy_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    violations = material_intake_no_execution(monkeypatch)
     repository = _material_routes(monkeypatch)
     monkeypatch.setattr(main_module, "device_runtime", None)
     monkeypatch.setattr(main_module, "material_ingestion", None)
 
     routes = (
-        lambda: main_module.scan_material_intake(_request()),
-        lambda: main_module.retry_material_intake("asset-one", _request()),
+        lambda: main_module._material_intake_http_adapter().scan_material_intake(_request()),
+        lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
         lambda: main_module.scan_production_materials(_request()),
         lambda: main_module.analyze_production_material("asset-one", _request()),
     )
@@ -91,6 +94,7 @@ def test_scheduled_material_routes_reject_missing_driver_before_heavy_work(monke
     repository.scan_library.assert_not_called()
     repository.analyze_asset.assert_not_called()
     repository.retry_material_ingestion.assert_not_called()
+    assert violations == []
 
 
 def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -112,7 +116,7 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
     repository.scan_library.assert_not_called()
 
     for route in (
-        lambda: main_module.retry_material_intake("asset-one", _request()),
+        lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
         lambda: main_module.analyze_production_material("asset-one", _request()),
     ):
         with pytest.raises(HTTPException) as error:

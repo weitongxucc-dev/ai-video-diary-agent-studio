@@ -8,6 +8,7 @@ from app.assistant.stream_response import AssistantStreamTransport
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
+from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
 from app.assistant.storyboard_result_binding import (AssistantStoryboardResultBinding,
@@ -8867,42 +8868,6 @@ def get_material_library_insights(
 app.include_router(build_material_library_router(_material_library_http_adapter, ('list_production_materials',)))
 
 
-def _material_binding_status(workspace_id: str, repository: ProductionRepository) -> MaterialIntakeStatusResponse:
-    directory = repository.material_ingestion_directory_state(workspace_id)
-    binding = repository.get_material_ingestion_binding()
-    foreign = bool(directory["bound_to_another_workspace"]) or (binding is not None and binding[0] != workspace_id)
-    bound = binding is not None and binding[0] == workspace_id
-    if foreign:
-        state = "unknown"
-        message = "素材目录已关联其他工作区；当前工作区不能读取。"
-        repair = "切换到原工作区，或先明确解除原绑定。"
-    elif directory["configured_path_changed"]:
-        state = "changed"
-        message = "当前设置的素材目录与本工作区原绑定目录不同。"
-        repair = "先检查目录设置并处理原绑定，再重新确认。"
-    else:
-        state = str(directory["status"])
-        message, repair = {
-            "ready": (("素材目录可访问；确认复制完成后才接收并分析。" if bound else
-                       "素材目录可访问，等待关联到当前工作区。"), None),
-            "missing": ("找不到当前设置的素材目录。", "连接存储盘或在设置中选择现有目录。"),
-            "unmounted": ("素材所在的外接盘没有挂载。", "连接原数据盘后重试。"),
-            "read_only": ("素材目录当前不可写，素材无法进入分析。", "检查磁盘是否以只读方式挂载或目录权限是否被改动，再重新检查。"),
-            "invalid": ("当前素材目录不可用于自动导入。", "在设置中选择可访问的素材目录。"),
-        }.get(state, ("尚未确认素材目录状态。", "检查目录设置后重试。"))
-    return MaterialIntakeStatusResponse(
-        bound_to_current_workspace=bound,
-        binding_available=not foreign,
-        configured_directory=None if foreign else str(directory["directory"]),
-        bound_directory=binding[1] if bound else None,
-        directory_state=state,
-        directory_message=message,
-        repair_action=repair,
-        scan_interval_seconds=60,
-        file_counts=(repository.material_ingestion_state_counts(workspace_id) if bound else
-                     {"observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0}),
-        pending_files=repository.pending_material_copies(workspace_id) if bound else [],
-    )
 
 
 def _material_ingestion_for(repository: ProductionRepository):
@@ -8928,72 +8893,36 @@ def _material_ingestion_for(repository: ProductionRepository):
     return service
 
 
-@app.get("/api/production/materials/intake", response_model=MaterialIntakeStatusResponse)
-def get_material_intake_status(request: Request) -> MaterialIntakeStatusResponse:
-    repository = production_repo
-    workspace_id = current_workspace_id(request)
-    _content_reader(request, workspace_id)
-    return _material_binding_status(workspace_id, repository)
+def _wake_received_materials(repository):
+    if material_ingestion is not None and material_ingestion.repository is repository:
+        material_ingestion.wake()
 
 
-@app.post("/api/production/materials/intake/bind", response_model=MaterialIntakeStatusResponse)
-def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -> MaterialIntakeStatusResponse:
-    workspace_id = current_workspace_id(request)
-    repository = production_repo
-    service = _material_ingestion_for(repository)
-    try:
-        repository.bind_material_ingestion(
-            workspace_id,
-            expected_directory=payload.expected_directory,
-            verified_owner_user_id=_content_reader(request, workspace_id)[0],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    service.wake()
-    return _material_binding_status(workspace_id, repository)
-
-
-@app.post("/api/production/materials/intake/copy-complete", response_model=MaterialCopyCompleteResponse)
-def confirm_material_copy_complete(request: Request, payload: MaterialCopyCompleteRequest) -> MaterialCopyCompleteResponse:
-    workspace_id = current_workspace_id(request)
-    repository = production_repo
-    service = _material_ingestion_for(repository)
-    try:
-        service.confirm_copy_complete(
-            workspace_id, relative_path=payload.relative_path,
-            expected_revision=payload.expected_revision.model_dump(),
-            confirmation_source=payload.confirmation_source,
-            verified_owner_user_id=_content_reader(request, workspace_id)[0],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=409, detail="文件已移除，请重新检查素材目录。") from exc
-    return MaterialCopyCompleteResponse(
-        confirmed=True, intake=_material_binding_status(workspace_id, repository),
+def _material_intake_http_adapter():
+    return MaterialIntakeHTTPAdapter(
+        records_for=lambda: production_repo,
+        discovery_for=lambda repository=None: (production_repo if repository is None else repository).material_discovery,
+        workspace_for=current_workspace_id,
+        reader_for=_content_reader,
+        member_scope=_member_owned_content_scope,
+        ingestion_for=_material_ingestion_for,
+        execution_mode=lambda: material_execution_mode,
+        asset_response=_material_asset_response,
+        discovery_exclusions=lambda discovery, workspace_id, owner: discovery.store.exclusions(workspace_id, owner),
+        wake_received=_wake_received_materials,
     )
 
 
-@app.post("/api/production/materials/intake/scan")
-def scan_material_intake(request: Request) -> MaterialLibraryResponse:
-    workspace_id = current_workspace_id(request)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    repository = production_repo
-    status = _material_binding_status(workspace_id, repository)
-    if not status.bound_to_current_workspace:
-        raise HTTPException(status_code=409, detail="请先在当前工作区绑定素材目录")
-    if status.directory_state != "ready":
-        raise HTTPException(status_code=409, detail=status.directory_message)
-    _material_ingestion_for(repository).scan_once()
-    assets, total = repository.list_assets_page(
-        workspace_id, limit=24, offset=0,
-        include_private=local_diagnostic,
-        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-    )
-    return MaterialLibraryResponse(
-        assets=[_material_asset_response(asset) for asset in assets],
-        total_count=total, limit=24, offset=0, has_more=len(assets) < total,
-    )
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('get_material_intake_status',)))
+
+
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('bind_material_intake',)))
+
+
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('confirm_material_copy_complete',)))
+
+
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('scan_material_intake',)))
 
 
 def _media_link_service(
@@ -9087,25 +9016,7 @@ def import_production_material_link(
     )
 
 
-@app.post("/api/production/materials/{asset_id}/intake/retry")
-def retry_material_intake(asset_id: str, request: Request) -> MaterialAssetResponse:
-    workspace_id = current_workspace_id(request)
-    repository = production_repo
-    service = _material_ingestion_for(repository)
-    if material_execution_mode == "scheduled":
-        raise HTTPException(status_code=503, detail="素材手动重试的调度授权尚未接通。")
-    status = _material_binding_status(workspace_id, repository)
-    if status.directory_state != "ready":
-        raise HTTPException(status_code=409, detail=status.directory_message)
-    try:
-        repository.retry_material_ingestion(workspace_id, asset_id)
-        asset = repository.get_asset(workspace_id, asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="素材不属于当前工作区") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    service.wake()
-    return _material_asset_response(asset)
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('retry_material_intake',)))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_asset_tags',)))
@@ -9194,83 +9105,30 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('set_production_material_visibility',)))
 
 
-@contextmanager
-def _material_discovery_errors():
-    try:
-        yield
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="扫描任务或候选素材不存在。") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="无法读取所选位置，请检查目录权限。") from exc
-    except OSError as exc:
-        raise HTTPException(status_code=503, detail="媒体目录暂不可用，请连接原磁盘后重试。") from exc
 
 
-@app.get("/api/production/materials/discovery/roots")
-def material_discovery_roots(request: Request):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        discovery = production_repo.material_discovery
-        return {"roots": discovery.roots(), "exclusions": discovery.store.exclusions(workspace_id, owner)}
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('material_discovery_roots',)))
 
 
-@app.get("/api/production/materials/discovery/latest")
-def latest_material_discovery(request: Request):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        return production_repo.material_discovery.latest(workspace_id, owner)
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('latest_material_discovery',)))
 
 
-@app.post("/api/production/materials/discovery", status_code=201)
-def start_material_discovery(request: Request, payload: MaterialDiscoveryStartRequest):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        return production_repo.material_discovery.start(workspace_id, owner,
-            root_ids=payload.root_ids, exclusions=payload.exclusions)
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('start_material_discovery',)))
 
 
-@app.get("/api/production/materials/discovery/{session_id}")
-def get_material_discovery(session_id: str, request: Request, offset: int = 0):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        return production_repo.material_discovery.snapshot(session_id, workspace_id, owner, offset=offset)
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('get_material_discovery',)))
 
 
-@app.post("/api/production/materials/discovery/{session_id}/advance")
-def advance_material_discovery(session_id: str, request: Request):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        return production_repo.material_discovery.advance(session_id, workspace_id, owner)
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('advance_material_discovery',)))
 
 
-@app.post("/api/production/materials/discovery/{session_id}/control")
-def control_material_discovery(session_id: str, request: Request, payload: MaterialDiscoveryControlRequest):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        return production_repo.material_discovery.control(session_id, workspace_id, owner,
-            payload.action, exclusions=payload.exclusions)
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('control_material_discovery',)))
 
 
-@app.post("/api/production/materials/discovery/{session_id}/receive")
-def receive_discovered_materials(session_id: str, request: Request, payload: MaterialDiscoveryReceiveRequest):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        repository = production_repo
-        result = repository.material_discovery.receive(session_id, workspace_id, owner, payload.candidate_ids)
-        # Reception is durable even when the independent analysis driver is unavailable.
-        if material_ingestion is not None and material_ingestion.repository is repository:
-            material_ingestion.wake()
-        return result
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('receive_discovered_materials',)))
 
 
-@app.get("/api/production/materials/discovery/{session_id}/candidates/{candidate_id}/preview")
-def preview_discovered_material(session_id: str, candidate_id: str, request: Request):
-    workspace_id, owner = _member_owned_content_scope(request)
-    with _material_discovery_errors():
-        path = production_repo.material_discovery.preview_path(session_id, candidate_id, workspace_id, owner)
-        return FileResponse(path, filename=path.name, content_disposition_type="inline")
+app.include_router(build_material_intake_router(_material_intake_http_adapter, ('preview_discovered_material',)))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('get_production_material',)))

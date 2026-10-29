@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.materials.intake_routes import material_binding_status
+
 from app.creation.task_input_reads import require_creation_task
 import hashlib
 import json
@@ -1723,7 +1725,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
         assert bound.json()["file_counts"] == {
             "observing": 0, "running": 0, "ready": 0, "failed": 0, "blocked_disk": 0,
         }
-        foreign = main_module._material_binding_status("other_workspace", repo)
+        foreign = material_binding_status("other_workspace", repo)
         assert foreign.configured_directory is None and foreign.bound_directory is None
         assert foreign.directory_state == "unknown"
         newer_directory = tmp_path / "new-library"
@@ -1744,11 +1746,11 @@ def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
     library = tmp_path / "曜核AI IP一体机"
     library.mkdir()
     repo = ProductionRepository(database_path=tmp_path / "isolated.sqlite3", video_library_path=library)
-    assert main_module._material_binding_status("local", repo).directory_state == "ready"
+    assert material_binding_status("local", repo).directory_state == "ready"
 
     library.chmod(0o500)
     try:
-        refused = main_module._material_binding_status("local", repo)
+        refused = material_binding_status("local", repo)
         assert refused.directory_state == "read_only"
         assert "不可写" in refused.directory_message
         assert refused.repair_action and "只读" in refused.repair_action
@@ -1757,15 +1759,15 @@ def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
     finally:
         library.chmod(0o755)
 
-    recovered = main_module._material_binding_status("local", repo)
+    recovered = material_binding_status("local", repo)
     assert recovered.directory_state == "ready"
     assert recovered.repair_action is None
     repo.bind_material_ingestion("local", expected_directory=str(library))
-    assert main_module._material_binding_status("local", repo).bound_to_current_workspace is True
+    assert material_binding_status("local", repo).bound_to_current_workspace is True
 
     library.chmod(0o500)
     try:
-        assert main_module._material_binding_status("local", repo).directory_state == "read_only"
+        assert material_binding_status("local", repo).directory_state == "read_only"
     finally:
         library.chmod(0o755)
 
