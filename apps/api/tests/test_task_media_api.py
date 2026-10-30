@@ -50,6 +50,8 @@ def test_202_fixed_result_route_replay_success_and_cancel(tmp_path, monkeypatch)
     runtime = build(media)
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args: actor)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
     from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
@@ -91,6 +93,8 @@ def test_result_read_cannot_cross_member_task_or_changed_input(tmp_path, monkeyp
     _declared_result(repo, job, {"audio_url": "/declared-output"})
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args: actor)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
     client = TestClient(main.app)
@@ -255,6 +259,8 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     buffer = io.BytesIO()
     with wave.open(buffer,'wb') as source:
         source.setnchannels(1)
@@ -376,6 +382,8 @@ def test_list_is_bounded_member_filtered_and_restores_same_jobs(tmp_path, monkey
     media.submit(runtime, other, 'task','audio_listen', {'position':99},'audio_listen')
     monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     monkeypatch.setattr(main,'_require_permit_actor',lambda *args:actor)
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
     client=TestClient(main.app)

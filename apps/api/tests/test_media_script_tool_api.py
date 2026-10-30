@@ -709,6 +709,8 @@ def test_related_media_receipt_uses_original_turn_job_and_rejects_foreign_source
             CreationJobUnitExecutor(state.production,render_action=None,render_is_valid=None,task_media=media))},
         resources=Resources(),processes=Processes())
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     origin=state.conversations.task_turn_source(state.turn_id,'local',state.member.member_id,state.task.id)
     job=media.submit(runtime,state.actor,state.task.id,'media_script_preview',{'_typed_source':{
         'assistant_turn_id':state.turn_id,'conversation_id':origin['conversation_id']}},'graphic_source')
@@ -800,6 +802,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
         device_lock_path=tmp_path/'submission-only.lock',device_access=MemberDeviceAccess(state.members,identity_verifier=identity),
         registrations={'creation_job':OwnerRegistration(owner,executor)},resources=resources,processes=Processes())
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     receipt_owner = main._exact_preview_use_case()
     events=[]
     original_receipt = main._media_result_receipt

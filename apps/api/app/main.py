@@ -2302,13 +2302,13 @@ def _exact_preview_facts(workspace_id,task_id,arguments,actor):
     return case.seal_resources(prepared,resources,_device_operation_budget("cpu_audio"),actor=actor)
 
 
-def _task_media_facts(workspace_id, task_id, operation, arguments, actor):
+def _task_media_facts(workspace_id, task_id, operation, arguments, actor, *, task_authorizations=None):
     if operation == 'compound_selection_preview':
         return _compound_selection_facts(workspace_id, task_id, arguments, actor)
     if operation == 'visual_edit_preview' and '_clip_preview' not in arguments:
         return _visual_preview_facts(workspace_id, task_id, arguments, actor)
     if operation in MEDIA_SCRIPT_ACTIONS:
-        owner = _media_script_use_case(task_id=task_id)
+        owner = _media_script_use_case(task_id=task_id, task_authorizations=task_authorizations)
         prepared = owner.prepare_source(workspace_id, task_id, operation, arguments, actor)
         toolchain, budget = _script_configuration()
         return owner.seal(prepared, toolchain, budget, arguments.get('_script_toolchain'))
@@ -2358,12 +2358,40 @@ def _media_result_receipt(media, job, actor, runtime):
         raise HTTPException(exc.status_code, exc.detail) from exc
 
 
+def _media_result_read_components():
+    from app.creation_execution import CreationJobOwnerVerifier
+    from app.device_runtime import OwnerReadRouter
+    from app.device_scheduler import DeviceRequestReadAccess
+    from app.member_permits import MemberDeviceAccess
+
+    with _runtime_reload_lock:
+        runtime = device_runtime
+        if runtime is not None:
+            registration = runtime.registrations.get('creation_job')
+            if runtime.last_error is not None or registration is None:
+                raise HTTPException(status_code=503, detail="整机制作许可已停止，须核查许可后才能继续")
+            return registration.owner.task_media, runtime.scheduler
+        repository = production_repo
+        authorizations = _task_authorizations_for_goal(repository)
+        media = TaskMediaJobs(repository,
+            facts=lambda *args: _task_media_facts(*args, task_authorizations=authorizations),
+            verify_identity=_verify_creation_identity,
+            clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
+                TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
+        media.task_authorizations = authorizations
+        owner = CreationJobOwnerVerifier(repository, verify_identity=_verify_creation_identity,
+            task_media=media, task_authorizations=authorizations)
+        access = MemberDeviceAccess(local_members_service, identity_verifier=_verify_creation_identity)
+        owners = OwnerReadRouter(lambda kind: owner if kind == 'creation_job' else None, access)
+        return media, DeviceRequestReadAccess(repository.database_path, owners=owners)
+
+
+
 def _read_media_result(task_id, job_id, request):
     actor = _require_permit_actor(request, current_workspace_id(request))
-    runtime = _creation_runtime()
-    media = runtime.registrations['creation_job'].owner.task_media
+    media, requests = _media_result_read_components()
     try:
-        return _media_results().read(media, task_id, job_id, actor, runtime.scheduler)
+        return _media_results().read(media, task_id, job_id, actor, requests)
     except MediaResultRejected as exc:
         raise HTTPException(exc.status_code, exc.detail) from exc
 
@@ -2372,7 +2400,7 @@ def _related_media_result(task_id, request, turn_id, conversation_id, reported):
     # Schema validation precedes runtime acquisition, as in the original gate.
     related = TaskMediaJobResponse.model_validate(reported)
     workspace_id = current_workspace_id(request)
-    media = _creation_runtime().registrations['creation_job'].owner.task_media
+    media, _requests = _media_result_read_components()
     try:
         job_id = _media_result_binding().related_job(media, workspace_id, task_id, turn_id, conversation_id, related)
     except MediaResultRejected as exc:
@@ -2545,10 +2573,9 @@ app.include_router(_task_media_http_router(("list_task_media_jobs",)))
 
 
 def _list_goal_media_jobs(task, actor, *, cursor=None, limit=20):
-    runtime = _creation_runtime()
-    media = runtime.registrations['creation_job'].owner.task_media
+    media, requests = _media_result_read_components()
     try:
-        return _media_results().list(media, task, actor, runtime.scheduler, cursor=cursor, limit=limit)
+        return _media_results().list(media, task, actor, requests, cursor=cursor, limit=limit)
     except MediaResultRejected as exc:
         raise HTTPException(exc.status_code, exc.detail) from exc
 
@@ -2936,13 +2963,13 @@ def _run_media_script_submission(request: Request, steps):
 app.include_router(_task_media_script_http_router(('preview_media_script',)))
 
 
-def _media_script_use_case(repository=None, *, task_id=None):
+def _media_script_use_case(repository=None, *, task_id=None, task_authorizations=None):
     repo = repository if repository is not None else production_repo
-    return MediaScriptPreviewUseCase(repo, artifact_store, settings.effective_temporary_root_path, _media_script_tools(repo, task_id=task_id))
+    return MediaScriptPreviewUseCase(repo, artifact_store, settings.effective_temporary_root_path, _media_script_tools(repo, task_id=task_id, task_authorizations=task_authorizations))
 
 
 
-def _media_script_tools(repository=None, *, task_id=None):
+def _media_script_tools(repository=None, *, task_id=None, task_authorizations=None):
     repo = repository if repository is not None else production_repo
     def authorize(actor, task):
         user_id = actor.user_id or actor.member_id
@@ -2950,7 +2977,8 @@ def _media_script_tools(repository=None, *, task_id=None):
             and content_readable(user_id=user_id, local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id))
     return MediaScriptTools(repo, artifact_store, verify_identity=_verify_creation_identity,
         authorize_task_write=authorize, task_id=task_id,
-        task_authorizations=device_runtime.task_authorizations if task_id is not None and device_runtime is not None else None)
+        task_authorizations=(task_authorizations if task_authorizations is not None else
+            device_runtime.task_authorizations if task_id is not None and device_runtime is not None else None))
 
 
 def _script_tool_error(exc):
@@ -7350,10 +7378,13 @@ def _goal_request_metadata(task,actor,request_id,phase):
 
 
 def _goal_media_metadata(task,actor,job_id):
-    runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
+    media, requests = _media_result_read_components()
     job,event=media.read(task.workspace_id,job_id)
     _goal_projection().require_media_task(task.id,job)
-    return _media_result_receipt(media,job,actor,runtime)
+    try:
+        return _media_results().receipt(media,job,actor,requests)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 def _goal_script_source_slot(goal, job_id, actor):

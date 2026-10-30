@@ -908,6 +908,8 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
         processes=HostProcessProbe())
     state.preview_runtime=runtime
     monkeypatch.setattr(main_module,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main_module, '_media_result_read_components',
+        lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))
     def permit(request,workspace):
         member=state.members.resolve_member(request.headers.get('x-local-member-token'))
         assert member.member_id==actor.member_id and workspace==actor.workspace_id
@@ -1049,6 +1051,8 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     state.owner, state.actor, state.members = owner, actor, members
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "_creation_runtime", lambda: state.runtime)
+    monkeypatch.setattr(main_module, '_media_result_read_components',
+        lambda: (state.runtime.registrations['creation_job'].owner.task_media, state.runtime.scheduler))
     state.granted = granted
     yield state
     assert state.runtime.stop(1)

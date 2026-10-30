@@ -282,7 +282,75 @@ def _material_key_has_digest(owner_type: str, unit_key: str) -> bool:
                 and re.fullmatch(r"[0-9a-f]{64}", digest))
 
 
-class DeviceScheduler:
+class DeviceRequestReadAccess:
+    """Read original request views without creating a queue, lock or driver."""
+
+    def __init__(self, database_path, *, owners):
+        self.database_path = Path(database_path).expanduser().resolve()
+        self.owners = owners
+
+    def _connect(self):
+        conn = sqlite3.connect(self.database_path.as_uri() + '?mode=ro', uri=True,
+                               timeout=5, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _get(self, request_id: str) -> WorkRequest:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+        if row is None:
+            raise KeyError(request_id)
+        return self._request(row)
+
+    @staticmethod
+    def _request(row: sqlite3.Row) -> WorkRequest:
+        window_data = json.loads(row["window_json"]) if row["window_json"] else None
+        return WorkRequest(
+            id=row["id"], workspace_id=row["workspace_id"], member_id=row["member_id"],
+            owner_type=row["owner_type"], owner_id=row["owner_id"], input_digest=row["input_digest"],
+            unit_key=row["unit_key"], work_class=row["work_class"],
+            policy=SchedulePolicy(row["policy"], _parse(row["not_before_utc"]), Window(**window_data) if window_data else None),
+            first_ready_at_utc=_parse(row["first_ready_at_utc"]), eligible_since_utc=_parse(row["eligible_since_utc"]),
+            eligible_wait_seconds=float(row["eligible_wait_seconds"]), state=row["state"],
+            wait_reason=row["wait_reason"], resources=json.loads(row["resources_json"]),
+            source_refs=tuple(SourceRef(**ref) for ref in json.loads(row["source_refs_json"])),
+            attempt_number=int(row["attempt_number"]), retry_not_before_utc=_parse(row["retry_not_before_utc"]),
+            last_grant_generation=row["last_grant_generation"],
+        )
+
+    def view_for(self, request_id: str, actor: object) -> dict[str, object]:
+        """Never expose the internal WorkRequest through an HTTP response."""
+        request = self._get(request_id)
+        if self.owners.can_view_detail(request, actor):
+            return {
+                "id": request.id, "state": request.state, "wait_reason": request.wait_reason,
+                "workspace_id": request.workspace_id, "owner_type": request.owner_type,
+                "owner_id": request.owner_id, "unit_key": request.unit_key,
+                "first_ready_at": _stamp(request.first_ready_at_utc),
+                "attempt_number": request.attempt_number,
+                "retry_not_before_at": _stamp(request.retry_not_before_utc) if request.retry_not_before_utc else None,
+            }
+        if self.owners.can_view_device_summary(actor):
+            return {"state": request.state, "wait_reason": request.wait_reason,
+                    "device_busy": request.state in {"granted", "yield_requested"}}
+        raise PermissionError("无权查看设备队列")
+
+    def task_media_result_request(self, workspace_id, job_id, input_digest, actor):
+        """Return original request detail only when the owner permits that detail."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
+                "AND owner_type='creation_job' AND owner_id=? AND input_digest=? AND unit_key=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (workspace_id, job_id, input_digest, f"task_media:{input_digest}")).fetchone()
+        if row is None:
+            return None, {}
+        view = self.view_for(row['id'], actor)
+        if view.get('id', view.get('request_id')) != row['id']:
+            return None, {}
+        return self._request(row), view
+
+
+class DeviceScheduler(DeviceRequestReadAccess):
     """One SQLite queue plus a host-wide, path-stable OS lock and recovery ledger.
 
     The lock path must be supplied from one machine-wide device configuration,
@@ -640,59 +708,9 @@ class DeviceScheduler:
             conn.commit()
         return self.view_for(request.id, actor)
 
-    def _get(self, request_id: str) -> WorkRequest:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
-        if row is None:
-            raise KeyError(request_id)
-        return self._request(row)
 
-    @staticmethod
-    def _request(row: sqlite3.Row) -> WorkRequest:
-        window_data = json.loads(row["window_json"]) if row["window_json"] else None
-        return WorkRequest(
-            id=row["id"], workspace_id=row["workspace_id"], member_id=row["member_id"],
-            owner_type=row["owner_type"], owner_id=row["owner_id"], input_digest=row["input_digest"],
-            unit_key=row["unit_key"], work_class=row["work_class"],
-            policy=SchedulePolicy(row["policy"], _parse(row["not_before_utc"]), Window(**window_data) if window_data else None),
-            first_ready_at_utc=_parse(row["first_ready_at_utc"]), eligible_since_utc=_parse(row["eligible_since_utc"]),
-            eligible_wait_seconds=float(row["eligible_wait_seconds"]), state=row["state"],
-            wait_reason=row["wait_reason"], resources=json.loads(row["resources_json"]),
-            source_refs=tuple(SourceRef(**ref) for ref in json.loads(row["source_refs_json"])),
-            attempt_number=int(row["attempt_number"]), retry_not_before_utc=_parse(row["retry_not_before_utc"]),
-            last_grant_generation=row["last_grant_generation"],
-        )
 
-    def view_for(self, request_id: str, actor: object) -> dict[str, object]:
-        """Never expose the internal WorkRequest through an HTTP response."""
-        request = self._get(request_id)
-        if self.owners.can_view_detail(request, actor):
-            return {
-                "id": request.id, "state": request.state, "wait_reason": request.wait_reason,
-                "workspace_id": request.workspace_id, "owner_type": request.owner_type,
-                "owner_id": request.owner_id, "unit_key": request.unit_key,
-                "first_ready_at": _stamp(request.first_ready_at_utc),
-                "attempt_number": request.attempt_number,
-                "retry_not_before_at": _stamp(request.retry_not_before_utc) if request.retry_not_before_utc else None,
-            }
-        if self.owners.can_view_device_summary(actor):
-            return {"state": request.state, "wait_reason": request.wait_reason,
-                    "device_busy": request.state in {"granted", "yield_requested"}}
-        raise PermissionError("无权查看设备队列")
 
-    def task_media_result_request(self, workspace_id, job_id, input_digest, actor):
-        """Return original request detail only when the owner permits that detail."""
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? "
-                "AND owner_type='creation_job' AND owner_id=? AND input_digest=? AND unit_key=? "
-                "ORDER BY created_at DESC LIMIT 1",
-                (workspace_id, job_id, input_digest, f"task_media:{input_digest}")).fetchone()
-        if row is None:
-            return None, {}
-        view = self.view_for(row['id'], actor)
-        if view.get('id', view.get('request_id')) != row['id']:
-            return None, {}
-        return self._request(row), view
 
     def list_queue_for(self, actor: object) -> dict[str, object]:
         if not self.owners.can_view_device_summary(actor):
