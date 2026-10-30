@@ -83,9 +83,9 @@ def qualification_state(tmp_path, monkeypatch):
     bad.append(add_asset('unregistered-source', role='b_roll', registered=False))
     app = FastAPI()
     for path, handler in [
-        ('/api/creation-requests', main.create_creation_request),
-        ('/api/creation-requests/{request_id}/windows', main.preview_creation_request_window),
-        ('/api/creation-requests/{request_id}/windows/{window_id}/confirm', main.confirm_creation_request_window),
+        ('/api/creation-requests', next(route.endpoint for route in main.app.routes if route.name == "create_creation_request")),
+        ('/api/creation-requests/{request_id}/windows', next(route.endpoint for route in main.app.routes if route.name == "preview_creation_request_window")),
+        ('/api/creation-requests/{request_id}/windows/{window_id}/confirm', next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_request_window")),
     ]:
         app.add_api_route(path, handler, methods=['POST'])
 

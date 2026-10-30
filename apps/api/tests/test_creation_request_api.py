@@ -16,9 +16,29 @@ from test_creation_requests import entries
 
 
 @pytest.fixture
-def client_state(tmp_path, monkeypatch):
+def client_state(tmp_path, monkeypatch, request):
     from test_production_foundation import edit_adoption_no_execution
     forbidden = edit_adoption_no_execution(monkeypatch)
+    metadata_only = request.node.originalname in {
+        "test_unknown_relationship_and_today_range_stay_waiting_without_tasks",
+        "test_original_creation_request_can_be_read_by_trusted_input_without_server_id",
+        "test_stale_assistant_input_cannot_replan_or_revise_request",
+    }
+    if metadata_only:
+        from app.auth import SupabaseAuthContext
+        from app.config import Settings
+        from app.device_runtime import DeviceRuntime
+        from app.device_scheduler import DeviceScheduler
+        monkeypatch.setattr(DeviceRuntime, "wake", forbidden)
+        monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+        settings = Settings(database_path=str(tmp_path / "api.sqlite3"),
+            video_inbox_path=str(tmp_path / "inbox"), video_output_path=str(tmp_path / "output"),
+            model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temp"),
+            draft_output_path=str(tmp_path / "drafts"), jianying_draft_root_path=str(tmp_path / "jianying"),
+            obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+            local_whisper_cli_path=None, local_whisper_model_path=None,
+            supabase_url=None, supabase_publishable_key=None)
+        monkeypatch.setattr(main, "settings", settings)
     from app.local_portrait import LocalPortrait
     from app.subtitle_tracks import OpenAICompatibleSubtitleTranslationProvider, UnavailableSubtitleTranslationProvider
     monkeypatch.setattr(LocalPortrait, "process", forbidden)
@@ -33,7 +53,7 @@ def client_state(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "production_repo", repo)
     monkeypatch.setattr(main, "local_members_service", members)
     monkeypatch.setattr(main, "conversation_repo", conversations)
-    monkeypatch.setattr(main, "auth_context", SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main, "auth_context", SupabaseAuthContext(settings) if metadata_only else SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, "current_workspace_id", lambda _request: "request-test")
     live_fingerprint = ["a" * 64]
     def preflight(_case, workspace_id, payload, **_dependencies):
@@ -45,19 +65,32 @@ def client_state(tmp_path, monkeypatch):
     monkeypatch.setattr(main.CreationPlanPreflightUseCase, "prepare", preflight)
     app = FastAPI()
     for path, handler, methods in [
-        ("/api/creation-requests", main.create_creation_request, ["POST"]),
-        ("/api/assistant/creation-request", main.read_current_input_creation_request, ["GET"]),
-        ("/api/creation-requests/{request_id}", main.get_creation_request, ["GET"]),
-        ("/api/creation-requests/{request_id}", main.revise_creation_request, ["PATCH"]),
-        ("/api/creation-requests/{request_id}/windows", main.preview_creation_request_window, ["POST"]),
-        ("/api/creation-requests/{request_id}/windows/{window_id}/confirm", main.confirm_creation_request_window, ["POST"]),
-        ("/api/creation-requests/{request_id}/windows/{window_id}/replan", main.replan_creation_request_window, ["POST"]),
-        ("/api/creation-requests/{request_id}/items", main.list_creation_request_items, ["GET"]),
+        ("/api/creation-requests", next(route.endpoint for route in main.app.routes if route.name == "create_creation_request"), ["POST"]),
+        ("/api/assistant/creation-request", next(route.endpoint for route in main.app.routes if route.name == "read_current_input_creation_request"), ["GET"]),
+        ("/api/creation-requests/{request_id}", next(route.endpoint for route in main.app.routes if route.name == "get_creation_request"), ["GET"]),
+        ("/api/creation-requests/{request_id}", next(route.endpoint for route in main.app.routes if route.name == "revise_creation_request"), ["PATCH"]),
+        ("/api/creation-requests/{request_id}/windows", next(route.endpoint for route in main.app.routes if route.name == "preview_creation_request_window"), ["POST"]),
+        ("/api/creation-requests/{request_id}/windows/{window_id}/confirm", next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_request_window"), ["POST"]),
+        ("/api/creation-requests/{request_id}/windows/{window_id}/replan", next(route.endpoint for route in main.app.routes if route.name == "replan_creation_request_window"), ["POST"]),
+        ("/api/creation-requests/{request_id}/items", next(route.endpoint for route in main.app.routes if route.name == "list_creation_request_items"), ["GET"]),
     ]:
         app.add_api_route(path, handler, methods=methods)
-    return SimpleNamespace(client=TestClient(app), alice={"X-Local-Member-Token": token_a},
+    state = SimpleNamespace(client=TestClient(app), alice={"X-Local-Member-Token": token_a},
         bob={"X-Local-Member-Token": token_b}, member=alice, conversations=conversations,
         repository=repo, live_fingerprint=live_fingerprint)
+    if metadata_only:
+        def metadata_snapshot():
+            with repo._connect() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                facts = {name: sorted((tuple(row) for row in connection.execute(
+                    'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+            tree = {str(item.relative_to(tmp_path)): item.read_bytes() if item.is_file() else None
+                    for item in tmp_path.rglob('*')}
+            return facts, tree
+        state.metadata_snapshot = metadata_snapshot
+        request.addfinalizer(state.client.close)
+    return state
 
 
 def create(c, **changes):
@@ -98,13 +131,25 @@ def test_unknown_relationship_and_today_range_stay_waiting_without_tasks(client_
     saved = create(c, goal="把今天发给你的视频做成10000条视频", output_relation=None).json()
     assert saved["status"] == "awaiting_clarification" and len(saved["clarification_questions"]) == 2
     base = "/api/creation-requests/" + saved["id"]
+    before_reject = c.metadata_snapshot()
     rejected = c.client.post(base + "/windows", headers=c.alice,
         json={"expected_revision": saved["revision"], "goals": [{"goal": "主题"}]})
     assert rejected.status_code == 409
+    assert c.metadata_snapshot() == before_reject
     revised = c.client.patch(base, headers=c.alice, json={"expected_revision": saved["revision"],
         "output_relation": "series", "material_scope": "workspace_library"})
     assert revised.status_code == 200 and revised.json()["clarification_questions"] == []
     assert c.repository.task_records.list_creation_tasks("request-test") == []
+    reopened = ProductionRepository(c.repository.database_path, c.repository.video_library_path)
+    persisted = reopened.creation_requests.get_creation_request("request-test", saved["id"],
+        viewer_user_id=c.member.member_id)
+    assert persisted["revision"] == revised.json()["revision"]
+    assert persisted["output_relation"] == "series" and persisted["material_scope"] == {"kind": "workspace_library"}
+    before_reads = c.metadata_snapshot()
+    assert c.client.get(base, headers=c.alice).json()["revision"] == persisted["revision"]
+    items = c.client.get(base + "/items", headers=c.alice)
+    assert items.status_code == 200 and items.json()["items"] == []
+    assert c.metadata_snapshot() == before_reads
 
 
 def test_model_cannot_change_original_count_or_turn_identity(client_state):
@@ -133,13 +178,17 @@ def test_original_creation_request_can_be_read_by_trusted_input_without_server_i
     assert c.client.get(lookup, headers=c.alice).json() is None
     saved = create(c, assistant_turn_id=turn["id"], request_key=turn["id"])
     assert saved.status_code == 200, saved.text
+    before_reads = c.metadata_snapshot()
     recovered = c.client.get(lookup, headers=c.alice)
     assert recovered.status_code == 200 and recovered.json()["id"] == saved.json()["id"]
     assert c.client.get(lookup, headers=c.bob).status_code == 404
+    assert c.metadata_snapshot() == before_reads
     c.conversations.finish_turn(turn["id"], "completed", "原输入已结束")
+    before_rejects = c.metadata_snapshot()
     assert c.client.get(lookup, headers=c.alice).status_code == 409
     assert c.repository.task_records.list_creation_tasks("request-test") == []
     assert create(c, assistant_turn_id=turn["id"]).status_code == 409
+    assert c.metadata_snapshot() == before_rejects
 
 
 @pytest.mark.parametrize("goal,count,duration", [
@@ -254,6 +303,7 @@ def test_stale_assistant_input_cannot_replan_or_revise_request(client_state):
         "继续制作", str(uuid4()), chat["draft_version"])
     c.conversations.finish_turn(turn["id"], "completed", "输入已结束")
     suffix = "?assistant_turn_id=" + turn["id"]
+    before_rejects = c.metadata_snapshot()
     response = c.client.post(base + "/windows/" + data["current_window"]["id"] + "/replan" + suffix,
         headers=c.alice, json={"expected_revision": data["revision"], "goals": [{"goal": "不得写入"}]})
     assert response.status_code == 409
@@ -261,6 +311,7 @@ def test_stale_assistant_input_cannot_replan_or_revise_request(client_state):
     assert response.status_code == 409
     assert c.client.get(base, headers=c.alice).json()["revision"] == data["revision"]
     assert c.repository.task_records.list_creation_tasks("request-test") == []
+    assert c.metadata_snapshot() == before_rejects
 
 
 def test_resource_change_at_adoption_is_safe_and_does_not_create_tasks(client_state, monkeypatch):

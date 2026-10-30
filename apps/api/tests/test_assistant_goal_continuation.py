@@ -904,13 +904,13 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
     monkeypatch.setattr(main,'_assistant_conversation_for_request',lambda *_:('workspace','member',case.chat))
     monkeypatch.setattr(main,'_wake_assistant_continuations',lambda:None)
     request=SimpleNamespace(headers={'x-assistant-input-id':input_id} if input_id else {})
-    response=main.resume_assistant_creation_request(request,turn['id'],None)
+    response=next(route.endpoint for route in main.app.routes if route.name == "resume_assistant_creation_request")(request,turn['id'],None)
     assert response['status']=='resumed' and response['request_id']==saved['id']
     assert {item['task_id'] for item in response['tasks']}=={goal['task_id'] for goal in original}
     current=[case.conversations.get_task_goal(root) for root in roots]
     assert all(goal['revision']==1 and goal['creation_resume']['source']['turn_id']==turn['id'] for goal in current)
     assert all(goal['creation_adoption']==before['creation_adoption'] for goal,before in zip(current,original))
-    duplicate=main.resume_assistant_creation_request(request,turn['id'],saved['id'])
+    duplicate=next(route.endpoint for route in main.app.routes if route.name == "resume_assistant_creation_request")(request,turn['id'],saved['id'])
     assert duplicate['status']=='already_running'
     assert all(case.conversations.get_task_goal(root)['revision']==1 for root in roots)
     assert case.conversations.get_turn(turn['id'])['user_message']=='继续刚才已经采用的中英文两条'

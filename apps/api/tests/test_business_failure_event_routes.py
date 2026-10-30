@@ -8,7 +8,7 @@ from test_creation_request_api import client_state, create, prepare_one
 
 def test_lost_creation_reply_is_read_by_original_input_without_creating_again(client_state):
     c = client_state
-    c.client.app.add_api_route('/api/assistant/creation-request', main.read_current_input_creation_request, methods=['GET'])
+    c.client.app.add_api_route('/api/assistant/creation-request', next(route.endpoint for route in main.app.routes if route.name == "read_current_input_creation_request"), methods=['GET'])
     message = '制作1条视频'
     chat = c.conversations.create('request-test', c.member.member_id, 'home', 'home', '目标')
     c.conversations.save_draft(chat['id'], 'request-test', c.member.member_id, message, 0)

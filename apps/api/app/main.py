@@ -355,7 +355,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestCreateRequest, CreationRequestReviseRequest, CreationRequestWindowPreviewRequest, CreationRequestWindowConfirmRequest, CreationRequestWindowReplanRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskTimelineRestoreRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, HomeAggregationResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -3698,200 +3698,78 @@ def _creation_request_or_404(request: Request, request_id: str) -> dict:
 
 
 
-def _creation_request_workflow():
-    return request_workflow.CreationRequestWorkflowUseCase(
-        records=production_repo.creation_requests, adoption=production_repo.creation_request_adoption,
-        preflight=CreationPlanPreflightUseCase(production_repo, source_repository, model_catalog,
-            lipsync_provider_for=_lipsync_provider))
 
 
-def _creation_window_goals(goals):
-    return tuple(request_workflow.DeliveryGoal(item.goal, item.name,
-        item.requirements.model_dump(mode="json", exclude_unset=True) if item.requirements else {},
-        item.model_dump()) for item in goals)
 
 
-def _creation_window_input(payload):
-    return request_workflow.WindowInput(payload.expected_revision, _creation_window_goals(payload.goals))
 
 
-def _creation_request_delivery(requirements):
-    payload = CreationPlanPreviewRequest.model_validate(requirements)
-    values = CreationPlanPreflightInput(
-        goal=payload.goal, name=payload.name, target_count=payload.target_count,
-        language=payload.language, aspect_ratio=payload.aspect_ratio,
-        duration_target_seconds=payload.duration_target_seconds,
-        duration_mode=payload.duration_mode, duration_range_seconds=payload.duration_range_seconds,
-        presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
-        template_id=payload.template_id, template_version=payload.template_version,
-        selected_knowledge=(payload.selected_knowledge.knowledge_item_id, payload.selected_knowledge.version) if payload.selected_knowledge is not None else None,
-        selected_voice=(payload.selected_voice.profile_id, payload.selected_voice.version) if payload.selected_voice is not None else None,
-        selected_person=(payload.selected_person.profile_id, payload.selected_person.version) if payload.selected_person is not None else None,
-        provided_fields=frozenset(payload.model_fields_set),
+
+
+
+
+
+
+from app.creation_request_routes import build_creation_request_router
+
+
+def _creation_request_http_router(route_names):
+    return build_creation_request_router(
+        workflow_module_for=lambda: request_workflow,
+        production_for=lambda: production_repo,
+        preflight_type_for=lambda: CreationPlanPreflightUseCase,
+        sources_for=lambda: source_repository,
+        catalog_for=lambda: model_catalog,
+        lipsync_for=lambda: _lipsync_provider,
+        plan_request_type_for=lambda: CreationPlanPreviewRequest,
+        preflight_input_type_for=lambda: CreationPlanPreflightInput,
+        workspace_for=lambda: current_workspace_id,
+        reader_for=lambda: _content_reader,
+        owned_request_for=lambda: _creation_request_or_404,
+        reply_for=lambda: _verified_assistant_reply,
+        template_for=lambda: _video_template_http_adapter,
+        window_request_type_for=lambda: CreationRequestWindowPreviewRequest,
+        replace_for=lambda: replace,
+        http_error_for=lambda: HTTPException,
+        conversations_for=lambda: conversation_repo,
+        conversation_for=lambda: _assistant_conversation_for_request,
+        goal_for=lambda: _goal_service,
+        authorizations_for=lambda: _task_authorizations_for_goal,
+        safe_text_for=lambda: _assistant_stream_safe_text,
+        wake_for=lambda: _wake_assistant_continuations,
+        response_for=lambda: _creation_request_response,
+        items_type_for=lambda: CreationRequestItemsResponse,
+        item_for=lambda: _creation_request_item_response,
+        route_names=route_names,
     )
-    return request_workflow.Delivery(values, payload.model_dump(mode="json"))
 
 
-def _run_creation_request_workflow(request: Request, steps):
-    """Answer the creation workflow's finite HTTP input stages at their original gates."""
-    try:
-        try:
-            stage = next(steps)
-        except StopIteration as result:
-            return result.value
-        while True:
-            try:
-                if isinstance(stage, request_workflow.ReadReader):
-                    workspace_id = current_workspace_id(request)
-                    owner, diagnostic = _content_reader(request, workspace_id)
-                    answer = request_workflow.Reader(workspace_id, owner, diagnostic)
-                elif isinstance(stage, request_workflow.ReadWorkspace):
-                    answer = current_workspace_id(request)
-                elif isinstance(stage, request_workflow.ReadOwnedRequest):
-                    answer = _creation_request_or_404(request, stage.request_id)
-                elif isinstance(stage, request_workflow.ReadInput):
-                    answer = _creation_request_input(request, stage.turn_id)
-                elif isinstance(stage, request_workflow.ReadReply):
-                    answer = _verified_assistant_reply(request, stage.conversation_id, stage.turn_id, None)
-                elif isinstance(stage, request_workflow.ReadTemplate):
-                    answer = _video_template_http_adapter().read_template(request, stage.workspace_id, stage.template_id, stage.version)
-                elif isinstance(stage, request_workflow.NormalizeDelivery):
-                    answer = _creation_request_delivery(stage.requirements)
-                elif isinstance(stage, request_workflow.NormalizeWindow):
-                    # Only these two frozen Plan fields exceed the public delivery DTO.
-                    goals, durations = [], []
-                    for goal in stage.goals:
-                        requirements = dict(goal["requirements"])
-                        durations.append({key: requirements.pop(key) for key in
-                            ("duration_mode", "duration_range_seconds") if key in requirements})
-                        goals.append({**goal, "requirements": requirements})
-                    window = _creation_window_input(CreationRequestWindowPreviewRequest.model_validate(
-                        {"expected_revision": stage.expected_revision, "goals": goals}))
-                    answer = replace(window, goals=tuple(replace(goal,
-                        overrides={**goal.overrides, **duration})
-                        for goal, duration in zip(window.goals, durations)))
-                else:
-                    raise TypeError(f"Unsupported creation-request stage: {type(stage).__name__}")
-            except Exception as exc:
-                # Re-enter the precise original business try block; never swallow adapter errors.
-                try:
-                    stage = steps.throw(exc)
-                except StopIteration as result:
-                    return result.value
-            else:
-                try:
-                    stage = steps.send(answer)
-                except StopIteration as result:
-                    return result.value
-    except request_workflow.CreationRequestWorkflowRejected as exc:
-        failure = HTTPException(status_code=exc.status_code, detail=exc.detail)
-        if exc.__cause__ is not None:
-            raise failure from exc.__cause__
-        raise failure from None
+app.include_router(_creation_request_http_router(("resume_assistant_creation_request",)))
 
 
-def _creation_request_input(request: Request, turn_id: str):
-    turn = conversation_repo.get_turn(turn_id)
-    try:
-        request_workflow.require_running_turn(turn)
-        _assistant_conversation_for_request(request, turn["conversation_id"])
-        return request_workflow.current_input(turn, request.headers.get("x-assistant-input-id"))
-    except request_workflow.CreationRequestWorkflowRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+app.include_router(_creation_request_http_router(("create_creation_request",)))
 
 
-@app.post('/api/assistant/creation-request/resume')
-def resume_assistant_creation_request(request: Request, assistant_turn_id: UUID,
-                                      creation_request_id: str | None = Query(default=None,max_length=128)):
-    turn,_message,active=_creation_request_input(request,str(assistant_turn_id))
-    workspace_id,member_id,_conversation=_assistant_conversation_for_request(request,turn['conversation_id'])
-    try:
-        result=_goal_service().resume_creation_request(workspace_id,member_id,turn['id'],
-            active['input_id'] if active else None,creation_request_id,_task_authorizations_for_goal())
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
-    for item in result['tasks']:
-        if item.get('reason'):
-            item['reason']=_assistant_stream_safe_text(item['reason'],workspace_id)
-    if result['status']=='resumed':
-        _wake_assistant_continuations()
-    return result
+app.include_router(_creation_request_http_router(("read_current_input_creation_request",)))
 
 
-@app.post("/api/creation-requests", response_model=CreationRequestResponse, status_code=201)
-def create_creation_request(request: Request, payload: CreationRequestCreateRequest):
-    command = request_workflow.CreateGoal(
-        goal=payload.goal, request_key=str(payload.request_key), target_count=payload.target_count,
-        duration_mode=payload.duration_mode, duration_target_seconds=payload.duration_target_seconds,
-        material_scope=payload.material_scope, output_relation=payload.output_relation,
-        assistant_turn_id=str(payload.assistant_turn_id) if payload.assistant_turn_id is not None else None,
-        requirements=payload.model_dump(mode="json", exclude={"request_key", "output_relation", "material_scope", "assistant_turn_id", "intent"}),
-        intent=payload.intent.model_dump(mode="json") if payload.intent is not None else None)
-    return _creation_request_response(_run_creation_request_workflow(request, _creation_request_workflow().create(command)))
+app.include_router(_creation_request_http_router(("get_creation_request",)))
 
 
-@app.get("/api/assistant/creation-request", response_model=CreationRequestResponse | None)
-def read_current_input_creation_request(request: Request, assistant_turn_id: UUID):
-    turn, _message, source_input = _creation_request_input(request, str(assistant_turn_id))
-    workspace_id = current_workspace_id(request)
-    owner, _diagnostic = _content_reader(request, workspace_id)
-    if not owner:
-        raise HTTPException(status_code=403, detail="请先确认当前成员，再读取制作目标。")
-    request_key = source_input["input_id"] if source_input else turn["id"]
-    saved = production_repo.creation_requests.find_creation_request_by_key(workspace_id, request_key, viewer_user_id=owner)
-    # An absent row is a read observation, not proof that an in-flight POST failed.
-    return _creation_request_response(saved) if saved is not None else None
+app.include_router(_creation_request_http_router(("revise_creation_request",)))
 
 
-@app.get("/api/creation-requests/{request_id}", response_model=CreationRequestResponse)
-def get_creation_request(request_id: str, request: Request):
-    return _creation_request_response(_creation_request_or_404(request, request_id))
-
-
-@app.patch("/api/creation-requests/{request_id}", response_model=CreationRequestResponse)
-def revise_creation_request(request_id: str, request: Request, payload: CreationRequestReviseRequest):
-    command = request_workflow.ReviseGoal(payload.expected_revision, payload.output_relation, payload.material_scope,
-        payload.requirements.model_dump(mode="json") if payload.requirements else None,
-        request.query_params.get("assistant_turn_id"))
-    return _creation_request_response(_run_creation_request_workflow(request, _creation_request_workflow().revise(request_id, command)))
-
-
-@app.post("/api/creation-requests/{request_id}/windows", response_model=CreationRequestResponse)
-def preview_creation_request_window(request_id: str, request: Request, payload: CreationRequestWindowPreviewRequest):
-    steps = _creation_request_workflow().prepare_window(request_id, _creation_window_input(payload),
-        tool_turn_id=request.query_params.get("assistant_turn_id"))
-    return _creation_request_response(_run_creation_request_workflow(request, steps))
+app.include_router(_creation_request_http_router(("preview_creation_request_window",)))
 
 
 
-@app.post("/api/creation-requests/{request_id}/windows/{window_id}/replan", response_model=CreationRequestResponse)
-def replan_creation_request_window(request_id: str, window_id: str, request: Request, payload: CreationRequestWindowReplanRequest):
-    goals = _creation_window_goals(payload.goals) if payload.goals is not None else None
-    steps = _creation_request_workflow().replan(request_id, window_id, payload.expected_revision, goals,
-        tool_turn_id=request.query_params.get("assistant_turn_id"))
-    return _creation_request_response(_run_creation_request_workflow(request, steps))
+app.include_router(_creation_request_http_router(("replan_creation_request_window",)))
 
 
-@app.post("/api/creation-requests/{request_id}/windows/{window_id}/confirm", response_model=CreationRequestResponse)
-def confirm_creation_request_window(request_id: str, window_id: str, request: Request, payload: CreationRequestWindowConfirmRequest):
-    command = request_workflow.ConfirmWindow(payload.expected_revision, payload.input_fingerprint, payload.adoption_kind,
-        str(payload.assistant_turn_id) if payload.assistant_turn_id is not None else None)
-    steps = _creation_request_workflow().confirm(request_id, window_id, command)
-    return _creation_request_response(_run_creation_request_workflow(request, steps))
+app.include_router(_creation_request_http_router(("confirm_creation_request_window",)))
 
 
-@app.get("/api/creation-requests/{request_id}/items", response_model=CreationRequestItemsResponse)
-def list_creation_request_items(request_id: str, request: Request, after_ordinal: int = 0, limit: int = 20):
-    _creation_request_or_404(request, request_id)
-    if after_ordinal < 0 or not 1 <= limit <= 100:
-        raise HTTPException(status_code=422, detail="分页范围无效。")
-    owner, diagnostic = _content_reader(request, current_workspace_id(request))
-    data = production_repo.creation_requests.list_creation_request_items(current_workspace_id(request), request_id,
-        after_ordinal=after_ordinal, limit=limit, viewer_user_id=owner, local_diagnostic=diagnostic)
-    return CreationRequestItemsResponse.model_validate({**data,
-        "items": [_creation_request_item_response(item) for item in data["items"]]})
+app.include_router(_creation_request_http_router(("list_creation_request_items",)))
 
 
 @app.post(
