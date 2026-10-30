@@ -5360,36 +5360,29 @@ def creation_task_segment_video(task_id: str, section_id: str, version: str, req
         raise HTTPException(status_code=404,detail='此段落版本的视频不可读取') from exc
 
 
-from app.schemas import TaskBudgetReadResponse
 
 
-@app.get('/api/creation-tasks/{task_id}/budget', response_model=TaskBudgetReadResponse)
-def creation_task_budget(task_id: str, request: Request):
-    from app.creation.task_budget_use_case import TaskBudgetUseCase
-    ws = current_workspace_id(request)
-    try:
-        return TaskBudgetUseCase(production_repo).read(ws,task_id,_require_permit_actor(request,ws))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404,detail='任务预算不存在') from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+from app.task_budget_routes import build_task_budget_router
 
 
-@app.post('/api/creation-tasks/{task_id}/budget/resume')
-def resume_creation_task_budget(task_id: str, request: Request, payload: dict):
-    from app.creation.task_budget_use_case import TaskBudgetUseCase
-    from app.schemas import TaskBudgetResumeRequest
-    ws = current_workspace_id(request)
-    _require_automation_task_open(request,ws,task_id)
-    try:
-        return TaskBudgetUseCase(production_repo).resume(ws,task_id,_require_permit_actor(request,ws),
-            TaskBudgetResumeRequest.model_validate(payload),execution_control=_creation_execution_control(),runtime=_creation_runtime())
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (KeyError,ValueError,ExecutionControlRejected) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+def _task_budget_http_router(route_names):
+    return build_task_budget_router(
+        workspace_for=lambda: current_workspace_id,
+        production_for=lambda: production_repo,
+        actor_for=lambda: _require_permit_actor,
+        http_error_for=lambda: HTTPException,
+        automation_guard_for=lambda: _require_automation_task_open,
+        control_for=lambda: _creation_execution_control,
+        runtime_for=lambda: _creation_runtime,
+        control_error_for=lambda: ExecutionControlRejected,
+        route_names=route_names,
+    )
+
+
+app.include_router(_task_budget_http_router(("creation_task_budget",)))
+
+
+app.include_router(_task_budget_http_router(("resume_creation_task_budget",)))
 
 
 def _cover_use_case(repository=None, *, budget=_RESOURCE_BUDGET_UNSET):
