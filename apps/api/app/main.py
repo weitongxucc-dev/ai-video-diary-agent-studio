@@ -355,7 +355,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -3895,97 +3895,27 @@ def _topic_failure_response(
     )
 
 
-@app.get(
-    "/api/creation-tasks/{task_id}/topics",
-    response_model=CreationTaskTopicsResponse,
-)
-def get_creation_task_topics(
-    task_id: str,
-    request: Request,
-) -> CreationTaskTopicsResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    route_snapshot = _topic_route_snapshot(workspace_id)
-    preflight_error: _CreationTaskTopicPreflightError | None = None
-    input_count = 0
-    try:
-        sources, _, _ = _source_inputs_use_case().prepare(
-            workspace_id,
-            task,
-            plan,
-            cloud_egress=route_snapshot["execution_location"] == "cloud",
-        )
-        input_count = len(sources)
-        if route_snapshot["availability"] == "unconfigured":
-            preflight_error = _CreationTaskTopicPreflightError(
-                reason="capability_unavailable",
-                impact="当前没有可调用的文字模型连接，不能开始选题。",
-                repair_action="在本机运行时设置中配置 OpenAI-compatible 文字模型后重试。",
-                retryable=True,
-            )
-    except _CreationTaskTopicPreflightError as exc:
-        preflight_error = exc
-    return _creation_task_topic_response(
-        workspace_id,
-        task,
-        route_snapshot=route_snapshot,
-        preflight_error=preflight_error,
-        preflight_input_count=input_count,
-    )
+from app.task_topic_routes import build_task_topic_router
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/topics/generate",
-    response_model=CreationTaskTopicsResponse,
-)
-def generate_creation_task_topics(
-    task_id: str,
-    request: Request,
-    _payload: CreationTaskTopicGenerateRequest,
-) -> CreationTaskTopicsResponse:
-    workspace_id=current_workspace_id(request)
-    _require_automation_task_open(request,workspace_id,task_id)
-    task=_creation_task_or_404(workspace_id,task_id)
-    try:
-        return _script_draft_use_case(workspace_id,validate_inputs=lambda ws,plan,refs:_require_current_script_inputs(request,ws,plan,refs)).generate_topics(workspace_id,task)
-    except ScriptDraftRejected as exc:
-        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-
-
-@app.post(
-    "/api/creation-tasks/{task_id}/topics/{topic_id}/confirm",
-    response_model=CreationTaskTopicsResponse,
-)
-def confirm_creation_task_topic(
-    task_id: str,
-    topic_id: str,
-    request: Request,
-    payload: CreationTaskTopicConfirmRequest,
-) -> CreationTaskTopicsResponse:
-    workspace_id = current_workspace_id(request)
-    if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
-        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
-    try:
-        task, _ = production_repo.topic_records.confirm_topic_candidate(
-            workspace_id,
-            task_id,
-            topic_id,
-            title=payload.title,
-            adoption_kind=payload.adoption_kind, verified_owner_user_id=_content_reader(request, workspace_id)[0],
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task topic not found") from exc
-    except ValueError as exc:
-        raise _topic_failure_response(
-            status_code=409,
-            error="creation_task_topic_confirmation_conflict",
-            reason="当前选题不能被确认。",
-            impact="没有改变已确认的选题或任务阶段。",
-            repair_action=str(exc),
-            retryable=False,
-        ) from exc
-    return _creation_task_topic_response(workspace_id, task)
+app.include_router(build_task_topic_router(
+    workspace_for=lambda: current_workspace_id,
+    task_for=lambda: _creation_task_or_404,
+    plan_for=lambda: _creation_plan_for_task_or_404,
+    route_for=lambda: _topic_route_snapshot,
+    preflight_error_for=lambda: _CreationTaskTopicPreflightError,
+    source_inputs_for=lambda: _source_inputs_use_case,
+    response_for=lambda: _creation_task_topic_response,
+    automation_guard_for=lambda: _require_automation_task_open,
+    draft_for=lambda: _script_draft_use_case,
+    current_inputs_for=lambda: _require_current_script_inputs,
+    draft_error_for=lambda: ScriptDraftRejected,
+    http_error_for=lambda: HTTPException,
+    adoption_for=lambda: _assistant_creation_adoption_scope,
+    production_for=lambda: production_repo,
+    reader_for=lambda: _content_reader,
+    failure_for=lambda: _topic_failure_response,
+))
 
 
 @app.put(

@@ -422,7 +422,7 @@ def test_delegated_existing_topic_is_adopted_without_topic_generation(client_sta
         "endpoint_identity": "https://models.invalid", "connection_version": "test-connection",
         "availability": "unconfigured", "checked_at": "2026-10-18T00:00:00Z"}
     monkeypatch.setattr(main, "_topic_route_snapshot", lambda workspace: route)
-    c.client.app.add_api_route("/api/creation-tasks/{task_id}/topics", main.get_creation_task_topics, methods=["GET"])
+    c.client.app.add_api_route("/api/creation-tasks/{task_id}/topics", next(route.endpoint for route in main.app.routes if route.name == "get_creation_task_topics"), methods=["GET"])
     response = c.client.get(f"/api/creation-tasks/{task.id}/topics", headers=c.alice)
     assert response.status_code == 200, response.text
     data = response.json()
