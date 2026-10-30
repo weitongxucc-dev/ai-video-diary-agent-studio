@@ -220,6 +220,29 @@ class ExecutionRecordStore:
             ).fetchone()
         return self.task_event_from_row(row) if row is not None else None
 
+    def list_observation_job_starts(self, workspace_id: str, task_id: str, job_kind: str, member_id: str) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute("""SELECT j.id, e.payload_json FROM job_runs j JOIN task_events e
+            ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start'
+            WHERE j.workspace_id=? AND j.task_id=? AND j.kind=?
+            AND json_extract(e.payload_json,'$.operation')='output_observation'
+            AND json_extract(e.payload_json,'$.member_id')=?
+            ORDER BY j.created_at DESC,j.id DESC LIMIT 5""",
+                (workspace_id, task_id, job_kind, member_id)).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_observation_target_artifacts(self, workspace_id: str, task_id: str, job_kind: str, member_id: str, base_version_id: str | None) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute("""SELECT a.id,a.logical_ref,a.kind,a.sha256,a.producer_job_id FROM artifact_records a
+            JOIN job_runs j ON j.workspace_id=a.workspace_id AND j.id=a.producer_job_id
+            JOIN task_events e ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start'
+            WHERE a.workspace_id=? AND a.task_id=? AND j.kind=? AND j.status='succeeded'
+            AND json_extract(e.payload_json,'$.member_id')=?
+            AND json_extract(e.payload_json,'$.input_facts.base_version_id') IS ?
+            ORDER BY j.created_at DESC,a.id DESC LIMIT 10""",
+                (workspace_id, task_id, job_kind, member_id, base_version_id)).fetchall()
+        return [dict(row) for row in rows]
+
     def list_task_events(self, workspace_id: str, task_id: str) -> list[_TaskEvent]:
         with self._connect() as conn:
             self._require_creation_task(conn, workspace_id, task_id)

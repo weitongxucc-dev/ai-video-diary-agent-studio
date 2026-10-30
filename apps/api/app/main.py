@@ -2469,14 +2469,7 @@ def _task_observation_metadata(task,member_id):
     workspace_id,task_id=task.workspace_id,task.id
     current = _creation_task_quality_check_response(workspace_id, task_id).model_dump(mode="json")
     current.update(bounded_quality_findings(current))
-    with production_repo._connect() as conn:
-        rows = conn.execute("""SELECT j.id, e.payload_json FROM job_runs j JOIN task_events e
-            ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start'
-            WHERE j.workspace_id=? AND j.task_id=? AND j.kind=?
-            AND json_extract(e.payload_json,'$.operation')='output_observation'
-            AND json_extract(e.payload_json,'$.member_id')=?
-            ORDER BY j.created_at DESC,j.id DESC LIMIT 5""",
-            (workspace_id, task_id, TASK_MEDIA_KIND, member_id)).fetchall()
+    rows = production_repo.execution_records.list_observation_job_starts(workspace_id, task_id, TASK_MEDIA_KIND, member_id)
     observations = []
     for row in rows:
         job = production_repo.job_records.get_job_run(workspace_id, row["id"])
@@ -2506,15 +2499,8 @@ def _task_observation_metadata(task,member_id):
     else:
         targets.append({"target": {"kind": "final"}, "artifact_id": output["artifact_id"], "sha256": output["sha256"],
                         "output_role": "composed_output"})
-    with production_repo._connect() as conn:
-        rows = conn.execute("""SELECT a.id,a.logical_ref,a.kind,a.sha256,a.producer_job_id FROM artifact_records a
-            JOIN job_runs j ON j.workspace_id=a.workspace_id AND j.id=a.producer_job_id
-            JOIN task_events e ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start'
-            WHERE a.workspace_id=? AND a.task_id=? AND j.kind=? AND j.status='succeeded'
-            AND json_extract(e.payload_json,'$.member_id')=?
-            AND json_extract(e.payload_json,'$.input_facts.base_version_id') IS ?
-            ORDER BY j.created_at DESC,a.id DESC LIMIT 10""",
-            (workspace_id, task_id, TASK_MEDIA_KIND, member_id, task.current_timeline_version_id)).fetchall()
+    rows = production_repo.execution_records.list_observation_target_artifacts(
+        workspace_id, task_id, TASK_MEDIA_KIND, member_id, task.current_timeline_version_id)
     for row in rows:
         if row["logical_ref"].endswith(".mp4") or row["kind"] == "graphic_source" and row["logical_ref"].endswith(".png"):
             targets.append({"target": {"kind": "media_job", "job_id": row["producer_job_id"], "artifact_id": row["id"]},
