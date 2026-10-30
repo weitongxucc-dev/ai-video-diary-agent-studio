@@ -693,12 +693,13 @@ class TaskBusiness:
     def execute_creation(self, operation,args,actor,task,goal,origin,guard):
         ws,task_id=task.workspace_id,task.id
         self._adoption_origin(origin,False)
-        runtime=self.runtime()
         if operation=='cancel_creation_execution':
             sources=self.execution_sources(goal)
             if not sources or self.execution.execution.latest(ws,task_id).id!=sources[-1].job_id:
                 raise TaskBusinessRejected('当前可停止作业不是原目标绑定的作业')
+            runtime=self.runtime()
             return self.execution.cancel(ws,task_id,actor,runtime,verify_media=False,write_guard=guard)
+        runtime=self.runtime()
         if args.get('assistant_turn_id') not in {None,goal.get('current_turn_id')}:
             raise ValueError('制作请求不能绑定其他助手回合')
         source={"workspace_id":ws,"task_id":task_id,"member_id":goal['member_id'],
