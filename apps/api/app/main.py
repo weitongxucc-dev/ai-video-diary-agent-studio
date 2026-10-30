@@ -6956,66 +6956,14 @@ def _timeline_version_or_404(
     return version
 
 
-def _history_montage(version: TimelineVersion) -> dict[str, object]:
-    montage = version.snapshot.get("montage")
-    return montage if isinstance(montage, dict) else {}
 
 
-def _history_subtitle_tracks(workspace_id: str, task_id: str, version: TimelineVersion):
-    return production_repo.subtitle_records.list_subtitle_tracks(
-        workspace_id, task_id, timeline_version_id=version.id
-    )
 
 
-def _history_summary(
-    task: CreationTask,
-    version: TimelineVersion,
-    workspace_id: str,
-) -> TimelineVersionSummaryResponse:
-    try:
-        return TimelineVersionSummaryResponse.model_validate(
-            production_repo.timeline_history.summary(workspace_id, task.id, version.id))
-    except TimelineHistoryConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _history_artifact_refs(
-    version: TimelineVersion,
-    workspace_id: str,
-    task_id: str,
-) -> dict[str, str | None]:
-    """Collect this version's own artifact refs, never the task's current output."""
-    montage = _history_montage(version)
-    tracks = _history_subtitle_tracks(workspace_id, task_id, version)
-    subtitle_ref = next(
-        (
-            track.artifact_ref
-            for track in tracks
-            if track.status == "valid" and track.artifact_ref
-        ),
-        None,
-    ) or montage.get("subtitle_path")
-    cover_ref = None
-    cover = _cover_asset_for_version(workspace_id, task_id, version)
-    if cover is not None and cover.status == "valid":
-        cover_ref = cover.artifact_ref
-    return {
-        "video": montage.get("output_path") if isinstance(montage.get("output_path"), str) else None,
-        "subtitles": subtitle_ref if isinstance(subtitle_ref, str) else None,
-        "cover": cover_ref,
-    }
 
 
-def _history_artifact_state(
-    logical_ref: str | None,
-) -> Literal["available", "not_generated", "missing"]:
-    if not logical_ref:
-        return "not_generated"
-    try:
-        artifact_store.resolve_file(logical_ref)
-    except (FileNotFoundError, ValueError):
-        return "missing"
-    return "available"
 
 
 _HISTORY_ARTIFACT_MEDIA_TYPES = {
@@ -7036,140 +6984,49 @@ _HISTORY_ARTIFACT_MISSING = {
 }
 
 
-def _history_artifact_url(task_id: str, version: TimelineVersion, kind: str) -> str:
-    return (
-        f"/api/creation-tasks/{quote(task_id, safe='')}/timeline/versions/"
-        f"{quote(version.id, safe='')}/artifacts/{kind}"
+
+
+
+
+from app.timeline_history_routes import build_timeline_history_router
+
+
+def _timeline_history_http_router(route_names):
+    return build_timeline_history_router(
+        production_for=lambda: production_repo,
+        summary_type_for=lambda: TimelineVersionSummaryResponse,
+        history_error_for=lambda: TimelineHistoryConflict,
+        http_error_for=lambda: HTTPException,
+        cover_for=lambda: _cover_asset_for_version,
+        store_for=lambda: artifact_store,
+        quote_for=lambda: quote,
+        artifact_type_for=lambda: TimelineVersionArtifactResponse,
+        not_generated_for=lambda: _HISTORY_ARTIFACT_NOT_GENERATED,
+        missing_for=lambda: _HISTORY_ARTIFACT_MISSING,
+        workspace_for=lambda: current_workspace_id,
+        task_for=lambda: _creation_task_or_404,
+        list_type_for=lambda: TimelineVersionListResponse,
+        version_for=lambda: _timeline_version_or_404,
+        shot_type_for=lambda: TimelineVersionShotResponse,
+        segment_type_for=lambda: TimelineVersionNarrationSegmentResponse,
+        detail_type_for=lambda: TimelineVersionDetailResponse,
+        subtitle_type_for=lambda: SubtitleTrackResponse,
+        asdict_for=lambda: asdict,
+        cover_type_for=lambda: CoverAssetResponse,
+        readable_for=lambda: _readable_creation_task,
+        media_types_for=lambda: _HISTORY_ARTIFACT_MEDIA_TYPES,
+        file_response_for=lambda: FileResponse,
+        route_names=route_names,
     )
 
 
-def _history_artifacts(
-    task_id: str,
-    version: TimelineVersion,
-    refs: dict[str, str | None],
-) -> list[TimelineVersionArtifactResponse]:
-    return [
-        TimelineVersionArtifactResponse(
-            kind=kind,
-            status=status,
-            url=_history_artifact_url(task_id, version, kind) if status == "available" else None,
-            reason=(
-                None
-                if status == "available"
-                else _HISTORY_ARTIFACT_NOT_GENERATED[kind]
-                if status == "not_generated"
-                else _HISTORY_ARTIFACT_MISSING[kind]
-            ),
-        )
-        for kind, status in (
-            (kind, _history_artifact_state(ref)) for kind, ref in refs.items()
-        )
-    ]
+app.include_router(_timeline_history_http_router(("list_creation_task_timeline_versions",)))
 
 
-@app.get(
-    "/api/creation-tasks/{task_id}/timeline/versions",
-    response_model=TimelineVersionListResponse,
-)
-def list_creation_task_timeline_versions(
-    task_id: str, request: Request, limit: int = Query(20, ge=1, le=50),
-    before_sequence: int | None = Query(None, ge=1),
-) -> TimelineVersionListResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    try:
-        return TimelineVersionListResponse.model_validate(production_repo.timeline_history.page(
-            workspace_id, task.id, limit=limit, before_sequence=before_sequence))
-    except TimelineHistoryConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+app.include_router(_timeline_history_http_router(("get_creation_task_timeline_version",)))
 
 
-@app.get(
-    "/api/creation-tasks/{task_id}/timeline/versions/{version_id}",
-    response_model=TimelineVersionDetailResponse,
-)
-def get_creation_task_timeline_version(
-    task_id: str, version_id: str, request: Request
-) -> TimelineVersionDetailResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    version = _timeline_version_or_404(workspace_id, task_id, version_id)
-    montage = _history_montage(version)
-    clips = montage.get("clips")
-    cue_list = montage.get("cues") if isinstance(montage.get("cues"), list) else []
-    cues_by_id = {
-        cue["id"]: cue for cue in cue_list if isinstance(cue, dict) and "id" in cue
-    }
-    shots = [
-        TimelineVersionShotResponse(
-            index=index + 1,
-            id=str(clip.get("id", "")),
-            narration_text=cues_by_id[clip["cue_id"]].get("text")
-            if isinstance(cues_by_id.get(clip.get("cue_id")), dict)
-            else None,
-            start_seconds=float(clip.get("timeline_start_seconds") or 0.0),
-            end_seconds=float(clip.get("timeline_end_seconds") or 0.0),
-            description="；".join(str(reason) for reason in clip["match_reasons"])
-            if isinstance(clip.get("match_reasons"), list) and clip["match_reasons"]
-            else None,
-        )
-        for index, clip in enumerate(clips if isinstance(clips, list) else [])
-        if isinstance(clip, dict)
-    ]
-    segments = version.snapshot.get("narration_segments")
-    narration_segments = [
-        TimelineVersionNarrationSegmentResponse(
-            index=index + 1,
-            id=str(segment.get("id", "")),
-            text=str(segment.get("text", "")),
-            duration_seconds=segment.get("duration_seconds")
-            if isinstance(segment.get("duration_seconds"), (int, float))
-            else None,
-            status=segment.get("status") if isinstance(segment.get("status"), str) else None,
-        )
-        for index, segment in enumerate(segments if isinstance(segments, list) else [])
-        if isinstance(segment, dict)
-    ]
-    tracks = _history_subtitle_tracks(workspace_id, task_id, version)
-    cover = _cover_asset_for_version(workspace_id, task_id, version)
-    return TimelineVersionDetailResponse(
-        task_id=task.id,
-        version=_history_summary(task, version, workspace_id),
-        shots=shots,
-        narration_segments=narration_segments,
-        subtitle_tracks=[
-            SubtitleTrackResponse.model_validate(asdict(track)) for track in tracks
-        ],
-        cover_asset=CoverAssetResponse.model_validate(asdict(cover)) if cover is not None else None,
-        artifacts=_history_artifacts(
-            task_id,
-            version,
-            _history_artifact_refs(version, workspace_id, task_id),
-        ),
-    )
-
-
-@app.get("/api/creation-tasks/{task_id}/timeline/versions/{version_id}/artifacts/{kind}")
-def get_creation_task_timeline_version_artifact(
-    task_id: str,
-    version_id: str,
-    kind: Literal["video", "subtitles", "cover"],
-    request: Request,
-) -> FileResponse:
-    workspace_id = current_workspace_id(request)
-    _readable_creation_task(request, task_id)
-    version = _timeline_version_or_404(workspace_id, task_id, version_id)
-    logical_ref = _history_artifact_refs(version, workspace_id, task_id)[kind]
-    if logical_ref is None:
-        raise HTTPException(status_code=404, detail=_HISTORY_ARTIFACT_NOT_GENERATED[kind])
-    if _history_artifact_state(logical_ref) == "missing":
-        raise HTTPException(status_code=404, detail=_HISTORY_ARTIFACT_MISSING[kind])
-    path = artifact_store.resolve_file(logical_ref)
-    if kind == "cover":
-        media_type = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
-    else:
-        media_type = _HISTORY_ARTIFACT_MEDIA_TYPES[kind]
-    return FileResponse(path, media_type=media_type, filename=path.name)
+app.include_router(_timeline_history_http_router(("get_creation_task_timeline_version_artifact",)))
 
 
 @app.get("/api/creation-tasks/{task_id}/output/selected-subtitles")

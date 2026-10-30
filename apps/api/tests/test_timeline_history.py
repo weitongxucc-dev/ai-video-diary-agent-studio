@@ -85,9 +85,36 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
 
 
 @pytest.fixture
-def history_task(tmp_path, monkeypatch):
+def history_task(tmp_path, monkeypatch, request):
     from test_production_foundation import edit_adoption_no_execution
     edit_adoption_no_execution(monkeypatch)
+    metadata_only = request.node.name in {
+        "test_version_list_shows_sequence_time_and_current_marker",
+        "test_old_version_detail_reads_its_own_snapshot_without_touching_current",
+        "test_history_rejects_another_task_version_and_unknown_version",
+    }
+    if metadata_only:
+        from app.auth import SupabaseAuthContext
+        from app.config import Settings
+        from app.device_scheduler import DeviceScheduler
+        from app.device_runtime import DeviceRuntime
+        from app.local_members import LocalMemberService
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("timeline history metadata forbids scheduling or media execution")
+
+        monkeypatch.setattr(DeviceRuntime, "wake", forbidden)
+        monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+        settings = Settings(database_path=str(tmp_path / "production.sqlite3"),
+            video_inbox_path=str(tmp_path / "inbox"), video_output_path=str(tmp_path / "outputs"),
+            model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temp"),
+            obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+            local_whisper_cli_path=None, local_whisper_model_path=None,
+            supabase_url=None, supabase_publishable_key=None)
+        monkeypatch.setattr(main_module, "settings", settings)
+        monkeypatch.setattr(main_module, "auth_context", SupabaseAuthContext(settings))
+        monkeypatch.setattr(main_module, "local_members_service",
+                            LocalMemberService(tmp_path / "production.sqlite3"))
     repo = ProductionRepository(database_path=tmp_path / "production.sqlite3",
                                 video_library_path=tmp_path / "library")
     store = ArtifactStore(tmp_path / "artifacts")
@@ -162,7 +189,28 @@ def history_task(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "settings", replace(main_module.settings,
         video_output_path=str(tmp_path / 'outputs'), temporary_root_path=str(tmp_path / 'temp')))
     monkeypatch.setattr(main_module, "creation_execution_mode", "legacy")
-    return repo, task.id, TestClient(main_module.app)
+    client = TestClient(main_module.app)  # No lifespan; anonymous local diagnostic policy.
+    if metadata_only:
+        def database_facts():
+            with repo._connect() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                return {name: sorted((tuple(row) for row in connection.execute(
+                    'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+
+        def tree():
+            return {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                    for path in tmp_path.rglob('*')}
+
+        before_facts, before_tree = database_facts(), tree()
+
+        def verify_no_writes():
+            assert database_facts() == before_facts
+            assert tree() == before_tree
+            client.close()
+
+        request.addfinalizer(verify_no_writes)
+    return repo, task.id, client
 
 
 def test_version_list_shows_sequence_time_and_current_marker(history_task):
@@ -245,6 +293,14 @@ def test_history_rejects_another_task_version_and_unknown_version(history_task):
     unknown = client.get(f"/api/creation-tasks/{task_id}/timeline/versions/timeline_nope")
     assert unknown.status_code == 404
     assert client.get("/api/creation-tasks/task_nope/timeline/versions").status_code == 404
+    no_cover = client.get(
+        f"/api/creation-tasks/{task_id}/timeline/versions/timeline_history_v1/artifacts/cover")
+    assert no_cover.status_code == 404
+    assert no_cover.json()["detail"] == "该版本没有封面；这一版没有生成封面。"
+    missing_video = client.get(
+        f"/api/creation-tasks/{task_id}/timeline/versions/timeline_history_v2/artifacts/video")
+    assert missing_video.status_code == 404
+    assert missing_video.json()["detail"] == "该版本记录的成片已不在受控产物目录内。"
 
 
 def test_history_detail_preserves_original_operation_from_list(history_task):
