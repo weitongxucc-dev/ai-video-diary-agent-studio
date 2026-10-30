@@ -5193,33 +5193,24 @@ def _ordinary_native_handler(actor,binding):
     return NativeOperationHandler(case,actor,verify,_creation_runtime)
 
 
-@app.get('/api/creation-tasks/{task_id}/native-operations')
-def creation_task_native_operations(task_id: str,request: Request,offset: int=Query(0,ge=0),limit: int=Query(30,ge=1,le=100)):
-    ws = current_workspace_id(request)
-    actor = _request_permit_actor(request,ws)
-    if actor is None:
-        raise HTTPException(status_code=403,detail='缺少原任务成员身份')
-    try:
-        return _native_task_operations_case().list_operations(actor,task_id,offset=offset,limit=limit)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
+from app.native_task_read_routes import build_native_task_read_router
 
 
-@app.get('/api/creation-tasks/{task_id}/native-artifacts/{artifact_id}/content')
-def creation_task_native_artifact(task_id: str,artifact_id: str,request: Request):
-    ws = current_workspace_id(request)
-    actor = _request_permit_actor(request,ws)
-    if actor is None:
-        raise HTTPException(status_code=403,detail='缺少原任务成员身份')
-    try:
-        from app.creation.native_task_operations import actual_mime
-        path = _native_task_operations_case().artifact_path(actor,task_id,artifact_id)
-        return FileResponse(path,media_type=actual_mime(path),headers={
-            'X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"})
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (KeyError,ValueError,OSError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+def _native_task_read_http_router(route_names):
+    return build_native_task_read_router(
+        workspace_for=lambda: current_workspace_id,
+        actor_for=lambda: _request_permit_actor,
+        http_error_for=lambda: HTTPException,
+        case_for=lambda: _native_task_operations_case,
+        file_response_for=lambda: FileResponse,
+        route_names=route_names,
+    )
+
+
+app.include_router(_native_task_read_http_router(("creation_task_native_operations",)))
+
+
+app.include_router(_native_task_read_http_router(("creation_task_native_artifact",)))
 
 
 def _local_revision_origin(task_id,request,payload):
