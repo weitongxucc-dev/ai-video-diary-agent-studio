@@ -68,9 +68,29 @@ def test_old_request_cannot_silently_receive_new_version(output):
 
 @pytest.mark.parametrize('values', [{'rendered': False}, {'registered': False}])
 def test_new_version_without_valid_registered_output_never_falls_back_to_old(output, values):
-    client, _, _, version = output
+    client, repository, _, version = output
     version(2, **values)
+    root = repository.database_path.parent
+
+    def facts():
+        with repository._connect() as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {name: sorted((tuple(row) for row in connection.execute(
+                'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+
+    def tree():
+        return {str(item.relative_to(root)): item.read_bytes() if item.is_file() else None
+                for item in root.rglob('*')}
+
+    before_facts, before_tree = facts(), tree()
     assert client.get('/api/creation-tasks/task/output?expected_version_id=v2').status_code == 409
+    expected = ('当前版本尚无可下载的有效产物，请等待该版本制作完成。' if values.get('rendered') is False
+                else '当前版本产物尚未登记。')
+    subtitles = client.get('/api/creation-tasks/task/output/subtitles?expected_version_id=v2')
+    assert subtitles.status_code == 409 and subtitles.json()['detail'] == expected
+    assert facts() == before_facts
+    assert tree() == before_tree
 
 
 def test_version_change_while_resolving_file_rejects_download(output, monkeypatch):
