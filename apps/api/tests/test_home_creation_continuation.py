@@ -135,12 +135,12 @@ def test_home_response_and_live_replay_register_the_same_actual_tasks(client_sta
     request = Request({"type": "http", "headers": [(key.lower().encode(), value.encode()) for key, value in c.alice.items()]})
     payload = WorkspaceAssistantPlanTurnRequest(conversation_id=chat["id"], message=message,
         client_request_id=uuid4(), expected_draft_version=1)
-    response = main._workspace_assistant_plan_turn(request, payload, None)
+    response = main._home_plan_http_adapter().execute(request, payload, None)
     assert response.creation_request.current_window.status == "confirmed"
     candidates = c.conversations.goal_event_candidates()
     assert len(candidates) == 1
     created[0] = False
-    replay = main._workspace_assistant_plan_turn(request, payload, None)
+    replay = main._home_plan_http_adapter().execute(request, payload, None)
     assert replay.creation_request.id == saved["id"] and model_boundary.call_count == 1
     assert [item["root"]["id"] for item in c.conversations.goal_event_candidates()] == [candidates[0]["root"]["id"]]
 
@@ -184,7 +184,7 @@ def test_home_saved_request_planning_keeps_save_only_and_second_unavailable(clie
         monkeypatch.setattr(main, "run_plan_turn", model)
         payload = WorkspaceAssistantPlanTurnRequest(conversation_id=chat["id"], message=message,
             client_request_id=uuid4(), expected_draft_version=1)
-        response = main._workspace_assistant_plan_turn(request, payload, None)
+        response = main._home_plan_http_adapter().execute(request, payload, None)
         assert len(calls) == (1 if mode == "save_only" else 2)
         assert response.creation_request.id == original[0]["id"]
         saved = c.conversations.get_turn(str(response.turn_id))
@@ -198,7 +198,7 @@ def test_home_saved_request_planning_keeps_save_only_and_second_unavailable(clie
             assert response.creation_request.current_window is None
             assert response.creation_request.status == "awaiting_plan"
             assert ("制作目标已保存，当前这组方案尚未完成。" in response.reply) == (mode == "second_unavailable")
-        replay = main._workspace_assistant_plan_turn(request, payload, None)
+        replay = main._home_plan_http_adapter().execute(request, payload, None)
         assert replay.model_dump(mode="json") == response.model_dump(mode="json")
         assert len(calls) == (1 if mode == "save_only" else 2)
     assert c.repository.task_records.list_creation_tasks("request-test") == []

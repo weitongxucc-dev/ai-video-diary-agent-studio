@@ -3482,7 +3482,7 @@ def _workspace_assistant_turn_http_router(route_names):
     return build_workspace_assistant_turn_router(
         workspace_for=lambda: current_workspace_id,
         stream_for=lambda: _assistant_stream_transport,
-        plan_for=lambda: _workspace_assistant_plan_turn,
+        plan_for=lambda: _home_plan_http_adapter().execute,
         member_for=lambda: _assistant_member_id,
         conversations_for=lambda: conversation_repo,
         selection_for=lambda: _assistant_material_selection_snapshot,
@@ -3495,130 +3495,34 @@ def _workspace_assistant_turn_http_router(route_names):
 app.include_router(_workspace_assistant_turn_http_router(('workspace_assistant_plan_turn',)))
 
 
-def _workspace_assistant_plan_turn(
-    request: Request,
-    payload: WorkspaceAssistantPlanTurnRequest,
-    on_event,
-    *, material_selection: dict | None = None,
-) -> WorkspaceAssistantPlanTurnResponse:
-    workspace_id = current_workspace_id(request)
-    workspace_settings_for_turn = _workspace_settings_for(workspace_id)
-    caller_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    profile_reference = (_assistant_profile_snapshot(request, payload.selected_profile_reference.kind,
-                         payload.selected_profile_reference.profile_id, payload.selected_profile_reference.version)
-                         if payload.selected_profile_reference is not None else None)
-    knowledge_reference = (_assistant_knowledge_snapshot(request, payload.selected_knowledge_reference.knowledge_item_id,
-                           payload.selected_knowledge_reference.version, payload.selected_knowledge_reference.locator)
-                           if payload.selected_knowledge_reference is not None else None)
-    turn_id, created, turn = _task_turn_http_adapter().begin(
-        request, str(payload.conversation_id), "home", "home", payload.message.strip(),
-        payload.client_request_id, payload.expected_draft_version, {"kind": "home", "profile_reference": payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, "knowledge_reference": payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None, "target_snapshot": {"profile_reference": profile_reference, "knowledge_reference": knowledge_reference, "material_selection": material_selection}}, on_event,
-        expected_reference_version=payload.expected_reference_version,
+from app.assistant.home_plan_http_adapter import HomePlanTurnHTTPAdapter
+
+
+def _home_plan_http_adapter():
+    return HomePlanTurnHTTPAdapter(
+        creation_plan_preview_response_type_for=lambda: CreationPlanPreviewResponse,
+        creation_request_response_type_for=lambda: CreationRequestResponse,
+        http_exception_type_for=lambda: HTTPException,
+        material_assistant_result_response_type_for=lambda: MaterialAssistantResultResponse,
+        workspace_assistant_plan_turn_response_type_for=lambda: WorkspaceAssistantPlanTurnResponse,
+        assistant_creation_request_for_turn_for=lambda: _assistant_creation_request_for_turn,
+        assistant_knowledge_snapshot_for=lambda: _assistant_knowledge_snapshot,
+        assistant_profile_snapshot_for=lambda: _assistant_profile_snapshot,
+        assistant_stream_safe_text_for=lambda: _assistant_stream_safe_text,
+        assistant_text_without_credentials_for=lambda: _assistant_text_without_credentials,
+        content_reader_for=lambda: _content_reader,
+        creation_request_or_404_for=lambda: _creation_request_or_404,
+        creation_request_response_for=lambda: _creation_request_response,
+        home_plan_turn_use_case_for=lambda: _home_plan_turn_use_case,
+        local_member_token_for=lambda: _local_member_token,
+        register_adopted_creation_goals_for=lambda: _register_adopted_creation_goals,
+        task_turn_http_adapter_for=lambda: _task_turn_http_adapter,
+        workspace_settings_for_for=lambda: _workspace_settings_for,
+        current_workspace_id_for=lambda: current_workspace_id,
+        forget_turn_control_for=lambda: forget_turn_control,
+        home_plan_for=lambda: home_plan,
+        run_plan_turn_for=lambda: run_plan_turn,
     )
-    if not created:
-        settings_for_replay = _workspace_settings_for(workspace_id)
-        response = _task_turn_http_adapter().replay(
-            turn_id, WorkspaceAssistantPlanTurnResponse,
-            provider=settings_for_replay.effective_llm_provider,
-            model=settings_for_replay.effective_llm_model,
-            draft_version=payload.expected_draft_version + 1,
-        )
-        _register_adopted_creation_goals(request, turn_id, response.creation_request)
-        return response
-    case = _home_plan_turn_use_case()
-    steps = case.execute(turn_id, payload.message, material_selection=material_selection)
-    try:
-        stage = next(steps)
-        while True:
-            try:
-                if isinstance(stage, home_plan.RunPlanning):
-                    answer = run_plan_turn(
-                        workspace_settings_for_turn,
-                        workspace_id=workspace_id,
-                        local_member_token=_local_member_token(request) or None,
-                        caller_user_id=caller_user_id if not local_diagnostic else None,
-                        conversation_id=str(payload.conversation_id),
-                        message=payload.message.strip(),
-                        authorization=request.headers.get("authorization"),
-                        cookie=request.headers.get("cookie"),
-                        on_event=on_event,
-                        turn_id=turn_id,
-                        selected_references=_task_turn_http_adapter().frozen_references(request, str(payload.conversation_id), turn_id),
-                        input_handler=_task_turn_http_adapter().input_delivery(request, str(payload.conversation_id), turn_id),
-                        profile_reference=profile_reference,
-                        knowledge_reference=knowledge_reference,
-                        keep_turn_control=True, material_selection=material_selection,
-                    )
-                elif isinstance(stage, home_plan.ContinuePlanning):
-                    answer = run_plan_turn(
-                        workspace_settings_for_turn, workspace_id=workspace_id,
-                        local_member_token=_local_member_token(request) or None,
-                        caller_user_id=caller_user_id if not local_diagnostic else None,
-                        conversation_id=str(payload.conversation_id), message=payload.message.strip(),
-                        authorization=request.headers.get("authorization"), cookie=request.headers.get("cookie"),
-                        on_event=on_event, turn_id=turn_id, profile_reference=profile_reference,
-                        selected_references=_task_turn_http_adapter().frozen_references(request, str(payload.conversation_id), turn_id),
-                        input_handler=_task_turn_http_adapter().input_delivery(request, str(payload.conversation_id), turn_id),
-                        knowledge_reference=knowledge_reference,
-                        creation_request=_creation_request_response(stage.latest_request).model_dump(mode="json"),
-                        keep_turn_control=True, material_selection=material_selection,
-                    )
-                elif isinstance(stage, home_plan.ReadOwnedRequest):
-                    answer = _creation_request_or_404(request, stage.request_id)
-                elif isinstance(stage, home_plan.SafeFailureText):
-                    answer = _assistant_stream_safe_text(stage.text, workspace_id)
-                elif isinstance(stage, home_plan.ForgetTurnControl):
-                    answer = forget_turn_control(turn_id)
-                elif isinstance(stage, home_plan.BuildStoppedResponse):
-                    response = WorkspaceAssistantPlanTurnResponse(
-                        reply=stage.assistant_text, provider=workspace_settings_for_turn.effective_llm_provider,
-                        model=workspace_settings_for_turn.effective_llm_model, turn_id=turn_id, turn_status="stopped",
-                        draft_version=payload.expected_draft_version + 1,
-                        creation_request=CreationRequestResponse.model_validate(stage.saved_goal) if stage.saved_goal else None)
-                    answer = response
-                elif isinstance(stage, home_plan.SerializeStoppedResponse):
-                    answer = home_plan.RenderedResponse(stage.response, stage.response.model_dump(mode="json"))
-                elif isinstance(stage, home_plan.NormalizeMaterial):
-                    material = MaterialAssistantResultResponse.model_validate(stage.value)
-                    answer = home_plan.MaterialResult(material.scope, material.asset_ref, material.segment_ref, material)
-                elif isinstance(stage, home_plan.ReadFrozenSelections):
-                    answer = _task_turn_http_adapter().frozen_references(request, str(payload.conversation_id), turn_id)
-                elif isinstance(stage, home_plan.RecoverSavedRequest):
-                    answer = _assistant_creation_request_for_turn(request, stage.turn)
-                elif isinstance(stage, home_plan.BuildCompletedResponse):
-                    creation_request = CreationRequestResponse.model_validate(stage.request_result) if stage.request_result is not None else None
-                    plan_preview = CreationPlanPreviewResponse.model_validate(stage.preview) if stage.preview is not None and creation_request is None else None
-                    forget_turn_control(turn_id)
-                    safe_reply = _assistant_text_without_credentials(stage.reply, workspace_id)
-                    response = WorkspaceAssistantPlanTurnResponse(
-                        reply=safe_reply, provider=workspace_settings_for_turn.effective_llm_provider,
-                        model=workspace_settings_for_turn.effective_llm_model, plan_preview=plan_preview,
-                        creation_request=creation_request,
-                        material_result=stage.material_result.response if stage.material_result is not None else None,
-                        turn_id=turn_id, draft_version=payload.expected_draft_version + 1)
-                    answer = home_plan.RenderedResponse(response, response.model_dump(mode="json"))
-                else:
-                    raise TypeError(f"Unsupported home planning stage: {type(stage).__name__}")
-            except Exception as exc:
-                # Return only this checkpoint's exception to its original business try block.
-                try:
-                    stage = steps.throw(exc)
-                except StopIteration as completed:
-                    result = completed.value
-                    break
-            else:
-                try:
-                    stage = steps.send(answer)
-                except StopIteration as completed:
-                    result = completed.value
-                    break
-    except home_plan.HomePlanTurnRejected as exc:
-        failure = HTTPException(status_code=exc.status_code, detail=exc.detail)
-        raise failure from (exc.__cause__ or exc)
-    response = result.rendered.response
-    if result.completed:
-        _register_adopted_creation_goals(request, turn_id, response.creation_request)
-    return response
 
 
 app.include_router(_workspace_assistant_turn_http_router(('material_assistant_turn',)))
