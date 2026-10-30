@@ -270,9 +270,9 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     seen=s.repo.timeline_records.get_timeline_version('ws',undone.task.current_timeline_version_id)
     payload=CreationTaskTimelineRestoreRequest(request_id='redo-insert',target_operation_id=inserted.operation.id,
         expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
-    posted=main.redo_creation_task_timeline(s.task.id,request,payload)
-    queried=main.get_creation_task_timeline_restore_request(s.task.id,'redo-insert',request)
-    replayed=main.redo_creation_task_timeline(s.task.id,request,payload)
+    posted=next(route.endpoint for route in main.app.routes if route.name == "redo_creation_task_timeline")(s.task.id,request,payload)
+    queried=next(route.endpoint for route in main.app.routes if route.name == "get_creation_task_timeline_restore_request")(s.task.id,'redo-insert',request)
+    replayed=next(route.endpoint for route in main.app.routes if route.name == "redo_creation_task_timeline")(s.task.id,request,payload)
     assert posted.execution_readiness==queried['execution_readiness']==replayed.execution_readiness
     assert posted.restore_request['execution_readiness']==posted.execution_readiness
     assert posted.execution_readiness['status']=='authorization_ready'
