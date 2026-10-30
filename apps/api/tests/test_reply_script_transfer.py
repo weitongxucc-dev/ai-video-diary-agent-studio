@@ -551,8 +551,8 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         },
     )
 
-    first = main_module.confirm_creation_plan(request, payload)
-    second = main_module.confirm_creation_plan(request, payload)
+    first = next(route.endpoint for route in main_module.app.routes if route.name == "confirm_creation_plan")(request, payload)
+    second = next(route.endpoint for route in main_module.app.routes if route.name == "confirm_creation_plan")(request, payload)
     assert second == first
     events = repo.execution_records.list_task_events(WORKSPACE, first["task_id"])
     assert len(events) == 1
@@ -661,6 +661,6 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     prior_events = repo.execution_records.list_task_events(WORKSPACE, task.id)
     turn["result"] = {"response": {"reply": "被篡改的正文"}}
     with pytest.raises(main_module.HTTPException) as exc:
-        main_module.confirm_creation_plan(request, payload)
+        next(route.endpoint for route in main_module.app.routes if route.name == "confirm_creation_plan")(request, payload)
     assert exc.value.status_code == 409
     assert repo.execution_records.list_task_events(WORKSPACE, first["task_id"]) == prior_events
