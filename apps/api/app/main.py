@@ -1104,12 +1104,12 @@ app.include_router(build_scheduled_task_router(
 ))
 
 
-@app.get("/api/content-templates", response_model=ContentTemplatesResponse)
-def get_content_templates() -> ContentTemplatesResponse:
-    return ContentTemplatesResponse.model_validate(
-        {"templates": list_content_templates()},
-        from_attributes=True,
-    )
+from app.content_template_routes import build_content_template_router
+
+app.include_router(build_content_template_router(
+    response_for=lambda: ContentTemplatesResponse,
+    catalog_for=lambda: list_content_templates,
+))
 
 
 
