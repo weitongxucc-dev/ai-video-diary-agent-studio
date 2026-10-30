@@ -78,7 +78,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert replay.status_code == 202 and replay.json()['job_id'] == job_id, replay.text
     assert not state.runtime.run_once()
     assert 'compound_selection_preview' not in main._TASK_MEDIA_HANDLERS
-    assert not hasattr(main.preview_compound_selection, '__wrapped__')
+    assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_compound_selection'), '__wrapped__')
     assert TASK_MEDIA_CONTEXT.get() is None
     with state.production._connect() as conn:
         permit = dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())

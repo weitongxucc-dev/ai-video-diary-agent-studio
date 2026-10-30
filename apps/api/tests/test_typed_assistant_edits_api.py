@@ -621,7 +621,10 @@ def test_metadata_patch_routes_consume_use_case_without_route_reentry(metadata_h
     state = metadata_http_state
     def forbidden(*args, **kwargs):
         pytest.fail("metadata PATCH must not invoke another HTTP route")
-    monkeypatch.setattr(main, "apply_creation_task_exact_edit", forbidden)
+    canonical_guard_routes = [route for route in main.app.routes if route.name == 'apply_creation_task_exact_edit' and route.path == '/api/creation-tasks/{task_id}/edits/exact' and ('POST' in route.methods)]
+    assert len(canonical_guard_routes) == 1
+    monkeypatch.setattr(canonical_guard_routes[0], 'endpoint', forbidden)
+    monkeypatch.setattr(canonical_guard_routes[0].dependant, 'call', forbidden)
     clip = state.client.patch(state.url + "/montage/clips/clip", json={"locked": True})
     assert clip.status_code == 200, clip.text
     subtitle = state.client.patch(state.url + "/montage/cues/cue", json={"text": "只更新这句字幕"})

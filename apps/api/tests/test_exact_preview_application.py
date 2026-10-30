@@ -148,7 +148,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     assert state.production.task_records.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id) == montage_before
     assert not hasattr(main,'_TASK_MEDIA_HANDLERS')
-    assert not hasattr(main.preview_creation_task_exact_edit,'__wrapped__')
+    assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_creation_task_exact_edit'),'__wrapped__')
     assert TASK_MEDIA_CONTEXT.get() is None and EXACT_EDIT_SOURCE.get() is None
     with state.production._connect() as conn:
         permit = dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())

@@ -1303,14 +1303,14 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
         'expected_timeline_version_id':state.version.id, 'expected_timeline_sequence':state.version.sequence,
         'clip_id':'declared-clip', 'ignored_private_field':'x'*100000}
     event_id, _ = repo.claim_edit_request(task, state.member.member_id, request_id, 'apply', inputs)
-    unknown = main._goal_request_result(task.id, request_id, state.request, 'apply')
+    unknown = next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, request_id, state.request, 'apply')
     assert unknown['status'] == 'unknown' and unknown['result'] is None and unknown['result_status_code'] is None
     assert 'ignored_private_field' not in unknown['submitted_input']
     assert main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
         origin, snapshot, version, state.request) is None
     repo.save_edit_request_result(task, event_id, status_code=200,
         response={'operation':{'id':operation.id, 'result_version_id':version.id}})
-    recorded = main._goal_request_result(task.id, request_id, state.request, 'apply')
+    recorded = next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, request_id, state.request, 'apply')
     assert recorded['status'] == 'recorded' and recorded['result']['operation']['id'] == operation.id
     successor = main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
         origin, snapshot, version, state.request)
@@ -1321,7 +1321,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     repo.claim_edit_request(task, state.member.member_id, large_id, 'apply',
         {**inputs, 'clip_ids':['中'*22000]})
     with pytest.raises(HTTPException) as too_large:
-        main._goal_request_result(task.id, large_id, state.request, 'apply')
+        next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, large_id, state.request, 'apply')
     assert too_large.value.status_code == 409 and '有界查询范围' in str(too_large.value.detail)
     assert len(repo.edit_records.list_edit_operations(state.workspace_id, task.id)) == 1
     # Even a previously checked task/source cannot bypass the former self-HTTP

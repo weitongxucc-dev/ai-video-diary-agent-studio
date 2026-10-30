@@ -41,8 +41,10 @@ def test_execution_accepts_only_this_inputs_committed_successor(metadata_http_st
     assert response.status_code == 200, response.text
     edited = state.repo.task_records.get_creation_task("ws", state.task.id)
     if case == "unknown":
-        original = main.get_exact_edit_request_result
-        monkeypatch.setattr(main, "get_exact_edit_request_result", lambda *args: {**original(*args), "status": "unknown"})
+        from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+        original = ExactPreviewUseCase.read_request_receipt
+        monkeypatch.setattr(ExactPreviewUseCase, "read_request_receipt",
+            lambda self, *args, **kwargs: {**original(self, *args, **kwargs), "status": "unknown"})
     elif case == "foreign_version":
         version = state.repo.timeline_records.get_timeline_version("ws", edited.current_timeline_version_id)
         state.repo.timeline_records.create_timeline_version(replace(version, id="foreign-version", parent_version_id=version.id, sequence=version.sequence+1))

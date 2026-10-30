@@ -18,9 +18,18 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
     def forbidden(*args, **kwargs):
         raise AssertionError('direct metadata control cannot reenter HTTP routes or media runtime')
     try:
-        monkeypatch.setattr(main, 'preview_creation_task_exact_edit', forbidden)
-        monkeypatch.setattr(main, 'preview_creation_task_edit', forbidden)
-        monkeypatch.setattr(main, 'confirm_creation_task_edit', forbidden)
+        canonical_guard_routes = [route for route in main.app.routes if route.name == 'preview_creation_task_exact_edit' and route.path == '/api/creation-tasks/{task_id}/edits/exact/preview' and ('POST' in route.methods)]
+        assert len(canonical_guard_routes) == 1
+        monkeypatch.setattr(canonical_guard_routes[0], 'endpoint', forbidden)
+        monkeypatch.setattr(canonical_guard_routes[0].dependant, 'call', forbidden)
+        canonical_guard_routes = [route for route in main.app.routes if route.name == 'preview_creation_task_edit' and route.path == '/api/creation-tasks/{task_id}/edits/preview' and ('POST' in route.methods)]
+        assert len(canonical_guard_routes) == 1
+        monkeypatch.setattr(canonical_guard_routes[0], 'endpoint', forbidden)
+        monkeypatch.setattr(canonical_guard_routes[0].dependant, 'call', forbidden)
+        canonical_guard_routes = [route for route in main.app.routes if route.name == 'confirm_creation_task_edit' and route.path == '/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm' and ('POST' in route.methods)]
+        assert len(canonical_guard_routes) == 1
+        monkeypatch.setattr(canonical_guard_routes[0], 'endpoint', forbidden)
+        monkeypatch.setattr(canonical_guard_routes[0].dependant, 'call', forbidden)
         monkeypatch.setattr(main, '_creation_runtime', forbidden)
         payloads = {
             'subtitle':{'operation_type':'ConfigureSubtitleTrack', 'subtitle_display':'none'},

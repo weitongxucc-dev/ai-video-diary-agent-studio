@@ -115,7 +115,7 @@ def test_command_subtitle_font_preview_has_real_media_and_replays_without_render
     assert physical_before=={side:(hashlib.sha256(path.read_bytes()).hexdigest(),path.stat().st_size,path.stat().st_mtime_ns,path.stat().st_ctime_ns) for side,path in files.items()}
     assert state.production.task_records.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id==before_task.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)==before_montage
-    assert not hasattr(main,'_TASK_MEDIA_HANDLERS') and not hasattr(main.preview_creation_task_edit,'__wrapped__')
+    assert not hasattr(main,'_TASK_MEDIA_HANDLERS') and not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_creation_task_edit'),'__wrapped__')
     assert not hasattr(main,'_execute_task_media_operation') and not hasattr(main,'_validate_task_media_result')
     assert not hasattr(state.media,'execute_operation') and not hasattr(state.media,'validate_result')
     assert TASK_MEDIA_CONTEXT.get() is None and EXACT_EDIT_SOURCE.get() is None
