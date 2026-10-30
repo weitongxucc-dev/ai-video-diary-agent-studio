@@ -5227,31 +5227,23 @@ def _local_revision_origin(task_id,request,payload):
     return actor,{**origin,'assistant_turn_id':turn_id,'input_id':input_id}
 
 
-@app.post('/api/creation-tasks/{task_id}/assistant/input-understanding')
-def creation_task_input_understanding(task_id: str, request: Request, payload: dict):
-    actor,origin = _local_revision_origin(task_id,request,payload)
-    try:
-        return conversation_repo.record_input_understanding(origin['conversation_id'],actor.workspace_id,actor.member_id,
-            origin['assistant_turn_id'],None if origin['input_id']==origin['assistant_turn_id'] else origin['input_id'],
-            **{key:value for key,value in payload.items() if key not in {'assistant_turn_id','input_id'}})
-    except (ValueError,PermissionError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+from app.assistant_semantic_receipt_routes import build_assistant_semantic_receipt_router
 
 
-@app.post('/api/creation-tasks/{task_id}/assistant/narration-semantic-review')
-def creation_task_narration_semantic_review(task_id: str, request: Request, payload: dict):
-    from app.assistant.task_business import record_narration_semantic_review
-    actor,origin = _local_revision_origin(task_id,request,payload)
-    task = production_repo.task_records.get_creation_task(actor.workspace_id,task_id)
-    def guard(conn):
-        current = conversation_repo._task_turn_source(conn,origin['assistant_turn_id'],actor.workspace_id,actor.member_id,task_id)
-        if (current.get('input_id') or origin['assistant_turn_id']) != origin['input_id']:
-            raise ValueError('原输入已变化，不能登记旧语义比较')
-    try:
-        return record_narration_semantic_review(production_repo,task,origin,
-            {key:value for key,value in payload.items() if key!='assistant_turn_id'},write_guard=guard)
-    except (ValueError,PermissionError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+def _assistant_semantic_receipt_http_router(route_names):
+    return build_assistant_semantic_receipt_router(
+        origin_for=lambda: _local_revision_origin,
+        conversations_for=lambda: conversation_repo,
+        production_for=lambda: production_repo,
+        http_error_for=lambda: HTTPException,
+        route_names=route_names,
+    )
+
+
+app.include_router(_assistant_semantic_receipt_http_router(("creation_task_input_understanding",)))
+
+
+app.include_router(_assistant_semantic_receipt_http_router(("creation_task_narration_semantic_review",)))
 
 
 from app.task_segment_routes import build_task_segment_router
