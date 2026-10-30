@@ -66,7 +66,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 import httpx
@@ -406,42 +406,29 @@ _desktop_shutdown_lock = threading.Lock()
 DESKTOP_SHUTDOWN_PATH = "/internal/desktop-shutdown"
 
 
-class DesktopShutdownRequest(BaseModel):
-    model_config = {"extra": "forbid"}
-    exit_request_id: UUID
-    deadline_at_utc: datetime
+from app.desktop_shutdown_routes import build_desktop_shutdown_router
 
-
-@app.post(DESKTOP_SHUTDOWN_PATH)
-def desktop_shutdown(payload: DesktopShutdownRequest, request: Request):
-    token = app.state.desktop_control_token
-    supplied = request.headers.get("X-Yaohe-Desktop-Control", "")
-    try:
-        loopback = request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
-    except ValueError:
-        loopback = False
-    if (not loopback or not re.fullmatch(r"[0-9a-f]{64}", token)
-            or not re.fullmatch(r"[0-9a-f]{64}", supplied) or not hmac.compare_digest(token, supplied)):
-        raise HTTPException(status_code=403, detail="本次启动的桌面退出控制凭据无效")
-    deadline = payload.deadline_at_utc
-    if deadline.tzinfo is None or deadline.utcoffset() is None:
-        raise HTTPException(status_code=422, detail="退出截止必须包含UTC时区")
-    remaining = (deadline-datetime.now(UTC)).total_seconds()
-    if remaining <= 0:
-        raise HTTPException(status_code=408, detail="退出请求已超期")
-    deadline_monotonic = time.monotonic() + min(30.0, remaining)
-    with _desktop_shutdown_lock:
-        if app.state.desktop_shutdown is None:
-            app.state.desktop_shutdown = DesktopShutdownUseCase(runtime=device_runtime,
-                automation=automation_runtime, ingestion=material_ingestion,
-                assistant=assistant_continuation_driver, stop_assistant=stop_all_assistant_turns,
-                conversations=conversation_repo,
-                close_clients=lambda: (stop_auth_transport(), stop_creation_permit_transport()))
-        shutdown = app.state.desktop_shutdown
-    try:
-        return shutdown.execute(str(payload.exit_request_id), deadline_monotonic)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+app.include_router(build_desktop_shutdown_router(
+    shutdown_path=DESKTOP_SHUTDOWN_PATH,
+    app_for=lambda: app,
+    ipaddress_for=lambda: ipaddress,
+    regex_for=lambda: re,
+    hmac_for=lambda: hmac,
+    http_error_for=lambda: HTTPException,
+    datetime_for=lambda: datetime,
+    utc_for=lambda: UTC,
+    time_for=lambda: time,
+    lock_for=lambda: _desktop_shutdown_lock,
+    shutdown_type_for=lambda: DesktopShutdownUseCase,
+    runtime_for=lambda: device_runtime,
+    automation_for=lambda: automation_runtime,
+    ingestion_for=lambda: material_ingestion,
+    assistant_for=lambda: assistant_continuation_driver,
+    stop_assistant_for=lambda: stop_all_assistant_turns,
+    conversations_for=lambda: conversation_repo,
+    stop_auth_for=lambda: stop_auth_transport,
+    stop_permit_for=lambda: stop_creation_permit_transport,
+))
 
 
 # Register before every driver that can verify a creation identity.
