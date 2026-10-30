@@ -26,6 +26,35 @@ from app.quality_worker_runtime import source_receipt
 
 @pytest.fixture
 def system(tmp_path, monkeypatch, request):
+    metadata_only = request.node.name == "test_authority_and_empty_body_reject_before_check_write"
+    forbidden_calls = []
+    if metadata_only:
+        import wave
+        from app.auth import SupabaseAuthContext
+        from app.config import Settings
+        from app.device_runtime import DeviceRuntime
+        from app.device_scheduler import DeviceScheduler
+        from app.creation.quality_execution import QualityCheckUnitExecutor
+
+        def forbidden(*args, **kwargs):
+            forbidden_calls.append("execution")
+            pytest.fail("quality authority metadata forbids runtime/worker/media execution")
+
+        monkeypatch.setattr(subprocess, "Popen", forbidden)
+        monkeypatch.setattr(wave, "open", forbidden)
+        for name in ("start", "run_once", "wake"):
+            monkeypatch.setattr(DeviceRuntime, name, forbidden)
+        monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+        monkeypatch.setattr(QualityCheckUnitExecutor, "execute", forbidden)
+        monkeypatch.setattr(main, "_start_device_runtime", forbidden)
+        settings = Settings(database_path=str(tmp_path / "studio.sqlite"),
+            video_inbox_path=str(tmp_path / "inbox"), video_output_path=str(tmp_path / "output"),
+            model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
+            obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+            local_whisper_cli_path=None, local_whisper_model_path=None,
+            supabase_url=None, supabase_publishable_key=None)
+        monkeypatch.setattr(main, "settings", settings)
+        monkeypatch.setattr(main, "auth_context", SupabaseAuthContext(settings))
     members = LocalMemberService(tmp_path / "studio.sqlite")
     owner, token = members.whoami(None)
     other, other_token = members.join(members.create_invite_code(), "另一个成员")
@@ -55,11 +84,15 @@ def system(tmp_path, monkeypatch, request):
         resources=native.resources if native else None, processes=native.processes if native else None)
     monkeypatch.setattr(main, "_quality_inspection_use_case", lambda repository=None: service)
     monkeypatch.setattr(main, "device_runtime", runtime)
+    if metadata_only:
+        monkeypatch.setattr(runtime.registrations["quality_check"].executor, "worker", forbidden)
     client.quality_runtime, client.quality_service, client.quality_actor, client.quality_native = runtime, service, actor, native
     yield client, repo, store, checks, {"X-Local-Member-Token": token}, other_token, tmp_path
     assert runtime.stop(1)
     client.close()
     assert other.member_id != owner.member_id
+    if metadata_only:
+        assert forbidden_calls == []
 
 
 def seed_render(system, content=b"fake video", *, register=True, ref="artifacts/video.mp4", version="v1"):
@@ -137,8 +170,17 @@ def test_real_wil119_black_frame_persisted_and_locatable(system):
 
 
 def test_authority_and_empty_body_reject_before_check_write(system, monkeypatch):
-    client, _, _, checks, headers, other_token, _ = system
+    client, repo, _, checks, headers, other_token, _ = system
     seed_render(system)
+
+    def database_facts():
+        with repo._connect() as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {name: sorted((tuple(row) for row in connection.execute(
+                'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+
+    before = database_facts()
     url = "/api/creation-tasks/task/quality-check"
     for method in (client.get, client.post):
         args = {"json": {}} if method == client.post else {}
@@ -147,10 +189,23 @@ def test_authority_and_empty_body_reject_before_check_write(system, monkeypatch)
         assert method(url, headers={"X-Local-Member-Token": other_token}, **args).status_code == 404
         assert method("/api/creation-tasks/unknown/quality-check", headers=headers, **args).status_code == 404
     assert client.post(url, headers=headers, json={"path": "/etc/passwd"}).status_code == 422
+    readable = client.get(url, headers=headers)
+    assert readable.status_code == 200, readable.text
+    assert readable.json()["check_state"] == "none"
+    assert readable.json()["timeline_version_id"] == "v1"
+    assert readable.json()["check_id"] is None and readable.json()["findings"] == []
+    missing = {"job_id": "missing-job", "failed_request_id": "missing-request"}
+    for response in (client.get(url + "/continuation", headers=headers, params=missing),
+                     client.post(url + "/continue", headers=headers, json=missing)):
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"] == "原质检作业不存在或不属于当前任务"
+    assert client.post(url + "/continue", headers=headers,
+                       json={**missing, "max_timeout_seconds": 99}).status_code == 422
     monkeypatch.setattr(main, "current_workspace_id", lambda _request: "another-workspace")
     assert client.get(url, headers=headers).status_code == 403
     assert client.post(url, headers=headers, json={}).status_code == 403
     assert checks.get("local", "task") is None
+    assert database_facts() == before
 
 
 @pytest.mark.parametrize("registered", [True, False])
