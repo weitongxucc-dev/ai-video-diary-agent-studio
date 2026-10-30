@@ -4027,20 +4027,14 @@ def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None
 app.include_router(_task_script_http_router(('save_assistant_script_draft',)))
 
 
-@app.get(
-    "/api/creation-tasks/{task_id}/assistant/history",
-    response_model=CreationTaskAssistantHistoryResponse,
-)
-def get_creation_task_assistant_history(task_id: str, request: Request) -> CreationTaskAssistantHistoryResponse:
-    workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
-    return CreationTaskAssistantHistoryResponse.model_validate({"items": [
-        {"role": event.payload.get("role"), "message": event.payload.get("message"),
-         "stage": event.payload.get("stage"), "script_id": event.payload.get("script_id"),
-         "at": event.created_at}
-        for event in production_repo.execution_records.list_task_events(workspace_id, task_id)
-        if event.event_type == "assistant_turn" and event.payload.get("role") in {"user", "assistant"}
-    ]})
+from app.task_assistant_history_routes import build_task_assistant_history_router
+
+app.include_router(build_task_assistant_history_router(
+    workspace_for=lambda: current_workspace_id,
+    task_for=lambda: _creation_task_or_404,
+    response_for=lambda: CreationTaskAssistantHistoryResponse,
+    production_for=lambda: production_repo,
+))
 
 
 def _assistant_text_without_credentials(value: str, workspace_id: str) -> str:
