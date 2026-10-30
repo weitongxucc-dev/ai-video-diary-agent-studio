@@ -47,7 +47,10 @@ def wav_bytes():
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch, request):
-    if request.node.originalname == "test_material_search_reader_filters_private_before_limit":
+    if request.node.originalname in {
+        "test_material_search_reader_filters_private_before_limit",
+        "test_automation_and_coverage_keep_observation",
+    }:
         from test_production_foundation import edit_adoption_no_execution
         forbidden = edit_adoption_no_execution(monkeypatch)
         monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
@@ -225,6 +228,74 @@ def test_automation_and_coverage_keep_observation(repo, tmp_path):
         insights["recommended_gaps"]
     )
     assert {"戴眼镜女性", "笔记本", "办公室"} <= {i["tag"] for i in insights["tags"]}
+
+    from copy import deepcopy
+    from dataclasses import asdict
+    import sqlite3
+    from app.materials.library_insights import material_library_insights
+
+    # Fixed value inputs: the policy must never mutate the caller's observations.
+    first_segment = replace(segment, system_tags=['repeat', 'repeat', '办公室'],
+        user_tags=['repeat', ''], usage_count=3)
+    second_segment = replace(segment, id='second-segment', start_seconds=2, end_seconds=4,
+        system_tags=['repeat'], user_tags=['repeat'], usage_count=4)
+    first_asset = replace(asset, duration_seconds=4, user_tags=['repeat', 'repeat', 'asset-only', ''],
+        segments=[first_segment, second_segment])
+    second_asset = replace(asset, id='second-value-asset', user_tags=['repeat'], duration_seconds=2,
+        segments=[replace(segment, id='third-segment', asset_id='second-value-asset',
+            start_seconds=0, end_seconds=1.23456, system_tags=['repeat'], user_tags=['repeat'], usage_count=5)])
+    values = (first_asset, second_asset)
+    untouched = deepcopy([asdict(item) for item in values])
+    projected = material_library_insights(values)
+    assert [asdict(item) for item in values] == untouched
+    assert (projected['asset_count'], projected['segment_count']) == (2, 3)
+    assert [item['tag'] for item in projected['tags']] == [
+        'repeat', '', '办公室', 'asset-only', '主体:人物', '内容:软件界面', '动作:打字',
+        '场景:办公', '场景:户外', '物体:电脑', '镜头:特写']
+    tags = {item['tag']: item for item in projected['tags']}
+    assert tags['repeat'] == {'tag': 'repeat', 'asset_count': 2, 'segment_count': 3,
+        'duration_seconds': 5.235, 'usage_count': 12}
+    assert tags['asset-only'] == {'tag': 'asset-only', 'asset_count': 1, 'segment_count': 0,
+        'duration_seconds': 0.0, 'usage_count': 0}
+    assert tags[''] == {'tag': '', 'asset_count': 0, 'segment_count': 1,
+        'duration_seconds': 2.0, 'usage_count': 3}
+    assert tags['主体:人物']['asset_count'] == tags['主体:人物']['segment_count'] == 0
+    assert projected['recommended_gaps'] == ['内容:软件界面', '动作:打字', '场景:户外', '物体:电脑', '镜头:特写']
+
+    # A second private asset is actual persisted input, never a mocked visible list.
+    other_path = repo.video_library_path / 'other-private.mp4'
+    other_path.write_bytes(b'isolated other-member metadata; no media decoding')
+    repo._save_asset(replace(asset, id='other-private', owner_user_id='other', path=str(other_path),
+        file_name=other_path.name, size_bytes=other_path.stat().st_size,
+        segments=[replace(segment, id='other-private-segment', asset_id='other-private',
+            system_tags=['other-private-tag'], user_tags=[])], user_tags=['other-private-tag']))
+    reopened = ProductionRepository(repo.database_path, repo.video_library_path,
+        duration_reader=lambda _: 2, scene_reader=lambda *_: [])
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as connection:
+                    tables = [row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        name: sorted(connection.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall(), key=repr)
+                        for name in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    before = snapshot()
+    visible = reopened.list_assets('ws', viewer_user_id='member', local_diagnostic=False)
+    assert [item.id for item in visible] == [asset.id]
+    assert reopened.library_insights('ws', viewer_user_id='member') == material_library_insights(visible) == insights
+    other = reopened.library_insights('ws', viewer_user_id='other')
+    assert other['asset_count'] == 1 and other['segment_count'] == 1
+    assert 'other-private-tag' in {item['tag'] for item in other['tags']}
+    assert 'other-private-tag' not in {item['tag'] for item in insights['tags']}
+    # Legacy repository calls without a viewer include private assets; this is not anonymous HTTP.
+    assert reopened.library_insights('ws')['asset_count'] == 2
+    assert snapshot() == before
 
 
 class VoiceProvider:
