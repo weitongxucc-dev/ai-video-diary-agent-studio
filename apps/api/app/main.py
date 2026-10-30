@@ -3816,20 +3816,27 @@ app.include_router(build_script_library_router(
     use_case=_script_library_use_case, workspace_id=lambda request: current_workspace_id(request)))
 
 
-@app.get("/api/creation-tasks", response_model=CreationTasksResponse)
-def list_creation_tasks(request: Request) -> CreationTasksResponse:
-    workspace_id = current_workspace_id(request)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    tasks = production_repo.task_records.list_creation_tasks(
-        workspace_id,
-        include_private=_content_include_private(request),
-        viewer_user_id=viewer_user_id,
-        local_diagnostic=local_diagnostic,
+from app.task_workspace_routes import build_task_workspace_router
+
+
+def _task_workspace_http_router(route_names):
+    return build_task_workspace_router(
+        workspace_for=lambda: current_workspace_id,
+        reader_for=lambda: _content_reader,
+        production_for=lambda: production_repo,
+        private_for=lambda: _content_include_private,
+        list_response_for=lambda: CreationTasksResponse,
+        summary_for=lambda: project_task_summary,
+        write_guard_for=lambda: _local_member_write_guard,
+        http_error_for=lambda: HTTPException,
+        workspace_response_for=lambda: _creation_task_workspace_response,
+        task_for=lambda: _creation_task_or_404,
+        readable_for=lambda: _readable_creation_task,
+        route_names=route_names,
     )
-    return CreationTasksResponse(
-        items=[project_task_summary(production_repo, item).summary for item in tasks],
-        total_count=len(tasks),
-    )
+
+
+app.include_router(_task_workspace_http_router(('list_creation_tasks',)))
 
 
 def _creation_task_or_404(workspace_id: str, task_id: str) -> CreationTask:
@@ -3918,45 +3925,7 @@ app.include_router(build_task_topic_router(
 ))
 
 
-@app.put(
-    "/api/creation-tasks/{task_id}/visibility",
-    response_model=CreationTaskWorkspaceResponse,
-)
-def set_creation_task_visibility_route(
-    task_id: str,
-    request: Request,
-    payload: ContentVisibilityRequest,
-) -> CreationTaskWorkspaceResponse:
-    """显式共享或收回一条创作任务；响应回读同一列。"""
-    denied = _local_member_write_guard(request)
-    if denied is not None:
-        return denied
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.task_records.set_creation_task_visibility(workspace_id, task_id, payload.visibility)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _creation_task_workspace_response(
-        workspace_id,
-        _creation_task_or_404(workspace_id, task_id),
-    )
-
-
-@app.get(
-    "/api/creation-tasks/{task_id}",
-    response_model=CreationTaskWorkspaceResponse,
-)
-def get_creation_task_workspace(
-    task_id: str,
-    request: Request,
-) -> CreationTaskWorkspaceResponse:
-    workspace_id = current_workspace_id(request)
-    return _creation_task_workspace_response(
-        workspace_id,
-        _readable_creation_task(request, task_id),
-    )
+app.include_router(_task_workspace_http_router(('set_creation_task_visibility_route', 'get_creation_task_workspace')))
 
 
 from app.task_knowledge_adoption_routes import build_task_knowledge_adoption_router

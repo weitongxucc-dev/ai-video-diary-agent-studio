@@ -2933,11 +2933,76 @@ def task_record_no_execution(monkeypatch):
     monkeypatch.setattr(main_module.CreationPlanPreflightUseCase, "prepare", metadata_preflight)
 
 
+@pytest.fixture(autouse=True)
+def task_workspace_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname != 'test_creation_task_list_is_workspace_scoped_ordered_and_read_only':
+        return None
+    import sqlite3
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.artifact_store import ArtifactStore
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+    from app.sources import ObsidianVault
+
+    # Request the existing fixture once, before other fixture seed, rather than
+    # reinstalling edit_adoption_no_execution or metadata_preflight.
+    request.getfixturevalue('task_record_no_execution')
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('workspace-aggregation-or-execution')
+        pytest.fail('task listing metadata forbids workspace aggregation, grant and execution')
+
+    monkeypatch.setattr(DeviceRuntime, 'wake', forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(main_module, '_task_workspace_read_use_case', forbidden)
+    settings = Settings(database_path=str(tmp_path / 'studio.sqlite3'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'output'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, 'settings', settings)
+    monkeypatch.setattr(main_module, '_workspace_settings_for', lambda workspace_id: settings)
+    monkeypatch.setattr(main_module, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main_module, 'device_runtime', None)
+    monkeypatch.setattr(main_module, 'vault', ObsidianVault(None))
+    monkeypatch.setattr(main_module, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as conn:
+                    tables = [row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        table: sorted((tuple(row) for row in conn.execute(
+                            'SELECT * FROM "' + table.replace('"', '""') + '"')), key=repr) for table in tables}
+        assert 'members.sqlite3' in databases
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    def check_no_execution():
+        assert violations == []
+
+    request.addfinalizer(check_no_execution)
+    return SimpleNamespace(snapshot=snapshot, violations=violations)
+
+
 def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     tmp_path,
     monkeypatch,
     plan_owner,
     task_record_no_execution,
+    task_workspace_metadata_guard,
 ):
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
@@ -2950,11 +3015,13 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
         lambda request: request.headers.get("x-test-workspace", "workspace_a"),
     )
     client = TestClient(main_module.app, headers=plan_owner[1])
+    before_empty_metadata = task_workspace_metadata_guard.snapshot()
     before_empty_list = hashlib.sha256(production.database_path.read_bytes()).hexdigest()
     empty_list = client.get("/api/creation-tasks")
     assert empty_list.status_code == 200
     assert empty_list.json() == {"items": [], "total_count": 0}
     assert hashlib.sha256(production.database_path.read_bytes()).hexdigest() == before_empty_list
+    assert task_workspace_metadata_guard.snapshot() == before_empty_metadata
 
     def confirm(goal: str, workspace_id: str) -> dict[str, object]:
         payload = {"goal": goal, "name": goal}
@@ -2986,6 +3053,10 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     assert task_records.list_creation_tasks("workspace_a", local_diagnostic=True, include_private=False) == []
     assert [task.id for task in task_records.list_creation_tasks(
         "workspace_a", viewer_user_id="", local_diagnostic=True)] == expected_ids
+    # The join is authorized preparation, before the next no-write interval.
+    members = main_module.local_members_service
+    _, other_token = members.join(members.create_invite_code(), 'Other reader')
+    before_list_metadata = task_workspace_metadata_guard.snapshot()
     before_list = hashlib.sha256(production.database_path.read_bytes()).hexdigest()
 
     list_a = client.get("/api/creation-tasks", headers={"x-test-workspace": "workspace_a"})
@@ -3004,6 +3075,25 @@ def test_creation_task_list_is_workspace_scoped_ordered_and_read_only(
     ]
     assert list_b.json()["total_count"] == 1
     assert hashlib.sha256(production.database_path.read_bytes()).hexdigest() == before_list
+
+    assert task_workspace_metadata_guard.snapshot() == before_list_metadata
+    task_id = first_a['creation_task']['id']
+    private = client.get('/api/creation-tasks/' + task_id, headers={
+        'x-test-workspace': 'workspace_a', 'X-Local-Member-Token': other_token})
+    assert private.status_code == 404 and private.json()['detail'] == 'creation task not found'
+    assert client.get('/api/creation-tasks/missing', headers={'x-test-workspace': 'workspace_a'}).status_code == 404
+    visibility_url = '/api/creation-tasks/' + task_id + '/visibility'
+    assert client.put(visibility_url, json={'visibility': 'shared'}, headers={
+        'x-test-workspace': 'workspace_a', 'X-Local-Member-Token': other_token}).status_code == 403
+    assert client.put(visibility_url, json={'visibility': 'shared'}, headers={
+        'x-test-workspace': 'workspace_a', 'X-Local-Member-Token': 'invalid-token'}).status_code == 401
+    assert client.put('/api/creation-tasks/missing/visibility', json={'visibility': 'shared'},
+        headers={'x-test-workspace': 'workspace_a'}).status_code == 404
+    assert client.put(visibility_url, json={'visibility': 'invalid'},
+        headers={'x-test-workspace': 'workspace_a'}).status_code == 422
+    assert task_workspace_metadata_guard.snapshot() == before_list_metadata
+    assert production.job_records.list_job_runs('workspace_a', task_id) == []
+    assert task_workspace_metadata_guard.violations == []
 
 
 def _configure_workspace_text_service(
