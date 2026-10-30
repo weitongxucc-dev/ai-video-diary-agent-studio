@@ -445,7 +445,7 @@ def test_slow_auth_does_not_block_public_or_other_workspace_requests(auth_ctx, m
     monkeypatch.setattr("app.repository._AUTH_ENABLED", True)
     app = FastAPI()
     app.middleware("http")(main_module.auth_boundary_middleware)
-    app.add_api_route("/api/version", main_module.get_version)
+    app.add_api_route("/api/version", next(route.endpoint for route in main_module.app.routes if route.name == "get_version"))
 
     @app.api_route("/test/workspace", methods=["GET"])
     @app.api_route(main_module.DEVICE_INVITE_ACCEPT_PATH, methods=["POST"])

@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.application_info_routes import build_application_info_router
 from app.voice_reference_routes import build_voice_reference_router
 from app.media_capability_routes import build_media_capability_router
 from app.voice_transcription_routes import build_voice_transcription_router
@@ -1079,18 +1080,22 @@ def _script_package_from_response(script) -> ScriptPackage:
     )
 
 
-@app.get("/api/system/status", response_model=SystemStatusResponse)
-def get_system_status() -> SystemStatusResponse:
-    return SystemStatusResponse.model_validate(settings.public_status())
-
-
-@app.get("/api/workflow/status", response_model=WorkflowStatusResponse)
-def get_workflow_status() -> WorkflowStatusResponse:
-    return WorkflowStatusResponse(
-        framework="LangGraph",
-        node_names=workflow.node_names(),
-        human_review_nodes=workflow.human_review_nodes(),
+def _application_info_http_router(route_names):
+    return build_application_info_router(
+        system_type_for=lambda: SystemStatusResponse,
+        settings_for=lambda: settings,
+        workflow_type_for=lambda: WorkflowStatusResponse,
+        workflow_for=lambda: workflow,
+        process_for=lambda: subprocess,
+        file_for=lambda: __file__,
+        route_names=route_names,
     )
+
+
+app.include_router(_application_info_http_router(("get_system_status",)))
+
+
+app.include_router(_application_info_http_router(("get_workflow_status",)))
 
 
 app.include_router(build_scheduled_task_router(
@@ -7727,52 +7732,7 @@ def list_production_montage_clip_candidates(
 
 
 
-@app.get("/api/version")
-async def get_version():
-    """Return the current API version, build info, and completed phases."""
-    from pathlib import Path as _Path
-
-    # Read version from pyproject.toml
-    version = "0.1.0"
-    pyproject_path = _Path(__file__).resolve().parent.parent / "pyproject.toml"
-    if pyproject_path.exists():
-        for line in pyproject_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("version"):
-                version = stripped.split("=", 1)[1].strip().strip('"')
-                break
-
-    # Read git commit and date
-    git_commit = ""
-    build_date = ""
-    try:
-        result = subprocess.run(  # noqa: ASYNC221
-            ["git", "log", "-1", "--format=%H,%aI"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            cwd=_Path(__file__).resolve().parents[3],
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            parts = result.stdout.strip().split(",", 1)
-            git_commit = parts[0]
-            build_date = parts[1] if len(parts) > 1 else ""
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-    return {
-        "version": version,
-        "build_date": build_date,
-        "git_commit": git_commit,
-        "phases_completed": [
-            "phase-a-script-control-feedback-foundations",
-            "phase-b-production-modes-chain-source-lifecycle",
-            "phase-c-publish-feedback-episode-history",
-            "phase-d-source-sync-preference-cards",
-            "phase-0-emergency-hardening",
-        ],
-    }
+app.include_router(_application_info_http_router(("get_version",)))
 
 
 def _require_feature(feature: str) -> None:
