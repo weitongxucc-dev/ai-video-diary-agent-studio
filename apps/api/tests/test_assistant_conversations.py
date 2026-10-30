@@ -1,3 +1,4 @@
+import pytest
 from app.materials.library_routes import MaterialLibraryHTTPAdapter
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
@@ -9,7 +10,93 @@ from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
 
 
-def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypatch):
+@pytest.fixture(autouse=True)
+def assistant_capability_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname != 'test_assistant_capabilities_describes_product_sdk_runtime':
+        return None
+    import sqlite3
+    import subprocess
+    import wave
+    import httpx
+    from PIL import Image
+    from app import assistant_pi
+    from app.assistant import runtime_checks
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('actual-pi-runtime-or-media')
+        pytest.fail('controlled capability projection forbids actual Pi checks, network, runtime and media')
+
+    # Protect before the original member seed; the original body later supplies its controlled main lambda.
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    monkeypatch.setattr(assistant_pi, 'pi_runtime_checks', forbidden)
+    monkeypatch.setattr(assistant_pi, 'runtime_checks', forbidden)
+    monkeypatch.setattr(runtime_checks, 'runtime_checks', forbidden)
+    monkeypatch.setattr(main_module, 'pi_runtime_checks', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_build_device_components', '_start_device_runtime',
+                 '_device_operation_budget', '_workspace_settings_for', 'run_task_turn',
+                 'run_plan_turn', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    monkeypatch.setattr(main_module, 'montage_renderer', SimpleNamespace(render=forbidden))
+    monkeypatch.setattr(main_module, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
+    settings = Settings(database_path=str(tmp_path / 'unused.sqlite'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'outputs'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, 'settings', settings)
+    monkeypatch.setattr(main_module, 'auth_context', SupabaseAuthContext(settings))
+    for name in ('device_runtime', 'automation_runtime', 'production_repo', 'conversation_repo',
+                 'source_repository', 'artifact_store', 'local_members_service', 'vault'):
+        monkeypatch.setattr(main_module, name, None)
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as connection:
+                    tables = [row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        name: sorted(connection.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall(), key=repr)
+                        for name in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    def prepare():
+        prepared = snapshot()  # Original member/schema and controlled monkeypatch preparation is complete.
+        assert set(prepared[0]) == {'capability-members.sqlite3'}
+        return prepared
+
+    def assert_unchanged(prepared):
+        # The original successful controlled projection already ran; this refusal must precede even a check.
+        monkeypatch.setattr(main_module, 'pi_runtime_checks', forbidden)
+        invalid = TestClient(main_module.app).get('/api/assistant/capabilities',
+            headers={'X-Local-Member-Token': 'invalid-token'})
+        assert invalid.status_code == 401
+        assert snapshot() == prepared
+        assert violations == []
+
+    return SimpleNamespace(prepare=prepare, assert_unchanged=assert_unchanged)
+
+
+def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypatch, assistant_capability_metadata_guard):
     members = LocalMemberService(tmp_path / "capability-members.sqlite3")
     _member, token = members.join(members.create_invite_code(), "成员甲")
     monkeypatch.setattr(main_module, "local_members_service", members)
@@ -17,6 +104,7 @@ def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypa
     monkeypatch.setattr(main_module, "pi_runtime_checks", lambda: [{
         "id": "pi", "status": "ready", "version": "1.4.0", "reason": "隔离版本检查已通过。",
     }])
+    prepared_metadata = assistant_capability_metadata_guard.prepare()
     response = TestClient(main_module.app).get(
         "/api/assistant/capabilities", headers={"X-Local-Member-Token": token},
     )
@@ -34,6 +122,7 @@ def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypa
     assert response.json()["business_tools"] == {
         scope: list(tools) for scope, tools in ASSISTANT_BUSINESS_TOOLS.items()
     }
+    assistant_capability_metadata_guard.assert_unchanged(prepared_metadata)
 
 
 def test_conversation_resume_selects_persistent_current_for_trusted_member(tmp_path, monkeypatch):
