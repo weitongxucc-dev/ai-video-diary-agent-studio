@@ -5591,16 +5591,13 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
     raise HTTPException(status_code=409, detail='unsupported creation task edit operation')
 
 
-@app.get("/api/creation-tasks/{task_id}/assistant/edit-capabilities")
-def get_creation_task_edit_capabilities(task_id: str, request: Request):
-    task, _member_id = _exact_edit_access(task_id, request)
-    return _task_edit_capability_facts(task)
+from app.task_capability_routes import build_task_capability_router
 
-
-@app.get("/api/creation-tasks/{task_id}/assistant/execution-capabilities")
-def get_creation_task_execution_capabilities(task_id: str, request: Request):
-    task, _member_id = _exact_edit_access(task_id, request)
-    return _task_execution_capability_facts(task)
+app.include_router(build_task_capability_router(
+    access_for=lambda: _exact_edit_access,
+    edit_facts_for=lambda: _task_edit_capability_facts,
+    execution_facts_for=lambda: _task_execution_capability_facts,
+))
 
 
 def _task_execution_capability_facts(task):

@@ -14,6 +14,99 @@ from test_linked_timeline_reorder import _build_linked_state
 
 
 @pytest.fixture(autouse=True)
+def task_capability_metadata_guard(request, monkeypatch, tmp_path):
+    targets = {'test_execution_capability_read_is_authorized_and_does_not_start_runtime',
+               'test_capabilities_are_real_schema_and_exclude_unmigrated_actions'}
+    if request.node.originalname not in targets:
+        return None
+    import sqlite3
+    from types import SimpleNamespace
+    import httpx
+    from PIL import Image
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+    from app import host_resource_probes
+    from app.source_repository import SourceRepository
+    from app.sources import ObsidianVault
+
+    execution = request.node.originalname == 'test_execution_capability_read_is_authorized_and_does_not_start_runtime'
+    # capability_metadata_state already installs this exact guard in metadata_http_state.
+    # Only the execution branch needs its missing seed-before invocation.
+    if execution:
+        from test_production_foundation import edit_adoption_no_execution
+        edit_adoption_no_execution(monkeypatch)
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('capability-execution-or-probe')
+        pytest.fail('capability metadata forbids runtime, grants, host sampling, network and media')
+
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'wake', forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    monkeypatch.setattr(host_resource_probes, 'sample_host_capacity', forbidden)
+    monkeypatch.setattr(host_resource_probes.HostResourceProbe, '_sample', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('_device_operation_budget', '_build_device_components',
+                 '_wake_assistant_continuations', '_workspace_settings_for'):
+        monkeypatch.setattr(main, name, forbidden)
+    settings = Settings(database_path=str(tmp_path / 'editor.sqlite3'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'outputs'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main, 'settings', settings)
+    monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, 'automation_runtime', None)
+    monkeypatch.setattr(main, 'conversation_repo', None)
+    monkeypatch.setattr(main, 'source_repository', None)
+    monkeypatch.setattr(main, 'artifact_store', None)
+    monkeypatch.setattr(main, 'vault', ObsidianVault(None))
+    # The original capability fixture installs its guard before its metadata seed.
+    state = request.getfixturevalue('metadata_http_state' if execution else 'capability_metadata_state')
+    monkeypatch.setattr(main, 'conversation_repo', ConversationRepository(state.repo.database_path))
+    monkeypatch.setattr(main, 'source_repository', SourceRepository(state.repo.database_path))
+    other, other_token = state.members.join(state.members.create_invite_code(), 'Other capability reader')
+    assert other.member_id != state.member.member_id
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).visibility == 'private'
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as connection:
+                    tables = [row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        name: sorted(connection.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall(), key=repr)
+                        for name in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    before = snapshot()  # All schema, editorial declarations and member writes are preparation.
+
+    def assert_unchanged():
+        suffix = '/assistant/execution-capabilities' if execution else '/assistant/edit-capabilities'
+        invalid = state.client.get(state.url + suffix, headers={'X-Local-Member-Token': 'invalid-token'})
+        assert invalid.status_code == 401
+        private = state.client.get(state.url + suffix, headers={'X-Local-Member-Token': other_token})
+        assert private.status_code == 404 and private.json()['detail'] == 'creation task not found'
+        assert snapshot() == before
+        assert state.repo.job_records.list_job_runs('ws', state.task.id) == []
+        assert violations == []
+
+    return SimpleNamespace(assert_unchanged=assert_unchanged)
+
+
+@pytest.fixture(autouse=True)
 def typed_settings(request, monkeypatch):
     if "material_edit_state" in request.fixturenames:
         material_edit_state = request.getfixturevalue("material_edit_state")
@@ -149,7 +242,7 @@ def test_task_turn_scope_uses_current_metadata_refs_and_original_stage_gates(sco
     assert scope("review", selected, 4000) == ("review", selected)
     assert scope("subtitle_cover", ["cover:" + task.id]) == ("subtitle_cover", ["cover:" + task.id])
 
-def test_execution_capability_read_is_authorized_and_does_not_start_runtime(metadata_http_state, monkeypatch):
+def test_execution_capability_read_is_authorized_and_does_not_start_runtime(metadata_http_state, monkeypatch, task_capability_metadata_guard):
     state = metadata_http_state
     monkeypatch.setattr(main, "device_runtime", None)
 
@@ -168,6 +261,7 @@ def test_execution_capability_read_is_authorized_and_does_not_start_runtime(meta
     assert state.client.get(state.url + "/assistant/execution-capabilities",
                             headers={"x-test-workspace": "outside"}).status_code == 404
     assert state.client.get("/api/creation-tasks/missing/assistant/execution-capabilities").status_code == 404
+    task_capability_metadata_guard.assert_unchanged()
 
 
 def _workspace_row_script(state):
@@ -560,7 +654,7 @@ def capability_metadata_state(metadata_http_state):
     return metadata_http_state
 
 
-def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(capability_metadata_state, monkeypatch):
+def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(capability_metadata_state, monkeypatch, task_capability_metadata_guard):
     state = capability_metadata_state
     monkeypatch.setattr(main, "device_runtime", None)
     response = state.client.get(state.base_url + "/assistant/edit-capabilities")
@@ -586,6 +680,7 @@ def test_capabilities_are_real_schema_and_exclude_unmigrated_actions(capability_
     # Same actual factory read port, without invoking an Agent turn or asserting write authority.
     business = main._task_business(generation_case=object())
     assert business.edit_capabilities(state.task) == value
+    task_capability_metadata_guard.assert_unchanged()
 
 
 def test_typed_replace_replay_lost_receipt_and_undo_keep_narration(material_edit_state):
