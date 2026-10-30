@@ -355,7 +355,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -3448,21 +3448,24 @@ def assistant_capabilities(request: Request):
 
 
 
-@app.post(
-    "/api/assistant/plan/turn",
-    response_model=WorkspaceAssistantPlanTurnResponse,
-)
-def workspace_assistant_plan_turn(
-    request: Request,
-    payload: WorkspaceAssistantPlanTurnRequest,
-) -> WorkspaceAssistantPlanTurnResponse:
-    if "text/event-stream" in request.headers.get("accept", "").lower():
-        workspace_id = current_workspace_id(request)
-        return _assistant_stream_transport().response(
-            lambda on_event: _workspace_assistant_plan_turn(request, payload, on_event),
-            workspace_id=workspace_id,
-        )
-    return _workspace_assistant_plan_turn(request, payload, None)
+from app.workspace_assistant_turn_routes import build_workspace_assistant_turn_router
+
+
+def _workspace_assistant_turn_http_router(route_names):
+    return build_workspace_assistant_turn_router(
+        workspace_for=lambda: current_workspace_id,
+        stream_for=lambda: _assistant_stream_transport,
+        plan_for=lambda: _workspace_assistant_plan_turn,
+        member_for=lambda: _assistant_member_id,
+        conversations_for=lambda: conversation_repo,
+        selection_for=lambda: _assistant_material_selection_snapshot,
+        plan_request_for=lambda: WorkspaceAssistantPlanTurnRequest,
+        material_response_for=lambda: MaterialAssistantTurnResponse,
+        route_names=route_names,
+    )
+
+
+app.include_router(_workspace_assistant_turn_http_router(('workspace_assistant_plan_turn',)))
 
 
 def _workspace_assistant_plan_turn(
@@ -3591,18 +3594,7 @@ def _workspace_assistant_plan_turn(
     return response
 
 
-@app.post("/api/assistant/material/turn", response_model=MaterialAssistantTurnResponse)
-def material_assistant_turn(
-    request: Request,
-    payload: MaterialAssistantTurnRequest,
-) -> MaterialAssistantTurnResponse:
-    if "text/event-stream" in request.headers.get("accept", "").lower():
-        workspace_id = current_workspace_id(request)
-        return _assistant_stream_transport().response(
-            lambda on_event: _material_assistant_turn(request, payload, on_event),
-            workspace_id=workspace_id,
-        )
-    return _material_assistant_turn(request, payload, None)
+app.include_router(_workspace_assistant_turn_http_router(('material_assistant_turn',)))
 
 
 def _assistant_material_selection_snapshot(request: Request, selection: dict, *, replay: bool = False) -> tuple[dict, object]:
@@ -3652,23 +3644,6 @@ def _assistant_task_clip_material_selection(request: Request, task, selected_ref
         raise
 
 
-def _material_assistant_turn(
-    request: Request,
-    payload: MaterialAssistantTurnRequest,
-    on_event,
-) -> MaterialAssistantTurnResponse:
-    selection = None
-    workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
-    previous = conversation_repo.request_context(str(payload.client_request_id), str(payload.conversation_id), workspace_id, member_id)
-    if payload.selection is not None:
-        selection, _asset = _assistant_material_selection_snapshot(
-            request, payload.selection.model_dump(mode="json", exclude_none=True), replay=previous is not None)
-        if previous is not None:
-            selection = previous["target_snapshot"].get("material_selection")
-    response = _workspace_assistant_plan_turn(request, WorkspaceAssistantPlanTurnRequest(
-        **payload.model_dump(exclude={"selection"})), on_event, material_selection=selection)
-    return MaterialAssistantTurnResponse.model_validate(response.model_dump())
 
 
 def _creation_request_response(data: dict) -> CreationRequestResponse:

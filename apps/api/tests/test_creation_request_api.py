@@ -639,7 +639,7 @@ def test_material_tag_receipt_still_requires_exact_bound_object(client_state, mo
     if result_asset == "malformed":
         del raw["user_tags"]
     monkeypatch.setattr(main, "run_plan_turn", lambda *_args, **_kwargs: ("已回读", {"kind": "material_result", "material_result": raw}))
-    c.client.app.add_api_route("/api/assistant/material/turn", main.material_assistant_turn, methods=["POST"])
+    c.client.app.add_api_route("/api/assistant/material/turn", next(route.endpoint for route in main.app.routes if route.name == 'material_assistant_turn'), methods=["POST"])
     chat = c.conversations.create("request-test", c.member.member_id, "home", "home", "素材")
     c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, "添加配图标签", 0)
     payload = {"conversation_id": chat["id"], "message": "添加配图标签", "client_request_id": str(uuid4()),

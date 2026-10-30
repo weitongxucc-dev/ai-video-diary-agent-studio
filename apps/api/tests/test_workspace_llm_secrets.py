@@ -330,7 +330,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
     conversation = main_module.conversation_repo.get(conversation["id"], "ws-a", "u")
     assert conversation is not None and conversation["draft_text"] == "帮我列个提纲"
 
-    response = main_module.workspace_assistant_plan_turn(
+    response = next(route.endpoint for route in main_module.app.routes if route.name == 'workspace_assistant_plan_turn')(
         request, WorkspaceAssistantPlanTurnRequest(
             conversation_id=conversation["id"], message="帮我列个提纲",
             client_request_id=str(uuid4()), expected_draft_version=conversation["draft_version"],
