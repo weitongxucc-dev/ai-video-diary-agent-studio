@@ -355,7 +355,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -4943,30 +4943,26 @@ def _creation_task_montage_candidates(workspace_id,plan,clip,*,automation_only=F
     return _metadata_edit_use_case().montage_candidates(workspace_id,plan,clip,automation_only=automation_only,viewer_user_id=viewer_user_id,local_diagnostic=local_diagnostic)
 
 
-@app.get(
-    "/api/creation-tasks/{task_id}/montage/clips/{clip_id}/candidates",
-    response_model=list[MontageClipCandidateResponse],
-)
-def get_creation_task_montage_clip_candidates(
-    task_id: str,
-    clip_id: str,
-    request: Request,
-    for_automation: bool = False,
-) -> list[MontageClipCandidateResponse]:
-    workspace_id = current_workspace_id(request)
-    _creation_task_or_404(workspace_id, task_id)
-    try:
-        plan = creation_task_montage_plan_from_payload(
-            production_repo.get_creation_task_montage_plan(workspace_id, task_id)
-        )
-        clip = next(item for item in plan.clips if item.id == clip_id)
-    except (KeyError, StopIteration) as exc:
-        raise HTTPException(status_code=404, detail="creation task montage clip not found") from exc
-    return _creation_task_montage_candidates(
-        workspace_id, plan, clip, automation_only=for_automation,
-        viewer_user_id=_content_reader(request, workspace_id)[0],
-        local_diagnostic=_content_reader(request, workspace_id)[1],
+from app.task_montage_control_routes import build_task_montage_control_router
+
+
+def _task_montage_control_http_router(route_names):
+    return build_task_montage_control_router(
+        workspace_for=lambda: current_workspace_id,
+        task_for=lambda: _creation_task_or_404,
+        plan_from_for=lambda: creation_task_montage_plan_from_payload,
+        production_for=lambda: production_repo,
+        http_error_for=lambda: HTTPException,
+        candidates_for=lambda: _creation_task_montage_candidates,
+        reader_for=lambda: _content_reader,
+        save_for=lambda: _save_direct_metadata_edit,
+        edit_request_for=lambda: CreationTaskExactEditRequest,
+        fields_for=lambda: EXACT_EDIT_FIELDS,
+        route_names=route_names,
     )
+
+
+app.include_router(_task_montage_control_http_router(('get_creation_task_montage_clip_candidates',)))
 
 
 def _edit_preview_response(
@@ -6313,79 +6309,7 @@ def _apply_creation_task_montage_clip_update(workspace_id,task_id,plan,clip_id,p
     except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
-@app.patch(
-    "/api/creation-tasks/{task_id}/montage/clips/{clip_id}",
-    response_model=CreationTaskMontagePlanResponse,
-)
-def update_creation_task_montage_clip(
-    task_id: str,
-    clip_id: str,
-    request: Request,
-    payload: CreationTaskMontageClipUpdateRequest,
-) -> CreationTaskMontagePlanResponse:
-    if any(value is not None for value in (payload.fit_mode, payload.crop_x, payload.crop_y, payload.split_time_seconds, payload.playback_rate)):
-        raise HTTPException(status_code=409, detail="请通过精确编辑预览确认修改。")
-    categories = [
-        name
-        for name, active in (
-            ("ReplaceClip", payload.asset_id is not None or payload.segment_id is not None),
-            ("TrimClip", payload.source_start_seconds is not None and payload.asset_id is None and payload.segment_id is None),
-            ("ReorderClip", payload.position is not None),
-            ("SetClipLock", payload.locked is not None),
-            ("ConfirmClip", payload.confirmed is True),
-        )
-        if active
-    ]
-    if len(categories) != 1:
-        raise HTTPException(
-            status_code=409,
-            detail="legacy montage PATCH accepts one typed edit at a time",
-        )
-    result = _save_direct_metadata_edit(
-        task_id,
-        request,
-        CreationTaskExactEditRequest(
-            operation_type=categories[0],
-            clip_id=clip_id,
-            **{key: value for key, value in payload.model_dump(exclude_unset=True).items()
-               if key in EXACT_EDIT_FIELDS[categories[0]]},
-        ),
-    )
-    return result.montage
-
-
-@app.patch(
-    "/api/creation-tasks/{task_id}/montage/cues/{cue_id}",
-    response_model=CreationTaskMontagePlanResponse,
-)
-def update_creation_task_subtitle_cue(
-    task_id: str,
-    cue_id: str,
-    request: Request,
-    payload: CreationTaskSubtitleCueUpdateRequest,
-) -> CreationTaskMontagePlanResponse:
-    result = _save_direct_metadata_edit(
-        task_id,
-        request,
-        CreationTaskExactEditRequest(
-            operation_type="UpdateSubtitleCue",
-            cue_id=cue_id,
-            text=payload.text,
-        ),
-    )
-    return result.montage
-
-
-@app.post(
-    "/api/creation-tasks/{task_id}/montage/render",
-    response_model=CreationTaskMontagePlanResponse,
-)
-def render_creation_task_montage(
-    task_id: str,
-    request: Request,
-    _payload: CreationTaskMontageRenderRequest,
-) -> CreationTaskMontagePlanResponse:
-    raise HTTPException(status_code=409, detail="请使用开始/继续制作，成片必须进入设备队列")
+app.include_router(_task_montage_control_http_router(('update_creation_task_montage_clip', 'update_creation_task_subtitle_cue', 'render_creation_task_montage')))
 
 
 
