@@ -17,6 +17,94 @@ from test_creation_task_script_grounding import (
 from test_knowledge_original_files import uploaded, word_file
 
 
+@pytest.fixture(autouse=True)
+def knowledge_adoption_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.name not in {
+        'test_stale_plan_or_task_revision_rejects_without_writes[expected_plan_updated_at]',
+        'test_unavailable_source_is_rejected_before_plan_or_task_write[missing]',
+    }:
+        return None
+    import sqlite3
+    import subprocess
+    import wave
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.artifact_store import ArtifactStore
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('knowledge-adoption-media-or-execution')
+        pytest.fail('knowledge refusal metadata forbids models, script execution, runtime, grants and media')
+
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn',
+                 '_execute_script_generation', '_creation_task_script_generator_for',
+                 '_creation_task_topic_generator_for', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(main, 'montage_renderer', SimpleNamespace(render=forbidden))
+    monkeypatch.setattr(main, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
+    provider = SimpleNamespace(ready=False, model_id='metadata-only', render=forbidden, generate=forbidden)
+    monkeypatch.setattr(main, 'latentsync_provider', provider)
+    monkeypatch.setattr(main, 'avatar_lipsync_provider', provider)
+    monkeypatch.setattr(main, 'video_job_runner', SimpleNamespace(run=forbidden))
+    settings = Settings(database_path=str(tmp_path / 'isolated.sqlite'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'output'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main, 'settings', settings)
+    monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
+    # Load the unchanged text-only fixture only after all execution guards exist.
+    target = request.getfixturevalue('state')
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as conn:
+                    tables = [row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        table: sorted((tuple(row) for row in conn.execute(
+                            'SELECT * FROM "' + table.replace('"', '""') + '"')), key=repr) for table in tables}
+        tree = {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob('*')}
+        return databases, tree
+
+    def assert_reads_unchanged(body, before):
+        url = '/api/creation-tasks/task/knowledge-adoptions/'
+        missing = target.client.get(url + body['request_id'])
+        assert missing.status_code == 404
+        assert missing.json()['detail'] == '没有找到此成员在当前任务中的原资料采用回执。'
+        assert target.client.get(url + 'not-a-uuid').status_code == 422
+        assert snapshot() == before
+        assert target.repository.job_records.list_job_runs('local', 'task') == []
+        assert violations == []
+
+    target._adoption_http_metadata = SimpleNamespace(snapshot=snapshot, assert_reads_unchanged=assert_reads_unchanged)
+
+    def check_no_execution():
+        assert violations == []
+
+    request.addfinalizer(check_no_execution)
+
+
 @pytest.fixture
 def state(api_state):
     for route in main.app.routes:
@@ -146,9 +234,12 @@ def test_stale_plan_or_task_revision_rejects_without_writes(state, field):
     body = command(state, knowledge(state))
     body[field] = '2000-01-01T00:00:00Z'
     before = rows(state)
+    before_metadata = state._adoption_http_metadata.snapshot() if field == 'expected_plan_updated_at' else None
     response = adopt(state, body)
     assert response.status_code == 409 and '版本已变化' in response.text
     assert rows(state) == before
+    if before_metadata is not None:
+        state._adoption_http_metadata.assert_reads_unchanged(body, before_metadata)
 
 
 @pytest.mark.parametrize('case', ['missing', 'wrong_version', 'private', 'other_workspace', 'excluded', 'not_for_automation'])
@@ -163,9 +254,12 @@ def test_unavailable_source_is_rejected_before_plan_or_task_write(state, case):
     elif case in {'excluded', 'not_for_automation'}:
         state.sources.set_knowledge_item_use_state('local', item.id, case)
     before = rows(state)
+    before_metadata = state._adoption_http_metadata.snapshot() if case == 'missing' else None
     response = adopt(state, body)
     assert response.status_code in {404, 409}, response.text
     assert rows(state) == before
+    if before_metadata is not None:
+        state._adoption_http_metadata.assert_reads_unchanged(body, before_metadata)
 
 
 def test_receipt_request_identity_cannot_be_reused_for_different_sources(state):
