@@ -2396,9 +2396,6 @@ def _output_observation_facts(workspace_id, task_id, arguments, actor):
     return case.seal_resources(source, budget, observation_budget)
 
 
-def _task_observation_facts(task_id, request):
-    task,member_id=_exact_edit_access(task_id,request)
-    return _task_observation_metadata(task,member_id)
 
 
 def _task_observation_metadata(task,member_id):
@@ -2465,30 +2462,29 @@ def _task_observation_metadata(task,member_id):
         "media_policy": "local_measurements_and_text_only"}
 
 
-@app.get("/api/creation-tasks/{task_id}/observations")
-def get_creation_task_observations(task_id: str, request: Request):
-    return _task_observation_facts(task_id, request)
+from app.task_observation_routes import build_task_observation_router
 
 
-@app.post("/api/creation-tasks/{task_id}/observations")
-def observe_creation_task_output(task_id: str, request: Request, payload: CreationTaskObservationRequest):
-    task,_member=_exact_edit_access(task_id,request,write=True)
-    actor=_require_permit_actor(request,task.workspace_id)
-    try:
-        previous=_output_observation_use_case().original_request(task,actor,payload)
-        if previous is not None:
-            return JSONResponse(status_code=202,content=previous)
-        source=_prepare_observation_request(task_id,request,payload)
-        runtime=_creation_runtime()
-        receipt=_output_observation_use_case().submit(runtime,runtime.registrations['creation_job'].owner.task_media,
-            task,actor,payload,source,receipt_for=_media_result_receipt)
-    except OutputObservationRejected as exc:
-        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (ValueError,KeyError) as exc:
-        raise HTTPException(status_code=422,detail=str(exc)) from exc
-    return JSONResponse(status_code=202,content=receipt)
+def _task_observation_http_router(route_names):
+    return build_task_observation_router(
+        access_for=lambda: _exact_edit_access,
+        metadata_for=lambda: _task_observation_metadata,
+        actor_for=lambda: _require_permit_actor,
+        case_for=lambda: _output_observation_use_case,
+        json_response_for=lambda: JSONResponse,
+        prepare_for=lambda: _prepare_observation_request,
+        runtime_for=lambda: _creation_runtime,
+        receipt_for=lambda: _media_result_receipt,
+        output_error_for=lambda: OutputObservationRejected,
+        http_error_for=lambda: HTTPException,
+        route_names=route_names,
+    )
+
+
+app.include_router(_task_observation_http_router(("get_creation_task_observations",)))
+
+
+app.include_router(_task_observation_http_router(("observe_creation_task_output",)))
 
 
 def _task_media_http_router(route_names):

@@ -2554,7 +2554,7 @@ def test_observation_reconciles_original_before_version_and_marks_unknown(tmp_pa
     monkeypatch.setattr(main_module,'_exact_edit_access',lambda *_args,**_kwargs:(later,actor.member_id))
     monkeypatch.setattr(main_module,'_require_permit_actor',lambda *_args:actor)
     monkeypatch.setattr(main_module,'_output_observation_use_case',lambda:case)
-    assert main_module.observe_creation_task_output(task_id,None,payload).status_code==202
+    assert next(route.endpoint for route in main_module.app.routes if route.name == "observe_creation_task_output")(task_id,None,payload).status_code==202
     other=payload.model_copy(update={'sample_times_seconds':[0.2]})
     with pytest.raises(OutputObservationRejected) as conflict:
         case.submit(None,None,later,actor,other,{},receipt_for=None)
@@ -2573,7 +2573,7 @@ def test_observation_reconciles_original_before_version_and_marks_unknown(tmp_pa
         def prepare(*args): raise exception
         monkeypatch.setattr(main_module,'_prepare_observation_request',prepare)
         with pytest.raises(main_module.HTTPException) as error:
-            main_module.observe_creation_task_output(task_id,None,payload)
+            next(route.endpoint for route in main_module.app.routes if route.name == "observe_creation_task_output")(task_id,None,payload)
         assert error.value.status_code==status
 
 
@@ -2728,7 +2728,7 @@ def test_original_observation_409_stays_rejected_for_http_and_host(tmp_path,monk
     monkeypatch.setattr(main_module,'_require_permit_actor',lambda *_args:actor)
     monkeypatch.setattr(main_module,'_output_observation_use_case',lambda:case)
     with pytest.raises(main_module.HTTPException) as http:
-        main_module.observe_creation_task_output(task.id,None,payload)
+        next(route.endpoint for route in main_module.app.routes if route.name == "observe_creation_task_output")(task.id,None,payload)
     assert http.value.status_code==409 and http.value.detail==rejection
     response=host('observe_task_output',{'payload':payload.model_dump(mode='json',exclude_unset=True)},
         call_id='old-refusal',tool_call_id='observe',source_binding=binding,cancel_event=Event(),deadline_monotonic=time.monotonic()+10)
