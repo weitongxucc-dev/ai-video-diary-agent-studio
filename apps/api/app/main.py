@@ -2221,9 +2221,8 @@ def _submit_audio_ingress(task_id, request, operation, result_kind, *, audio=Non
     except Exception as exc:
         if created_input is not None:
             relative = str(created_input.relative_to(settings.effective_temporary_root_path))
-            with production_repo._connect() as conn:
-                referenced = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND event_type='task_media_submitted' AND json_extract(payload_json,'$.arguments.audio.staged_input')=? LIMIT 1", (workspace_id, relative)).fetchone()
-            if referenced is None:
+            referenced = production_repo.execution_records.staged_audio_input_referenced(workspace_id, relative)
+            if not referenced:
                 created_input.unlink(missing_ok=True)
         if isinstance(exc, AudioIngressRejected):
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

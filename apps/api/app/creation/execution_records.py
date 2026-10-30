@@ -220,6 +220,11 @@ class ExecutionRecordStore:
             ).fetchone()
         return self.task_event_from_row(row) if row is not None else None
 
+    def staged_audio_input_referenced(self, workspace_id: str, relative: str) -> bool:
+        with self._connect() as conn:
+            referenced = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND event_type='task_media_submitted' AND json_extract(payload_json,'$.arguments.audio.staged_input')=? LIMIT 1", (workspace_id, relative)).fetchone()
+        return referenced is not None
+
     def list_observation_job_starts(self, workspace_id: str, task_id: str, job_kind: str, member_id: str) -> list[dict[str, object]]:
         with self._connect() as conn:
             rows = conn.execute("""SELECT j.id, e.payload_json FROM job_runs j JOIN task_events e
