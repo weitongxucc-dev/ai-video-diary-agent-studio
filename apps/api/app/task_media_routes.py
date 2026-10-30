@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from app.creation_execution import CreationExecutionActor
 
-def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, runtime_for, repository_for, receipt_for, observations_for, route_names) -> APIRouter:
+def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, route_names) -> APIRouter:
     router = APIRouter()
 
     @router.get('/api/creation-tasks/{task_id}/media-jobs')
@@ -24,6 +24,19 @@ def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, rea
     @router.post('/api/creation-tasks/{task_id}/media-jobs/{job_id}/cancel')
     def cancel_task_media_job(task_id: str, job_id: str, request: Request):
         actor = actor_for()(request, workspace_for()(request))
+        from app import creation_execution
+        observed_media, _requests = read_components_for()()
+        try:
+            observed_job, observed_event = observed_media.read(actor.workspace_id, job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail='任务媒体作业不存在') from exc
+        if (observed_job.task_id != task_id
+                or creation_execution.CreationExecutionActor.from_event(observed_job.workspace_id, observed_event) != actor):
+            raise HTTPException(status_code=404, detail='任务媒体作业不存在')
+        if observed_job.status in {'succeeded', 'failed', 'cancelled'} and not any(
+                row['state'] in {'waiting', 'blocked', 'granted', 'yield_requested'}
+                for row in repository_for().list_creation_job_request_states(observed_job.workspace_id, observed_job.id)):
+            return read_for()(task_id, job_id, request)
         runtime = runtime_for()()
         media = runtime.registrations['creation_job'].owner.task_media
         try:

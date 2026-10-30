@@ -2561,6 +2561,7 @@ def _task_media_http_router(route_names):
         task_for=lambda: _creation_task_or_404,
         list_for=lambda: _list_goal_media_jobs,
         read_for=lambda: _read_media_result,
+        read_components_for=lambda: _media_result_read_components,
         runtime_for=lambda: _creation_runtime,
         repository_for=lambda: production_repo,
         receipt_for=lambda: _media_result_receipt,

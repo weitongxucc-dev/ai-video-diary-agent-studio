@@ -166,7 +166,30 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
                 assert list(conn.iterdump()) == before_retry
         stale = client.get(url).json()
         assert stale['status'] == 'stale' and stale['resource_wait']['context'] == 'history'
-        cancelled = client.post(url+'/cancel').json()
+        calls = []
+        original_runtime = main._creation_runtime
+        original_cancel = runtime.scheduler.cancel
+        original_notify = runtime.registrations['creation_job'].executor.request_cancel
+
+        def ensure_runtime():
+            calls.append(('ensure', None))
+            return original_runtime()
+
+        def cancel_request(request_id, who):
+            calls.append(('scheduler', request_id))
+            return original_cancel(request_id, who)
+
+        def notify_request(request_id):
+            calls.append(('executor', request_id))
+            return original_notify(request_id)
+
+        with monkeypatch.context() as active_cancel:
+            active_cancel.setattr(main, '_creation_runtime', ensure_runtime)
+            active_cancel.setattr(runtime.scheduler, 'cancel', cancel_request)
+            active_cancel.setattr(runtime.registrations['creation_job'].executor, 'request_cancel', notify_request)
+            cancelled = client.post(url+'/cancel').json()
+        assert calls == [('ensure', None), ('scheduler', pending.device_request_id),
+                         ('executor', pending.device_request_id)]
         assert cancelled['status'] == 'cancelled' and cancelled['failure_reason'] == 'user_cancelled'
         assert cancelled['resource_wait']['context'] == 'history'
         assert cancelled['resource_wait']['checked_at'] == pending.resource_wait.checked_at.isoformat().replace('+00:00','Z')
@@ -179,11 +202,45 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
             before_repeat = list(conn.iterdump())
         assert requests and all(row['state'] == 'cancelled' and row['wait_reason'] == 'user_cancelled'
                                 for row in requests)
-        repeated = client.post(url+'/cancel')
+        before_repeat_tree = {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                              for path in tmp_path.rglob('*')}
+        with monkeypatch.context() as terminal_cancel:
+            def forbidden_runtime():
+                pytest.fail('terminal cancel without active requests must not ensure a runtime')
+            terminal_cancel.setattr(main, '_creation_runtime', forbidden_runtime)
+            repeated = client.post(url+'/cancel')
+        assert {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob('*')} == before_repeat_tree
         assert repeated.status_code == 200 and repeated.json() == cancelled
         with repo._connect() as conn:
             assert list(conn.iterdump()) == before_repeat
         assert repo.job_records.get_job_run('local', job.id).status == 'cancelled'
+        # Declared terminal Job with its original waiting request: it must retain the old ensure path.
+        repo.job_records.finish_job_run('local', second.id, status='cancelled', failure_reason='declared-terminal',
+            impact='Historical metadata; the original request still exists', repair_action='Read the original request')
+        active_rows = repo.list_creation_job_request_states('local', second.id)
+        assert any(row['state'] == 'waiting' for row in active_rows)
+        with repo._connect() as conn:
+            before_active_terminal = list(conn.iterdump())
+        before_active_tree = {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                              for path in tmp_path.rglob('*')}
+        unavailable = main.HTTPException(status_code=503, detail='controlled original runtime unavailable')
+        attempts = []
+
+        def unavailable_runtime():
+            attempts.append(unavailable)
+            raise unavailable
+
+        with monkeypatch.context() as pending_terminal:
+            pending_terminal.setattr(main, '_creation_runtime', unavailable_runtime)
+            blocked = client.post(f'/api/creation-tasks/task/media-jobs/{second.id}/cancel')
+        assert blocked.status_code == 503 and blocked.json()['detail'] == unavailable.detail
+        assert attempts == [unavailable]
+        with repo._connect() as conn:
+            assert list(conn.iterdump()) == before_active_terminal
+        assert {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob('*')} == before_active_tree
+        assert repo.job_records.get_job_run('local', second.id).status == 'cancelled'
         monkeypatch.setattr(main, '_require_permit_actor', lambda *args:replace(actor,member_id='other'))
         assert client.get(url).status_code == 404
     finally:
