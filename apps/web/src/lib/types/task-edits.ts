@@ -282,3 +282,20 @@ export type CreationTaskEditQueuedResponse = {
     request_id: string;
 };
 export type CreationTaskEditResult = CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse;
+
+/** A single subtitle write, retained unchanged until its original receipt is known. */
+export type CreationTaskSubtitleSaveInput = Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }> & {
+    request_id: string;
+    expected_timeline_version_id: string | null;
+    expected_timeline_sequence: number;
+};
+export type CreationTaskEditRequestReceipt = {
+    request_id: string;
+    task_id: string;
+    phase: "apply";
+    input_digest: string;
+    status: "unknown" | "recorded";
+    submitted_input: CreationTaskSubtitleSaveInput;
+    result_status_code: number | null;
+    result: CreationTaskEditResult | { detail: unknown } | null;
+};

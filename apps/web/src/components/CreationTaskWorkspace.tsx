@@ -16,6 +16,10 @@ import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
 import { getCreationTaskNarrationVoiceSelection } from "@/lib/api/creation-tasks";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
+import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
+import { isLocalAuthMode } from "@/lib/auth/routing";
+import { ensureLocalMemberIdentity } from "@/lib/local-member-auth";
+import { createClient } from "@/lib/supabase/client";
 import { CreationPlanApiError } from "@/lib/api";
 import { Tabs, TabsContent } from "./ui/tabs";
 import { Button } from "./ui/button";
@@ -34,8 +38,8 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
-import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
-import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
+import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
+import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskSubtitleSaveInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
 import { previewCreationTaskAudio, previewCreationTaskVisual, saveCreationTaskRecording } from "@/lib/api";
@@ -71,6 +75,27 @@ export type Props = {
   initialTasks: CreationTask[];
 };
 
+type PendingSubtitleSave = {
+  memberId: string;
+  taskId: string;
+  workspaceId: string;
+  input: CreationTaskSubtitleSaveInput;
+  submissionError?: ReturnType<typeof errorDetails>;
+};
+
+// This identity scopes the local pending request; the API still performs authorization.
+async function subtitleSaveMemberId() {
+  if (isLocalAuthMode()) return (await ensureLocalMemberIdentity()).member_id;
+  const { data, error } = await createClient().auth.getSession();
+  if (error || !data.session) throw new Error("请先登录原保存请求所属的账号。");
+  return data.session.user.id;
+}
+
+function subtitleInputKey(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+}
+
 export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initialTasks }: Props) {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [workspace, setWorkspace] = useState(initialWorkspace);
@@ -87,6 +112,57 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   currentBusy.current = busy;
   const [error, setError] = useState<ReturnType<typeof errorDetails> | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingSubtitleSave, setPendingSubtitleSave] = useState<PendingSubtitleSave | null>(null);
+  const pendingSubtitleSaveRef = useRef<PendingSubtitleSave | null>(null);
+  const subtitleScope = useRef<string | null>(null);
+  const subtitleOperation = useRef<{ taskId: string; memberId: string | null } | null>(null);
+  const subtitleIdentity = useLocalMemberIdentity();
+  const subtitleStoragePrefix = `subtitle-save:${workspace.task.workspace_id}:${workspace.task.id}:`;
+  useEffect(() => {
+    let active = true;
+    let identityRevision = 0;
+    const restore = (memberId: string | null) => {
+      if (!active) return;
+      const nextScope = memberId ? `${subtitleStoragePrefix}${memberId}` : null;
+      if (subtitleScope.current === nextScope && subtitleOperation.current) return;
+      const previousScope = subtitleScope.current;
+      subtitleScope.current = nextScope;
+      const operation = subtitleOperation.current;
+      if (operation && ((previousScope !== null && previousScope !== nextScope)
+        || (operation.memberId !== null && (operation.memberId !== memberId || operation.taskId !== workspace.task.id)))) {
+        subtitleOperation.current = null;
+        setBusy(null);
+      }
+      pendingSubtitleSaveRef.current = null;
+      setPendingSubtitleSave(null);
+      if (!memberId) return;
+      try {
+        const stored = sessionStorage.getItem(`${subtitleStoragePrefix}${memberId}`);
+        const pending: PendingSubtitleSave | null = stored ? JSON.parse(stored) : null;
+        if (pending && (pending.taskId !== workspace.task.id || pending.workspaceId !== workspace.task.workspace_id
+          || pending.memberId !== memberId || !pending.input.request_id
+          || pending.input.operation_type !== "UpdateSubtitleCue")) throw new Error("原字幕保存请求无法读取，请保留此页面并核对原结果。");
+        pendingSubtitleSaveRef.current = pending;
+        setPendingSubtitleSave(pending);
+        if (pending?.submissionError) setError(pending.submissionError);
+      } catch (cause) { setError(errorDetails(cause)); }
+    };
+    void subtitleSaveMemberId().then(memberId => { if (identityRevision === 0) restore(memberId); })
+      .catch(cause => { if (active && identityRevision === 0) setError(errorDetails(cause)); });
+    // Local identity changes already notify the existing hook; formal sessions
+    // notify here without starting another auth or task lifecycle.
+    let unsubscribe: (() => void) | undefined;
+    try {
+      if (!isLocalAuthMode()) {
+        const { data } = createClient().auth.onAuthStateChange((_event, session) => {
+          identityRevision += 1;
+          restore(session?.user.id ?? null);
+        });
+        unsubscribe = () => data.subscription.unsubscribe();
+      }
+    } catch (cause) { setError(errorDetails(cause)); }
+    return () => { active = false; unsubscribe?.(); };
+  }, [subtitleStoragePrefix, workspace.task.id, workspace.task.workspace_id, subtitleIdentity.token]);
   const [pendingLocalEdit, setPendingLocalEdit] = useState<PendingLocalEdit | null>(null);
   const pendingLocalEditRef = useRef(pendingLocalEdit);
   pendingLocalEditRef.current = pendingLocalEdit;
@@ -1246,7 +1322,107 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     finally { if (ownsRequest()) setBusy(null); }
   }
 
+  async function readSubtitleSave(pending: PendingSubtitleSave, owns: () => boolean) {
+    if (await subtitleSaveMemberId() !== pending.memberId) throw new Error("请切回原成员账号查询这次字幕保存，未重新提交。");
+    const receipt = await getCreationTaskEditRequest(pending.taskId, pending.input.request_id).catch(cause => {
+      if (pending.submissionError) throw new Error(`${pending.submissionError.message}；原请求查询：${errorDetails(cause).message}`);
+      throw cause;
+    });
+    if (!owns()) return false;
+    if (receipt.task_id !== pending.taskId || receipt.request_id !== pending.input.request_id || receipt.phase !== "apply"
+      || subtitleInputKey(receipt.submitted_input) !== subtitleInputKey(pending.input)) {
+      throw new Error("原字幕保存回执与封存输入不一致，请保留原请求核对。");
+    }
+    if (receipt.status !== "recorded" || receipt.result_status_code === null) {
+      setNotice("字幕保存结果尚未核实，请查询原保存结果，不要重新提交。");
+      if (pending.submissionError) setError(pending.submissionError);
+      return false;
+    }
+    if (receipt.result_status_code < 200 || receipt.result_status_code >= 300 || !receipt.result || !("operation" in receipt.result)) {
+      setNotice(`原字幕保存返回 ${receipt.result_status_code}，可能已有写入。请保留原请求，核对版本和字幕；未自动重试。`);
+      await refresh(true, () => owns());
+      return false;
+    }
+    await refresh(true, () => owns());
+    if (!owns()) return false;
+    sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
+    pendingSubtitleSaveRef.current = null;
+    setPendingSubtitleSave(null);
+    setNotice("字幕修改已保存，可撤销。" + (editExecutionReadinessMessage(receipt.result.execution_readiness) ?? ""));
+    return true;
+  }
+
+  async function querySubtitleSave() {
+    const pending = pendingSubtitleSaveRef.current;
+    if (!pending || subtitleOperation.current || busy !== null) return;
+    const operation = { taskId: pending.taskId, memberId: pending.memberId };
+    subtitleOperation.current = operation;
+    const owns = () => currentTaskId.current === pending.taskId && subtitleOperation.current === operation
+      && subtitleScope.current === `subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`;
+    setBusy("edit-confirm"); setError(null);
+    try { await readSubtitleSave(pending, owns); }
+    catch (cause) { if (owns()) setError(errorDetails(cause)); }
+    finally {
+      // Release only this operation's busy slot; an old response cannot clear a successor's slot.
+      if (subtitleOperation.current === operation) {
+        subtitleOperation.current = null;
+        if (currentTaskId.current === operation.taskId) setBusy(null);
+      }
+    }
+  }
+
+  async function saveSubtitleCue(input: Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }>) {
+    if (subtitleOperation.current || pendingSubtitleSaveRef.current || busy !== null) return false;
+    const taskSnapshot = currentWorkspace.current.task;
+    const operation: { taskId: string; memberId: string | null } = { taskId: taskSnapshot.id, memberId: null };
+    subtitleOperation.current = operation;
+    const owns = () => currentTaskId.current === taskSnapshot.id && subtitleOperation.current === operation
+      && (operation.memberId === null || subtitleScope.current === `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${operation.memberId}`);
+    setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
+    try {
+      const memberId = await subtitleSaveMemberId();
+      operation.memberId = memberId;
+      if (!owns()) return false;
+      const subtitleStorageKey = `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${memberId}`;
+      const stored = sessionStorage.getItem(subtitleStorageKey);
+      if (stored) {
+        const original: PendingSubtitleSave = JSON.parse(stored);
+        if (original.taskId !== taskSnapshot.id || original.workspaceId !== taskSnapshot.workspace_id || original.memberId !== memberId)
+          throw new Error("原字幕保存请求与当前任务或成员不一致，没有提交。");
+        pendingSubtitleSaveRef.current = original;
+        setPendingSubtitleSave(original);
+        setNotice("这次字幕保存已有原请求，请先查询原保存结果。");
+        return false;
+      }
+      const pending: PendingSubtitleSave = { memberId, taskId: taskSnapshot.id, workspaceId: taskSnapshot.workspace_id,
+        input: JSON.parse(JSON.stringify({ ...input, request_id: crypto.randomUUID(),
+          expected_timeline_version_id: taskSnapshot.current_timeline_version_id,
+          expected_timeline_sequence: taskSnapshot.timeline_sequence })) };
+      const serialized = JSON.stringify(pending);
+      sessionStorage.setItem(subtitleStorageKey, serialized);
+      if (sessionStorage.getItem(subtitleStorageKey) !== serialized) throw new Error("无法保留原字幕保存请求，本次没有提交。");
+      pendingSubtitleSaveRef.current = pending;
+      setPendingSubtitleSave(pending);
+      // A failed POST response is not evidence that the write did not happen.
+      try { await applyCreationTaskExactEdit(pending.taskId, pending.input); }
+      catch (cause) {
+        pending.submissionError = errorDetails(cause);
+        sessionStorage.setItem(subtitleStorageKey, JSON.stringify(pending));
+        if (owns()) { setPendingSubtitleSave({ ...pending }); setError(pending.submissionError); }
+      }
+      return await readSubtitleSave(pending, owns);
+    } catch (cause) { if (owns()) setError(errorDetails(cause)); return false; }
+    finally {
+      // Release only this operation's busy slot; an old response cannot clear a successor's slot.
+      if (subtitleOperation.current === operation) {
+        subtitleOperation.current = null;
+        if (currentTaskId.current === operation.taskId) setBusy(null);
+      }
+    }
+  }
+
   async function previewExactEdit(input: CreationTaskExactEditInput) {
+    if (input.operation_type === "UpdateSubtitleCue") return saveSubtitleCue(input);
     if (busy !== null) return false;
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -1468,7 +1644,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
           <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} restoreBusy={busy!==null || Boolean(pendingTimelineRestore)} onRestore={(operationId,redo)=>void undoTimeline(redo,operationId)} />
         </HomeCardDialog>
-        {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
+        {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">{!pendingSubtitleSave ? <CheckCircle2 size={17} /> : null}{notice}</div> : null}
+        {pendingSubtitleSave?.taskId === task.id ? <div role="status">字幕保存结果待核对。原输入已保留，不会重复提交。<Button variant="outline" disabled={busy !== null} onClick={() => void querySubtitleSave()}>查询原保存结果</Button><details><summary>保存请求详情</summary><p>原请求：{pendingSubtitleSave.input.request_id}</p></details></div> : null}
         {pendingTimelineRestore?.taskId===task.id ? <p role="status">撤销或重做请求等待核对。<Button variant="outline" disabled={busy!==null} onClick={()=>void queryTimelineRestore()}>查询原撤销重做结果</Button></p> : null}
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">重新核对文案和制作要求</button> : null}</TaskIssue> : null}
@@ -1525,7 +1702,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>准备视频剪辑</h2><p>在上方核对文案与要求后继续制作。</p></div></section> : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null || Boolean(pendingSubtitleSave)} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
 
         <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-result-${task.id}`} aria-labelledby={activeView === "review" ? `review-result-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "result"}>
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={workspace.cover_asset?.status === "valid"} canEditSubtitle={Boolean(activeSubtitleTrack)} reviewChecks={reviewChecks} busy={busy} onEditMontage={() => openView("montage")} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} /> : null}
