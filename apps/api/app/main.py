@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.media_capability_routes import build_media_capability_router
 from app.voice_transcription_routes import build_voice_transcription_router
 from app.task_visual_routes import build_task_visual_router
 from app.task_audio_routes import build_task_audio_router
@@ -1446,49 +1447,14 @@ def _capability_unavailable(
     )
 
 
-@app.get(
-    "/api/media/capabilities/voice-clone",
-    response_model=MediaCapabilityResponse,
-)
-def get_voice_clone_capability() -> MediaCapabilityResponse:
-    if not voice_clone_provider.ready:
-        raise _capability_unavailable(
-            "voice_clone",
-            message=voice_clone_provider.message,
-            impact="声音复制未执行，不能产出或返回配音媒体。",
-            repair_action="安装并配置本地声音复制运行环境后重新查询。",
-        )
-    return MediaCapabilityResponse(
-        capability_id="voice_clone",
-        available=True,
-        model_id=voice_clone_provider.model_id,
-        message=voice_clone_provider.message,
-        impact=None,
-        repair_action=None,
-    )
+app.include_router(build_media_capability_router(
+    voice_for=lambda: voice_clone_provider,
+    unavailable_for=lambda: _capability_unavailable,
+    lipsync_for=lambda: _lipsync_provider,
+    response_type_for=lambda: MediaCapabilityResponse,
+))
 
 
-@app.get(
-    "/api/media/capabilities/avatar-lipsync",
-    response_model=MediaCapabilityResponse,
-)
-def get_avatar_lipsync_capability(quality: Literal["high", "fast"] = "fast") -> MediaCapabilityResponse:
-    provider = _lipsync_provider(quality)
-    if not provider.ready:
-        raise _capability_unavailable(
-            "avatar_lipsync",
-            message=provider.message,
-            impact="人物与口型步骤未完成，不能生成或返回人物视频。",
-            repair_action="配置明确的本地人物口型运行环境后重新查询。",
-        )
-    return MediaCapabilityResponse(
-        capability_id="avatar_lipsync",
-        available=True,
-        model_id=provider.model_id,
-        message=provider.message,
-        impact=None,
-        repair_action=None,
-    )
 
 
 def _media_preview_http_router():
