@@ -151,7 +151,7 @@ from app.creation.editing.metadata_use_case import (
 from app.creation.editing.compound_use_case import (CompoundEditUseCase, CompoundPreviewCommand,
     CompoundSelectionCommand, CompoundProposalMissing, CompoundSelectionInputError)
 from app.creation.editing.subtitle_use_case import (SubtitleEditUseCase, SubtitlePreviewFailed, is_subtitle_edit, subtitle_values)
-from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase, ExactEditResult, validate_edit_origin
+from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase, ExactEditResult, validate_edit_origin, project_submitted_edit_input
 from app.creation.editing.command_preview_use_case import CommandPreviewUseCase
 from app.creation.editing.command_compile import AudioCommandPreview,CommandParseRejected,indexed_reorder_command,subtitle_text_from_command,edit_material_constraint
 from app.creation.editing.narration_preview_use_case import NarrationPreviewUseCase
@@ -7337,7 +7337,7 @@ def _task_business(*, generation_case=None):
         topic_facts=_creation_task_topic_response,edit_capabilities=_task_edit_capability_facts,
         script_capabilities=_task_script_capability_facts,tool_capabilities=_script_tool_capability_facts,
         material_facts=_material_asset_response,observation_facts=lambda task,actor:_task_observation_metadata(task,actor.user_id or actor.member_id),
-        observe_output=_submit_goal_observation,request_result=_goal_request_metadata,media_result=_goal_media_metadata,
+        observe_output=_submit_goal_observation,request_result=_public_goal_request_metadata,media_result=_goal_media_metadata,
         record_adoption=lambda *args, **kwargs: _goal_service().record_script_adoption(*args, **kwargs),
         segments=None if generation_case is not None else _segment_production_use_case(),
         native_case=None if generation_case is not None else _native_task_operations_case(),
@@ -7376,6 +7376,11 @@ def _goal_request_metadata(task,actor,request_id,phase):
     return {'request_id':str(request_id),'phase':phase,'input_digest':event.payload['input_digest'],'task_id':task.id,
         'status':'recorded' if result else 'unknown','submitted_input':event.payload['inputs'],
         'result_status_code':result['status_code'] if result else None,'result':result['response'] if result else None}
+
+
+def _public_goal_request_metadata(task,actor,request_id,phase):
+    receipt = _goal_request_metadata(task,actor,request_id,phase)
+    return {**receipt, "submitted_input": project_submitted_edit_input(phase, receipt["submitted_input"])}
 
 
 def _goal_media_metadata(task,actor,job_id):

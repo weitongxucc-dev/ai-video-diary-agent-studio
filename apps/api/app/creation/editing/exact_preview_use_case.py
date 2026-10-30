@@ -87,6 +87,23 @@ def validate_edit_origin(conversations, source, actor, *, connection=None):
 
 
 
+def project_submitted_edit_input(phase, inputs):
+    """Project the original request fields without exposing unbounded private input."""
+    if phase in {"preview", "script", "observation"} or (phase == "apply" and "operation_type" in inputs):
+        fields = (CreationTaskExactEditRequest.model_fields if phase in {"preview", "apply"} else
+                  CreationTaskObservationRequest.model_fields if phase == "observation" else
+                  MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
+        submitted_input = {key: value for key, value in inputs.items() if key in fields}
+        if phase == "script" and "tool_id" in inputs:
+            submitted_input["tool_id"] = inputs["tool_id"]
+    else:
+        submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
+        submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
+    if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+        raise EditPreviewRejected(409, "原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
+    return submitted_input
+
+
 class ExactPreviewUseCase:
     def __init__(self, repository, metadata, subtitles, linked, audio_edit, visual, clip_preview, conversations, settings, *, edit_result=None, preview_result=None, person_preview=None, narration_preview=None, person_stage=None, execution_control=None, runtime_for=None):
         self.repository, self.metadata, self.subtitles, self.linked = repository, metadata, subtitles, linked
@@ -121,18 +138,7 @@ class ExactPreviewUseCase:
         event_id, event = GoalResultProjection(self.repository, self.conversations).request_claim(
             task, member_id, str(request_id), phase)
         inputs = event.payload["inputs"]
-        if phase in {"preview", "script", "observation"} or (phase == "apply" and "operation_type" in inputs):
-            fields = (CreationTaskExactEditRequest.model_fields if phase in {"preview", "apply"} else
-                      CreationTaskObservationRequest.model_fields if phase == "observation" else
-                      MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
-            submitted_input = {key: value for key, value in inputs.items() if key in fields}
-            if phase == "script" and "tool_id" in inputs:
-                submitted_input["tool_id"] = inputs["tool_id"]
-        else:
-            submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
-            submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
-        if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
-            raise EditPreviewRejected(409, "原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
+        submitted_input = project_submitted_edit_input(phase, inputs)
         result = self.read_request_result(task, event_id)
         return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
                 "task_id": task.id, "status": "recorded" if result is not None else "unknown",

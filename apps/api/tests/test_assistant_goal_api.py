@@ -25,6 +25,46 @@ script_state = test_media_script_api.state
 
 @pytest.fixture(autouse=True)
 def isolated_local_workspace(request, monkeypatch):
+    if request.node.name == "test_execution_binding_plain_receipt_preserves_committed_successor_and_bounds":
+        import subprocess
+        import threading
+        import wave
+        import httpx
+        from PIL import Image
+        from app.artifact_store import ArtifactStore
+        from app.auth import SupabaseAuthContext
+        from app.config import Settings
+        from app.device_runtime import DeviceRuntime
+        from app.source_repository import SourceRepository
+        tmp_path = request.getfixturevalue('tmp_path')
+
+        def no_execution(*args, **kwargs):
+            pytest.fail('public receipt projection must not start execution or inspect media')
+
+        for owner, name in ((subprocess, 'Popen'), (threading.Thread, 'start'),
+                (wave, 'open'), (Image, 'open'), (Image, 'new'), (Image.Image, 'save'),
+                (httpx.HTTPTransport, 'handle_request'), (httpx.AsyncHTTPTransport, 'handle_async_request')):
+            monkeypatch.setattr(owner, name, no_execution)
+        for name in ('start', 'run_once', 'wake'):
+            monkeypatch.setattr(DeviceRuntime, name, no_execution)
+        for name in ('_build_device_components', 'recover_interrupted_quality_checks',
+                '_device_host_budget', '_wake_assistant_continuations'):
+            monkeypatch.setattr(main, name, no_execution)
+        settings = Settings(database_path=str(tmp_path / 'studio.sqlite3'),
+            video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'output'),
+            model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+            draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+            obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+            local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+            native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+        monkeypatch.setattr(main, 'settings', settings)
+        monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+        monkeypatch.setattr(main, 'device_runtime', None)
+        monkeypatch.setattr(main, 'automation_runtime', None)
+        monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
+        monkeypatch.setattr(main, 'source_repository', SourceRepository(tmp_path / 'sources.sqlite3'))
+        # Absence of execution configuration is declared data, never a host probe.
+        monkeypatch.setattr(main, '_device_operation_budget', lambda name: None)
     if request.node.name.split("[")[0] == "test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending":
         # This original bounded SQL representative has no dependency on the media/driver fixture.
         from test_production_foundation import edit_adoption_no_execution
@@ -1275,7 +1315,7 @@ def test_execution_binding_late_input_and_version_gate_precede_actor_and_write(e
         state.member.member_id, state.task.id)['input_id'] == new_input
 
 
-def test_execution_binding_plain_receipt_preserves_committed_successor_and_bounds(execution_binding_state):
+def test_execution_binding_plain_receipt_preserves_committed_successor_and_bounds(execution_binding_state, tmp_path):
     from fastapi import HTTPException
     from app.creation.contracts import EditIntent, EditProposal, EditOperation, TimelineVersion
     state = execution_binding_state
@@ -1303,26 +1343,66 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
         'expected_timeline_version_id':state.version.id, 'expected_timeline_sequence':state.version.sequence,
         'clip_id':'declared-clip', 'ignored_private_field':'x'*100000}
     event_id, _ = repo.claim_edit_request(task, state.member.member_id, request_id, 'apply', inputs)
+    # Prepare the actual production TaskBusiness port before any read-only snapshot.
+    business = main._task_business()
+
+    def public_receipt(identity=request_id):
+        return business.request_result(task, state.actor, identity, 'apply')
+
+    def raw_receipt(identity=request_id):
+        return main._goal_request_metadata(task, state.actor, identity, 'apply')
+
+    def durable_snapshot():
+        import sqlite3
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as connection:
+                    tables = [row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        name: sorted(connection.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall(), key=repr)
+                        for name in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    before = durable_snapshot()
     unknown = next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, request_id, state.request, 'apply')
     assert unknown['status'] == 'unknown' and unknown['result'] is None and unknown['result_status_code'] is None
     assert 'ignored_private_field' not in unknown['submitted_input']
+    assert public_receipt() == unknown
+    assert raw_receipt()['submitted_input'] == inputs
     assert main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
         origin, snapshot, version, state.request) is None
+    assert durable_snapshot() == before
     repo.save_edit_request_result(task, event_id, status_code=200,
         response={'operation':{'id':operation.id, 'result_version_id':version.id}})
+    before = durable_snapshot()
     recorded = next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, request_id, state.request, 'apply')
     assert recorded['status'] == 'recorded' and recorded['result']['operation']['id'] == operation.id
+    assert public_receipt() == recorded
+    assert raw_receipt()['status'] == 'recorded' and raw_receipt()['submitted_input'] == inputs
     successor = main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
         origin, snapshot, version, state.request)
     assert successor == {**snapshot, 'timeline_version_id':version.id, 'timeline_sequence':version.sequence}
     assert main._assistant_execution_source(task.id, state.request, state.turn_id, 'start')[0][
         'expected_timeline_version_id'] == version.id
+    assert durable_snapshot() == before
     large_id = str(uuid4())
     repo.claim_edit_request(task, state.member.member_id, large_id, 'apply',
         {**inputs, 'clip_ids':['中'*22000]})
+    before = durable_snapshot()
     with pytest.raises(HTTPException) as too_large:
         next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, large_id, state.request, 'apply')
     assert too_large.value.status_code == 409 and '有界查询范围' in str(too_large.value.detail)
+    from app.creation.editing.metadata_use_case import EditPreviewRejected
+    with pytest.raises(EditPreviewRejected) as public_too_large:
+        public_receipt(large_id)
+    assert public_too_large.value.status_code == 409
+    assert public_too_large.value.detail == too_large.value.detail
+    assert raw_receipt(large_id)['status'] == 'unknown'
+    assert raw_receipt(large_id)['submitted_input']['clip_ids'] == ['中'*22000]
+    assert durable_snapshot() == before
     assert len(repo.edit_records.list_edit_operations(state.workspace_id, task.id)) == 1
     # Even a previously checked task/source cannot bypass the former self-HTTP
     # reader's current write gate. Shared visibility exercises owner rejection.
@@ -1333,11 +1413,16 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
         conn.execute('UPDATE creation_tasks SET payload=?,visibility=? WHERE id=?',
             (json.dumps({**saved_task, 'owner_user_id':other.member_id}, default=str), 'shared', task.id))
     assert repo.task_records.get_creation_task(state.workspace_id, task.id).visibility == 'shared'
+    before = durable_snapshot()
     try:
         with pytest.raises(HTTPException) as changed_owner:
             main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
                 origin, snapshot, version, state.request)
         assert changed_owner.value.status_code == 403
+        # Public Agent projection adds no new HTTP owner gate; internal reconciliation stays raw.
+        assert public_receipt() == recorded
+        assert raw_receipt()['result'] == recorded['result']
+        assert durable_snapshot() == before
     finally:
         with repo._connect() as conn:
             conn.execute('UPDATE creation_tasks SET payload=?,visibility=? WHERE id=?',
