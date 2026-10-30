@@ -14,6 +14,113 @@ from test_linked_timeline_reorder import _build_linked_state
 
 
 @pytest.fixture(autouse=True)
+def legacy_edit_reentry_metadata_guard(request, monkeypatch, tmp_path):
+    targets = {'test_metadata_patch_routes_consume_use_case_without_route_reentry',
+               'test_metadata_patch_preserves_no_change_and_missing_target_responses',
+               'test_metadata_http_save_replay_input_conflict_and_lost_receipt'}
+    if request.node.originalname not in targets:
+        yield
+        return
+    import sqlite3
+    import subprocess
+    import wave
+    import httpx
+    from PIL import Image
+    from types import SimpleNamespace
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+    from app.production import ProductionRepository
+    from app.source_repository import SourceRepository
+    from app.sources import ObsidianVault
+
+    violations, notifications = [], []
+
+    def forbidden(*args, **kwargs):
+        violations.append('execution-or-media')
+        pytest.fail('metadata edits must not execute media, network or runtime')
+
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    for name in ('open', 'new'):
+        monkeypatch.setattr(Image, name, forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn',
+                 'run_plan_turn', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda: notifications.append('notified'))
+    settings = Settings(database_path=str(tmp_path / 'editor.sqlite3'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'outputs'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main, 'settings', settings)
+    monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, 'automation_runtime', None)
+    monkeypatch.setattr(main, 'vault', ObsidianVault(None))
+    monkeypatch.setattr(main, 'montage_renderer', SimpleNamespace(render=forbidden))
+    monkeypatch.setattr(main, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
+    provider = SimpleNamespace(ready=False, model_id='metadata-only', message='isolated',
+                               render=forbidden, generate=forbidden)
+    monkeypatch.setattr(main, 'latentsync_provider', provider)
+    monkeypatch.setattr(main, 'avatar_lipsync_provider', provider)
+    monkeypatch.setattr(main, 'video_job_runner', SimpleNamespace(run=forbidden))
+    state = request.getfixturevalue('metadata_http_state')
+    monkeypatch.setattr(main, 'conversation_repo', ConversationRepository(state.repo.database_path))
+    monkeypatch.setattr(main, 'source_repository', SourceRepository(state.repo.database_path))
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as connection:
+                    tables = [row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        name: sorted(connection.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall(), key=repr)
+                        for name in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    before = snapshot()
+    yield
+    reopened = ProductionRepository(state.repo.database_path, state.repo.video_library_path)
+    current = reopened.task_records.get_creation_task('ws', state.task.id)
+    assert reopened.timeline_records.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
+    assert current.narration_cache_key == state.narration.cache_key
+    jobs = reopened.job_records.list_job_runs('ws', state.task.id)
+    if request.node.originalname == 'test_metadata_patch_routes_consume_use_case_without_route_reentry':
+        assert len(jobs) == 1 and jobs[0].kind == 'subtitle_cue_update'
+        assert jobs[0].status == 'succeeded' and jobs[0].output_refs
+        assert all(reference.endswith('/subtitles.srt') for reference in jobs[0].output_refs)
+        saved = reopened.get_creation_task_montage_plan('ws', state.task.id)
+        assert saved['clips'][0]['locked'] is True
+        assert saved['cues'][0]['text'] == '只更新这句字幕'
+        assert saved['narration_audio_path'] == state.plan.narration_audio_path
+        versions = reopened.timeline_records.list_timeline_versions('ws', state.task.id)
+        assert len(versions) == 3 and current.current_timeline_version_id == versions[-1].id
+        assert len(reopened.edit_records.list_edit_operations('ws', state.task.id)) == 2
+        assert len(notifications) == 2
+    elif request.node.originalname == 'test_metadata_patch_preserves_no_change_and_missing_target_responses':
+        assert jobs == []
+        assert snapshot() == before
+    else:
+        assert jobs == []
+        assert len(reopened.edit_records.list_edit_operations('ws', state.task.id)) == 1
+    assert violations == []
+    state.client.close()
+
+
+@pytest.fixture(autouse=True)
 def task_capability_metadata_guard(request, monkeypatch, tmp_path):
     targets = {'test_execution_capability_read_is_authorized_and_does_not_start_runtime',
                'test_capabilities_are_real_schema_and_exclude_unmigrated_actions'}

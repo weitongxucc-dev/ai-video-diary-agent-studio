@@ -4911,7 +4911,21 @@ def _preview_metadata_settings(task, request, operation_type, values, base_versi
 
 
 def _save_direct_metadata_edit(task_id, request, payload):
-    return next(route.endpoint for route in app.routes if route.name == 'apply_creation_task_exact_edit' and route.path == '/api/creation-tasks/{task_id}/edits/exact' and 'POST' in route.methods)(task_id, request, payload)
+    if payload.assistant_turn_id is not None and payload.request_id is None:
+        raise HTTPException(status_code=422, detail='助手直接编辑需要原请求身份')
+    task, member_id = _exact_edit_access(task_id, request, write=True)
+    actor = _request_permit_actor(request, task.workspace_id) if auth_context.enabled else CreationExecutionActor(task.workspace_id, member_id)
+    try:
+        result = _exact_preview_use_case().apply(task, actor, payload,
+            identity={'member_id': member_id, 'local_diagnostic': False},
+            expected_input_id=request.headers.get('X-Assistant-Input-ID'))
+        if result.changed:
+            _wake_assistant_continuations()
+        return CreationTaskEditConfirmResponse.model_validate(result.value)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except (ValueError, KeyError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _logical_montage_output_refs(plan: CreationTaskMontagePlan) -> list[str]:
