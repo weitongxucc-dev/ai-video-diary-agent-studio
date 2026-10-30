@@ -2765,10 +2765,22 @@ def _script_configuration():
 
 
 
-@app.get("/api/creation-tasks/{task_id}/assistant/media-script-capabilities")
-def get_media_script_capabilities(task_id: str, request: Request):
-    task, member_id = _exact_edit_access(task_id, request)
-    return _task_script_capability_facts(task, member_id)
+from app.task_media_script_routes import build_task_media_script_router
+
+
+def _task_media_script_http_router(route_names):
+    return build_task_media_script_router(
+        access_for=lambda: _exact_edit_access,
+        facts_for=lambda: _task_script_capability_facts,
+        command_for=lambda: _media_script_submission_command,
+        runner_for=lambda: _run_media_script_submission,
+        submission_for=lambda: _media_script_submission_use_case,
+        json_response_for=lambda: JSONResponse,
+        route_names=route_names,
+    )
+
+
+app.include_router(_task_media_script_http_router(('get_media_script_capabilities',)))
 
 
 def _task_script_capability_facts(task, member_id):
@@ -2882,11 +2894,7 @@ def _run_media_script_submission(request: Request, steps):
         raise failure from None
 
 
-@app.post("/api/creation-tasks/{task_id}/media-scripts/preview", response_model=TaskMediaJobResponse)
-def preview_media_script(task_id: str, request: Request, payload: MediaScriptPreviewRequest):
-    command = _media_script_submission_command(task_id, payload)
-    result = _run_media_script_submission(request, _media_script_submission_use_case().submit(command))
-    return JSONResponse(status_code=result.status_code, content=result.body)
+app.include_router(_task_media_script_http_router(('preview_media_script',)))
 
 
 def _media_script_use_case(repository=None, *, task_id=None):

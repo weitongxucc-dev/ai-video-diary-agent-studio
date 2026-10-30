@@ -136,7 +136,7 @@ def test_raw_source_recipe_and_replay_use_explicit_owner(script_application):
     assert not state.runtime.run_once()
     assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
     assert not scripts.MEDIA_SCRIPT_ACTIONS.intersection(main._TASK_MEDIA_HANDLERS)
-    assert not hasattr(main.preview_media_script, '__wrapped__')
+    assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_media_script'), '__wrapped__')
     assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_media_script_tool'), '__wrapped__')
     with state.production._connect() as conn:
         permit = dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())
