@@ -6376,25 +6376,17 @@ def _material_library_http_adapter():
     )
 
 
-@app.get(
-    "/api/production/materials/insights",
-    response_model=MaterialLibraryInsightsResponse,
-)
-def get_material_library_insights(
-    request: Request,
-) -> MaterialLibraryInsightsResponse:
-    workspace_id = current_workspace_id(request)
-    for plan in montage_repo.recent(workspace_id, limit=50):
-        if plan.status == "rendered":
-            _record_montage_usage(workspace_id, plan)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    return MaterialLibraryInsightsResponse.model_validate(
-        production_repo.library_insights(
-            workspace_id,
-            viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic,
-        )
-    )
+from app.material_insights_routes import build_material_insights_router
+
+
+app.include_router(build_material_insights_router(
+    workspace_for=lambda: current_workspace_id,
+    montages_for=lambda: montage_repo,
+    reader_for=lambda: _content_reader,
+    response_for=lambda: MaterialLibraryInsightsResponse,
+    production_for=lambda: production_repo,
+    render_for=lambda: _render_stage_use_case,
+))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('list_production_materials',)))
@@ -6617,8 +6609,6 @@ app.include_router(_legacy_montage_http_router(("get_production_batch",)))
 
 
 
-def _record_montage_usage(workspace_id: str, plan) -> None:
-    _render_stage_use_case().record_usage(workspace_id, plan)
 
 
 
