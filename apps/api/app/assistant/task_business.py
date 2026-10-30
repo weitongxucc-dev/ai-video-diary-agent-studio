@@ -476,7 +476,7 @@ class TaskBusiness:
                 return self.production.get_creation_task_narration_voice_selection(ws,task_id,args['request_id'],member_id=member)
             from app.schemas import CreationTaskNarrationVoiceSelectionRequest
             payload=CreationTaskNarrationVoiceSelectionRequest.model_validate(args['payload'])
-            return self.execution.select_narration_voice(runtime=self.runtime(),actor=actor,write_guard=guard,
+            return self.execution.select_narration_voice(runtime_for=self.runtime,actor=actor,write_guard=guard,
                 workspace_id=ws,task_id=task_id,member_id=member,
                 **{**payload.model_dump(exclude={'assistant_turn_id'}),'request_id':str(payload.request_id)})
         if operation in {'read_timeline_history','read_timeline_restore_request','restore_timeline'}:

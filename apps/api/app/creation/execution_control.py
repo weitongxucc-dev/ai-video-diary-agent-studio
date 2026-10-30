@@ -638,11 +638,11 @@ class CreationExecutionControl:
         runtime.wake()
         return job, queued
 
-    def select_narration_voice(self, *, runtime, actor=None, write_guard=None, **inputs):
+    def select_narration_voice(self, *, runtime=None, runtime_for=None, actor=None, write_guard=None, **inputs):
         with ExitStack() as stack:
-            return self._select_narration_voice(runtime=runtime, stack=stack, actor=actor, write_guard=write_guard, **inputs)
+            return self._select_narration_voice(runtime=runtime, runtime_for=runtime_for, stack=stack, actor=actor, write_guard=write_guard, **inputs)
 
-    def _select_narration_voice(self, *, runtime, stack, actor, write_guard=None, **inputs):
+    def _select_narration_voice(self, *, runtime, runtime_for, stack, actor, write_guard=None, **inputs):
         try:
             self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
                 inputs['request_id'], member_id=inputs['member_id'])
@@ -652,6 +652,9 @@ class CreationExecutionControl:
             # The repository verifies the original input fingerprint before
             # returning its receipt; replay never prepares/rebinds execution.
             return self.repository.select_creation_task_narration_voice(**inputs)
+
+        if runtime_for is not None:
+            runtime = runtime_for()
 
         def require_same_actor(original):
             if (not isinstance(actor, CreationExecutionActor) or original != actor
