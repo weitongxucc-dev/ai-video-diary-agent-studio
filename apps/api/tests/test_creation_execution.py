@@ -3670,20 +3670,20 @@ def test_segment_revision_http_adapter_checks_trusted_source_before_atomic_effec
     monkeypatch.setattr(main_module,'_creation_runtime',lambda:runtime)
     monkeypatch.setattr(case.segments,'verify_revision',verified)
     request = Request({'type':'http','method':'POST','path':'/','headers':[]})
-    result = main_module.revise_creation_task_segment(case.task_id,'section_1',payload,request)
+    result = next(route.endpoint for route in main_module.app.routes if route.name == "revise_creation_task_segment")(case.task_id,'section_1',payload,request)
     assert result['request_id']=='http_revision' and effects==['http_revision']
     with pytest.raises(main_module.HTTPException) as extra:
-        main_module.revise_creation_task_segment(case.task_id,'section_1',{**payload,'request_id':'extra','untrusted':True},request)
+        next(route.endpoint for route in main_module.app.routes if route.name == "revise_creation_task_segment")(case.task_id,'section_1',{**payload,'request_id':'extra','untrusted':True},request)
     assert extra.value.status_code==409
     case.repo.save_semantic_review(TaskEvent('other_turn_review','local',case.task_id,None,'narration_semantic_review',
         {**review.payload,'source':{**source,'assistant_turn_id':'other_turn'}}),write_guard=lambda conn:None)
     with pytest.raises(main_module.HTTPException) as mismatched:
-        main_module.revise_creation_task_segment(case.task_id,'section_1',
+        next(route.endpoint for route in main_module.app.routes if route.name == "revise_creation_task_segment")(case.task_id,'section_1',
             {**payload,'request_id':'other_source','semantic_review_ref':'other_turn_review'},request)
     assert mismatched.value.status_code==409
     current_origin['input_id']='new_input'
     with pytest.raises(main_module.HTTPException) as stale:
-        main_module.revise_creation_task_segment(case.task_id,'section_1',{**payload,'request_id':'stale_input'},request)
+        next(route.endpoint for route in main_module.app.routes if route.name == "revise_creation_task_segment")(case.task_id,'section_1',{**payload,'request_id':'stale_input'},request)
     assert stale.value.status_code==409 and effects==['http_revision']
     assert case.repo.find_segment_revision_request('local',case.task_id,case.actor.member_id,'stale_input') is None
 

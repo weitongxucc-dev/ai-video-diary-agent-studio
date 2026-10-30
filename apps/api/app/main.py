@@ -5254,110 +5254,44 @@ def creation_task_narration_semantic_review(task_id: str, request: Request, payl
         raise HTTPException(status_code=409,detail=str(exc)) from exc
 
 
-@app.get('/api/creation-tasks/{task_id}/segments')
-def creation_task_segments(task_id: str, request: Request, offset: int = Query(0,ge=0), limit: int = Query(30,ge=1,le=100)):
-    ws = current_workspace_id(request)
-    try:
-        return _segment_production_use_case().list_segments(ws,task_id,_require_permit_actor(request,ws),offset=offset,limit=limit)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404,detail='当前任务或段落不存在') from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+from app.task_segment_routes import build_task_segment_router
 
 
-@app.get('/api/creation-tasks/{task_id}/segments/{section_id}/context')
-def creation_task_segment_context(task_id: str, section_id: str, request: Request):
-    ws = current_workspace_id(request)
-    try:
-        return _segment_production_use_case().context(ws,task_id,section_id,_require_permit_actor(request,ws))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (KeyError,ValueError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+def _task_segment_http_router(route_names):
+    return build_task_segment_router(
+        workspace_for=lambda: current_workspace_id,
+        case_for=lambda: _segment_production_use_case,
+        actor_for=lambda: _require_permit_actor,
+        http_error_for=lambda: HTTPException,
+        automation_guard_for=lambda: _require_automation_task_open,
+        origin_for=lambda: _local_revision_origin,
+        production_for=lambda: production_repo,
+        conversations_for=lambda: conversation_repo,
+        runtime_for=lambda: _creation_runtime,
+        file_response_for=lambda: FileResponse,
+        route_names=route_names,
+    )
 
 
-@app.get('/api/creation-tasks/{task_id}/segments/{section_id}/sources')
-def creation_task_segment_sources(task_id: str, section_id: str, request: Request,
-        offset: int = Query(0, ge=0), limit: int = Query(8, ge=1, le=24),
-        text_offset: int = Query(0, ge=0), max_chars: int = Query(3000, ge=1, le=8000)):
-    ws = current_workspace_id(request)
-    try:
-        return _segment_production_use_case().sources(ws, task_id, section_id, _require_permit_actor(request, ws),
-            offset=offset, limit=limit, text_offset=text_offset, max_chars=max_chars)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail='原段落证据不存在') from exc
+app.include_router(_task_segment_http_router(("creation_task_segments",)))
 
 
-@app.post('/api/creation-tasks/{task_id}/segments/{section_id}/revision')
-def revise_creation_task_segment(task_id: str, section_id: str, payload: dict, request: Request):
-    from app.schemas import NarrationRevisionRequest
-    from pydantic import ValidationError
-    ws = current_workspace_id(request)
-    _require_automation_task_open(request,ws,task_id)
-    try:
-        actor,origin = _local_revision_origin(task_id,request,payload)
-        command = NarrationRevisionRequest.model_validate({key:value for key,value in payload.items() if key!='assistant_turn_id'})
-        if command.section_id != section_id:
-            raise ValueError('路由与稳定段落ID不一致')
-        review = production_repo.execution_records.get_task_event(ws,command.semantic_review_ref)
-        source = review.payload.get('source',{})
-        if (source.get('conversation_id'),source.get('assistant_turn_id'),source.get('input_id') or source.get('assistant_turn_id')) != (
-                origin['conversation_id'],origin['assistant_turn_id'],origin['input_id']):
-            raise ValueError('语义回执不属于当前可信助手回合与原输入')
-        case = _segment_production_use_case()
-        def commit_guard(conn):
-            current = conversation_repo._task_turn_source(conn,origin['assistant_turn_id'],ws,actor.member_id,task_id)
-            if (current['conversation_id'],current.get('input_id') or origin['assistant_turn_id']) != (
-                    origin['conversation_id'],origin['input_id']):
-                raise ValueError('提交时原输入已变化，未登记旧修改影响')
-            case.verify_revision(ws,task_id,actor,command,connection=conn)
-            conversation_repo.record_input_business_effect(origin['assistant_turn_id'],ws,actor.member_id,
-                input_id=command.input_id,request_id=command.request_id,status='queued',
-                adoption_mode=command.adoption_mode,connection=conn)
-        return case.submit_revision(ws,task_id,actor,command,runtime=_creation_runtime(),write_guard=commit_guard)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (KeyError,ValueError,ValidationError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+app.include_router(_task_segment_http_router(("creation_task_segment_context",)))
 
 
-@app.get('/api/creation-tasks/{task_id}/segment-requests/{request_id}')
-def creation_task_segment_request(task_id: str, request_id: str, request: Request):
-    ws = current_workspace_id(request)
-    try:
-        return _segment_production_use_case().read_request(ws,task_id,request_id,_require_permit_actor(request,ws))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404,detail='原修改请求不存在') from exc
+app.include_router(_task_segment_http_router(("creation_task_segment_sources",)))
 
 
-@app.post('/api/creation-tasks/{task_id}/segment-requests/{request_id}/resume')
-def resume_creation_task_segment(task_id: str, request_id: str, request: Request):
-    ws = current_workspace_id(request)
-    _require_automation_task_open(request,ws,task_id)
-    try:
-        return _segment_production_use_case().resume_request(ws,task_id,request_id,_require_permit_actor(request,ws),runtime=_creation_runtime())
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (KeyError,ValueError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
+app.include_router(_task_segment_http_router(("revise_creation_task_segment",)))
 
 
-@app.get('/api/creation-tasks/{task_id}/segments/{section_id}/versions/{version}/video')
-def creation_task_segment_video(task_id: str, section_id: str, version: str, request: Request):
-    ws = current_workspace_id(request)
-    try:
-        path = _segment_production_use_case().video_path(ws,task_id,section_id,version,_require_permit_actor(request,ws))
-        return FileResponse(path,media_type='video/mp4')
-    except PermissionError as exc:
-        raise HTTPException(status_code=403,detail=str(exc)) from exc
-    except (KeyError,ValueError,FileNotFoundError) as exc:
-        raise HTTPException(status_code=404,detail='此段落版本的视频不可读取') from exc
+app.include_router(_task_segment_http_router(("creation_task_segment_request",)))
+
+
+app.include_router(_task_segment_http_router(("resume_creation_task_segment",)))
+
+
+app.include_router(_task_segment_http_router(("creation_task_segment_video",)))
 
 
 
