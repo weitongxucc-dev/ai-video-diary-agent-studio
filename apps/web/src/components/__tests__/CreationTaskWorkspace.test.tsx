@@ -8,6 +8,7 @@ import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, C
 import { CreationPlanApiError, getCreationTaskScriptGenerationRequest, stopAssistantConversationTurn, confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
+import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { ScriptEditor, ConfirmedScriptView } from "../creation-task/ScriptStage";
 import * as creationTaskApi from "@/lib/api/creation-tasks";
 const previewReadRestores: (() => void)[] = [];
@@ -1709,6 +1710,91 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole('button',{name:'查询原撤销重做结果'}));
     await waitFor(()=>expect(mocks.readTimelineRestore).toHaveBeenLastCalledWith(initial.task.id,requestId));
     expect(mocks.undoTimeline).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists redo across fresh page maps and isolates an in-flight member switch", async () => {
+    const initial = workspaceWithCover();
+    initial.task = { ...initial.task, can_redo: true };
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.redoTimeline.mockReset(); mocks.undoTimeline.mockReset(); mocks.readTimelineRestore.mockReset();
+    const page = (slot: WorkspacePageSlot, value = initial) => <WorkspacePageContext.Provider value={slot}>
+      <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={value} />
+    </WorkspacePageContext.Provider>;
+    const mount = (value = initial) => {
+      const slot: WorkspacePageSlot = { id: "/tasks/task-1", href: "/tasks/task-1", active: true, updateShell: vi.fn(), viewState: new Map() };
+      const view = render(page(slot, value));
+      fireEvent.click(getWorkspaceViewControl("字幕与封面：已完成"));
+      return { ...view, slot };
+    };
+    const first = mount();
+    const originalSet = Storage.prototype.setItem;
+    const storageGuard = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) {
+      if (key.startsWith("timeline-restore:")) throw new DOMException("session quota", "QuotaExceededError");
+      originalSet.call(this, key, value);
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "重做" }));
+      await waitFor(() => expect(storageGuard.mock.calls.filter(([key]) => key.startsWith("timeline-restore:"))).toHaveLength(1));
+      await screen.findAllByText(/^本次撤销重做没有提交：/);
+      expect(mocks.redoTimeline).not.toHaveBeenCalled();
+      expect(mocks.readTimelineRestore).not.toHaveBeenCalled();
+    } finally { storageGuard.mockRestore(); }
+    let rejectPost!: (cause: Error) => void;
+    mocks.redoTimeline.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPost = reject; }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重做" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "重做" }));
+    await waitFor(() => expect(mocks.redoTimeline).toHaveBeenCalledOnce());
+    const original = mocks.redoTimeline.mock.calls[0][1];
+    const key = `timeline-restore:${initial.task.workspace_id}:${initial.task.id}:member-1`;
+    expect(original).toEqual({ request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      expected_timeline_version_id: initial.task.current_timeline_version_id, expected_timeline_sequence: initial.task.timeline_sequence });
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({ action: "redo", memberId: "member-1", taskId: initial.task.id, input: original });
+    mocks.memberId = "member-other";
+    first.rerender(page(first.slot));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原撤销重做结果" })).not.toBeInTheDocument());
+    await act(async () => { rejectPost(new Error("redo response lost")); });
+    expect(screen.queryByText(/redo response lost/)).not.toBeInTheDocument();
+    expect(mocks.readTimelineRestore).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "重做" })).toBeEnabled();
+    expect(sessionStorage.getItem(key)).not.toBeNull();
+    first.unmount();
+    const foreign = mount();
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "查询原撤销重做结果" })).not.toBeInTheDocument();
+    foreign.unmount();
+    mocks.memberId = "member-1";
+    const reopened = mount();
+    expect(reopened.slot.viewState).not.toBe(first.slot.viewState);
+    await screen.findByRole("button", { name: "查询原撤销重做结果" });
+    fireEvent.click(screen.getByRole("button", { name: "重做" }));
+    expect(mocks.redoTimeline).toHaveBeenCalledOnce();
+    mocks.readTimelineRestore.mockResolvedValue({ task_id: initial.task.id, request_id: original.request_id, action: "redo",
+      target_operation_id: "resolved-original-operation", status: "result_unknown", operation_id: null, result_version_id: null, failure: null });
+    fireEvent.click(screen.getByRole("button", { name: "查询原撤销重做结果" }));
+    await screen.findByText("原结果尚未核实，请继续查询原请求。");
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原撤销重做结果" })).toBeEnabled());
+    mocks.readTimelineRestore.mockRejectedValueOnce(new CreationPlanApiError(404, null, "原重做回执未取得"));
+    fireEvent.click(screen.getByRole("button", { name: "查询原撤销重做结果" }));
+    await screen.findByText("原重做回执未取得");
+    expect(sessionStorage.getItem(key)).not.toBeNull();
+    const restored = structuredClone(initial);
+    restored.task = { ...restored.task, current_timeline_version_id: "redo-version", timeline_sequence: initial.task.timeline_sequence + 1, can_redo: false, output_ready: false };
+    restored.montage = { ...restored.montage!, output_url: null };
+    restored.subtitle_tracks = [{ ...restored.subtitle_tracks[0], timeline_version_id: "redo-version",
+      cues: [{ ...restored.subtitle_tracks[0].cues[0], text: "重做后持久字幕" }] }];
+    mocks.getWorkspace.mockResolvedValue(restored);
+    mocks.readTimelineRestore.mockResolvedValue({ task_id: initial.task.id, request_id: original.request_id, action: "redo",
+      target_operation_id: "resolved-original-operation", status: "applied", operation_id: "redo-operation", result_version_id: "redo-version", failure: null });
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原撤销重做结果" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "查询原撤销重做结果" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原撤销重做结果" })).not.toBeInTheDocument());
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("重做后持久字幕");
+    expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
+    expect(mocks.readTimelineRestore).toHaveBeenCalledTimes(3);
+    for (const call of mocks.readTimelineRestore.mock.calls) expect(call).toEqual([initial.task.id, original.request_id]);
+    expect(mocks.redoTimeline).toHaveBeenCalledOnce(); expect(mocks.undoTimeline).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(key)).toBeNull();
+    reopened.unmount();
   });
 
   it("uses persisted cues when switching tracks and selecting another cue", async () => {

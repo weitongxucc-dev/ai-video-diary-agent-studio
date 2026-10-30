@@ -83,8 +83,17 @@ type PendingSubtitleSave = {
   submissionError?: ReturnType<typeof errorDetails>;
 };
 
+type PendingTimelineRestore = {
+  memberId: string;
+  taskId: string;
+  workspaceId: string;
+  action: "undo" | "redo";
+  input: Parameters<typeof undoCreationTaskTimeline>[1];
+  submissionError?: ReturnType<typeof errorDetails>;
+};
+
 // This identity scopes the local pending request; the API still performs authorization.
-async function subtitleSaveMemberId() {
+async function editRequestMemberId() {
   if (isLocalAuthMode()) return (await ensureLocalMemberIdentity()).member_id;
   const { data, error } = await createClient().auth.getSession();
   if (error || !data.session) throw new Error("请先登录原保存请求所属的账号。");
@@ -114,9 +123,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [notice, setNotice] = useState<string | null>(null);
   const [pendingSubtitleSave, setPendingSubtitleSave] = useState<PendingSubtitleSave | null>(null);
   const pendingSubtitleSaveRef = useRef<PendingSubtitleSave | null>(null);
-  const subtitleScope = useRef<string | null>(null);
-  const subtitleOperation = useRef<{ taskId: string; memberId: string | null } | null>(null);
-  const subtitleIdentity = useLocalMemberIdentity();
+  const [pendingTimelineRestore, setPendingTimelineRestore] = useState<PendingTimelineRestore | null>(null);
+  const pendingTimelineRestoreRef = useRef<PendingTimelineRestore | null>(null);
+  const editRequestScope = useRef<string | null>(null);
+  const editRequestOperation = useRef<{ taskId: string; memberId: string | null } | null>(null);
+  const editRequestIdentity = useLocalMemberIdentity();
   const subtitleStoragePrefix = `subtitle-save:${workspace.task.workspace_id}:${workspace.task.id}:`;
   useEffect(() => {
     let active = true;
@@ -124,17 +135,20 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     const restore = (memberId: string | null) => {
       if (!active) return;
       const nextScope = memberId ? `${subtitleStoragePrefix}${memberId}` : null;
-      if (subtitleScope.current === nextScope && subtitleOperation.current) return;
-      const previousScope = subtitleScope.current;
-      subtitleScope.current = nextScope;
-      const operation = subtitleOperation.current;
+      if (editRequestScope.current === nextScope && editRequestOperation.current) return;
+      const previousScope = editRequestScope.current;
+      editRequestScope.current = nextScope;
+      if (previousScope !== nextScope) { setError(null); setNotice(null); }
+      const operation = editRequestOperation.current;
       if (operation && ((previousScope !== null && previousScope !== nextScope)
         || (operation.memberId !== null && (operation.memberId !== memberId || operation.taskId !== workspace.task.id)))) {
-        subtitleOperation.current = null;
+        editRequestOperation.current = null;
         setBusy(null);
       }
       pendingSubtitleSaveRef.current = null;
       setPendingSubtitleSave(null);
+      pendingTimelineRestoreRef.current = null;
+      setPendingTimelineRestore(null);
       if (!memberId) return;
       try {
         const stored = sessionStorage.getItem(`${subtitleStoragePrefix}${memberId}`);
@@ -146,8 +160,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         setPendingSubtitleSave(pending);
         if (pending?.submissionError) setError(pending.submissionError);
       } catch (cause) { setError(errorDetails(cause)); }
+      try {
+        const stored = sessionStorage.getItem(`timeline-restore:${workspace.task.workspace_id}:${workspace.task.id}:${memberId}`);
+        const pending: PendingTimelineRestore | null = stored ? JSON.parse(stored) : null;
+        if (pending && (pending.taskId !== workspace.task.id || pending.workspaceId !== workspace.task.workspace_id
+          || pending.memberId !== memberId || !pending.input.request_id || !["undo", "redo"].includes(pending.action)))
+          throw new Error("原撤销重做请求无法读取，请保留现场核对。");
+        pendingTimelineRestoreRef.current = pending;
+        setPendingTimelineRestore(pending);
+        if (pending?.submissionError) setError(pending.submissionError);
+      } catch (cause) { setError(errorDetails(cause)); }
     };
-    void subtitleSaveMemberId().then(memberId => { if (identityRevision === 0) restore(memberId); })
+    void editRequestMemberId().then(memberId => { if (identityRevision === 0) restore(memberId); })
       .catch(cause => { if (active && identityRevision === 0) setError(errorDetails(cause)); });
     // Local identity changes already notify the existing hook; formal sessions
     // notify here without starting another auth or task lifecycle.
@@ -162,7 +186,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       }
     } catch (cause) { setError(errorDetails(cause)); }
     return () => { active = false; unsubscribe?.(); };
-  }, [subtitleStoragePrefix, workspace.task.id, workspace.task.workspace_id, subtitleIdentity.token]);
+  }, [subtitleStoragePrefix, workspace.task.id, workspace.task.workspace_id, editRequestIdentity.token]);
   const [pendingLocalEdit, setPendingLocalEdit] = useState<PendingLocalEdit | null>(null);
   const pendingLocalEditRef = useRef(pendingLocalEdit);
   pendingLocalEditRef.current = pendingLocalEdit;
@@ -215,8 +239,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       ?? null,
   );
   const [pendingVoiceSelection, setPendingVoiceSelection] = useWorkspaceViewState<CreationTaskNarrationVoiceSelectionRequest | null>(`task:${workspace.task.id}.voiceSelectionRequest`, null);
-  const [pendingTimelineRestore, setPendingTimelineRestore] = useWorkspaceViewState<{taskId:string;requestId:string}|null>(`task:${workspace.task.id}.timelineRestoreRequest`,null);
-  const restoreReadSequence=useRef(0);
   const [voiceSelectionNotFound, setVoiceSelectionNotFound] = useState<string | null>(null);
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
@@ -1323,7 +1345,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   async function readSubtitleSave(pending: PendingSubtitleSave, owns: () => boolean) {
-    if (await subtitleSaveMemberId() !== pending.memberId) throw new Error("请切回原成员账号查询这次字幕保存，未重新提交。");
+    if (await editRequestMemberId() !== pending.memberId) throw new Error("请切回原成员账号查询这次字幕保存，未重新提交。");
     const receipt = await getCreationTaskEditRequest(pending.taskId, pending.input.request_id).catch(cause => {
       if (pending.submissionError) throw new Error(`${pending.submissionError.message}；原请求查询：${errorDetails(cause).message}`);
       throw cause;
@@ -1354,33 +1376,33 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   async function querySubtitleSave() {
     const pending = pendingSubtitleSaveRef.current;
-    if (!pending || subtitleOperation.current || busy !== null) return;
+    if (!pending || editRequestOperation.current || busy !== null) return;
     const operation = { taskId: pending.taskId, memberId: pending.memberId };
-    subtitleOperation.current = operation;
-    const owns = () => currentTaskId.current === pending.taskId && subtitleOperation.current === operation
-      && subtitleScope.current === `subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`;
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === pending.taskId && editRequestOperation.current === operation
+      && editRequestScope.current === `subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`;
     setBusy("edit-confirm"); setError(null);
     try { await readSubtitleSave(pending, owns); }
     catch (cause) { if (owns()) setError(errorDetails(cause)); }
     finally {
       // Release only this operation's busy slot; an old response cannot clear a successor's slot.
-      if (subtitleOperation.current === operation) {
-        subtitleOperation.current = null;
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
         if (currentTaskId.current === operation.taskId) setBusy(null);
       }
     }
   }
 
   async function saveSubtitleCue(input: Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }>) {
-    if (subtitleOperation.current || pendingSubtitleSaveRef.current || busy !== null) return false;
+    if (editRequestOperation.current || pendingSubtitleSaveRef.current || busy !== null) return false;
     const taskSnapshot = currentWorkspace.current.task;
     const operation: { taskId: string; memberId: string | null } = { taskId: taskSnapshot.id, memberId: null };
-    subtitleOperation.current = operation;
-    const owns = () => currentTaskId.current === taskSnapshot.id && subtitleOperation.current === operation
-      && (operation.memberId === null || subtitleScope.current === `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${operation.memberId}`);
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === taskSnapshot.id && editRequestOperation.current === operation
+      && (operation.memberId === null || editRequestScope.current === `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${operation.memberId}`);
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
     try {
-      const memberId = await subtitleSaveMemberId();
+      const memberId = await editRequestMemberId();
       operation.memberId = memberId;
       if (!owns()) return false;
       const subtitleStorageKey = `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${memberId}`;
@@ -1414,8 +1436,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     } catch (cause) { if (owns()) setError(errorDetails(cause)); return false; }
     finally {
       // Release only this operation's busy slot; an old response cannot clear a successor's slot.
-      if (subtitleOperation.current === operation) {
-        subtitleOperation.current = null;
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
         if (currentTaskId.current === operation.taskId) setBusy(null);
       }
     }
@@ -1462,61 +1484,105 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return saved;
   }
 
-  async function queryTimelineRestore() {
-    const pending=pendingTimelineRestore;
-    if (!pending || pending.taskId!==task.id) return;
-    const sequence=++restoreReadSequence.current;
-    const owns=()=>currentTaskId.current===pending.taskId && sequence===restoreReadSequence.current;
-    setBusy('undo');setError(null);
-    try {
-      const receipt=await readCreationTaskTimelineRestore(pending.taskId,pending.requestId);
-      if (!owns()) return;
-      if (receipt.task_id!==pending.taskId || receipt.request_id!==pending.requestId) throw new Error('撤销重做回执身份不一致');
-      if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
-      setNotice(receipt.status==='applied'?'原修改的撤销或重做已保存。'+(editExecutionReadinessMessage(receipt.execution_readiness) ?? ''):receipt.status==='refused'?(receipt.failure?.reason ?? '原操作因冲突被拒绝。'):'原结果尚未核实，请继续查询原请求。');
-      await refresh(true);
-    } catch(cause) {if (owns()) setError(errorDetails(cause));}
-    finally {if (owns()) setBusy(null);}
+  function clearTimelineRestore(pending: PendingTimelineRestore, owns: () => boolean) {
+    sessionStorage.removeItem(`timeline-restore:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
+    if (owns()) { pendingTimelineRestoreRef.current = null; setPendingTimelineRestore(null); }
   }
-  async function undoTimeline(redo = false, targetOperationId?: string) {
-    if (pendingTimelineRestore) {setNotice('原撤销重做请求等待核对，请先查询原结果。');return;}
-    const taskId=task.id,requestId=crypto.randomUUID(),sequence=++restoreReadSequence.current;
-    const owns=()=>currentTaskId.current===taskId && sequence===restoreReadSequence.current;
-    setPendingTimelineRestore({taskId,requestId});
-    setBusy("undo");
-    setError(null);
-    setNotice(null);
-    invalidateEditPreview();
-    let writeReturned=false;
-    try {
-      await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(task.id, {
-        request_id: requestId,
-        ...(targetOperationId?{target_operation_id:targetOperationId}:{}),
-        expected_timeline_version_id: task.current_timeline_version_id,
-        expected_timeline_sequence: task.timeline_sequence,
-      });
-      writeReturned=true;
-      const receipt=await readCreationTaskTimelineRestore(taskId,requestId);
-      if (!owns()) return;
-      if (receipt.task_id!==taskId || receipt.request_id!==requestId) throw new Error('撤销重做回执身份不一致');
-      if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
-      if (receipt.status!=='applied') {
-        setNotice(receipt.failure?.reason ?? '原操作结果尚未核实，请查询原请求。');
-        await refresh(true);return;
+
+  async function readTimelineRestore(pending: PendingTimelineRestore, owns: () => boolean) {
+    if (await editRequestMemberId() !== pending.memberId) throw new Error("请切回原成员账号查询撤销重做结果。");
+    const receipt = await readCreationTaskTimelineRestore(pending.taskId, pending.input.request_id);
+    if (!owns()) return;
+    if (receipt.task_id !== pending.taskId || receipt.request_id !== pending.input.request_id || receipt.action !== pending.action
+      || (pending.input.target_operation_id !== undefined && receipt.target_operation_id !== pending.input.target_operation_id))
+      throw new Error("撤销重做回执与原请求不一致");
+    await refresh(true, () => owns());
+    if (!owns()) return;
+    if (receipt.status === "applied" || receipt.status === "refused") clearTimelineRestore(pending, owns);
+    if (receipt.status === "applied") {
+      setClipDrafts({}); setSelectedCueId(null); setSelectedNarrationSegmentId(null); setSelectedCover(false);
+      setNotice("原修改的撤销或重做已保存。" + (editExecutionReadinessMessage(receipt.execution_readiness) ?? ""));
+    } else {
+      setNotice(receipt.failure?.reason ?? (receipt.status === "refused" ? "原操作因冲突被拒绝。" : "原结果尚未核实，请继续查询原请求。"));
+    }
+  }
+
+  async function queryTimelineRestore() {
+    const pending = pendingTimelineRestoreRef.current;
+    if (!pending || pending.taskId !== task.id || editRequestOperation.current || busy !== null) return;
+    const operation = { taskId: pending.taskId, memberId: pending.memberId };
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === pending.taskId && editRequestOperation.current === operation
+      && editRequestScope.current === `subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`;
+    setBusy("undo"); setError(null);
+    try { await readTimelineRestore(pending, owns); }
+    catch (cause) { if (owns()) setError(errorDetails(cause)); }
+    finally {
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
+        if (currentTaskId.current === pending.taskId) setBusy(null);
       }
-      setClipDrafts({});
-      setNotice('原修改的撤销或重做已保存。' + (editExecutionReadinessMessage(receipt.execution_readiness) ?? ''));
-      setSelectedCueId(null);
-      setSelectedNarrationSegmentId(null);
-      setSelectedCover(false);
-      await refresh(true);
+    }
+  }
+
+  async function undoTimeline(redo = false, targetOperationId?: string) {
+    if (editRequestOperation.current || busy !== null) return;
+    if (pendingTimelineRestoreRef.current) { setNotice("原撤销重做请求等待核对，请先查询原结果。"); return; }
+    const taskSnapshot = currentWorkspace.current.task;
+    const operation: { taskId: string; memberId: string | null } = { taskId: taskSnapshot.id, memberId: null };
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === taskSnapshot.id && editRequestOperation.current === operation
+      && (operation.memberId === null || editRequestScope.current === `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${operation.memberId}`);
+    setBusy("undo"); setError(null); setNotice(null); invalidateEditPreview();
+    let writeReturned = false;
+    let postStarted = false;
+    let pending: PendingTimelineRestore | null = null;
+    try {
+      const memberId = await editRequestMemberId();
+      operation.memberId = memberId;
+      if (!owns()) return;
+      const key = `timeline-restore:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${memberId}`;
+      const stored = sessionStorage.getItem(key);
+      if (stored) {
+        const original: PendingTimelineRestore = JSON.parse(stored);
+        if (original.taskId !== taskSnapshot.id || original.workspaceId !== taskSnapshot.workspace_id || original.memberId !== memberId)
+          throw new Error("原撤销重做请求与当前任务或成员不一致，没有提交。");
+        pendingTimelineRestoreRef.current = original; setPendingTimelineRestore(original);
+        setNotice("原撤销重做请求等待核对，请先查询原结果。"); return;
+      }
+      pending = { taskId: taskSnapshot.id, workspaceId: taskSnapshot.workspace_id, memberId, action: redo ? "redo" : "undo",
+        input: { request_id: crypto.randomUUID(), ...(targetOperationId ? { target_operation_id: targetOperationId } : {}),
+          expected_timeline_version_id: taskSnapshot.current_timeline_version_id, expected_timeline_sequence: taskSnapshot.timeline_sequence } };
+      const serialized = JSON.stringify(pending);
+      sessionStorage.setItem(key, serialized);
+      if (sessionStorage.getItem(key) !== serialized) throw new Error("无法保留撤销重做原请求，本次没有提交。");
+      pendingTimelineRestoreRef.current = pending; setPendingTimelineRestore(pending);
+      postStarted = true;
+      await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(pending.taskId, pending.input);
+      writeReturned = true;
+      await readTimelineRestore(pending, owns);
     } catch (cause) {
+      let reported = cause;
+      if (pending && postStarted && !writeReturned) {
+        try {
+          if (cause instanceof CreationPlanApiError && ["not_submitted", "rejected"].includes(cause.submissionEffect ?? "")) {
+            clearTimelineRestore(pending, owns);
+          } else {
+            pending.submissionError = errorDetails(cause);
+            sessionStorage.setItem(`timeline-restore:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`, JSON.stringify(pending));
+          }
+        } catch (storageCause) { reported = storageCause; }
+      }
       if (owns()) {
-        if (!writeReturned && cause instanceof CreationPlanApiError && ['not_submitted','rejected'].includes(cause.submissionEffect ?? '')) setPendingTimelineRestore(null);
-        setError(errorDetails(cause));await refresh(true).catch(() => undefined);
+        const details = errorDetails(reported);
+        setError(!postStarted ? { ...details, message: `本次撤销重做没有提交：${details.message}` } : details);
+        await refresh(true, () => owns()).catch(() => undefined);
       }
     } finally {
-      if (owns()) setBusy(null);
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
+        if (currentTaskId.current === taskSnapshot.id) setBusy(null);
+      }
     }
   }
 
