@@ -3249,10 +3249,20 @@ def _assistant_profile_snapshot(request: Request, kind: str, profile_id: str, ve
             "instruction": "固定版本档案事实，只读引用；不表示已用于任务，也不授权编辑、生成或发布。"}
 
 
-@app.get("/api/assistant/profile-references/{kind}/{profile_id}")
-def assistant_profile_reference(kind: Literal["person", "voice"], profile_id: str, request: Request, version: str):
-    _assistant_member_id(request, current_workspace_id(request))
-    return _assistant_profile_snapshot(request, kind, profile_id, version)
+from app.assistant_reference_routes import build_assistant_reference_router
+
+
+def _assistant_reference_http_router(route_names):
+    return build_assistant_reference_router(
+        member_for=lambda: _assistant_member_id,
+        workspace_for=lambda: current_workspace_id,
+        profile_snapshot_for=lambda: _assistant_profile_snapshot,
+        knowledge_snapshot_for=lambda: _assistant_knowledge_snapshot,
+        route_names=route_names,
+    )
+
+
+app.include_router(_assistant_reference_http_router(("assistant_profile_reference",)))
 
 
 def _assistant_knowledge_snapshot(request: Request, knowledge_item_id: str, version: str, locator: str | None = None, *, include_content: bool = False) -> dict:
@@ -3278,10 +3288,7 @@ def _assistant_knowledge_snapshot(request: Request, knowledge_item_id: str, vers
     return facts
 
 
-@app.get("/api/assistant/knowledge-references/{knowledge_item_id}")
-def assistant_knowledge_reference(knowledge_item_id: str, request: Request, version: str, locator: str | None = None):
-    _assistant_member_id(request, current_workspace_id(request))
-    return _assistant_knowledge_snapshot(request, knowledge_item_id, version, locator, include_content=True)
+app.include_router(_assistant_reference_http_router(("assistant_knowledge_reference",)))
 
 
 def _home_plan_turn_use_case():
