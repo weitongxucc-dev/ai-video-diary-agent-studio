@@ -778,40 +778,19 @@ def companion_identity_for(request: Request) -> CompanionIdentity:
         raise companion_http_error(exc) from exc
 
 
-class DeviceInviteAcceptRequest(BaseModel):
-    invite_token: str
+from app.device_invite_accept_routes import (
+    DeviceInviteAcceptResponse, build_device_invite_accept_router,
+)
 
-
-class DeviceInviteAcceptResponse(BaseModel):
-    target_workspace_id: str
-    member_count: int
-    already_accepted: bool
-
-
-@app.post("/api/device-invites/accept")
-async def accept_device_invite(request: Request, payload: DeviceInviteAcceptRequest):
-    """Accept a device invite for the verified identity (no workspace required).
-
-    The middleware already authenticated the request's identity only
-    (``authenticate_identity``) and attached a workspaceless principal. The
-    trusted native runtime supplies the DeviceCredential; the Supabase RPC
-    re-checks ``auth.uid()``, the device proof and the invite token.
-    """
-    principal = request.state.principal
-    try:
-        service = DeviceAccountService(settings, trusted_device_credential())
-        acceptance = service.accept_invite(principal, payload.invite_token)
-    except DeviceAccountError as exc:
-        status = DEVICE_ACCOUNT_ERROR_STATUS.get(exc.kind, 500)
-        return JSONResponse(
-            status_code=status,
-            content={"error": exc.kind, "detail": str(exc)},
-        )
-    return DeviceInviteAcceptResponse(
-        target_workspace_id=acceptance.target_workspace_id,
-        member_count=acceptance.member_count,
-        already_accepted=acceptance.already_accepted,
-    )
+app.include_router(build_device_invite_accept_router(
+    service_type_for=lambda: DeviceAccountService,
+    settings_for=lambda: settings,
+    credential_for=lambda: trusted_device_credential,
+    error_type_for=lambda: DeviceAccountError,
+    error_status_for=lambda: DEVICE_ACCOUNT_ERROR_STATUS,
+    json_response_for=lambda: JSONResponse,
+    response_for=lambda: DeviceInviteAcceptResponse,
+))
 
 
 LOCAL_MEMBER_TOKEN_HEADER = "X-Local-Member-Token"
