@@ -60,7 +60,7 @@ from weakref import WeakSet
 if TYPE_CHECKING:
     from app.device_runtime import DeviceRuntime
 
-from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.voice_reference_routes import build_voice_reference_router
 from app.media_capability_routes import build_media_capability_router
 from app.voice_transcription_routes import build_voice_transcription_router
 from app.task_visual_routes import build_task_visual_router
@@ -1362,33 +1363,14 @@ app.include_router(_profile_http_router(("get_media_person_profile",)))
 app.include_router(_profile_http_router(("list_media_person_profile_versions",)))
 
 
-@app.post(
-    "/api/media/voice-references/import",
-    response_model=VoiceReferenceImportResponse,
-    status_code=201,
-)
-async def import_media_voice_reference(
-    request: Request,
-    audio: UploadFile = File(...),  # noqa: B008
-) -> VoiceReferenceImportResponse:
-    if not audio.filename or Path(audio.filename).suffix.lower() != ".wav":
-        raise HTTPException(status_code=422, detail="请选择 WAV 声音参考文件")
-    try:
-        content = await audio.read(50 * 1024 * 1024 + 1)
-        reference, size_bytes, duration_seconds = (
-            production_repo.import_voice_reference_wav(
-                current_workspace_id(request),
-                content, verified_owner_user_id=_content_reader(request, current_workspace_id(request))[0],
-            )
-        )
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return VoiceReferenceImportResponse(
-        reference=reference,
-        file_name="已导入声音参考.wav",
-        size_bytes=size_bytes,
-        duration_seconds=duration_seconds,
-    )
+app.include_router(build_voice_reference_router(
+    path_type_for=lambda: Path,
+    http_error_type_for=lambda: HTTPException,
+    records_for=lambda: production_repo,
+    workspace_for=lambda: current_workspace_id,
+    reader_for=lambda: _content_reader,
+    response_type_for=lambda: VoiceReferenceImportResponse,
+))
 
 
 def _member_owned_content_scope(request: Request) -> tuple[str, str]:
