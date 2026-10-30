@@ -5177,18 +5177,11 @@ def _original_edit_result(task, proposal):
         version = production_repo.timeline_records.get_timeline_version(task.workspace_id, operation.result_version_id)
         montage = creation_task_montage_plan_from_payload(version.snapshot["montage"])
         return CreationTaskEditConfirmResponse(operation=asdict(operation), montage=_creation_task_montage_response(montage), narration=None)
-    with production_repo._connect() as conn:
-        row = conn.execute(
-            "SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id AND e.job_id=j.id "
-            "WHERE j.workspace_id=? AND j.task_id=? AND json_extract(e.payload_json,'$.edit_proposal_id')=? "
-            "ORDER BY j.created_at LIMIT 1", (task.workspace_id, task.id, proposal.id),
-        ).fetchone()
-        if row is None:
-            return None
-        request_row = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_id=? ORDER BY created_at LIMIT 1",
-                                   (task.workspace_id, row["id"])).fetchone()
-    result = CreationTaskEditJobReplayResponse(status=row["status"], job_id=row["id"],
-        request_id=request_row["id"] if request_row else None, failure_reason=row["failure_reason"])
+    row = production_repo.edit_records.find_proposal_job_result(task.workspace_id, task.id, proposal.id)
+    if row is None:
+        return None
+    result = CreationTaskEditJobReplayResponse(status=row["status"], job_id=row["job_id"],
+        request_id=row["request_id"], failure_reason=row["failure_reason"])
     return JSONResponse(status_code=202 if row["status"] in {"queued", "running", "interrupted"} else 200, content=result.model_dump(mode="json"))
 
 

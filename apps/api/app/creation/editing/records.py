@@ -480,6 +480,20 @@ class EditRecordStore:
             ).fetchall()
         return [self.edit_operation_from_row(row) for row in rows]
 
+    def find_proposal_job_result(self, workspace_id: str, task_id: str, proposal_id: str) -> dict[str, object] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id AND e.job_id=j.id "
+                "WHERE j.workspace_id=? AND j.task_id=? AND json_extract(e.payload_json,'$.edit_proposal_id')=? "
+                "ORDER BY j.created_at LIMIT 1", (workspace_id, task_id, proposal_id),
+            ).fetchone()
+            if row is None:
+                return None
+            request_row = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_id=? ORDER BY created_at LIMIT 1",
+                                       (workspace_id, row["id"])).fetchone()
+        return {"status": row["status"], "job_id": row["id"],
+            "request_id": request_row["id"] if request_row else None, "failure_reason": row["failure_reason"]}
+
     def _require_operation_timeline_lineage(
         self,
         conn: sqlite3.Connection, operation: EditOperation
