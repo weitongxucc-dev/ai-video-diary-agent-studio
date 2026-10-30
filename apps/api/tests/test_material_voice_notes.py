@@ -1,4 +1,3 @@
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -8,20 +7,41 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 import app.voice as voice_module
 from app.asr import ASRTranscription, ASRTranscriptionError, LocalWhisperTranscriber
+from app.auth import SupabaseAuthContext
+from app.config import Settings
 
 
 @pytest.fixture
-def tencent_settings(monkeypatch):
-    settings = replace(
-        main_module.settings,
+def tencent_settings(monkeypatch, tmp_path):
+    import subprocess
+    import tempfile
+    import wave
+    from app.asr import TencentCloudASRTranscriber
+    from app.device_runtime import DeviceRuntime
+    def forbidden(*args, **kwargs):
+        pytest.fail('transcription protocol evidence forbids actual ASR/media/runtime execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    monkeypatch.setattr(TencentCloudASRTranscriber, 'transcribe', forbidden)
+    monkeypatch.setattr(main_module, '_creation_runtime', forbidden)
+    temporary = tmp_path / 'temporary'
+    temporary.mkdir()
+    monkeypatch.setattr(tempfile, 'tempdir', str(temporary))
+    settings = Settings(
         asr_provider="tencentcloud",
         tencentcloud_secret_id="test-only-id",
         tencentcloud_secret_key="test-only-key",
         local_whisper_python_path=None,
         local_whisper_cli_path=None,
         local_whisper_model_path=None,
+        database_path=str(tmp_path/'metadata.sqlite3'), video_output_path=str(tmp_path/'output'),
+        model_root_path=str(tmp_path/'models'), temporary_root_path=str(temporary),
+        supabase_url=None, supabase_publishable_key=None,
     )
     monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, 'auth_context', SupabaseAuthContext(settings))
     return settings
 
 
@@ -65,6 +85,12 @@ def test_material_request_uses_only_local_whisper_even_when_tencent_is_configure
             assert "直接输入素材说明" in response.json()["detail"]
     assert len(local_calls) == (0 if local_state == "missing" else 1)
     assert all(not Path(path).exists() for path in local_calls)
+    if local_state == 'missing':
+        empty = TestClient(main_module.app).post('/api/voice/transcribe',
+            files={'audio': ('empty.webm', b'', 'audio/webm')}, data={'local_only': 'true'})
+        assert empty.status_code == 400 and empty.json()['detail'] == 'Empty audio file'
+        configured_selector.assert_not_called()
+        assert list(Path(tencent_settings.temporary_root_path).iterdir()) == []
 
 
 def test_existing_transcription_requests_still_use_the_configured_provider(monkeypatch, tencent_settings):
@@ -83,3 +109,7 @@ def test_existing_transcription_requests_still_use_the_configured_provider(monke
     assert response.json()["provider"] == "tencentcloud"
     configured_selector.assert_called_once_with(tencent_settings)
     configured.transcribe.assert_called_once()
+    temporary_input = Path(configured.transcribe.call_args.args[0])
+    assert temporary_input.parent == Path(tencent_settings.temporary_root_path)
+    assert not temporary_input.exists()
+    assert list(temporary_input.parent.iterdir()) == []

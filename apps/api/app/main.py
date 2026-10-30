@@ -60,7 +60,7 @@ from weakref import WeakSet
 if TYPE_CHECKING:
     from app.device_runtime import DeviceRuntime
 
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -246,6 +246,7 @@ from app.llm import (
 )
 from app.model_installer import ModelInstaller
 from app.model_install_routes import build_model_install_router
+from app.voice_transcription_routes import build_voice_transcription_router
 from app.task_visual_routes import build_task_visual_router
 from app.task_audio_routes import build_task_audio_router
 from app.production_profile_routes import build_production_profile_router
@@ -8329,33 +8330,12 @@ app.include_router(_episode_read_http_router(("get_latest_retake_report",)))
 
 
 
-@app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
-async def voice_transcribe(
-    audio: UploadFile = File(...),  # noqa: B008
-    local_only: bool = Form(False),  # noqa: B008
-) -> VoiceTranscriptionResponse:
-    """Transcribe uploaded audio; local_only selects LocalWhisper for this request."""
-    try:
-        content = await audio.read()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
-
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty audio file")
-
-    try:
-        if local_only:
-            result = transcribe_audio_bytes(content, settings, local_only=True)
-        else:
-            result = transcribe_audio_bytes(content, settings)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    return VoiceTranscriptionResponse(
-        transcript=result["transcript"],
-        provider=result["provider"],
-        segments=result["segments"],
-    )
+app.include_router(build_voice_transcription_router(
+    http_error_type_for=lambda: HTTPException,
+    transcribe_for=lambda: transcribe_audio_bytes,
+    settings_for=lambda: settings,
+    response_type_for=lambda: VoiceTranscriptionResponse,
+))
 
 
 # ── Creator Profile ──────────────────────────────────────────────
