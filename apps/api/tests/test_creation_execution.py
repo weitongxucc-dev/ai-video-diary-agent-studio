@@ -4460,7 +4460,7 @@ def _account_voice_selection_case(tmp_path, monkeypatch):
     async def authenticated(request, call_next):
         request.state.principal = principal
         return await call_next(request)
-    app.add_api_route('/api/creation-tasks/{task_id}/narration/voice', main_module.select_creation_task_narration_voice,
+    app.add_api_route('/api/creation-tasks/{task_id}/narration/voice', next(route.endpoint for route in main_module.app.routes if route.name == "select_creation_task_narration_voice"),
         methods=['POST'])
     client = TestClient(app)
     return SimpleNamespace(repo=repo, actor=actor, job=job, task_id=task_id, script_id=script_id,

@@ -355,7 +355,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicConfirmRequest, CreationTaskTopicGenerateRequest, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderRequest, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, StoryboardRegenerationRequest, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskMontageClipUpdateRequest, CreationTaskMontageRenderRequest, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskSubtitleCueUpdateRequest, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -4813,129 +4813,28 @@ def confirm_creation_task_script(
     return _creation_task_scripts_response(workspace_id, task)
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/narration/voice",
-    response_model=CreationTaskNarrationVoiceSelectionResponse,
-)
-def select_creation_task_narration_voice(
-    task_id: str,
-    request: Request,
-    payload: CreationTaskNarrationVoiceSelectionRequest,
-) -> CreationTaskNarrationVoiceSelectionResponse:
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    if payload.assistant_turn_id is not None:
-        _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
-    try:
-        actor = None
-        try:
-            production_repo.get_creation_task_narration_voice_selection(task.workspace_id, task.id,
-                str(payload.request_id), member_id=member_id)
-        except KeyError:
-            job = creation_execution.latest(task.workspace_id, task.id)
-            if job is not None and job.status == 'queued':
-                actor = _request_permit_actor(request, task.workspace_id)
-        receipt = _creation_execution_control().select_narration_voice(runtime=device_runtime, actor=actor,
-            workspace_id=task.workspace_id, task_id=task.id, member_id=member_id, request_id=str(payload.request_id),
-            voice_profile_id=payload.voice_profile_id,
-            voice_version=payload.voice_version,
-            expected_plan_updated_at=payload.expected_plan_updated_at,
-            expected_task_updated_at=payload.expected_task_updated_at,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到当前任务或配音声音。") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except MediaAuthorityError as exc:
-        raise _topic_failure_response(
-            status_code=409,
-            error=exc.reason,
-            reason=exc.reason,
-            impact=exc.impact,
-            repair_action=exc.repair_action,
-            retryable=True,
-        ) from exc
-    except (ValueError, RecoveryBlocked) as exc:
-        raise _topic_failure_response(
-            status_code=409,
-            error="creation_task_voice_selection_conflict",
-            reason="当前任务不能选择这个声音版本。",
-            impact="没有改变任务阶段，也没有调用声音模型。",
-            repair_action=str(exc),
-            retryable=False,
-        ) from exc
-    return CreationTaskNarrationVoiceSelectionResponse.model_validate(receipt)
+from app.task_narration_routes import build_task_narration_router
 
 
-@app.get("/api/creation-tasks/{task_id}/narration/voice/requests/{request_id}",
-    response_model=CreationTaskNarrationVoiceSelectionResponse)
-def get_creation_task_narration_voice_selection(task_id: str, request_id: UUID, request: Request):
-    task, member_id = _exact_edit_access(task_id, request)
-    try:
-        receipt = production_repo.get_creation_task_narration_voice_selection(
-            workspace_id=task.workspace_id, task_id=task.id, request_id=str(request_id), member_id=member_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="没有找到当前成员的原声音采用请求。") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    return CreationTaskNarrationVoiceSelectionResponse.model_validate(receipt)
-
-
-@app.post(
-    "/api/creation-tasks/{task_id}/narration/generate",
-    response_model=CreationTaskNarrationResponse,
-)
-def generate_creation_task_narration(
-    task_id: str,
-    request: Request,
-) -> CreationTaskNarrationResponse:
-    raise HTTPException(status_code=409, detail="请确认文案和制作要求后使用开始/继续制作，配音必须进入设备队列")
-
-
-@app.get("/api/creation-tasks/{task_id}/narration/audio")
-def get_creation_task_narration_audio(task_id: str, request: Request) -> FileResponse:
-    workspace_id = current_workspace_id(request)
-    task = _readable_creation_task(request, task_id)
-    artifact = (
-        production_repo.get_narration_artifact(workspace_id, task.narration_cache_key)
-        if task.narration_cache_key
-        else None
-    )
-    if artifact is None or artifact.task_id != task.id:
-        raise HTTPException(status_code=404, detail="creation task narration not found")
-    media_type = {
-        ".wav": "audio/wav", ".webm": "audio/webm", ".ogg": "audio/ogg",
-        ".m4a": "audio/mp4", ".mp4": "audio/mp4",
-    }.get(Path(artifact.audio_path).suffix.lower(), "application/octet-stream")
-    return FileResponse(artifact.audio_path, media_type=media_type, filename=f"narration{Path(artifact.audio_path).suffix}")
-
-
-@app.get('/api/creation-tasks/{task_id}/narration/waveform')
-def get_creation_task_narration_waveform(task_id: str, request: Request) -> dict:
-    return _submit_audio_ingress(task_id, request, 'narration_waveform', 'waveform')
-
-
-@app.get("/api/creation-tasks/{task_id}/narration/segments/{segment_id}/audio")
-def get_creation_task_narration_segment_audio(
-    task_id: str, segment_id: str, request: Request
-) -> FileResponse:
-    workspace_id = current_workspace_id(request)
-    _readable_creation_task(request, task_id)
-    try:
-        segment = production_repo.narration_records.get_narration_segment(
-            workspace_id, task_id, segment_id
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task narration segment not found") from exc
-    if segment.status != "ready" or not segment.audio_reference:
-        raise HTTPException(status_code=409, detail="creation task narration segment is not ready")
-    path = production_repo.resolve_authorized_narration_audio_reference(
-        workspace_id, segment.audio_reference
-    )
-    media_type = {
-        ".wav": "audio/wav", ".webm": "audio/webm", ".ogg": "audio/ogg",
-        ".m4a": "audio/mp4", ".mp4": "audio/mp4",
-    }.get(path.suffix.lower(), "application/octet-stream")
-    return FileResponse(path, media_type=media_type, filename=f"{segment.id}{path.suffix}")
+app.include_router(build_task_narration_router(
+    access_for=lambda: _exact_edit_access,
+    adoption_for=lambda: _assistant_creation_adoption_scope,
+    production_for=lambda: production_repo,
+    execution_for=lambda: creation_execution,
+    actor_for=lambda: _request_permit_actor,
+    control_for=lambda: _creation_execution_control,
+    runtime_for=lambda: device_runtime,
+    http_error_for=lambda: HTTPException,
+    authority_error_for=lambda: MediaAuthorityError,
+    failure_for=lambda: _topic_failure_response,
+    blocked_for=lambda: RecoveryBlocked,
+    selection_response_for=lambda: CreationTaskNarrationVoiceSelectionResponse,
+    workspace_for=lambda: current_workspace_id,
+    readable_for=lambda: _readable_creation_task,
+    path_for=lambda: Path,
+    file_response_for=lambda: FileResponse,
+    ingress_for=lambda: _submit_audio_ingress,
+))
 
 
 def _person_source_range(workspace_id,task,montage,clip,segment):

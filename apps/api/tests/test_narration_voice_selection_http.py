@@ -23,9 +23,9 @@ def http_state(state, monkeypatch):
     conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, 'conversation_repo', conversations)
     app = FastAPI()
-    app.add_api_route('/api/creation-tasks/{task_id}/narration/voice', main.select_creation_task_narration_voice, methods=['POST'])
+    app.add_api_route('/api/creation-tasks/{task_id}/narration/voice', next(route.endpoint for route in main.app.routes if route.name == "select_creation_task_narration_voice"), methods=['POST'])
     app.add_api_route('/api/creation-tasks/{task_id}/narration/voice/requests/{request_id}',
-        main.get_creation_task_narration_voice_selection, methods=['GET'])
+        next(route.endpoint for route in main.app.routes if route.name == "get_creation_task_narration_voice_selection"), methods=['GET'])
     state.client, state.conversations = TestClient(app), conversations
     return state
 
