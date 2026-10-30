@@ -7517,36 +7517,34 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment',)))
 
 
-@app.get(
-    "/api/production/batches",
-    response_model=ProductionBatchesResponse,
-)
-def list_production_batches(request: Request) -> ProductionBatchesResponse:
-    batches = production_repo.list_batches(current_workspace_id(request))
-    return ProductionBatchesResponse(
-        batches=[
-            _production_batch_response(batch)
-            for batch in batches
-        ],
-        total_count=len(batches),
+from app.legacy_montage_routes import build_legacy_montage_router
+
+
+def _legacy_montage_http_router(route_names):
+    return build_legacy_montage_router(
+        production_for=lambda: production_repo,
+        workspace_for=lambda: current_workspace_id,
+        batches_type_for=lambda: ProductionBatchesResponse,
+        batch_response_for=lambda: _production_batch_response,
+        http_error_for=lambda: HTTPException,
+        montage_for=lambda: montage_repo,
+        plans_type_for=lambda: MontagePlansResponse,
+        plan_response_for=lambda: _montage_plan_response,
+        safe_path_for=lambda: _safe_montage_media_path,
+        file_response_for=lambda: FileResponse,
+        candidate_type_for=lambda: MontageClipCandidateResponse,
+        reader_for=lambda: _content_reader,
+        eligible_for=lambda: material_segment_eligible,
+        route_names=route_names,
     )
 
 
+app.include_router(_legacy_montage_http_router(("list_production_batches",)))
 
 
-@app.get(
-    "/api/production/batches/{batch_id}",
-    response_model=ProductionBatchResponse,
-)
-def get_production_batch(
-    batch_id: str,
-    request: Request,
-) -> ProductionBatchResponse:
-    try:
-        batch = production_repo.get_batch(current_workspace_id(request), batch_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="production batch not found") from exc
-    return _production_batch_response(batch)
+
+
+app.include_router(_legacy_montage_http_router(("get_production_batch",)))
 
 
 
@@ -7589,138 +7587,29 @@ def _granted_audio_mix_sources(workspace_id, plan, context):
 
 
 
-@app.get(
-    "/api/production/batches/{batch_id}/montage-plans",
-    response_model=MontagePlansResponse,
-)
-def list_production_montage_plans(
-    batch_id: str,
-    request: Request,
-) -> MontagePlansResponse:
-    workspace_id = current_workspace_id(request)
-    try:
-        production_repo.get_batch(workspace_id, batch_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="production batch not found") from exc
-    plans = montage_repo.list_for_batch(workspace_id, batch_id)
-    return MontagePlansResponse(
-        plans=[
-            _montage_plan_response(plan)
-            for plan in plans
-        ],
-        total_count=len(plans),
-    )
+app.include_router(_legacy_montage_http_router(("list_production_montage_plans",)))
 
 
 
 
 
 
-@app.get(
-    "/api/production/montage-plans/{plan_id}",
-    response_model=MontagePlanResponse,
-)
-def get_production_montage_plan(
-    plan_id: str,
-    request: Request,
-) -> MontagePlanResponse:
-    try:
-        plan = montage_repo.get(current_workspace_id(request), plan_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="montage plan not found") from exc
-    return _montage_plan_response(plan)
+app.include_router(_legacy_montage_http_router(("get_production_montage_plan",)))
 
 
-def _stream_montage_plan_media(
-    plan_id: str,
-    request: Request,
-    *,
-    field: str,
-    media_type: str,
-) -> FileResponse:
-    try:
-        plan = montage_repo.get(current_workspace_id(request), plan_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="montage plan not found") from exc
-    path = _safe_montage_media_path(plan, field)
-    if path is None:
-        raise HTTPException(status_code=404, detail="montage media not found")
-    return FileResponse(
-        path,
-        media_type=media_type,
-        filename=path.name,
-        content_disposition_type="inline",
-    )
 
 
-@app.get("/api/production/montage-plans/{plan_id}/output")
-def stream_production_montage_output(plan_id: str, request: Request) -> FileResponse:
-    return _stream_montage_plan_media(
-        plan_id,
-        request,
-        field="output_path",
-        media_type="video/mp4",
-    )
+app.include_router(_legacy_montage_http_router(("stream_production_montage_output",)))
 
 
-@app.get("/api/production/montage-plans/{plan_id}/subtitle")
-def stream_production_montage_subtitle(plan_id: str, request: Request) -> FileResponse:
-    return _stream_montage_plan_media(
-        plan_id,
-        request,
-        field="subtitle_path",
-        media_type="application/x-subrip",
-    )
+app.include_router(_legacy_montage_http_router(("stream_production_montage_subtitle",)))
 
 
 def _refresh_montage_review_state(plan) -> None:
     return metadata_refresh_montage_review_state(plan)
 
 
-@app.get(
-    "/api/production/montage-plans/{plan_id}/clips/{clip_id}/candidates",
-    response_model=list[MontageClipCandidateResponse],
-)
-def list_production_montage_clip_candidates(
-    plan_id: str,
-    clip_id: str,
-    request: Request,
-) -> list[MontageClipCandidateResponse]:
-    workspace_id = current_workspace_id(request)
-    try:
-        plan = montage_repo.get(workspace_id, plan_id)
-        clip = next(item for item in plan.clips if item.id == clip_id)
-    except (KeyError, StopIteration) as exc:
-        raise HTTPException(status_code=404, detail="montage clip not found") from exc
-    cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
-    cue_tokens = set((cue.text if cue else "").lower())
-    candidates: list[MontageClipCandidateResponse] = []
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    for asset in production_repo.list_assets(
-        workspace_id, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic
-    ):
-        for segment in asset.segments:
-            if not material_segment_eligible(asset,segment,workspace_id):
-                continue
-            available = segment.end_seconds - segment.start_seconds
-            slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
-            if available + 1e-6 < slot_duration:
-                continue
-            description = (segment.description or segment.transcript or asset.file_name).strip()
-            overlap = len(cue_tokens & set(description.lower())) / max(1, len(cue_tokens))
-            score = max(0.0, min(1.0, overlap * 0.7 + min(1.0, available / max(slot_duration, 0.1)) * 0.3))
-            candidates.append(MontageClipCandidateResponse(
-                asset_id=asset.id,
-                segment_id=segment.id,
-                file_name=asset.file_name,
-                start_seconds=segment.start_seconds,
-                end_seconds=segment.end_seconds,
-                description=description,
-                score=round(score, 3),
-                reasons=["已通过版权和品牌审核", "时长满足当前旁白时间槽"],
-            ))
-    candidates.sort(key=lambda item: (item.asset_id == clip.asset_id and item.segment_id == clip.segment_id, item.score), reverse=True)
-    return candidates[:24]
+app.include_router(_legacy_montage_http_router(("list_production_montage_clip_candidates",)))
 
 
 
