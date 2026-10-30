@@ -7032,51 +7032,19 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('stream_production_material',)))
 
 
-@app.post(
-    "/api/production/materials/scan",
-    response_model=MaterialLibraryResponse,
-)
-def scan_production_materials(request: Request) -> MaterialLibraryResponse:
-    workspace_id = current_workspace_id(request)
-    viewer_user_id, local_diagnostic = _content_reader(request, workspace_id)
-    if material_execution_mode == "scheduled":
-        _material_ingestion_for(production_repo).scan_once()
-    else:
-        production_repo.scan_library(workspace_id)
-    assets, total = production_repo.list_assets_page(
-        workspace_id, limit=24, offset=0, include_private=local_diagnostic,
-        viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-    )
-    return MaterialLibraryResponse(
-        assets=[
-            _material_asset_response(asset)
-            for asset in assets
-        ],
-        total_count=total,
-        limit=24,
-        offset=0,
-        has_more=len(assets) < total,
-    )
+from app.material_processing_routes import build_material_processing_router
 
 
-@app.post(
-    "/api/production/materials/{asset_id}/analyze",
-    response_model=MaterialAssetResponse,
-)
-def analyze_production_material(
-    asset_id: str,
-    request: Request,
-) -> MaterialAssetResponse:
-    if material_execution_mode == "scheduled":
-        _material_ingestion_for(production_repo)
-        raise HTTPException(status_code=503, detail="素材手动分析的调度授权尚未接通。")
-    try:
-        asset = production_repo.analyze_asset(current_workspace_id(request), asset_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="material asset not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _material_asset_response(asset)
+app.include_router(build_material_processing_router(
+    workspace_for=lambda: current_workspace_id,
+    reader_for=lambda: _content_reader,
+    mode_for=lambda: material_execution_mode,
+    ingestion_for=lambda: _material_ingestion_for,
+    production_for=lambda: production_repo,
+    library_response_for=lambda: MaterialLibraryResponse,
+    asset_response_for=lambda: _material_asset_response,
+    http_error_for=lambda: HTTPException,
+))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('update_material_use_state',)))

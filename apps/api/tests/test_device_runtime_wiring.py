@@ -54,6 +54,45 @@ _CALIBRATED_ENV = {
 }
 
 
+@pytest.fixture(autouse=True)
+def material_processing_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname not in {
+        "test_scheduled_material_routes_reject_missing_driver_before_heavy_work",
+        "test_scheduled_scan_rejects_scheduler_from_another_database",
+    }:
+        return None
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append("runtime, grant or scan outside rejection metadata scope")
+        pytest.fail(violations[-1])
+
+    for name in ("start", "run_once", "wake"):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+    monkeypatch.setattr(ProductionRepository, "scan_library", forbidden)
+    settings = Settings(database_path=str(tmp_path / "studio.sqlite3"),
+        video_inbox_path=str(tmp_path / "library"), video_output_path=str(tmp_path / "output"),
+        model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
+        draft_output_path=str(tmp_path / "drafts"), jianying_draft_root_path=str(tmp_path / "jianying"),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "auth_context", SupabaseAuthContext(settings))
+    monkeypatch.setattr(main_module, "device_runtime", None)
+    monkeypatch.setattr(main_module, "material_ingestion", None)
+    request.addfinalizer(lambda: assert_no_execution())
+
+    def assert_no_execution():
+        assert violations == []
+
+
 def _request() -> Request:
     return Request({"type": "http", "method": "POST", "path": "/api/production/materials", "headers": []})
 
@@ -83,8 +122,8 @@ def test_scheduled_material_routes_reject_missing_driver_before_heavy_work(monke
     routes = (
         lambda: main_module._material_intake_http_adapter().scan_material_intake(_request()),
         lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
-        lambda: main_module.scan_production_materials(_request()),
-        lambda: main_module.analyze_production_material("asset-one", _request()),
+        lambda: next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request()),
+        lambda: next(route.endpoint for route in main_module.app.routes if route.name == "analyze_production_material")("asset-one", _request()),
     )
     for route in routes:
         with pytest.raises(HTTPException) as error:
@@ -110,14 +149,14 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
     monkeypatch.setattr(main_module, "device_runtime", runtime)
     monkeypatch.setattr(main_module, "material_ingestion", service)
 
-    result = main_module.scan_production_materials(_request())
+    result = next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request())
     assert result.total_count == 0
     service.scan_once.assert_called_once_with()
     repository.scan_library.assert_not_called()
 
     for route in (
         lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
-        lambda: main_module.analyze_production_material("asset-one", _request()),
+        lambda: next(route.endpoint for route in main_module.app.routes if route.name == "analyze_production_material")("asset-one", _request()),
     ):
         with pytest.raises(HTTPException) as error:
             route()
@@ -127,6 +166,7 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
 
 
 def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    violations = material_intake_no_execution(monkeypatch)
     repository = _material_routes(monkeypatch, tmp_path / "task.sqlite")
     scheduler = SimpleNamespace(database_path=tmp_path / "other.sqlite")
     service = SimpleNamespace(
@@ -139,10 +179,11 @@ def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pyt
     monkeypatch.setattr(main_module, "material_ingestion", service)
 
     with pytest.raises(HTTPException) as error:
-        main_module.scan_production_materials(_request())
+        next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request())
     assert error.value.status_code == 503
     service.scan_once.assert_not_called()
     repository.scan_library.assert_not_called()
+    assert violations == []
 
 
 def test_scheduled_mode_cannot_start_legacy_worker_or_stop_it_during_unwired_reload(
