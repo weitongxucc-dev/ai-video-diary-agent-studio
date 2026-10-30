@@ -64,7 +64,7 @@ def test_legacy_confirmation_rechecks_current_input_before_adoption(api_state, m
         return {'input_id': 'original' if len(checks) == 1 else 'superseded'}
     monkeypatch.setattr(main, '_assistant_creation_adoption_scope', current_origin)
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
-        main.confirm_creation_task_script, methods=['POST'])
+        next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_task_script"), methods=['POST'])
     body = {'title': script.title, 'sections': [asdict(section) for section in script.sections],
             'expected_updated_at': script.updated_at.isoformat(),
             'adoption_kind': 'delegated_system', 'assistant_turn_id': turn_id}

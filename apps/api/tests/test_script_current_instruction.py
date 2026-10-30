@@ -96,7 +96,7 @@ def test_actual_script_adoption_triggers_one_existing_continuation(api_state, mo
     assert saved.status_code == 200, saved.text
     script = saved.json()
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
-        main.confirm_creation_task_script, methods=['POST'])
+        next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_task_script"), methods=['POST'])
     body = {key: script[key] for key in ('title', 'sections')}
     body.update(expected_updated_at=script['updated_at'], adoption_kind='delegated_system', assistant_turn_id=turn['id'])
     response = state.client.post(f"/api/creation-tasks/task/scripts/{script['id']}/confirm", json=body)

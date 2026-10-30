@@ -639,8 +639,8 @@ def api_state(tmp_path, monkeypatch):
     app=FastAPI()
     app.include_router(build_script_generation_router(
         accept=main._accept_script_generation,read=main._read_script_generation,execute=main._execute_script_generation))
-    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-draft',main.save_assistant_script_draft,methods=['POST'])
-    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-context',main.get_assistant_script_context,methods=['GET'])
+    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-draft',next(route.endpoint for route in main.app.routes if route.name == "save_assistant_script_draft"),methods=['POST'])
+    app.add_api_route('/api/creation-tasks/{task_id}/assistant/script-context',next(route.endpoint for route in main.app.routes if route.name == "get_assistant_script_context"),methods=['GET'])
     state.client=TestClient(app,headers={'X-Local-Member-Token':state.token})
     return state
 
@@ -923,16 +923,139 @@ def test_agent_first_draft_rejection_leaves_no_run_or_script(api_state, monkeypa
     assert private_task_rows(api_state) == before
 
 
-def test_agent_stale_cas_is_rejected_before_model_call(api_state, monkeypatch):
+@pytest.fixture(autouse=True)
+def task_script_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname != 'test_agent_stale_cas_is_rejected_before_model_call':
+        return None
+    import sqlite3
+    import subprocess
+    import wave
+    from PIL import Image
+    from app.artifact_store import ArtifactStore
+    from app.auth import SupabaseAuthContext
+    from app.conversation_repository import ConversationRepository
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+    from app.schemas import CreationTaskScriptConfirmRequest, AssistantReplyScriptTransferRequest
+    from app.topics import OpenAICompatibleCreationTaskTopicGenerator
+    from uuid import uuid4
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('task-script-model-or-execution')
+        pytest.fail('script stale/read metadata forbids model checks, runtime, grants, network and media')
+
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('generate', 'check_draft'):
+        monkeypatch.setattr(OpenAICompatibleCreationTaskScriptGenerator, name, forbidden)
+    monkeypatch.setattr(OpenAICompatibleCreationTaskTopicGenerator, 'generate', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn',
+                 '_execute_script_generation', '_wake_assistant_continuations', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(main, 'montage_renderer', SimpleNamespace(render=forbidden))
+    monkeypatch.setattr(main, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
+    settings = Settings(database_path=str(tmp_path / 'isolated.sqlite'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'output'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main, 'settings', settings)
+    monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
+    monkeypatch.setattr(main, 'conversation_repo', ConversationRepository(tmp_path / 'isolated.sqlite'))
+    state = request.getfixturevalue('api_state')
+    # Keep the original isolated application's draft/context routes. Add only the
+    # three canonical members of this family missing from that application.
+    additional = {'transfer_assistant_reply_to_script', 'get_creation_task_scripts', 'confirm_creation_task_script'}
+    for route in main.app.routes:
+        if route.name in additional:
+            state.client.app.routes.append(route)
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as conn:
+                    tables = [row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        table: sorted((tuple(row) for row in conn.execute(
+                            'SELECT * FROM "' + table.replace('"', '""') + '"')), key=repr) for table in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    def prepare(original, body):
+        # The retained run is a metadata declaration, not a model result. Supply
+        # its original controlled route facts so the real list DTO is well formed.
+        repository = state.repository
+        with repository._connect() as conn:
+            row = conn.execute('SELECT payload FROM script_generation_runs WHERE id=?', (original.run_id,)).fetchone()
+            payload = json.loads(row['payload'])
+            payload['route_snapshot'] = main._topic_route_snapshot('local')
+            conn.execute('UPDATE script_generation_runs SET payload=? WHERE id=?',
+                (json.dumps(payload, ensure_ascii=False), original.run_id))
+        confirm = CreationTaskScriptConfirmRequest(title=body['title'], sections=body['sections'],
+            expected_updated_at=original.updated_at).model_dump(mode='json')
+        plan = repository.plan_records.get_creation_plan('local', 'plan')
+        task = repository.task_records.get_creation_task('local', 'task')
+        transfer = AssistantReplyScriptTransferRequest(conversation_id=uuid4(), turn_id=uuid4(), request_id=uuid4(),
+            expected_plan_updated_at=plan.updated_at, expected_task_updated_at=task.updated_at).model_dump(mode='json')
+        return SimpleNamespace(before=snapshot(), original=original, confirm=confirm, transfer=transfer)
+
+    def assert_reads_unchanged(prepared):
+        context = state.client.get('/api/creation-tasks/task/assistant/script-context')
+        assert context.status_code == 200, context.text
+        assert context.json()['draft']['id'] == prepared.original.id
+        assert context.json()['draft']['sections_loaded'] is False
+        scripts = state.client.get('/api/creation-tasks/task/scripts')
+        assert scripts.status_code == 200, scripts.text
+        assert scripts.json()['scripts_scope'] == 'active'
+        assert [script['id'] for script in scripts.json()['scripts']] == [prepared.original.id]
+        assert scripts.json()['scripts'][0]['sections_loaded'] is False
+        assert state.client.get('/api/creation-tasks/missing/assistant/script-context').status_code == 404
+        assert state.client.get('/api/creation-tasks/missing/scripts').status_code == 404
+        missing_script = state.client.post('/api/creation-tasks/task/scripts/missing/confirm', json=prepared.confirm)
+        assert missing_script.status_code == 404 and missing_script.json()['detail'] == 'creation task script not found'
+        missing_reply = state.client.post('/api/creation-tasks/task/assistant/reply-transfer', json=prepared.transfer)
+        assert missing_reply.status_code == 404 and missing_reply.json()['detail'] == '对话不存在或当前成员无权访问。'
+        assert snapshot() == prepared.before
+        assert state.repository.job_records.list_job_runs('local', 'task') == []
+        assert violations == []
+
+    def check_no_execution():
+        assert violations == []
+
+    request.addfinalizer(check_no_execution)
+    return SimpleNamespace(prepare=prepare, assert_reads_unchanged=assert_reads_unchanged)
+
+
+def test_agent_stale_cas_is_rejected_before_model_call(api_state, monkeypatch, task_script_metadata_guard):
     original = saved_agent_draft(api_state)
     body = agent_payload(api_state, original)
     body['expected_updated_at'] = '2000-01-01T00:00:00Z'
     calls = []
     set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
+    prepared_metadata = task_script_metadata_guard.prepare(original, body)
     before = private_task_rows(api_state)
     response = api_state.client.post('/api/creation-tasks/task/assistant/script-draft', json=body)
     assert response.status_code == 409 and calls == []
     assert private_task_rows(api_state) == before
+
+    task_script_metadata_guard.assert_reads_unchanged(prepared_metadata)
+    assert calls == []
 
 
 def test_agent_source_revocation_during_check_cannot_write(api_state, monkeypatch):
@@ -1848,7 +1971,7 @@ def test_mixed_presentation_uses_only_explicit_template_section_count(api_state,
 def test_confirm_does_not_treat_estimated_speech_as_real_delivery_duration(api_state, monkeypatch):
     state = api_state
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
-        main.confirm_creation_task_script, methods=['POST'])
+        next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_task_script"), methods=['POST'])
     content = FACT * 8
     with state.repository._connect() as conn:
         plan = json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()['payload'])
@@ -2043,7 +2166,7 @@ def test_no_facts_draft_saves_updates_and_confirms_without_inventing_evidence(ap
         assert script.sections[0].content == body['sections'][0]['content']
         assert len(state.repository.script_records.list_creation_task_scripts('local', 'task')) == 1
     state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',
-        main.confirm_creation_task_script, methods=['POST'])
+        next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_task_script"), methods=['POST'])
     confirm_body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [vars(section) for section in script.sections],
                     'expected_updated_at': script.updated_at.isoformat()}
     confirmation_calls = []
@@ -2162,7 +2285,7 @@ def test_confirmation_reviews_the_entire_changed_candidate_identity(api_state, m
         return _review_tool_response({'sections': reports})
     reviewer = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model', transport=httpx.MockTransport(review))
     monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: reviewer)
-    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm', main.confirm_creation_task_script, methods=['POST'])
+    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm', next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_task_script"), methods=['POST'])
     result = state.client.post(f'/api/creation-tasks/task/scripts/{script.id}/confirm', json=body)
     if change in {'borrow_reference_for_fact', 'source_revoked', 'outside_scope'}:
         assert result.status_code == (409 if change == 'source_revoked' else 422), result.text
@@ -2182,7 +2305,7 @@ def test_reused_library_script_confirmation_uses_its_real_source_without_a_topic
     from app.creation.script_library_routes import build_script_library_router
     state.client.app.include_router(build_script_library_router(
         use_case=main._script_library_use_case, workspace_id=main.current_workspace_id))
-    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',main.confirm_creation_task_script,methods=['POST'])
+    state.client.app.add_api_route('/api/creation-tasks/{task_id}/scripts/{script_id}/confirm',next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_task_script"),methods=['POST'])
     original_calls = []
     set_api_provider(monkeypatch, draft(), reviewed(draft()), original_calls)
     generate_with_provider(state)

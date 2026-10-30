@@ -355,7 +355,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, AssistantReplyScriptTransferRequest, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnRequest, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CompoundEditSelectionRequest, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditApplyRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskTimelineUndoRequest, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -3965,15 +3965,35 @@ def _script_context_use_case() -> ScriptContextUseCase:
     return ScriptContextUseCase(production_repo, _source_inputs_use_case())
 
 
-@app.get("/api/creation-tasks/{task_id}/assistant/script-context")
-def get_assistant_script_context(task_id: str, request: Request) -> dict[str, object]:
-    workspace_id = current_workspace_id(request)
-    reader_id, local_diagnostic = _content_reader(request, workspace_id)
-    try:
-        return _script_context_use_case().read_context(workspace_id, task_id, reader_id,
-            local_diagnostic=local_diagnostic)
-    except ScriptDraftRejected as exc:
-        raise HTTPException(exc.status_code, exc.detail) from exc
+from app.task_script_routes import build_task_script_router
+
+
+def _task_script_http_router(route_names):
+    return build_task_script_router(
+        workspace_for=lambda: current_workspace_id,
+        reader_for=lambda: _content_reader,
+        context_for=lambda: _script_context_use_case,
+        draft_error_for=lambda: ScriptDraftRejected,
+        http_error_for=lambda: HTTPException,
+        reply_for=lambda: _verified_assistant_reply,
+        current_inputs_for=lambda: _require_current_script_inputs,
+        production_for=lambda: production_repo,
+        uuid_for=lambda: uuid4,
+        section_type_for=lambda: CreationTaskScriptSection,
+        scripts_response_for=lambda: _creation_task_scripts_response,
+        adoption_for=lambda: _assistant_creation_adoption_scope,
+        draft_for=lambda: _script_draft_use_case,
+        script_response_for=lambda: CreationTaskScriptResponse,
+        asdict_for=lambda: asdict,
+        readable_for=lambda: _readable_creation_task,
+        task_for=lambda: _creation_task_or_404,
+        plan_for=lambda: _creation_plan_for_task_or_404,
+        library_for=lambda: _script_library_use_case,
+        route_names=route_names,
+    )
+
+
+app.include_router(_task_script_http_router(('get_assistant_script_context',)))
 
 
 def _verified_assistant_reply(request: Request, conversation_id: str, turn_id: str, task_id: str | None) -> tuple[dict[str, str], str, str]:
@@ -4011,57 +4031,7 @@ def _validate_script_input_sources(workspace_id,plan,input_references,reader_id,
         }) from exc
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/assistant/reply-transfer",
-    response_model=CreationTaskScriptsResponse,
-)
-def transfer_assistant_reply_to_script(
-    task_id: str, request: Request, payload: AssistantReplyScriptTransferRequest,
-) -> CreationTaskScriptsResponse:
-    workspace_id = current_workspace_id(request)
-    reference, reply_text, member_id = _verified_assistant_reply(
-        request, str(payload.conversation_id), str(payload.turn_id), task_id,
-    )
-    try:
-        task, plan, topic, _sources, input_references = _script_context_use_case().read_inputs(workspace_id, task_id)
-    except ScriptDraftRejected as exc:
-        raise HTTPException(exc.status_code, exc.detail) from exc
-    reader_id, _local_diagnostic = _require_current_script_inputs(
-        request, workspace_id, plan, input_references,
-    )
-    if reader_id != member_id:
-        raise HTTPException(status_code=403, detail="对话成员身份已变化，请重新打开当前工作区。")
-    scripts = production_repo.script_records.list_creation_task_scripts(workspace_id, task_id)
-    latest = scripts[0] if scripts else None
-    script_id = latest.id if latest and payload.replace_existing_script_id == latest.id else f"script_{uuid4().hex[:12]}"
-    run_id = f"script_run_{uuid4().hex[:12]}"
-    title = latest.title if latest and script_id == latest.id else f"对话回复草稿 · {topic.title[:80]}"
-    section = CreationTaskScriptSection(
-        id=f"reply_section_{payload.request_id.hex}", title=topic.title[:160] or "对话回复",
-        content=reply_text, visual_prompt="", evidence_reference_ids=[],
-    )
-    try:
-        task, _run, _script = production_repo.script_records.transfer_completed_assistant_reply_to_script(
-            workspace_id, task_id, request_id=str(payload.request_id),
-            reply_reference=reference, reply_text=reply_text,
-            plan_conversion_request_id=(str(payload.plan_conversion_request_id) if payload.plan_conversion_request_id else None),
-            expected_plan_id=plan.id, expected_plan_updated_at=payload.expected_plan_updated_at,
-            expected_topic_id=topic.id, expected_task_updated_at=payload.expected_task_updated_at,
-            input_references=input_references, script_id=script_id, run_id=run_id,
-            title=title, language=plan.language, sections=[section],
-            replace_existing_script_id=payload.replace_existing_script_id,
-            expected_script_updated_at=payload.expected_script_updated_at,
-            verified_owner_user_id=reader_id,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="当前任务或方案不存在") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail={
-            "error": "assistant_reply_transfer_conflict",
-            "message": "当前任务或草稿已变化，回复没有写入文案。",
-            "repair_action": str(exc),
-        }) from exc
-    return _creation_task_scripts_response(workspace_id, task)
+app.include_router(_task_script_http_router(('transfer_assistant_reply_to_script',)))
 
 
 def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None):
@@ -4083,23 +4053,7 @@ def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None
     return case
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/assistant/script-draft",
-    response_model=CreationTaskScriptResponse,
-)
-def save_assistant_script_draft(
-    task_id: str, request: Request, payload: CreationTaskScriptDraftRequest,
-) -> CreationTaskScriptResponse:
-    workspace_id=current_workspace_id(request)
-    origin = (_assistant_creation_adoption_scope(task_id,request,str(payload.assistant_turn_id),draft_only=True)
-              if payload.assistant_turn_id is not None else None)
-    case = _script_draft_use_case(workspace_id,validate_inputs=lambda ws,plan,refs: _require_current_script_inputs(request,ws,plan,refs))
-    try:
-        draft=case.save(workspace_id,task_id,payload,instruction_origin=origin,
-            reread_origin=lambda draft_only: _assistant_creation_adoption_scope(task_id,request,str(payload.assistant_turn_id),draft_only=draft_only))
-    except ScriptDraftRejected as exc:
-        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-    return CreationTaskScriptResponse.model_validate(asdict(draft))
+app.include_router(_task_script_http_router(('save_assistant_script_draft',)))
 
 
 @app.get(
@@ -4369,20 +4323,7 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
 
 
 
-@app.get(
-    "/api/creation-tasks/{task_id}/scripts",
-    response_model=CreationTaskScriptsResponse,
-)
-def get_creation_task_scripts(
-    task_id: str,
-    request: Request,
-) -> CreationTaskScriptsResponse:
-    workspace_id = current_workspace_id(request)
-    return _creation_task_scripts_response(
-        workspace_id,
-        _readable_creation_task(request, task_id),
-        include_body=False,
-    )
+app.include_router(_task_script_http_router(('get_creation_task_scripts',)))
 
 
 from app.creation.script_routes import build_script_sections_router
@@ -4522,52 +4463,7 @@ app.include_router(build_script_generation_router(
     accept=_accept_script_generation, read=_read_script_generation, execute=_execute_script_generation))
 
 
-@app.post(
-    "/api/creation-tasks/{task_id}/scripts/{script_id}/confirm",
-    response_model=CreationTaskScriptsResponse,
-)
-def confirm_creation_task_script(
-    task_id: str,
-    script_id: str,
-    request: Request,
-    payload: CreationTaskScriptConfirmRequest,
-) -> CreationTaskScriptsResponse:
-    workspace_id = current_workspace_id(request)
-    instruction_origin = None
-    if payload.adoption_kind == "delegated_system" and payload.assistant_turn_id is not None:
-        instruction_origin = _assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
-    task = _creation_task_or_404(workspace_id, task_id)
-    plan = _creation_plan_for_task_or_404(workspace_id, task)
-    try:
-        current_script = production_repo.script_records.get_creation_task_script(workspace_id, script_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="creation task script not found") from exc
-    if current_script.task_id != task.id:
-        raise HTTPException(status_code=404, detail="creation task script not found")
-    if current_script.reused_from_entry_id:
-        try:
-            _script_library_use_case(request).read_reusable_entry(workspace_id, current_script.reused_from_entry_id)
-        except ScriptDraftRejected as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="文案库条目不存在") from exc
-    elif current_script.run_id:
-        try:
-            generation_run = production_repo.script_records.get_script_generation_run(workspace_id, current_script.run_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=409, detail="文案来源记录已不可用，请重新读取任务。") from exc
-        _require_current_script_inputs(request, workspace_id, plan, generation_run.input_references)
-    try:
-        task,adopted_script=_script_draft_use_case(workspace_id,validate_inputs=lambda ws,plan,refs:_require_current_script_inputs(request,ws,plan,refs),
-            content_reader=lambda ws:_content_reader(request,ws)).confirm(
-            workspace_id,task_id,script_id,payload,member_id=_content_reader(request,workspace_id)[0],origin=instruction_origin,
-            reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
-                task_id,request,str(payload.assistant_turn_id),draft_only=False))
-    except ScriptDraftRejected as exc:
-        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-    except (KeyError,ValueError) as exc:
-        raise HTTPException(status_code=409,detail=str(exc)) from exc
-    return _creation_task_scripts_response(workspace_id, task)
+app.include_router(_task_script_http_router(('confirm_creation_task_script',)))
 
 
 from app.task_narration_routes import build_task_narration_router

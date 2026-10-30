@@ -490,7 +490,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
         expected_plan_updated_at=plan.updated_at,
         expected_task_updated_at=task.updated_at,
     )
-    first = main_module.transfer_assistant_reply_to_script(task.id, request, payload)
+    first = next(route.endpoint for route in main_module.app.routes if route.name == "transfer_assistant_reply_to_script")(task.id, request, payload)
     assert first == {"saved": True}
     saved = repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)
     assert len(saved) == 1 and saved[0].source_reply_reference == {
@@ -502,14 +502,14 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
 
     # The duplicate uses the original revision token; the repository returns the
     # original persisted script even though the first write advanced the task.
-    second = main_module.transfer_assistant_reply_to_script(task.id, request, payload)
+    second = next(route.endpoint for route in main_module.app.routes if route.name == "transfer_assistant_reply_to_script")(task.id, request, payload)
     assert second == {"saved": True}
     assert len(repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)) == 1
 
     readable.version = "v2"
     changed_request = Request({"type": "http", "headers": []})
     with pytest.raises(main_module.HTTPException) as exc:
-        main_module.transfer_assistant_reply_to_script(task.id, changed_request, payload)
+        next(route.endpoint for route in main_module.app.routes if route.name == "transfer_assistant_reply_to_script")(task.id, changed_request, payload)
     assert exc.value.status_code == 409
 
 
@@ -619,7 +619,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         plan_conversion_request_id=UUID(request_id),
         expected_plan_updated_at=plan.updated_at, expected_task_updated_at=task.updated_at,
     )
-    transferred = main_module.transfer_assistant_reply_to_script(task.id, request, transfer_payload)
+    transferred = next(route.endpoint for route in main_module.app.routes if route.name == "transfer_assistant_reply_to_script")(task.id, request, transfer_payload)
     assert transferred.task.id == task.id
     assert transferred.latest_run is None
     draft = repo.script_records.list_creation_task_scripts(WORKSPACE, task.id)[0]
@@ -628,7 +628,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     assert draft.sections[0].content == REPLY_TEXT and draft.source_reply_reference is not None
     assert review_requests == []  # Original-text transfer is not a factual-review pass.
 
-    edited = main_module.save_assistant_script_draft(task.id, request,
+    edited = next(route.endpoint for route in main_module.app.routes if route.name == "save_assistant_script_draft")(task.id, request,
         main_module.CreationTaskScriptDraftRequest(
             edit_mode="replace_all", title=draft.title, expected_updated_at=draft.updated_at,
             sections=[{
@@ -641,7 +641,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
     assert len(review_requests) == 1
     assert edited.source_reply_reference == draft.source_reply_reference
     assert edited.selection_status == "draft"
-    confirmed = main_module.confirm_creation_task_script(task.id, draft.id, request,
+    confirmed = next(route.endpoint for route in main_module.app.routes if route.name == "confirm_creation_task_script")(task.id, draft.id, request,
         main_module.CreationTaskScriptConfirmRequest(
             title=edited.title, expected_updated_at=edited.updated_at,
             sections=[section.model_dump() for section in edited.sections],
