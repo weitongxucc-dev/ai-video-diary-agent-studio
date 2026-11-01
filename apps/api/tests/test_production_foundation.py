@@ -2622,7 +2622,7 @@ def test_person_render_artifact_ref_migrates_existing_v5_rows(tmp_path, monkeypa
     # Real Production databases create the base material tables before applying
     # numbered migrations. Preserve that order when constructing the v5 fixture.
     with monkeypatch.context() as patch:
-        patch.setattr("app.production.apply_production_migrations", lambda _conn: None)
+        patch.setattr("app.production_schema.apply_production_migrations", lambda _conn: None)
         ProductionRepository(database_path, library_path)
     with sqlite3.connect(database_path) as conn:
         assert conn.execute(
@@ -2693,7 +2693,7 @@ def test_recorded_narration_schema_migrates_v14_generated_rows_without_rewrite(t
     created_at = datetime.now(timezone.utc).isoformat()
     library_path = tmp_path / "library"
     library_path.mkdir()
-    monkeypatch.setattr("app.production.apply_production_migrations", lambda _conn: None)
+    monkeypatch.setattr("app.production_schema.apply_production_migrations", lambda _conn: None)
     ProductionRepository(database_path, library_path)
     with sqlite3.connect(database_path) as conn:
         conn.execute("CREATE TABLE production_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")

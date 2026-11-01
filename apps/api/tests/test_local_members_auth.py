@@ -354,7 +354,7 @@ def test_migration_13_applies_twice_without_error(tmp_path):
     # Migration 13 is a version-only marker: it bumps the schema version without
     # touching creation_tasks/material_assets, so it stays safe on the bare
     # standalone chain (test_device_runtime). The visibility columns are added
-    # by ProductionRepository._init_database's PRAGMA-guarded ensures instead.
+    # by production_schema.initialize_production_schema's PRAGMA-guarded ensures instead.
 
 
 def test_migration_14_adds_confirmation_columns_after_a_bare_upgrade(tmp_path):
@@ -376,7 +376,7 @@ def test_migration_14_adds_confirmation_columns_after_a_bare_upgrade(tmp_path):
 
 
 def test_visibility_columns_are_provisioned_not_migrated(tmp_path, monkeypatch):
-    # The content visibility columns come from ProductionRepository._init_database's
+    # The content visibility columns come from production_schema.initialize_production_schema's
     # PRAGMA-guarded ensures, not from static migration SQL — SQLite has no
     # ADD COLUMN IF NOT EXISTS, and a plain ALTER would collide with the bare
     # standalone migration chain. A fresh repository must provision them.
