@@ -26,6 +26,7 @@ from app.device_scheduler import DeviceScheduler
 from app.local_members import LocalMemberService
 from app.media.picture_preview import PicturePreviewRenderer
 from app.production import ProductionRepository
+from app.creation.execution_records import ExecutionRecordStore
 from app.schemas import CreationTaskExactEditRequest
 from app.source_repository import SourceRepository
 from app.sources import ObsidianVault
@@ -52,8 +53,8 @@ def test_task_edit_reads_and_pre_admission_refusals_never_claim_or_edit(tmp_path
         monkeypatch.setattr(MetadataEditUseCase, name, forbidden)
     monkeypatch.setattr(CommandPreviewUseCase, 'preview', forbidden)
     monkeypatch.setattr(CompoundEditUseCase, 'preview_selection', forbidden)
-    monkeypatch.setattr(ProductionRepository, 'claim_edit_request', forbidden)
-    monkeypatch.setattr(ProductionRepository, 'save_edit_request_result', forbidden)
+    monkeypatch.setattr(ExecutionRecordStore, 'claim_edit_request', forbidden)
+    monkeypatch.setattr(ExecutionRecordStore, 'save_edit_request_result', forbidden)
     monkeypatch.setattr(ConversationRepository, 'create', forbidden)
     monkeypatch.setattr(ConversationRepository, 'create_turn_idempotent', forbidden)
     monkeypatch.setattr(ArtifactStore, 'resolve_file', forbidden)

@@ -115,12 +115,12 @@ class ExactPreviewUseCase:
 
     def claim_request(self, task, member_id, request_id, phase, inputs):
         try:
-            return self.repository.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.metadata.write_guard)
+            return self.repository.execution_records.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.metadata.write_guard)
         except ValueError as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
 
     def read_request_result(self, task, event_id):
-        return self.repository.read_edit_request_result(task, event_id)
+        return self.repository.execution_records.read_edit_request_result(task, event_id)
 
     def read_request_receipt(self, task, member_id, request_id, phase):
         """The bounded canonical receipt, shared by HTTP and execution provenance."""
@@ -148,7 +148,7 @@ class ExactPreviewUseCase:
 
     def record_request_result(self, task, event_id, *, status_code, response):
         if event_id is not None:
-            return self.repository.save_edit_request_result(task, event_id, status_code=status_code, response=response)
+            return self.repository.execution_records.save_edit_request_result(task, event_id, status_code=status_code, response=response)
 
     def _request_origin(self, task, payload, identity, actor, origin, expected_input_id):
         source={'workspace_id':task.workspace_id,'task_id':task.id,'member_id':identity['member_id'],

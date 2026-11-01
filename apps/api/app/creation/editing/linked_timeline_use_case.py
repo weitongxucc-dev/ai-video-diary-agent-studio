@@ -222,13 +222,13 @@ class LinkedTimelineEditUseCase:
         event_id = None
         if control.request_id is not None:
             try:
-                event_id, fresh = self.repository.claim_edit_request(task, control.member_id, control.request_id, 'apply',
+                event_id, fresh = self.repository.execution_records.claim_edit_request(task, control.member_id, control.request_id, 'apply',
                     {'proposal_id': proposal.id, 'base_version_id': base_id, 'input_digest': digest, 'request': control.request_fields})
             except ValueError as exc:
                 raise EditConflict(str(exc)) from exc
             saved = self._saved_result(task, proposal)
             if saved is not None:
-                missing_projection = self.repository.read_edit_request_result(task, event_id) is None
+                missing_projection = self.repository.execution_records.read_edit_request_result(task, event_id) is None
                 return LinkedEditApplicationResult(saved, event_id, missing_projection, False)
             if not fresh:
                 raise EditConflict('原应用请求结果尚未确定，请查询原提案结果，不重复执行')

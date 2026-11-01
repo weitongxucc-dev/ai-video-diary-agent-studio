@@ -470,7 +470,7 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
     assert read['ok'] and read['value']['result']==saved['value'],read
     assert not call('read_task_edit_request',{'task_id':'other-task','request_id':request_id,'phase':'apply'})['ok']
     foreign_id=str(uuid4())
-    s.repo.claim_edit_request(s.task,s.member.member_id,foreign_id,'apply',{'_business_source':{
+    s.repo.execution_records.claim_edit_request(s.task,s.member.member_id,foreign_id,'apply',{'_business_source':{
         'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id'],'input_id':'another-input','input_turn_id':turn['id']}})
     assert not call('read_task_edit_request',{'request_id':foreign_id,'phase':'apply'})['ok']
     authorization=s.repo.get_task_authorization('ws',s.task.id)
@@ -578,19 +578,19 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
         business.execute('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},actor,current,
             {**goal,'source_input_id':'another-input','source_input_turn_id':turn['id']},{},{},None)
     legacy_id=str(uuid4())
-    legacy_event,_=s.repo.claim_edit_request(current,s.member.member_id,legacy_id,phase,{'request_id':legacy_id})
-    s.repo.save_edit_request_result(current,legacy_event,status_code=200,response={'original_result':'preserved'})
+    legacy_event,_=s.repo.execution_records.claim_edit_request(current,s.member.member_id,legacy_id,phase,{'request_id':legacy_id})
+    s.repo.execution_records.save_edit_request_result(current,legacy_event,status_code=200,response={'original_result':'preserved'})
     with pytest.raises(EditPreviewRejected) as unknown:
         business.execute('read_task_edit_request',{'request_id':legacy_id,'phase':phase},actor,current,goal,{},{},None)
     assert unknown.value.detail['submission_effect']=='unknown'
-    assert s.repo.read_edit_request_result(current,legacy_event)=={'status_code':200,'response':{'original_result':'preserved'}}
+    assert s.repo.execution_records.read_edit_request_result(current,legacy_event)=={'status_code':200,'response':{'original_result':'preserved'}}
     gap_payload={**payload,'request_id':str(uuid4())}
     gap_inputs={**gap_payload,**({'_draft':True} if phase=='preview' else {})}
-    gap_event,_=s.repo.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
+    gap_event,_=s.repo.execution_records.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
     gap=s.client.post(endpoint,json=gap_payload)
     assert gap.status_code==409 and gap.json()['detail']['submission_effect']=='unknown',gap.text
     with pytest.raises(KeyError): s.repo.execution_records.get_task_event('ws',gap_event+'_source')
-    assert s.repo.read_edit_request_result(current,gap_event) is None
+    assert s.repo.execution_records.read_edit_request_result(current,gap_event) is None
     conversations.finish_turn(turn['id'],'completed','原请求已提交',{})
     foreign_input=s.client.post(endpoint,json=payload,headers={'X-Assistant-Input-ID':'another-input'})
     assert foreign_input.status_code==403,foreign_input.text

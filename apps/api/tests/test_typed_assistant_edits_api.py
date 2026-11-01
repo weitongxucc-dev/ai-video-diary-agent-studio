@@ -1083,7 +1083,7 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
     assert later.status_code == 200, later.text
     from app.task_audio import media_digest
     event = 'event_edit_request_' + media_digest(['ws', state.member.member_id, request['request_id'], 'apply'])
-    recorded = state.repo.read_edit_request_result(state.task, event)
+    recorded = state.repo.execution_records.read_edit_request_result(state.task, event)
     assert recorded['status_code'] == 200 and recorded['response'] == accepted.json()
     with state.repo._connect() as conn:
         conn.execute('DELETE FROM task_events WHERE id=?', (event + '_result',))
@@ -1091,7 +1091,7 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
     replay = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert replay.status_code == 200 and replay.json()['operation']['id'] == operation['id']
     assert len(wakes) == before_recovery
-    restored = state.repo.read_edit_request_result(state.task, event)
+    restored = state.repo.execution_records.read_edit_request_result(state.task, event)
     assert restored['status_code'] == 200 and restored['response'] == replay.json()
     read = state.client.get(result_url)
     assert read.status_code == 200 and read.json()['result']['operation']['result_version_id'] == operation['result_version_id']
@@ -1220,7 +1220,7 @@ def test_linked_clip_recovery_keeps_original_version_and_does_not_wake(linked_sp
     assert recovered.status_code == 200 and recovered.json()['operation'] == operation
     assert recovered.json()['montage']['duration_seconds'] == 6
     assert len(wakes) == before_wakes
-    assert state.repo.read_edit_request_result(state.task, event)['response'] == recovered.json()
+    assert state.repo.execution_records.read_edit_request_result(state.task, event)['response'] == recovered.json()
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result']['operation'] == operation
     assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == later_head
@@ -1388,10 +1388,10 @@ def test_subtitle_unknown_claim_and_HTTP_projection_are_not_application_facts(su
     proposal_id = preview.json()['proposal']['id']
     fixed = state.client.get(state.url + f'/edits/{proposal_id}/result').json()
     request = {'request_id': str(uuid4())}
-    event, fresh = state.repo.claim_edit_request(state.task, state.member.member_id, request['request_id'], 'apply',
+    event, fresh = state.repo.execution_records.claim_edit_request(state.task, state.member.member_id, request['request_id'], 'apply',
         {'proposal_id': proposal_id, 'base_version_id': state.base.id, 'input_digest': fixed['input_digest'], 'request': request})
     assert fresh
-    state.repo.save_edit_request_result(state.task, event, status_code=200, response={'only': 'a transport projection'})
+    state.repo.execution_records.save_edit_request_result(state.task, event, status_code=200, response={'only': 'a transport projection'})
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
     assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)
@@ -1485,10 +1485,10 @@ def test_compound_unknown_claim_with_projection_has_no_durable_edit_and_no_exact
     proposal_id = preview.json()['proposal']['id']
     fixed = state.client.get(state.url + f'/edits/{proposal_id}/result').json()
     request = {'request_id': str(uuid4())}
-    event, fresh = state.repo.claim_edit_request(state.task, state.member.member_id, request['request_id'], 'apply',
+    event, fresh = state.repo.execution_records.claim_edit_request(state.task, state.member.member_id, request['request_id'], 'apply',
         {'proposal_id': proposal_id, 'base_version_id': state.base.id, 'input_digest': fixed['input_digest'], 'request': request})
     assert fresh
-    state.repo.save_edit_request_result(state.task, event, status_code=200, response={'only': 'transport projection'})
+    state.repo.execution_records.save_edit_request_result(state.task, event, status_code=200, response={'only': 'transport projection'})
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
     assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)

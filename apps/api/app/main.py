@@ -4852,7 +4852,7 @@ def _confirm_linked_timeline_response(task, proposal, request, payload=None, *, 
         if outcome.newly_applied:
             _save_edit_request_result(task, outcome.event_id, response)
         else:
-            production_repo.save_edit_request_result(task, outcome.event_id,
+            production_repo.execution_records.save_edit_request_result(task, outcome.event_id,
                 status_code=200, response=response.model_dump(mode="json"))
     if wake and outcome.newly_applied:
         _wake_assistant_continuations()
@@ -7352,7 +7352,7 @@ def _submit_goal_observation(task,actor,values,origin,guard):
 
 def _goal_request_metadata(task,actor,request_id,phase):
     event_id,event=_goal_projection().request_claim(task,actor.user_id or actor.member_id,str(request_id),phase)
-    result=production_repo.read_edit_request_result(task,event_id)
+    result=production_repo.execution_records.read_edit_request_result(task,event_id)
     return {'request_id':str(request_id),'phase':phase,'input_digest':event.payload['input_digest'],'task_id':task.id,
         'status':'recorded' if result else 'unknown','submitted_input':event.payload['inputs'],
         'result_status_code':result['status_code'] if result else None,'result':result['response'] if result else None}

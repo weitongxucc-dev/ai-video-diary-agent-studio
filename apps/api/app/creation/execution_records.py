@@ -1,9 +1,10 @@
-"""Execution artifacts and task-event evidence; transaction decisions stay with callers."""
+"""Execution artifacts, task events and original edit-request receipts."""
 from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime
+import hashlib
 import json
 import re
 import sqlite3
@@ -15,6 +16,7 @@ from app.creation.contracts import (
     validate_logical_reference as _validate_logical_reference,
 )
 from app.persistence_json import _json_object
+from app.models import utc_now
 
 
 def _validate_artifact_record(artifact: _ArtifactRecord) -> None:
@@ -71,6 +73,41 @@ class ExecutionRecordStore:
         self._job_belongs = job_belongs
         self._decode_reference_list = decode_reference_list
         self._decode_payload_object = decode_payload_object
+
+    def claim_edit_request(self, task, member_id, request_id, phase, inputs, *, write_guard=None):
+        identity = hashlib.sha256(json.dumps(
+            [task.workspace_id, member_id, str(request_id), phase], sort_keys=True,
+            ensure_ascii=False, separators=(",", ":"), default=str).encode()).hexdigest()
+        event_id = f"event_edit_request_{identity}"
+        digest = hashlib.sha256(json.dumps([task.id, inputs], sort_keys=True,
+            ensure_ascii=False, separators=(",", ":"), default=str).encode()).hexdigest()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
+            row = conn.execute("SELECT payload_json FROM task_events WHERE id=?", (event_id,)).fetchone()
+            if row:
+                previous = json.loads(row["payload_json"])
+                if previous["input_digest"] != digest:
+                    raise ValueError("请求身份已绑定不同编辑输入")
+                return event_id, False
+            self.append_task_event(_TaskEvent(id=event_id, workspace_id=task.workspace_id,
+                task_id=task.id, job_id=None, event_type="edit_request_claimed",
+                payload={"member_id": member_id, "request_id": str(request_id), "phase": phase,
+                         "input_digest": digest, "inputs": inputs}, created_at=utc_now()), connection=conn)
+        return event_id, True
+
+    def save_edit_request_result(self, task, event_id, *, status_code, response):
+        return self.append_task_event(_TaskEvent(id=event_id + "_result", workspace_id=task.workspace_id,
+            task_id=task.id, job_id=None, event_type="edit_request_result",
+            payload={"status_code": status_code, "response": response}, created_at=utc_now()))
+
+    def read_edit_request_result(self, task, event_id):
+        try:
+            event = self.get_task_event(task.workspace_id, event_id + "_result")
+        except KeyError:
+            return None
+        return event.payload
 
     def create_artifact_record(self, artifact: _ArtifactRecord, *, connection: sqlite3.Connection | None = None) -> _ArtifactRecord:
         _validate_artifact_record(artifact)

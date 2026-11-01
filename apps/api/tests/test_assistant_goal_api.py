@@ -1342,7 +1342,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     inputs = {'operation_type':'ChangeCrop', 'assistant_turn_id':state.turn_id,
         'expected_timeline_version_id':state.version.id, 'expected_timeline_sequence':state.version.sequence,
         'clip_id':'declared-clip', 'ignored_private_field':'x'*100000}
-    event_id, _ = repo.claim_edit_request(task, state.member.member_id, request_id, 'apply', inputs)
+    event_id, _ = repo.execution_records.claim_edit_request(task, state.member.member_id, request_id, 'apply', inputs)
     # Prepare the actual production TaskBusiness port before any read-only snapshot.
     business = main._task_business()
 
@@ -1375,7 +1375,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
     assert main._assistant_edited_execution_version(task, state.member.member_id, state.turn_id,
         origin, snapshot, version, state.request) is None
     assert durable_snapshot() == before
-    repo.save_edit_request_result(task, event_id, status_code=200,
+    repo.execution_records.save_edit_request_result(task, event_id, status_code=200,
         response={'operation':{'id':operation.id, 'result_version_id':version.id}})
     before = durable_snapshot()
     recorded = next(route.endpoint for route in main.app.routes if route.name == 'get_exact_edit_request_result')(task.id, request_id, state.request, 'apply')
@@ -1389,7 +1389,7 @@ def test_execution_binding_plain_receipt_preserves_committed_successor_and_bound
         'expected_timeline_version_id'] == version.id
     assert durable_snapshot() == before
     large_id = str(uuid4())
-    repo.claim_edit_request(task, state.member.member_id, large_id, 'apply',
+    repo.execution_records.claim_edit_request(task, state.member.member_id, large_id, 'apply',
         {**inputs, 'clip_ids':['中'*22000]})
     before = durable_snapshot()
     with pytest.raises(HTTPException) as too_large:

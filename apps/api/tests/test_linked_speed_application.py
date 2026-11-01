@@ -105,7 +105,7 @@ def test_public_preview_confirm_replay_recovers_fixed_version_after_lost_project
     accepted = state.application.confirm(control)
     assert accepted.newly_applied and accepted.record_projection and accepted.outcome.montage.duration_seconds == 3
     original_version = state.repo.timeline_records.get_timeline_version('ws', accepted.outcome.operation.result_version_id)
-    state.repo.save_edit_request_result(state.task, accepted.event_id, status_code=200, response={'only': 'transport projection'})
+    state.repo.execution_records.save_edit_request_result(state.task, accepted.event_id, status_code=200, response={'only': 'transport projection'})
     replay = state.application.confirm(control)
     assert not replay.newly_applied and not replay.record_projection
     state.application.apply(speed_command(state))
@@ -130,9 +130,9 @@ def test_claim_and_HTTP200_projection_without_operation_stay_unknown_and_do_not_
     _intent, proposal = state.application.preview(speed_command(state))
     control = apply_command(state, proposal)
     digest = state.application.input_digest(state.task, proposal, control.source)
-    event_id, _ = state.repo.claim_edit_request(state.task, control.member_id, control.request_id, 'apply',
+    event_id, _ = state.repo.execution_records.claim_edit_request(state.task, control.member_id, control.request_id, 'apply',
         {'proposal_id': proposal.id, 'base_version_id': state.base.id, 'input_digest': digest, 'request': control.request_fields})
-    state.repo.save_edit_request_result(state.task, event_id, status_code=200, response={'operation': 'not a durable operation'})
+    state.repo.execution_records.save_edit_request_result(state.task, event_id, status_code=200, response={'operation': 'not a durable operation'})
     before = editorial_rows(state.repo)
     with pytest.raises(EditConflict, match='尚未确定'):
         state.application.confirm(control)

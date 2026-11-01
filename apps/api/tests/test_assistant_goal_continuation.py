@@ -986,7 +986,7 @@ def test_home_resume_reconciles_unknown_original_request_before_any_new_business
     saved,roots=case.adopted[0];root=roots[0]
     goal=case.conversations.get_task_goal(root);task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
     request_id=str(uuid4())
-    case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
+    case.production.execution_records.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
     claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
     case.conversations.append_event(claim['turn_id'],{'type':'tool_end','failure':{'submission_effect':'unknown',
@@ -998,7 +998,7 @@ def test_home_resume_reconciles_unknown_original_request_before_any_new_business
     current=case.conversations.get_task_goal(root)
     def read_request(task,actor,identity,phase):
         event_id,event=GoalResultProjection(case.production,case.conversations).request_claim(task,'member',identity,phase)
-        original=case.production.read_edit_request_result(task,event_id)
+        original=case.production.execution_records.read_edit_request_result(task,event_id)
         return {'status':'unknown' if original is None else 'recorded','result':original}
     def forbidden(*args,**kwargs): raise AssertionError('must not submit or select new work before reconciliation')
     outcome=case.service.verify_resume_business(current,task,CreationExecutionActor('workspace','member'),
@@ -1036,7 +1036,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     goal=case.conversations.get_task_goal(root);task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
     actor=CreationExecutionActor('workspace','member');owner=GoalResultProjection(case.production,case.conversations)
     request_id=str(uuid4())
-    event_id,_=case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
+    event_id,_=case.production.execution_records.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
     claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
     case.conversations.append_event(claim['turn_id'],{'type':'tool_end','failure':{'submission_effect':'unknown',
@@ -1055,14 +1055,14 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
             case.production.job_records.claim_job_run('workspace',job.id)
     elif recorded_state=='rejected':
         code=409;receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
-    case.production.save_edit_request_result(task,event_id,status_code=code,response=receipt)
+    case.production.execution_records.save_edit_request_result(task,event_id,status_code=code,response=receipt)
     assert not (case.conversations.get_turn(claim['turn_id'])['result'].get('response') or {}).get('media_job')
     turn=case.human('继续原任务，先核对原回执')
     assert case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)['status']=='resumed'
     reads=[]
     def read_request(task,actor,identity,phase):
         key,event=owner.request_claim(task,'member',identity,phase)
-        recorded=case.production.read_edit_request_result(task,key)
+        recorded=case.production.execution_records.read_edit_request_result(task,key)
         return {'status':'recorded','result_status_code':recorded['status_code'],'result':recorded['response']}
     def read_media(task,actor,job_id):
         reads.append(job_id)

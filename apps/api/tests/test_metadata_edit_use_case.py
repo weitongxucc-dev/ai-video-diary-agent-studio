@@ -350,6 +350,28 @@ def test_metadata_save_and_staged_request_replay_recover_original_version(state)
     current = state.repo.task_records.get_creation_task('ws', state.task.id)
     _, replay = state.case.begin(current, state.member.member_id, request_id, inputs)
     assert replay.recorded_projection['response'] == projection
+    original_claim = state.repo.execution_records.get_task_event(current.workspace_id, event_id)
+    original_identity = original_claim.payload
+    assert original_claim.task_id == current.id
+    assert original_identity['member_id'] == state.member.member_id
+    assert original_identity['request_id'] == str(request_id)
+    guarded_replays = []
+    def reject_known_request(connection):
+        assert connection.in_transaction
+        row = connection.execute('SELECT id,payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND id=?',
+            (current.workspace_id, current.id, original_claim.id)).fetchone()
+        assert row is not None and row['id'] == event_id
+        sealed = json.loads(row['payload_json'])
+        assert (sealed['member_id'], sealed['request_id'], sealed['phase']) == (
+            original_identity['member_id'], original_identity['request_id'], original_identity['phase'])
+        guarded_replays.append(row['id'])
+        raise PermissionError('original request guard refused replay')
+    before_guard = editorial_rows(state.repo)
+    with pytest.raises(PermissionError, match='guard refused replay'):
+        state.repo.execution_records.claim_edit_request(current, original_identity['member_id'],
+            original_identity['request_id'], original_identity['phase'], inputs, write_guard=reject_known_request)
+    assert guarded_replays == [event_id]
+    assert editorial_rows(state.repo) == before_guard
     with pytest.raises(ValueError, match='不同编辑输入'):
         state.case.begin(current, state.member.member_id, request_id, {**inputs, 'crop_x': .9})
     with state.repo._connect() as conn:
@@ -418,7 +440,7 @@ def test_metadata_late_write_failure_rolls_back_change_but_keeps_prior_claim(sta
         state.case.save(state.task, crop_command(state))
     assert editorial_rows(state.repo) == before
     assert state.repo.execution_records.get_task_event('ws', event_id).event_type == 'edit_request_claimed'
-    assert state.repo.read_edit_request_result(state.task, event_id) is None
+    assert state.repo.execution_records.read_edit_request_result(state.task, event_id) is None
 
 
 def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):

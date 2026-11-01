@@ -2546,9 +2546,9 @@ def test_observation_reconciles_original_before_version_and_marks_unknown(tmp_pa
     case=OutputObservationUseCase(repo,None,SimpleNamespace(repository=repo),tmp_path,None)
     payload=CreationTaskObservationRequest(expected_timeline_version_id=None,expected_timeline_sequence=0,
         target={'kind':'final'},request_id=uuid4())
-    event_id,_=repo.claim_edit_request(task,actor.member_id,payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True))
+    event_id,_=repo.execution_records.claim_edit_request(task,actor.member_id,payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True))
     receipt={'job_id':'original-observation','status':'queued'}
-    repo.save_edit_request_result(task,event_id,status_code=202,response=receipt)
+    repo.execution_records.save_edit_request_result(task,event_id,status_code=202,response=receipt)
     later=replace(task,current_timeline_version_id='later-version')
     assert case.submit(None,None,later,actor,payload,{},receipt_for=None)==receipt
     monkeypatch.setattr(main_module,'_exact_edit_access',lambda *_args,**_kwargs:(later,actor.member_id))
@@ -2716,9 +2716,9 @@ def test_original_observation_409_stays_rejected_for_http_and_host(tmp_path,monk
     case=OutputObservationUseCase(repo,None,SimpleNamespace(repository=repo),tmp_path,None)
     payload=CreationTaskObservationRequest(expected_timeline_version_id=None,expected_timeline_sequence=0,
         target={'kind':'final'},request_id=uuid4(),assistant_turn_id=binding['turn_id'])
-    event_id,_=repo.claim_edit_request(task,actor.member_id,payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True))
+    event_id,_=repo.execution_records.claim_edit_request(task,actor.member_id,payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True))
     rejection={'error':'original_observation_refused','reason':'原输入被拒绝','submission_effect':'rejected'}
-    repo.save_edit_request_result(task,event_id,status_code=409,response={'detail':rejection})
+    repo.execution_records.save_edit_request_result(task,event_id,status_code=409,response={'detail':rejection})
     def must_not_submit(*args,**kwargs): raise AssertionError('must replay original refusal before any version or media work')
     monkeypatch.setattr(case,'version',must_not_submit)
     with pytest.raises(OutputObservationRejected) as original:

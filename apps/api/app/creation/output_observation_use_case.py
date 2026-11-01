@@ -58,7 +58,7 @@ class OutputObservationUseCase:
             raise OutputObservationRejected(409,str(exc)) from exc
         event_id=None
         if payload.request_id is not None:
-            event_id,fresh=self.repository.claim_edit_request(task,actor.user_id or actor.member_id,
+            event_id,fresh=self.repository.execution_records.claim_edit_request(task,actor.user_id or actor.member_id,
                 payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True),write_guard=write_guard)
             if not fresh:
                 return self.original_request(task,actor,payload)
@@ -68,7 +68,7 @@ class OutputObservationUseCase:
             job=media.submit(runtime,actor,task.id,'output_observation',values,'observation',write_guard=write_guard)
             receipt=receipt_for(media,job,actor,runtime)
             if event_id is not None:
-                self.repository.save_edit_request_result(task,event_id,status_code=202,response=receipt)
+                self.repository.execution_records.save_edit_request_result(task,event_id,status_code=202,response=receipt)
         except Exception:
             if event_id is not None:
                 # A durable claim survives both queue and projection failures.
@@ -330,7 +330,7 @@ def read_original_observation_request(repository,task,actor,payload):
     digest=media_digest([task.id,inputs])
     if (event.task_id!=task.id or event.payload['member_id']!=member_id or event.payload['input_digest']!=digest):
         raise OutputObservationRejected(409,{'error':'observation_request_conflict','reason':'原观察请求身份已绑定不同任务或输入'})
-    result=repository.read_edit_request_result(task,event_id)
+    result=repository.execution_records.read_edit_request_result(task,event_id)
     if result is None:
         raise OutputObservationRejected(409,{'error':'observation_result_unknown','reason':'原观察请求结果尚未知，未重复执行；请查询原请求',
             'submission_effect':'unknown','task_id':task.id,'request_id':str(payload.request_id),'input_digest':digest,

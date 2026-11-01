@@ -407,10 +407,10 @@ class MetadataEditUseCase:
     def begin(self, task, member_id, request_id, inputs, *, phase="preview"):
         if request_id is None:
             return None, None
-        event_id, fresh = self.repository.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.write_guard)
+        event_id, fresh = self.repository.execution_records.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.write_guard)
         if fresh:
             return event_id, None
-        recorded = self.repository.read_edit_request_result(task, event_id)
+        recorded = self.repository.execution_records.read_edit_request_result(task, event_id)
         if recorded is not None:
             return event_id, MetadataEditReplay(recorded)
         # Recover an applied direct command whose projection was interrupted.
@@ -434,7 +434,7 @@ class MetadataEditUseCase:
 
     def record_result(self, task, event_id, *, status_code, response):
         if event_id is not None:
-            self.repository.save_edit_request_result(task, event_id, status_code=status_code, response=response)
+            self.repository.execution_records.save_edit_request_result(task, event_id, status_code=status_code, response=response)
 
     def save(self, task, command, *, audio_edit=None, audio_actor=None, connection=None):
         if command.base_version_id is None:
