@@ -968,6 +968,22 @@ class GoalResultProjection:
             return True
         return False
 
+    def project_execution_results(self, *, read_authorized_execution, observe):
+        projected = 0
+        for row in self.production.assistant_execution_projection_rows():
+            context = self.execution_candidate(row)
+            if context is None:
+                continue
+            try:
+                actual = read_authorized_execution(context.goal, context.job_id)
+            except (KeyError, ValueError, PermissionError):
+                continue
+            event = self.project_execution(context, actual)
+            if event is not None:
+                observe(context.source['assistant_turn_id'], event)
+                projected += 1
+        return projected
+
     def authorized(self, context, identity_status):
         from app.source_policy import knowledge_item_readable as content_readable
 

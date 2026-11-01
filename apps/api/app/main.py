@@ -7587,24 +7587,17 @@ def _bind_assistant_execution_result(task_id, request, turn_id, candidate, *, so
 
 
 
-def _project_assistant_execution_results():
-    owner = _goal_projection()
-    projected = 0
-    for row in production_repo.assistant_execution_projection_rows():
-        context = owner.execution_candidate(row)
-        if context is None:
-            continue
-        try:
-            business=_task_business()
-            actor,_task,_scope=business.original(context.goal)
-            actual=business.read_execution(context.goal,actor,job_id=context.job_id)
-        except (KeyError,ValueError,PermissionError):
-            continue
-        event = owner.project_execution(context, actual)
-        if event is not None:
-            _goal_service().observe_business_result(context.source["assistant_turn_id"], event)
-            projected += 1
-    return projected
+def _read_authorized_assistant_execution(goal, job_id):
+    business = _task_business()
+    actor, _task, _scope = business.original(goal)
+    return jsonable_encoder(business.read_execution(goal, actor, job_id=job_id))
+
+
+def _assistant_execution_projector():
+    from functools import partial
+    return partial(_goal_projection().project_execution_results,
+        read_authorized_execution=_read_authorized_assistant_execution,
+        observe=lambda turn_id, event: _goal_service().observe_business_result(turn_id, event))
 
 
 def _wake_assistant_continuations():
@@ -7684,7 +7677,7 @@ def _reconcile_assistant_business_results():
     projected = sum(_assistant_business_projector()(candidate)
                     for candidate in production_repo.assistant_business_candidates())
     return projected + sum(_assistant_script_tool_projector()(candidate)
-                           for candidate in _assistant_script_tool_candidates()) + _project_assistant_execution_results()
+                           for candidate in _assistant_script_tool_candidates()) + _assistant_execution_projector()()
 
 
 class AssistantContinuationDriver:

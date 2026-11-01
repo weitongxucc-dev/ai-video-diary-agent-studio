@@ -530,7 +530,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
     expected = "invalidated" if stale else "no_progress"
     wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == expected)
     assert len(calls) == (1 if stale else 2)
-    assert main._project_assistant_execution_results() == 0
+    assert main._assistant_execution_projector()() == 0
     assert main._goal_service().reconcile() == 0
     assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
                 if job.kind == "creation_task_execution"]) == 1
@@ -611,7 +611,7 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
         assert child["assistant_text"] == child["result"]["message"]
         assert "/Volumes/" not in child["assistant_text"]
         assert child["result"].get("reason") != "goal_runner_interrupted"
-    assert len(calls) == 2 and main._project_assistant_execution_results() == 0
+    assert len(calls) == 2 and main._assistant_execution_projector()() == 0
     assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id) if job.kind == "creation_task_execution"]) == 1
 
 
@@ -672,14 +672,14 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
         assert state.conversations.get_task_goal(turn["id"]) is None
         with pytest.raises(KeyError):
             state.production.execution_records.get_task_event(state.workspace_id,"event_assistant_execution_locator_"+turn["id"])
-        assert main._project_assistant_execution_results() == 0
+        assert main._assistant_execution_projector()() == 0
     else:
         assert result["execution_action"] == "start" and "本轮未提交" not in result["reply"]
         assert turn["result"]["goal_business_actions"] == [{"kind":"execution_status", "id":job_ids[0]}]
         assert state.conversations.get_task_goal(turn["id"])["status"] == "waiting_result"
         state.production.job_records.claim_job_run(state.workspace_id,job_ids[0])
         state.production.job_records.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
-        assert main._project_assistant_execution_results() == 1
+        assert main._assistant_execution_projector()() == 1
         assert main._goal_service().reconcile() == 1 and len(calls)==2
         assert state.conversations.get_task_goal(turn["id"])["status"] == "no_progress"
     assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id)
@@ -747,7 +747,7 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
     assert located.payload["source"]["action"] == "observe" and located.job_id == job_ids[0]
     state.production.job_records.claim_job_run(state.workspace_id,job_ids[0])
     state.production.job_records.finish_job_run(state.workspace_id,job_ids[0],status="succeeded")
-    assert main._project_assistant_execution_results() == 2
+    assert main._assistant_execution_projector()() == 2
     assert main._goal_service().reconcile() == 1 and len(calls) == 2
     assert main._goal_service().reconcile() == 0
     assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id) if job.kind == "creation_task_execution"]) == 1
@@ -848,7 +848,7 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
 
 
 @pytest.fixture
-def execution_http_state(tmp_path, monkeypatch):
+def execution_http_state(tmp_path, monkeypatch, request):
     """Persist only the HTTP source/version facts; no media or execution dispatch."""
     from dataclasses import asdict
     from fastapi.testclient import TestClient
@@ -859,7 +859,7 @@ def execution_http_state(tmp_path, monkeypatch):
 
     root = tmp_path / 'execution-http'
     root.mkdir()
-    repo, task_id, script_id, _ = _seed(root, workspace_id='local')
+    repo, task_id, script_id, _ = _seed(root, workspace_id='local', voice=getattr(request, 'param', True))
     members = LocalMemberService(repo.database_path)
     member, token = members.join(members.create_invite_code(), 'HTTP来源隔离成员')
     task = repo.task_records.get_creation_task('local', task_id)
@@ -1200,6 +1200,98 @@ def execution_binding_state(execution_http_state, monkeypatch):
     state.request = Request({'type':'http', 'headers':[
         (b'x-local-member-token', state.token.encode())]})
     return state
+
+
+@pytest.mark.parametrize('execution_http_state', [pytest.param(False, id='metadata-no-voice')], indirect=True)
+@pytest.mark.parametrize('authorization_revoked', [False, True], ids=['valid', 'revoked'])
+def test_execution_projection_rechecks_persisted_authority_and_keeps_stale_history(execution_binding_state, monkeypatch, authorization_revoked):
+    from datetime import datetime, timezone
+    from app.creation.contracts import JobRun, TimelineVersion
+    from app.conversation_repository import ConversationRepository
+    state = execution_binding_state
+    repo, conversations = state.production, state.conversations
+    authority = main._task_authorizations_for_goal()
+    monkeypatch.setattr(main, '_goal_continuation_service', None)
+    service = main._goal_service()
+    real_observe = service.observe_business_result
+    observed = []
+    def observe_persisted(turn_id, event):
+        persisted = ConversationRepository(conversations.database_path).get_turn(turn_id)
+        assert any(item.get('event_id') == event['event_id'] for item in persisted['events'])
+        marker = repo.execution_records.get_task_event(state.workspace_id, event['event_id'])
+        assert marker.event_type == 'assistant_business_projected'
+        assert event['actionable'] is False
+        observed.append((turn_id, event))
+        real_observe(turn_id, event)
+        return False  # Notification acceptance does not decide the projection count.
+    monkeypatch.setattr(service, 'observe_business_result', observe_persisted)
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda: pytest.fail('execution projection must not wake'))
+    def bind_declared_job(turn_id, job):
+        source, replay = main._assistant_execution_source(state.task.id, state.request, turn_id,
+            'start', input_digest=job.input_digest)
+        assert replay is None
+        actual = main._read_bound_execution_result(state.task.id, state.request, job.id)
+        main._assistant_execution_binding().record_result(state.workspace_id, state.task.id,
+            state.member.member_id, turn_id, actual, source=source)
+        goal = conversations.get_task_goal(turn_id)
+        assert goal is not None
+        task = repo.task_records.get_creation_task(state.workspace_id, state.task.id)
+        authority.bind_business_context(task, state.actor, goal, memory={})
+        conversations.finish_turn(turn_id, 'completed', result={'kind': 'task_turn',
+            'response': {'execution_status': actual}})
+        return conversations.get_task_goal(turn_id)
+    goal = bind_declared_job(state.turn_id, state.job)
+    repo.job_records.claim_job_run(state.workspace_id, state.job.id)
+    repo.job_records.finish_job_run(state.workspace_id, state.job.id, status='failed',
+        failure_reason='declared metadata failure', impact='declared job stopped without media work',
+        repair_action='read original job metadata')
+    if authorization_revoked:
+        authorization = repo.get_task_authorization(state.workspace_id, state.task.id)
+        repo.save_task_authorization(replace(authorization, revision=authorization.revision + 1,
+            revoked_at=datetime.now(timezone.utc)), expected_revision=authorization.revision)
+        assert authority.verdict(state.actor, state.task.id, 'task_goal', check_scope=False) == 'unauthorized'
+        before_turn = conversations.get_turn(state.turn_id)
+        before_events = repo.execution_records.list_task_events(state.workspace_id, state.task.id)
+        assert main._assistant_execution_projector()() == 0
+        assert conversations.get_turn(state.turn_id) == before_turn
+        assert conversations.get_task_goal(state.turn_id) == goal
+        assert repo.execution_records.list_task_events(state.workspace_id, state.task.id) == before_events
+        assert observed == []
+        return
+    assert authority.verdict(state.actor, state.task.id, 'task_goal', check_scope=False) == 'ready'
+    assert main._assistant_execution_projector()() == 1
+    assert len(observed) == 1 and observed[0][1]['status'] == 'failed'
+    published = ConversationRepository(conversations.database_path).get_turn(state.turn_id)
+    assert main._assistant_execution_projector()() == 0
+    assert conversations.get_turn(state.turn_id) == published and len(observed) == 1
+
+    chat = conversations.get(state.conversation['id'], state.workspace_id, state.member.member_id)
+    chat = conversations.save_draft(chat['id'], state.workspace_id, state.member.member_id,
+        '核对另一条原制作作业', chat['draft_version'])
+    turn, _ = conversations.create_turn_idempotent(chat['id'], state.workspace_id, state.member.member_id,
+        chat['draft_text'], str(uuid4()), chat['draft_version'], request_context={
+            'kind': 'task', 'task_id': state.task.id, 'stage': 'review',
+            'target_snapshot': {'timeline_version_id': state.version.id, 'timeline_sequence': state.version.sequence}})
+    plan = repo.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
+    second = repo.create_creation_execution_job(JobRun('declared-stale-projection', state.workspace_id,
+        state.task.id, 'creation_task_execution', 'declared-stale-projection', state.job.input_digest),
+        start_payload={'script_id': state.script_id, 'plan_id': plan.id, 'input_digest': state.job.input_digest,
+            **state.actor.identity_payload()})
+    bind_declared_job(turn['id'], second)
+    repo.timeline_records.create_timeline_version(TimelineVersion('projection-later-head', state.workspace_id,
+        state.task.id, state.version.id, 2, {}, None))
+    repo.job_records.claim_job_run(state.workspace_id, second.id)
+    repo.job_records.finish_job_run(state.workspace_id, second.id, status='failed',
+        failure_reason='declared stale metadata failure', impact='declared historical job stopped without media work',
+        repair_action='read original job metadata')
+    assert main._assistant_execution_projector()() == 1
+    assert len(observed) == 2 and observed[-1][0] == turn['id']
+    assert observed[-1][1]['status'] == 'stale' and observed[-1][1]['result_version_id'] is None
+    stale_turn = ConversationRepository(conversations.database_path).get_turn(turn['id'])
+    assert stale_turn['status'] == 'completed'
+    assert main._assistant_execution_projector()() == 0
+    assert conversations.get_turn(turn['id']) == stale_turn and len(observed) == 2
+    assert {job.id for job in repo.job_records.list_job_runs(state.workspace_id, state.task.id)} == {state.job.id, second.id}
 
 
 def test_execution_binding_preserves_source_actor_and_receipt_error_order(execution_binding_state, monkeypatch):
