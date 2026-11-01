@@ -3260,7 +3260,8 @@ def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_versi
     assert third.unit_key.startswith('narration:segment:v1:section_2:')
     case.executor.execute(third,case.scheduler)
     assert case.segments.context('local',case.task_id,'section_1',case.actor)['video']==context['video']
-    assert case.repo.task_budget_projection('local',case.task_id)['actual_cost']['amount'] is None
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+    assert TaskBudgetUseCase(case.repo).project_resources('local',case.task_id)['actual_cost']['amount'] is None
     for prefix in ('segment_video:section_2:','narration:merge:v1:'):
         grant=case.scheduler.pick_and_grant()
         assert grant.unit_key.startswith(prefix)

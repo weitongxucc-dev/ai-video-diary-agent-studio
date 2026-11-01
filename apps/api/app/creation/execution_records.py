@@ -495,3 +495,30 @@ class ExecutionRecordStore:
                 "AND json_extract(payload_json,'$.locator.status') IN ('unknown','result_unknown')",
                 (workspace_id, task_id, conversation_id, member_id)).fetchall()
         return rendered, located, pending, unknown
+
+    def task_budget_evidence_rows(self, workspace_id, task_id, *, connection=None):
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            jobs = conn.execute('SELECT id,attempt FROM job_runs WHERE workspace_id=? AND task_id=?',
+                (workspace_id, task_id)).fetchall()
+            rows = conn.execute("SELECT job_id,payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+                "AND event_type IN ('creation_narration_unit_settled','task_execution_unit_settled')",
+                (workspace_id, task_id)).fetchall()
+            grants = conn.execute("SELECT DISTINCT r.id,r.last_grant_generation,e.permit_generation FROM device_work_requests r "
+                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
+                "LEFT JOIN device_request_events e ON e.request_id=r.id "
+                "WHERE j.workspace_id=? AND j.task_id=? AND (r.last_grant_generation IS NOT NULL OR e.permit_generation IS NOT NULL)",
+                (workspace_id, task_id)).fetchall()
+            active_rows = conn.execute("SELECT s.payload_json FROM task_events s WHERE s.workspace_id=? AND s.task_id=? "
+                "AND s.event_type IN ('creation_narration_unit_started','task_execution_unit_started') AND NOT EXISTS "
+                "(SELECT 1 FROM task_events e WHERE e.workspace_id=s.workspace_id AND e.task_id=s.task_id "
+                "AND e.event_type IN ('creation_narration_unit_settled','task_execution_unit_settled') "
+                "AND json_extract(e.payload_json,'$.usage_id')=json_extract(s.payload_json,'$.usage_id')) LIMIT 32",
+                (workspace_id, task_id)).fetchall()
+            waiting = conn.execute("SELECT r.id,r.owner_id,r.state,r.wait_reason,r.last_failure_reason FROM device_work_requests r "
+                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id WHERE j.workspace_id=? AND j.task_id=? "
+                "AND r.state IN ('waiting','blocked','granted','yield_requested','failed') ORDER BY r.updated_at DESC LIMIT 1",
+                (workspace_id, task_id)).fetchone()
+        return {'jobs': [dict(row) for row in jobs], 'settled': [dict(row) for row in rows],
+            'grants': [dict(row) for row in grants], 'in_flight': [dict(row) for row in active_rows],
+            'waiting': dict(waiting) if waiting is not None else None}

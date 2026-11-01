@@ -1539,60 +1539,6 @@ class ProductionRepository:
 
 
 
-    def task_budget_projection(self, workspace_id, task_id, *, connection=None):
-        """Read original resource receipts; missing monetary evidence never blocks local work."""
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            require_creation_task(conn, workspace_id, task_id)
-            jobs = conn.execute('SELECT id,attempt FROM job_runs WHERE workspace_id=? AND task_id=?',
-                (workspace_id, task_id)).fetchall()
-            rows = conn.execute("SELECT job_id,payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
-                "AND event_type IN ('creation_narration_unit_settled','task_execution_unit_settled')",
-                (workspace_id, task_id)).fetchall()
-            grants = conn.execute("SELECT DISTINCT r.id,r.last_grant_generation,e.permit_generation FROM device_work_requests r "
-                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id "
-                "LEFT JOIN device_request_events e ON e.request_id=r.id "
-                "WHERE j.workspace_id=? AND j.task_id=? AND (r.last_grant_generation IS NOT NULL OR e.permit_generation IS NOT NULL)",
-                (workspace_id, task_id)).fetchall()
-            active_rows = conn.execute("SELECT s.payload_json FROM task_events s WHERE s.workspace_id=? AND s.task_id=? "
-                "AND s.event_type IN ('creation_narration_unit_started','task_execution_unit_started') AND NOT EXISTS "
-                "(SELECT 1 FROM task_events e WHERE e.workspace_id=s.workspace_id AND e.task_id=s.task_id "
-                "AND e.event_type IN ('creation_narration_unit_settled','task_execution_unit_settled') "
-                "AND json_extract(e.payload_json,'$.usage_id')=json_extract(s.payload_json,'$.usage_id')) LIMIT 32",
-                (workspace_id, task_id)).fetchall()
-            waiting = conn.execute("SELECT r.id,r.owner_id,r.state,r.wait_reason,r.last_failure_reason FROM device_work_requests r "
-                "JOIN job_runs j ON j.workspace_id=r.workspace_id AND j.id=r.owner_id WHERE j.workspace_id=? AND j.task_id=? "
-                "AND r.state IN ('waiting','blocked','granted','yield_requested','failed') ORDER BY r.updated_at DESC LIMIT 1",
-                (workspace_id, task_id)).fetchone()
-        receipts, conflicts, accounted_jobs = {}, set(), set()
-        for row in rows:
-            payload = json.loads(row['payload_json']); key = payload['usage_id']
-            value = (float(payload['elapsed_seconds']), int(payload['output_bytes']) if payload['output_bytes'] is not None else None)
-            if key in receipts and receipts[key] != value:
-                conflicts.add(key)
-            receipts[key] = value
-            accounted_jobs.add(row['job_id'])
-        expected = {f"{row['id']}:{generation}" for row in grants
-            for generation in (row['last_grant_generation'], row['permit_generation']) if generation is not None}
-        missing = expected - receipts.keys()
-        unmeasured_jobs = {row['id'] for row in jobs if row['attempt'] > 0} - accounted_jobs
-        in_flight = [json.loads(row['payload_json']) for row in active_rows]
-        unknown_outputs = {key for key,value in receipts.items() if value[1] is None}
-        coverage = ('conflict' if conflicts else 'partial' if missing or unmeasured_jobs or in_flight or unknown_outputs else 'complete')
-        seconds = sum(value[0] for key, value in receipts.items() if key not in conflicts)
-        generated = sum(value[1] for key, value in receipts.items() if key not in conflicts and value[1] is not None)
-        unit_budget_blocked = waiting is not None and waiting['last_failure_reason'] == 'declared_resources_exceed_budget'
-        return {'task_id': task_id, 'status': 'unit_budget_blocked' if unit_budget_blocked else 'local_work_authorized',
-            'waiting_reason': waiting['wait_reason'] if waiting is not None else None,
-            'waiting_request': dict(waiting) if waiting is not None else None,
-            'resources': {'settled_execution_seconds': seconds, 'settled_generated_bytes': generated,
-                'total_execution_seconds': seconds if coverage == 'complete' else None,
-                'total_generated_bytes': generated if coverage == 'complete' else None,
-                'storage_peak_bytes': None, 'coverage': coverage, 'receipt_count': len(receipts),
-                'missing_usage_ids': sorted(missing), 'unmeasured_job_ids': sorted(unmeasured_jobs),
-                'conflicting_usage_ids': sorted(conflicts), 'evidence_kind': 'original_execution_receipts'},
-            'actual_cost': {'status': 'pending_verification', 'amount': None, 'currency': None,
-                'supplier_usage_refs': [], 'pricing_or_invoice_refs': []},
-            'estimates': {'eta_seconds': None, 'cost': None}, 'in_flight': in_flight}
 
     def authorize_execution_budget_scope(self, workspace_id, origin_task_id, actor, **command):
         from app.creation.execution_budget_scope import ExecutionBudgetScopes

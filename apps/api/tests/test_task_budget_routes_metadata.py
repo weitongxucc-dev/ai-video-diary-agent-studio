@@ -109,3 +109,83 @@ def test_task_budget_metadata_reads_and_rejects_invalid_resume_before_control_or
     assert repository.job_records.list_job_runs('local', task.id) == []
     assert calls == []
     client.close()
+
+
+def test_task_budget_resource_projection_deduplicates_conflicts_and_leaves_rollback_to_caller(tmp_path, monkeypatch):
+    import socket
+    import threading
+    from PIL import Image
+    from app.creation.contracts import JobRun, TaskEvent
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('resource receipt metadata forbids media, network and execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    database = tmp_path / 'receipts.sqlite'
+    repository = ProductionRepository(database, tmp_path / 'library')
+    members = LocalMemberService(database)
+    owner, _token = members.whoami(None)
+    plan = CreationPlan(id='plan', workspace_id='local', goal='Read declared resource receipts', name='Receipt metadata',
+        target_count=1, language='zh-CN', aspect_ratio='16:9', duration_target_seconds=2,
+        knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
+        approved_asset_count=0, approved_clip_count=0, material_rule_summary='', model_snapshot=[],
+        confirmation_points=[], blockers=[], preflight_fingerprint='metadata-only')
+    task = CreationTask(id='task', workspace_id='local', plan_id=plan.id,
+        name='Receipt metadata', scenario='knowledge_explanation')
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner.member_id)
+    for job_id in ('receipt-job-a', 'receipt-job-b'):
+        repository.job_records.create_job_run(JobRun(job_id, 'local', task.id, 'creation_task_segment_revision',
+            f'metadata-key-{job_id}', f'metadata-digest-{job_id}'))
+    shared = {'usage_id': 'shared-declaration', 'elapsed_seconds': 2.5, 'output_bytes': 100}
+    # Declared receipts exercise projection only, without measurements or device grants.
+    for event_id, job_id, kind, payload in (
+        ('equal-a', 'receipt-job-a', 'creation_narration_unit_settled', shared),
+        ('equal-b', 'receipt-job-b', 'task_execution_unit_settled', shared),
+        ('unique', 'receipt-job-a', 'task_execution_unit_settled',
+            {'usage_id': 'unique-declaration', 'elapsed_seconds': 1.5, 'output_bytes': 20}),
+    ):
+        repository.execution_records.append_task_event(TaskEvent(event_id, 'local', task.id, job_id, kind, payload))
+    budget = TaskBudgetUseCase(repository)
+    rows = repository.execution_records.task_budget_evidence_rows('local', task.id)
+    assert len(rows['settled']) == 3 and all(isinstance(row, dict) for row in rows['settled'])
+    assert rows['grants'] == [] and rows['waiting'] is None
+    original = budget.project_resources('local', task.id)
+    resource = original['resources']
+    assert resource['receipt_count'] == 2 and resource['coverage'] == 'complete'
+    assert resource['settled_execution_seconds'] == resource['total_execution_seconds'] == 4.0
+    assert resource['settled_generated_bytes'] == resource['total_generated_bytes'] == 120
+    assert resource['conflicting_usage_ids'] == [] and original['in_flight'] == []
+    assert original['actual_cost']['status'] == 'pending_verification' and original['actual_cost']['amount'] is None
+    with repository._connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        repository.execution_records.append_task_event(TaskEvent('pending', 'local', task.id, 'receipt-job-b',
+            'task_execution_unit_started', {'usage_id': 'pending-declaration'}), connection=connection)
+        partial = budget.project_resources('local', task.id, connection=connection)
+        assert partial['resources']['coverage'] == 'partial' and len(partial['in_flight']) == 1
+        for event_id, payload in (
+            ('conflicting', {'usage_id': 'shared-declaration', 'elapsed_seconds': 9.0, 'output_bytes': 900}),
+            ('repeated-original', shared),
+        ):
+            repository.execution_records.append_task_event(TaskEvent(event_id, 'local', task.id, 'receipt-job-b',
+                'task_execution_unit_settled', payload), connection=connection)
+        result = budget.project_resources('local', task.id, connection=connection)
+        resource = result['resources']
+        assert resource['coverage'] == 'conflict' and len(result['in_flight']) == 1
+        assert resource['receipt_count'] == 2 and resource['conflicting_usage_ids'] == ['shared-declaration']
+        assert resource['settled_execution_seconds'] == 1.5 and resource['settled_generated_bytes'] == 20
+        assert resource['total_execution_seconds'] is None and resource['total_generated_bytes'] is None
+        assert result['actual_cost']['status'] == 'pending_verification' and result['actual_cost']['amount'] is None
+        assert connection.in_transaction and connection.execute('SELECT 1').fetchone()[0] == 1
+        assert budget.project_resources('local', task.id) == original
+        connection.rollback()
+        assert not connection.in_transaction and connection.execute('SELECT 1').fetchone()[0] == 1
+        assert budget.project_resources('local', task.id, connection=connection) == original
+        assert not connection.in_transaction
+    assert budget.project_resources('local', task.id) == original

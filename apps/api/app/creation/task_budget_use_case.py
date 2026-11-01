@@ -1,6 +1,8 @@
 """Project one task's existing resource receipts without creating another ledger."""
 from __future__ import annotations
 
+import json
+
 
 class TaskBudgetUseCase:
     def __init__(self, repository, *, scope_for=None):
@@ -26,7 +28,7 @@ class TaskBudgetUseCase:
 
     def read(self, workspace_id, task_id, actor):
         self.require_actor(workspace_id, task_id, actor)
-        result = self.repository.task_budget_projection(workspace_id, task_id)
+        result = self.project_resources(workspace_id, task_id)
         scopes = self.repository.execution_budget_scopes_for_task(workspace_id, task_id, actor)
         for scope in scopes:
             policy, usage = scope['authorization'], scope['usage']
@@ -66,3 +68,40 @@ class TaskBudgetUseCase:
         result = execution_control.resume(workspace_id, task_id, actor, runtime,
             verify_media=False, write_guard=write_guard)
         return {'request_id': command.request_id, 'execution': result, 'budget': self.read(workspace_id, task_id, actor)}
+
+    def project_resources(self, workspace_id, task_id, *, connection=None):
+        """Read original resource receipts; missing monetary evidence never blocks local work."""
+        evidence = self.repository.execution_records.task_budget_evidence_rows(workspace_id, task_id, connection=connection)
+        jobs, rows, grants, active_rows, waiting = (
+            evidence['jobs'], evidence['settled'], evidence['grants'], evidence['in_flight'], evidence['waiting'])
+        receipts, conflicts, accounted_jobs = {}, set(), set()
+        for row in rows:
+            payload = json.loads(row['payload_json'])
+            key = payload['usage_id']
+            value = (float(payload['elapsed_seconds']), int(payload['output_bytes']) if payload['output_bytes'] is not None else None)
+            if key in receipts and receipts[key] != value:
+                conflicts.add(key)
+            receipts[key] = value
+            accounted_jobs.add(row['job_id'])
+        expected = {f"{row['id']}:{generation}" for row in grants
+            for generation in (row['last_grant_generation'], row['permit_generation']) if generation is not None}
+        missing = expected - receipts.keys()
+        unmeasured_jobs = {row['id'] for row in jobs if row['attempt'] > 0} - accounted_jobs
+        in_flight = [json.loads(row['payload_json']) for row in active_rows]
+        unknown_outputs = {key for key,value in receipts.items() if value[1] is None}
+        coverage = ('conflict' if conflicts else 'partial' if missing or unmeasured_jobs or in_flight or unknown_outputs else 'complete')
+        seconds = sum(value[0] for key, value in receipts.items() if key not in conflicts)
+        generated = sum(value[1] for key, value in receipts.items() if key not in conflicts and value[1] is not None)
+        unit_budget_blocked = waiting is not None and waiting['last_failure_reason'] == 'declared_resources_exceed_budget'
+        return {'task_id': task_id, 'status': 'unit_budget_blocked' if unit_budget_blocked else 'local_work_authorized',
+            'waiting_reason': waiting['wait_reason'] if waiting is not None else None,
+            'waiting_request': dict(waiting) if waiting is not None else None,
+            'resources': {'settled_execution_seconds': seconds, 'settled_generated_bytes': generated,
+                'total_execution_seconds': seconds if coverage == 'complete' else None,
+                'total_generated_bytes': generated if coverage == 'complete' else None,
+                'storage_peak_bytes': None, 'coverage': coverage, 'receipt_count': len(receipts),
+                'missing_usage_ids': sorted(missing), 'unmeasured_job_ids': sorted(unmeasured_jobs),
+                'conflicting_usage_ids': sorted(conflicts), 'evidence_kind': 'original_execution_receipts'},
+            'actual_cost': {'status': 'pending_verification', 'amount': None, 'currency': None,
+                'supplier_usage_refs': [], 'pricing_or_invoice_refs': []},
+            'estimates': {'eta_seconds': None, 'cost': None}, 'in_flight': in_flight}
