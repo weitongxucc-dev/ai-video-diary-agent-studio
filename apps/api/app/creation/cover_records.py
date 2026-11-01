@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import nullcontext
 import math
+import json
 import sqlite3
 
 from app.creation.contracts import CoverAsset, validate_logical_reference
@@ -142,3 +143,11 @@ class CoverAssetRecordStore:
     def cover_asset_from_row(self, row: sqlite3.Row) -> CoverAsset:
         payload = self._decode_payload(str(row["payload_json"]))
         return CoverAsset(**_with_datetime(payload, "created_at", "updated_at"))
+
+    def read_restore_facts(self, workspace_id, task_id, cover_id, *, connection):
+        record_fields = {'id','workspace_id','task_id','timeline_version_id','created_at','updated_at'}
+        row = connection.execute('SELECT payload_json FROM cover_assets WHERE workspace_id=? AND task_id=? AND id=?',
+            (workspace_id,task_id,cover_id)).fetchone()
+        if row is None:
+            raise ValueError('历史封面记录缺失，不能证明整片恢复安全')
+        return {key:value for key,value in json.loads(row[0]).items() if key not in record_fields}

@@ -1684,3 +1684,90 @@ def test_segment_revision_request_records_keep_claim_replay_and_declared_source_
     assert records.segment_revision_result('ws', job.id) == result
     listed = records.list_segment_revision_requests('ws', task.id, actor.member_id)
     assert listed['total_count'] == 1 and listed['items'][0]['result'] == result
+
+
+def test_whole_restore_safety_compares_real_sparse_facts_on_the_callers_connection(tmp_path, monkeypatch):
+    import socket
+    import threading
+    import wave
+    from PIL import Image
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('whole restore metadata forbids media and execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    s = metadata_state(tmp_path)
+    repo = s.repo
+    whole = TimelineRestoreUseCase(repo, s.case)
+    changed_snapshot = json.loads(json.dumps(s.base.snapshot))
+    changed_snapshot.update(subtitle_track_ids=['whole-old-zh', 'whole-old-en'], cover_asset_id='whole-old-cover',
+        edit_operation_id='old-header', invalidated_refs=['old-header-ref'])
+    changed = TimelineVersion('whole-changed', 'ws', s.task.id, s.base.id, 2, changed_snapshot, None)
+    repo.timeline_records.create_timeline_version(changed, expected_current_version_id=s.base.id)
+    current_snapshot = json.loads(json.dumps(changed.snapshot))
+    current_snapshot.update(subtitle_track_ids=['whole-new-en', 'whole-new-zh'], cover_asset_id='whole-new-cover',
+        edit_operation_id='new-header', invalidated_refs=['new-header-ref'])
+    current_snapshot['montage'].update(created_at='2024-01-03T00:00:00+00:00', updated_at='2024-01-04T00:00:00+00:00', message='ignored-message')
+    current = TimelineVersion('whole-current', 'ws', s.task.id, changed.id, 3, current_snapshot, None)
+    repo.timeline_records.create_timeline_version(current, expected_current_version_id=changed.id)
+    early, late = datetime(2024, 1, 1, tzinfo=timezone.utc), datetime(2024, 1, 2, tzinfo=timezone.utc)
+    for identity, version, language, created in (
+        ('whole-old-zh', changed.id, 'zh-CN', late), ('whole-old-en', changed.id, 'en-US', early),
+        ('whole-new-zh', current.id, 'zh-CN', early), ('whole-new-en', current.id, 'en-US', late),
+    ):
+        repo.subtitle_records.create_subtitle_track(replace(s.track, id=identity, timeline_version_id=version,
+            language=language, created_at=created, updated_at=created))
+    with repo._connect() as conn:
+        for identity, version, created in (
+            ('whole-old-cover', changed.id, early), ('whole-new-cover', current.id, late),
+        ):
+            payload = {'id': identity, 'workspace_id': 'ws', 'task_id': s.task.id, 'timeline_version_id': version,
+                'created_at': created.isoformat(), 'updated_at': created.isoformat(), 'title': 'sparse metadata cover',
+                'legacy_flag': False}
+            conn.execute('INSERT INTO cover_assets(id,workspace_id,task_id,timeline_version_id,payload_json,created_at,updated_at) '
+                'VALUES(?,?,?,?,?,?,?)', (identity, 'ws', s.task.id, version, json.dumps(payload), created.isoformat(), created.isoformat()))
+    old_tracks = repo.subtitle_records.list_subtitle_tracks('ws', s.task.id, timeline_version_id=changed.id)
+    new_tracks = repo.subtitle_records.list_subtitle_tracks('ws', s.task.id, timeline_version_id=current.id)
+    assert [track.language for track in old_tracks] != [track.language for track in new_tracks]
+    with repo._connect() as conn:
+        facts = repo.cover_records.read_restore_facts('ws', s.task.id, 'whole-new-cover', connection=conn)
+        assert facts == {'title': 'sparse metadata cover', 'legacy_flag': False}
+        assert whole._timeline_restore_business_facts(changed, conn) == whole._timeline_restore_business_facts(current, conn)
+    whole.verify_whole_timeline_restore('ws', s.task.id, changed.id)
+    cover_read = repo.cover_records.read_restore_facts
+    observed = []
+    def read_on_caller(workspace_id, task_id, cover_id, *, connection):
+        observed.append(connection)
+        return cover_read(workspace_id, task_id, cover_id, connection=connection)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute("UPDATE cover_assets SET payload_json=json_set(payload_json,'$.style',json('{}')) WHERE id='whole-new-cover'")
+        with monkeypatch.context() as patch:
+            patch.setattr(repo.cover_records, 'read_restore_facts', read_on_caller)
+            with pytest.raises(ValueError, match='已有其他时间线成果'):
+                whole.verify_whole_timeline_restore('ws', s.task.id, changed.id, connection=conn)
+        assert len(observed) == 2 and all(value is conn for value in observed)
+        assert conn.in_transaction and conn.execute('SELECT 1').fetchone()[0] == 1
+        whole.verify_whole_timeline_restore('ws', s.task.id, changed.id)
+        conn.rollback()
+    whole.verify_whole_timeline_restore('ws', s.task.id, changed.id)
+    empty_snapshot = json.loads(json.dumps(s.base.snapshot))
+    empty_snapshot['subtitle_track_ids'] = []
+    empty = TimelineVersion('whole-empty-tracks', 'ws', s.task.id, current.id, 4, empty_snapshot, None)
+    repo.timeline_records.create_timeline_version(empty, expected_current_version_id=current.id)
+    absent_snapshot = json.loads(json.dumps(empty_snapshot))
+    absent_snapshot.pop('subtitle_track_ids')
+    absent = TimelineVersion('whole-absent-tracks', 'ws', s.task.id, empty.id, 5, absent_snapshot, None)
+    repo.timeline_records.create_timeline_version(absent, expected_current_version_id=empty.id)
+    with repo._connect() as conn:
+        assert whole._timeline_restore_business_facts(empty, conn)['subtitles']['explicit_empty']
+        assert not whole._timeline_restore_business_facts(absent, conn)['subtitles']['explicit_empty']
+    with pytest.raises(ValueError, match='已有其他时间线成果'):
+        whole.verify_whole_timeline_restore('ws', s.task.id, empty.id)

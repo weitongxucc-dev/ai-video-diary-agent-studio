@@ -1489,50 +1489,7 @@ class ProductionRepository:
 
 
 
-    def _timeline_restore_business_facts(self,version,connection):
-        snapshot = dict(version.snapshot)
-        for field in ('edit_operation_id','invalidated_refs'):
-            snapshot.pop(field,None)
-        if isinstance(snapshot.get('montage'),dict):
-            snapshot['montage'] = {key:value for key,value in snapshot['montage'].items()
-                if key not in {'created_at','updated_at','message'}}
-        if isinstance(snapshot.get('narration_segments'),list):
-            snapshot['narration_segments'] = [{key:value for key,value in row.items()
-                if key not in {'created_at','updated_at'}} for row in snapshot['narration_segments']]
-        record_fields = {'id','workspace_id','task_id','timeline_version_id','created_at','updated_at'}
-        tracks = self.subtitle_records.list_subtitle_tracks(version.workspace_id,version.task_id,timeline_version_id=version.id,connection=connection)
-        track_facts = [{key:value for key,value in asdict(track).items() if key not in record_fields} for track in tracks]
-        declared_tracks = snapshot.pop('subtitle_track_ids',None)
-        snapshot['subtitles'] = {'items':sorted(track_facts,key=lambda item:json.dumps(item,sort_keys=True)),
-            'explicit_empty':declared_tracks==[] and not track_facts}
-        cover_id = snapshot.pop('cover_asset_id',None)
-        cover = None
-        if cover_id:
-            row = connection.execute('SELECT payload_json FROM cover_assets WHERE workspace_id=? AND task_id=? AND id=?',
-                (version.workspace_id,version.task_id,cover_id)).fetchone()
-            if row is None:
-                raise ValueError('历史封面记录缺失，不能证明整片恢复安全')
-            cover = {key:value for key,value in json.loads(row[0]).items() if key not in record_fields}
-        snapshot['cover'] = cover
-        return snapshot
 
-    def verify_whole_timeline_restore(self,workspace_id,task_id,changed_version_id,*,connection=None):
-        """The legacy snapshot restore is safe only while no later facts are lost."""
-        with nullcontext(connection) if connection is not None else self._connect() as conn:
-            task = require_creation_task(conn,workspace_id,task_id)
-            changed = self.timeline_records.get_timeline_version(workspace_id,changed_version_id,connection=conn)
-            current = self.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
-            if (changed.task_id!=task_id or self._timeline_restore_business_facts(current,conn)
-                    !=self._timeline_restore_business_facts(changed,conn)):
-                raise ValueError('此修改之后已有其他时间线成果；当前编辑尚不支持局部反向恢复，不能覆盖后来成果')
-            if 'narration_segments' in changed.snapshot:
-                rows = self.narration_records.list_narration_segments(workspace_id,task_id,task.confirmed_script_id,connection=conn)
-                def facts(items):
-                    return [{key:value for key,value in item.items() if key not in {'created_at','updated_at'}} for item in items]
-                if facts([asdict(row) for row in rows])!=facts(changed.snapshot['narration_segments']):
-                    raise ValueError('此修改之后已有新的配音成果；不能用旧整片快照覆盖，请保留当前成果并核对目标修改')
-            if 'narration_cache_key' in changed.snapshot and task.narration_cache_key!=changed.snapshot['narration_cache_key']:
-                raise ValueError('此修改之后已有新的配音总轨；不能用旧整片快照覆盖')
 
 
 
