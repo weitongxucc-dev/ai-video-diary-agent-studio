@@ -30,6 +30,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
 
+      - name: Run Ruff
+        working-directory: apps/api
+        run: uvx "ruff==0.15.7" check .
+
       - name: Install FFmpeg
         run: |
           sudo apt-get update
@@ -42,10 +46,6 @@ jobs:
       - name: Run backend tests
         working-directory: apps/api
         run: uv run pytest
-
-      - name: Run Ruff
-        working-directory: apps/api
-        run: uvx "ruff==0.15.7" check .
 
   frontend:
     name: Frontend
