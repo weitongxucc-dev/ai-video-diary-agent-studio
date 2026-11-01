@@ -442,7 +442,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     audio = state.repo.get_narration_artifact('ws', task.narration_cache_key)
     import hashlib
     audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
-    usage = state.repo.creation_narration_usage('ws', job.id)
+    usage = state.repo.narration_units.creation_narration_usage('ws', job.id)
     service = TaskAudio(state.repo, state.case.artifact_store,
         state.case.output_root)
     state.owner.cpu_render_limits = CpuRenderLimits(8_000_000, 1, 30)
@@ -480,7 +480,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
         state.scheduler.cancel(grant.request_id, state.actor)
     assert state.repo.execution_records.get_task_event('ws', start.id) == start
     assert state.repo.read_storyboard_regeneration_receipt('ws', task.id, receipt['request_id'])[2] == completed['result']
-    assert state.repo.creation_narration_usage('ws', job.id) == usage
+    assert state.repo.narration_units.creation_narration_usage('ws', job.id) == usage
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
 
 

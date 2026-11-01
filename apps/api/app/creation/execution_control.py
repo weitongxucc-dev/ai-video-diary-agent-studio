@@ -242,7 +242,7 @@ class CreationExecutionControl:
             "waiting_reason": waiting_reason,
             "status_updated_at": status_updated_at,
             "input_rejection":creation_input_rejection(task_events,job.id) if job else None,
-            "narration_usage": self.repository.creation_narration_usage(workspace_id, job.id) if job else None,
+            "narration_usage": self.repository.narration_units.creation_narration_usage(workspace_id, job.id) if job else None,
         }
 
     def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
@@ -468,7 +468,7 @@ class CreationExecutionControl:
             except (ValueError, KeyError, TypeError, AttributeError):
                 logger.warning("制作作业 %s 缺少可复核的持久身份，保留待处理", job.id)
                 continue
-            if self.repository.creation_narration_usage(job.workspace_id,job.id)['unsettled']:
+            if self.repository.narration_units.creation_narration_usage(job.workspace_id,job.id)['unsettled']:
                 try:
                     if not executor.recover_pcm_unit(job,original,runtime.scheduler):
                         continue
@@ -623,7 +623,7 @@ class CreationExecutionControl:
                     owner.verify_submission(SubmissionIntent(workspace_id, 'creation_job', job.id, digest,
                         owner.narration_edit_facts(job, task, payload, plan, connection=conn, pcm_preparation=preparation)[0],
                         SchedulePolicy()), actor, connection=conn, pcm_preparation=preparation)
-            usage = self.repository.creation_narration_usage(workspace_id, job.id)
+            usage = self.repository.narration_units.creation_narration_usage(workspace_id, job.id)
             if usage['unsettled']:
                 queued = runtime.scheduler._get(usage['unsettled'][0]['request_id'])
                 if (queued.workspace_id, queued.owner_id, queued.member_id) != (workspace_id, job.id, actor.member_id):

@@ -328,7 +328,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     events = case.repo.execution_records.list_task_events('local', case.task_id)
     settlements = [event for event in events if event.event_type == 'task_execution_unit_settled']
     assert len(settlements) == 6 and all(event.payload['output_bytes'] > 0 for event in settlements)
-    assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
+    assert not case.repo.narration_units.creation_narration_usage('local', case.job.id)['unsettled']
     case.scheduler.close()
 
 

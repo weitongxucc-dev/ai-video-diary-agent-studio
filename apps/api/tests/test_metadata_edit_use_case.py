@@ -1143,3 +1143,145 @@ def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_pat
         reader.effective_creation_script('ws', task_id, connection=idle)
         assert idle.in_transaction
         idle.rollback()
+
+
+def test_narration_unit_transactions_keep_real_scope_receipts_and_original_job(tmp_path, monkeypatch):
+    from app.creation.contracts import JobRun, NarrationSegment, TaskEvent
+    from app.creation.execution_budget import narration_limits
+    from app.creation.execution_budget_scope import BudgetScopeExhausted
+    from app.creation_execution import CreationExecutionActor
+    from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked
+    from test_creation_execution import _seed
+
+    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', voice=False)
+    actor = CreationExecutionActor('local', 'metadata-unit-owner')
+    with repo._connect() as conn:
+        task = repo.task_records.get_creation_task('local', task_id, connection=conn)
+        task.owner_user_id = actor.member_id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task_id))
+    digest = repo.read_creation_execution_snapshot('local', task_id).input_digest
+    job = repo.job_records.create_job_run(JobRun('metadata-unit-job', 'local', task_id,
+        'creation_task_execution', 'metadata-unit-job', digest))
+    repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start', 'local', task_id, job.id,
+        'creation_execution_started', {'input_digest': digest, 'script_id': script_id, **actor.identity_payload()}))
+    repo.authorize_execution_budget_scope('local', task_id, actor, scope_id='metadata-unit-scope', expected_revision=-1,
+        request_id='metadata-unit-approval', source_ref='isolated-confirmation:metadata', target_task_ids=[task_id],
+        limits={'execution_seconds': 10, 'generated_bytes': 100}, policy_kind='explicit_total', authorization_guard=lambda conn: None)
+    repo.bind_execution_budget_scope('local', job.id, actor, scope_id='metadata-unit-scope', expected_revision=0)
+    units = repo.narration_units
+    def declare_grant(number, seconds, size):
+        limits = narration_limits(units.creation_narration_usage('local', job.id),
+            SimpleNamespace(max_timeout_seconds=seconds, max_output_bytes=size))
+        resources = {**limits, 'script_id': script_id, 'input_contract': 'isolated-narration-metadata/v1',
+            'timeout_seconds': seconds, 'max_output_bytes': size, 'narration_phase': 'segments',
+            'section_id': 'section_1', 'segment_id': 'metadata-pending', 'ordinal': 0}
+        request_id = f'metadata-unit-request-{number}'
+        unit_key = f'narration:segment:v1:metadata-{number}'
+        now = datetime.now(timezone.utc).isoformat()
+        with repo._connect() as conn:
+            conn.execute('INSERT INTO device_work_requests '
+                '(id,workspace_id,member_id,owner_type,owner_id,input_digest,unit_key,source_refs_json,work_class,policy,'
+                'first_ready_at_utc,state,resources_json,created_at,updated_at,last_grant_generation) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (request_id, 'local', actor.member_id, 'creation_job', job.id, digest, unit_key, '[]', 'normal_make',
+                    'asap', now, 'granted', json.dumps(resources), now, now, number))
+            row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (request_id,)).fetchone()
+            DeviceScheduler._record_event(conn, row, 'deferred', 'metadata-prior-generation-declaration', actor.member_id, now)
+        grant = Grant(request_id, 'local', 'creation_job', job.id, unit_key, digest, 1, number,
+            'metadata-declaration-not-a-host-permit', repo.database_path)
+        return grant, resources
+    def pending(task, header, section, resources):
+        return NarrationSegment('metadata-pending', 'local', task_id, script_id, section.id,
+            section.content, None, None, None, 'metadata-model', 'metadata-voice', 'v1', 'zh', '', 'pending')
+    first, resources = declare_grant(1, 6, 60)
+    started, seconds, size = units.start_creation_narration_unit(first, resources, [], pending_segment_for=pending)
+    assert (started.id, seconds, size) == (job.id, 6, 60)
+    active = units.creation_narration_usage('local', job.id)
+    assert active['consumption_known'] is False and active['used_seconds'] == 0
+    assert (active['scope']['usage']['reserved_seconds'], active['scope']['usage']['reserved_bytes']) == (6, 60)
+    with pytest.raises(RecoveryBlocked, match='尚未结算'):
+        units.start_creation_narration_unit(first, resources, [], pending_segment_for=pending)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        with pytest.raises(ValueError, match='尚不可核实'):
+            units.resume_creation_narration_job('local', job.id, connection=conn)
+        conn.rollback()
+    output = tmp_path / 'opaque-unit-output'
+    output.write_bytes(b'x'*60)
+    import hashlib
+    output_file = {'path': str(output), 'sha256': hashlib.sha256(output.read_bytes()).hexdigest(), 'size_bytes': 60}
+    scope_settle = units.budget_scopes.settle
+    reached = []
+    def fail_after_scope(*args, **kwargs):
+        scope_settle(*args, **kwargs)
+        reached.append(args[0].in_transaction)
+        raise RuntimeError('metadata failure after real scope settlement')
+    with monkeypatch.context() as guard:
+        guard.setattr(units.budget_scopes, 'settle', fail_after_scope)
+        with repo._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            with pytest.raises(RuntimeError, match='real scope settlement'):
+                units.settle_creation_narration_unit(first, elapsed_seconds=6, output_bytes=60, connection=conn, output_file=output_file)
+            assert conn.in_transaction
+            conn.rollback()
+    assert reached == [True]
+    assert units.creation_narration_usage('local', job.id)['used_seconds'] == 0
+    with pytest.raises(KeyError):
+        repo.execution_records.get_task_event('local', f'event_{job.id}_narration_settled_1')
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        receipt = units.settle_creation_narration_unit(first, elapsed_seconds=6, output_bytes=60, connection=conn, output_file=output_file)
+        assert conn.in_transaction
+        assert units.settle_creation_narration_unit(first, elapsed_seconds=6, output_bytes=60, connection=conn, output_file=output_file) == receipt
+        with pytest.raises(ValueError, match='不能重复结算不同消耗'):
+            units.settle_creation_narration_unit(first, elapsed_seconds=5, output_bytes=60, connection=conn, output_file=output_file)
+    settled = units.creation_narration_usage('local', job.id)
+    assert settled['consumption_known'] and (settled['used_seconds'], settled['used_output_bytes']) == (6, 60)
+    assert (settled['scope']['usage']['execution_seconds'], settled['scope']['usage']['reserved_seconds']) == (6, 0)
+    assert units.previous_creation_narration_output(replace(first, generation=2)) == output_file
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('SAVEPOINT missing_receipt')
+        conn.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.settled_event_id','missing-original-receipt') "
+            'WHERE workspace_id=? AND id=?', ('local', f'event_{job.id}_narration_budget'))
+        with pytest.raises(RecoveryBlocked, match='不能按零恢复'):
+            units.creation_narration_usage('local', job.id, connection=conn)
+        conn.execute('ROLLBACK TO missing_receipt')
+        conn.execute('RELEASE missing_receipt')
+        repo.job_records.finish_job_run('local', job.id, status='failed', failure_reason='declared interruption',
+            impact='metadata unit retains its original receipt', repair_action='resume the original known job', connection=conn)
+        units.resume_creation_narration_job('local', job.id, connection=conn)
+    assert repo.job_records.get_job_run('local', job.id).status == 'interrupted'
+    second, resources = declare_grant(2, 4, 40)
+    units.start_creation_narration_unit(second, resources, [], pending_segment_for=pending)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        units.settle_creation_narration_unit(second, elapsed_seconds=4, output_bytes=40, connection=conn)
+        conn.execute("UPDATE job_runs SET status='queued' WHERE workspace_id=? AND id=?", ('local', job.id))
+    assert units.previous_creation_narration_output(replace(second, generation=3)) is None
+    final = units.creation_narration_usage('local', job.id)
+    assert (final['used_seconds'], final['used_output_bytes']) == (10, 100)
+    assert (final['scope']['usage']['execution_seconds'], final['scope']['usage']['generated_bytes']) == (10, 100)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        units.exhaust_creation_narration_budget(second, task_id, connection=conn)
+        assert repo.job_records.get_job_run('local', job.id, connection=conn).status == 'failed'
+        conn.rollback()
+    assert repo.job_records.get_job_run('local', job.id).status == 'queued'
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        units.exhaust_creation_narration_budget(second, task_id, connection=conn)
+    assert repo.task_records.get_creation_task('local', task_id).stage_status == 'failed'
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        units.resume_creation_narration_job('local', job.id, connection=conn)
+        count_before = conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0]
+    third, resources = declare_grant(3, 1, 1)
+    with pytest.raises(BudgetScopeExhausted):
+        units.start_creation_narration_unit(third, resources, [], pending_segment_for=pending)
+    assert repo.job_records.get_job_run('local', job.id).status == 'interrupted'
+    assert units.creation_narration_usage('local', job.id)['used_seconds'] == 10
+    with repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0] == count_before
+    with pytest.raises(KeyError):
+        repo.execution_records.get_task_event('local', f'event_{job.id}_narration_started_3')

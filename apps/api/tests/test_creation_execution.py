@@ -2996,7 +2996,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
         grant=case.scheduler.pick_and_grant()
         assert grant is not None,case.repo.job_records.get_job_run('local',case.job.id).failure_reason
         case.executor.execute(grant,case.scheduler)
-    original_usage=case.repo.creation_narration_usage('local',case.job.id)
+    original_usage=case.repo.narration_units.creation_narration_usage('local',case.job.id)
     first=case.scheduler.pick_and_grant()
     assert first is not None, (case.repo.job_records.get_job_run('local',case.job.id).failure_reason,
         [dict(row) for row in case.repo.list_creation_job_request_states('local',case.job.id)])
@@ -3017,7 +3017,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
         with pytest.raises(RecoveryBlocked):
             case.executor.execute(second,case.scheduler)
         assert case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key is None
-        usage=case.repo.creation_narration_usage('local',case.job.id)
+        usage=case.repo.narration_units.creation_narration_usage('local',case.job.id)
         assert usage['unsettled'] and usage['used_output_bytes']==original_usage['used_output_bytes']+960044
         if corrupt_header in {'seal_only','commit_rollback','pending_pair'}:
             monkeypatch.setattr(case.repo.narration_completion,'complete_creation_task_narration',original_commit)
@@ -3028,7 +3028,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
             control.recover(SimpleNamespace(scheduler=case.scheduler,registrations={
                 'creation_job':SimpleNamespace(owner=case.owner,executor=executor)},wake=lambda:None))
             assert len(seen)==2
-            recovered=case.repo.creation_narration_usage('local',case.job.id)
+            recovered=case.repo.narration_units.creation_narration_usage('local',case.job.id)
             assert not recovered['unsettled'] and recovered['used_output_bytes']==2880184
             assert case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key
             assert case.scheduler._get(second.request_id).state=='done'
@@ -3039,7 +3039,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
         case.executor.execute(second,case.scheduler)
         current=case.repo.task_records.get_creation_task('local',case.task_id)
         assert current.stage=='montage' and current.narration_cache_key
-        usage=case.repo.creation_narration_usage('local',case.job.id)
+        usage=case.repo.narration_units.creation_narration_usage('local',case.job.id)
         assert not usage['unsettled'] and usage['used_output_bytes']==2880184<3*1024*1024
         assert seen[0]['file_identity']==seen[1]['file_identity']
         assert seen[1]['previous_pcm_bytes']==seen[0]['pcm_bytes']
@@ -3163,7 +3163,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
             assert current.current_timeline_version_id == base.id
             assert case.repo.job_records.get_job_run('local', job.id).status == 'interrupted'
             assert case.repo.edit_records.list_edit_operations('local', task.id) == []
-            usage = case.repo.creation_narration_usage('local', job.id)
+            usage = case.repo.narration_units.creation_narration_usage('local', job.id)
             assert not usage['unsettled'] and usage['used_output_bytes'] == 192096
             reconciled = [event for event in case.repo.execution_records.list_task_events('local', task.id)
                 if event.job_id == job.id and event.event_type == 'narration_edit_result_reconciled']
@@ -3180,7 +3180,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     assert case.repo.job_records.get_job_run('local',job.id).status=='succeeded'
     assert case.repo.narration_records.get_narration_segment('local',task.id,segments[0].id).audio_reference!=segments[0].audio_reference
     assert case.repo.narration_records.get_narration_segment('local',task.id,segments[1].id)==segments[1]
-    usage=case.repo.creation_narration_usage('local',job.id)
+    usage=case.repo.narration_units.creation_narration_usage('local',job.id)
     assert not usage['unsettled'] and usage['used_output_bytes']==192096
     assert len(case.repo.edit_records.list_edit_operations('local',task.id))==1
     assert wav_reads
@@ -3697,7 +3697,7 @@ def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_pa
     segments = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)
     assert [item.status for item in segments] == ['ready', 'pending']
     assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key is None
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_seconds'] > 0 and usage['used_output_bytes'] > 0 and not usage['unsettled']
     assert case.scheduler._get(first).state == 'done'
     # A fresh coordinator and executor consume persisted usage and only the next section.
@@ -3717,7 +3717,7 @@ def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_pa
     current = case.repo.task_records.get_creation_task('local', case.task_id)
     assert current.stage == 'montage' and current.narration_cache_key is not None
     assert len(case.execution.jobs('local', case.task_id)) == 1
-    final = case.repo.creation_narration_usage('local', case.job.id)
+    final = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert not final['unsettled'] and final['used_seconds'] > usage['used_seconds']
     assert final['used_output_bytes'] == sum(Path(item.audio_path).stat().st_size for item in [
         case.repo.get_narration_artifact('local', current.narration_cache_key), *[
@@ -3760,7 +3760,7 @@ def _queued_narration_voice_selection_case(tmp_path):
 def test_queued_voice_selection_rebinds_original_job_and_request_once_without_budget_reset(tmp_path):
     case = _queued_narration_voice_selection_case(tmp_path)
     start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     old = case.scheduler._get(case.request_id)
     receipt = case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
     authorization = case.repo.get_task_authorization('local', case.task_id)
@@ -3777,7 +3777,7 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     assert effective == {**start.payload, 'input_digest': job.input_digest, 'source_binding_event_id': source.id}
     assert source.id != start.payload['source_binding_event_id']
     assert source.payload['voice_id'] == 'voice_2' and source.payload['basis'] == 'current_bytes_at_adoption'
-    assert case.repo.creation_narration_usage('local', job.id) == usage
+    assert case.repo.narration_units.creation_narration_usage('local', job.id) == usage
     replaced = case.scheduler._get(old.id)
     assert replaced.state == 'cancelled' and replaced.wait_reason.startswith('replaced_by:')
     new = case.scheduler._get(replaced.wait_reason.split(':', 1)[1])
@@ -3795,13 +3795,13 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     case.executor.execute(grant, case.scheduler)
     segment = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)[0]
     assert segment.status == 'ready' and segment.voice_profile_id == 'voice_2'
-    after = case.repo.creation_narration_usage('local', job.id)
+    after = case.repo.narration_units.creation_narration_usage('local', job.id)
     assert after['used_output_bytes'] > 0 and not after['unsettled']
     assert after['budget']['parent_max_output_bytes'] == new.resources['parent_max_output_bytes']
     with case.repo._connect() as conn:
         count = conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0]
     assert case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection) == receipt
-    assert case.repo.creation_narration_usage('local', job.id) == after
+    assert case.repo.narration_units.creation_narration_usage('local', job.id) == after
     assert len(case.execution.jobs('local', case.task_id)) == 1
     with case.repo._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == count
@@ -3869,7 +3869,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
     assert checkpoint['section_ids'] == ['section_1', 'section_2'] and checkpoint['pcm']['pcm_bytes']/48000 == 2
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     assert task.stage == 'narration' and task.narration_cache_key is None
-    consumed = case.repo.creation_narration_usage('local', case.job.id)
+    consumed = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert consumed['used_output_bytes'] == 3*48044 + partial_path.stat().st_size
 
     # A fresh coordinator consumes the saved prefix; a known final-unit failure retains it.
@@ -3888,7 +3888,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
     case.executor.execute(final, case.scheduler)
     assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     assert case.repo.creation_narration_merge_checkpoint('local', case.job.id) == checkpoint
-    failed_usage = case.repo.creation_narration_usage('local', case.job.id)
+    failed_usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert failed_usage['used_output_bytes'] == consumed['used_output_bytes'] and not failed_usage['unsettled']
     monkeypatch.setattr(case.stage,'prepare_merge',original)
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
@@ -3902,7 +3902,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
     assert task.stage == 'montage' and output.duration_seconds == 3
     assert case.merged == [section_keys[:2], [str(partial_path), section_keys[2]]]
     assert len(case.generated) == 3 and len(case.execution.jobs('local', case.task_id)) == 1
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_seconds'] > failed_usage['used_seconds'] and not usage['unsettled']
     assert usage['used_output_bytes'] == consumed['used_output_bytes'] + 48008
     assert case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id) == sections
@@ -3926,7 +3926,7 @@ def test_narration_partial_merge_exhausts_parent_without_refund_or_reset(tmp_pat
     assert all(s.status == 'ready' for s in case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id))
     # Removing a charged intermediate cannot refund the original cumulative allowance.
     partial_path.unlink()
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == cap and not usage['unsettled']
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job': SimpleNamespace(owner=case.owner,executor=case.executor)}, wake=lambda: None)
@@ -3957,7 +3957,7 @@ def test_narration_merge_checkpoint_rejects_changed_actual_dependency(tmp_path, 
             with pytest.raises(RecoveryBlocked,match='检查点'):
                 case.owner.narration_unit_facts(conn,job,task,script,plan)
     assert len(case.generated) == 3 and len(case.merged) == 1
-    assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
+    assert not case.repo.narration_units.creation_narration_usage('local', case.job.id)['unsettled']
 
 
 def test_narration_unit_rollback_and_explicit_resume_preserve_consumed_allowance(tmp_path, monkeypatch):
@@ -3973,7 +3973,7 @@ def test_narration_unit_rollback_and_explicit_resume_preserve_consumed_allowance
     case.executor.execute(grant, case.scheduler)
     assert case.scheduler._get(grant.request_id).state == 'failed'
     assert all(s.status == 'pending' for s in case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id))
-    consumed = case.repo.creation_narration_usage('local', case.job.id)
+    consumed = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert consumed['used_output_bytes'] > 0 and not consumed['unsettled']
     monkeypatch.setattr(case.repo, 'commit_creation_narration_segment', original_commit)
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
@@ -3984,7 +3984,7 @@ def test_narration_unit_rollback_and_explicit_resume_preserve_consumed_allowance
     case.executor.execute(retried, case.scheduler)
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.generated[-1][2] == 3*1024*1024-consumed['used_output_bytes']
-    after = case.repo.creation_narration_usage('local', case.job.id)
+    after = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert after['used_output_bytes'] == consumed['used_output_bytes']  # Retry reused the already charged file.
     assert after['used_seconds'] > consumed['used_seconds']
 
@@ -4026,7 +4026,7 @@ def test_narration_quit_settles_then_cached_resume_does_not_charge_output_twice(
     monkeypatch.setattr(case.stage, 'prepare_segment', quit_after_prepare)
     grant = case.scheduler.pick_and_grant()
     case.executor.execute(grant, case.scheduler)
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['consumption_known'] and usage['used_output_bytes'] > 0 and usage['used_seconds'] > 0
     assert case.scheduler._get(grant.request_id).state == 'blocked'
     assert case.repo.job_records.get_job_run('local', case.job.id).status == 'interrupted'
@@ -4038,7 +4038,7 @@ def test_narration_quit_settles_then_cached_resume_does_not_charge_output_twice(
     next_grant = case.scheduler.pick_and_grant()
     assert next_grant.request_id == grant.request_id
     case.executor.execute(next_grant, case.scheduler)
-    after = case.repo.creation_narration_usage('local', case.job.id)
+    after = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert after['used_output_bytes'] == usage['used_output_bytes']
     assert after['used_seconds'] > usage['used_seconds'] and after['consumption_known']
     assert case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)[0].status == 'ready'
@@ -4061,7 +4061,7 @@ def test_narration_unknown_usage_blocks_redispatch_without_reset(tmp_path, monke
     case.scheduler.defer_unit(grant, reason='worker_interrupted', retry_not_before_utc=datetime.now(timezone.utc)+timedelta(seconds=1),
         owner_database_path=case.repo.database_path, owner_write=lambda conn, current: case.executor._write_interrupted(
             conn, current, scheduler=case.scheduler, stage='narration', reason='process_interrupted'))
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert not usage['consumption_known'] and len(usage['unsettled']) == 1
     with pytest.raises(RecoveryBlocked, match='消耗未知'):
         next_creation_intent(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id))
@@ -4098,7 +4098,7 @@ def test_narration_exhausted_parent_keeps_ready_segment_and_cannot_reset(tmp_pat
     assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     assert [s.status for s in case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)] == ['ready', 'pending']
     assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key is None
-    assert case.repo.creation_narration_usage('local', case.job.id)['used_output_bytes'] == one_output
+    assert case.repo.narration_units.creation_narration_usage('local', case.job.id)['used_output_bytes'] == one_output
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job': SimpleNamespace(owner=case.owner,executor=case.executor)}, wake=lambda: None)
     with pytest.raises(ExecutionControlRejected, match='不能|核对'):
@@ -4130,13 +4130,13 @@ def test_narration_real_memory_pressure_settles_known_usage_and_retains_unknown(
     if unknown is not None:
         with pytest.raises(RecoveryBlocked):
             runtime.run_once()
-        usage = case.repo.creation_narration_usage('local', case.job.id)
+        usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert not usage['consumption_known'] and len(usage['unsettled']) == 1
         assert runtime.last_error is not None
         assert case.scheduler._get(request_id).state == 'granted'
     else:
         assert runtime.run_once() is True and runtime.last_error is None
-        usage = case.repo.creation_narration_usage('local', case.job.id)
+        usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert usage['consumption_known'] and not usage['unsettled']
         assert usage['used_output_bytes'] == partial.stat().st_size and usage['used_seconds'] > 0
         assert case.repo.job_records.get_job_run('local', case.job.id).status == 'interrupted'
@@ -4258,7 +4258,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
     else:
         old = case.scheduler._get(submit_creation_stage(case.execution, case.scheduler, case.job, case.actor))
     start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start')
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     if legacy == 'device_only':
         source = case.repo.creation_narration_source_binding('local',case.job.id)
         previous = json.loads(json.dumps(source.payload))
@@ -4287,7 +4287,7 @@ def test_unstarted_narration_revalidates_original_sealed_bytes_without_reset(tmp
     assert case.repo.job_records.get_job_run('local', case.job.id).idempotency_key == case.job.idempotency_key
     assert case.repo.execution_records.get_task_event('local', start.id) == start
     assert case.repo.creation_narration_source_binding('local', case.job.id) == source
-    assert case.repo.creation_narration_usage('local', case.job.id) == usage
+    assert case.repo.narration_units.creation_narration_usage('local', case.job.id) == usage
     assert source.payload['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert case.repo.execution_records.get_task_event('local', f'event_{new.id}_source_revalidated').payload['source_binding_event_id'] == source.id
     assert migrate_creation_narration_request(case.repo, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor).id == new.id
@@ -4483,7 +4483,7 @@ def test_account_voice_http_uses_content_owner_and_full_current_actor_then_repla
         if key not in {'workspace_id','task_id','member_id'}}).model_dump(mode='json')
     old = case.scheduler._get(case.request_id)
     start = case.repo.execution_records.get_task_event(case.actor.workspace_id,f'event_{case.job.id}_start')
-    usage = case.repo.creation_narration_usage(case.actor.workspace_id,case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage(case.actor.workspace_id,case.job.id)
     route = f'/api/creation-tasks/{case.task_id}/narration/voice'
     before = _voice_selection_snapshot(case)
     monkeypatch.setattr(main_module,'trusted_device_credential',lambda:SimpleNamespace(device_id=str(uuid4())))
@@ -4506,7 +4506,7 @@ def test_account_voice_http_uses_content_owner_and_full_current_actor_then_repla
     assert new.member_id == case.actor.member_id and new.first_ready_at_utc == old.first_ready_at_utc
     assert new.resources['parent_timeout_seconds'] == old.resources['parent_timeout_seconds']
     assert new.resources['parent_max_output_bytes'] == old.resources['parent_max_output_bytes']
-    assert case.repo.creation_narration_usage(case.actor.workspace_id,case.job.id) == usage
+    assert case.repo.narration_units.creation_narration_usage(case.actor.workspace_id,case.job.id) == usage
     assert len(case.identity_calls) > checks_before
     checks_after = len(case.identity_calls)
     before = _voice_selection_snapshot(case)
@@ -4854,7 +4854,7 @@ def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=Fal
 def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_charge(tmp_path, monkeypatch, mismatch):
     from app.device_scheduler import RecoveryBlocked
     case = _legacy_generated_segment_case(tmp_path, monkeypatch, declared_source=True)
-    before = case.repo.creation_narration_usage('local', case.job.id)
+    before = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     if mismatch == 'output':
         path = case.output['path']
         path.write_bytes(path.read_bytes() + b'not_original')
@@ -4889,7 +4889,7 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
         assert case.segments.visual_decision(case.repo.job_records.get_job_run('local', case.job.id), 'section_1') == decision
         assert len(case.execution.jobs('local', case.task_id)) == 1
-    assert case.repo.creation_narration_usage('local', case.job.id) == before
+    assert case.repo.narration_units.creation_narration_usage('local', case.job.id) == before
     assert case.repo.execution_records.get_task_event('local', case.settled.id) == case.settled
     assert case.scheduler._get(case.grant.request_id).state == 'failed'
     assert case.scheduler.pick_and_grant() is None
@@ -4910,7 +4910,7 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     assert task.stage == 'montage' and task.stage_status == 'failed'
     assert case.repo.get_narration_artifact('local', task.narration_cache_key)
-    before = case.repo.creation_narration_usage('local', case.job.id)
+    before = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     rows = case.repo.list_creation_job_request_states('local', case.job.id)
     montage = next(row for row in rows if row['unit_key'].startswith('montage_plan:'))
     assert montage['state'] == 'failed'
@@ -4942,7 +4942,7 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
         assert case.repo.job_records.get_job_run('local', case.job.id).status == 'interrupted'
         assert observed and len(case.execution.jobs('local', case.task_id)) == 1
     assert case.scheduler._get(first.request_id).state == 'failed'
-    assert case.repo.creation_narration_usage('local', case.job.id) == before
+    assert case.repo.narration_units.creation_narration_usage('local', case.job.id) == before
 
 
 @pytest.mark.parametrize('denied', [False, True])
@@ -4976,7 +4976,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
         base.id, 2, {'montage': repo.get_creation_task_montage_plan('local', task_id)}, 'two-title-edit'))
     audio = repo.get_narration_artifact('local', 'cache_1')
     audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
-    usage = repo.creation_narration_usage('local', job.id)
+    usage = repo.narration_units.creation_narration_usage('local', job.id)
     control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     executor = CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail('unexpected render'),
         render_is_valid=lambda *_: False)
@@ -5025,7 +5025,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     assert guarded
     assert repo.execution_records.get_task_event('local', old_output.id) == old_output
     assert repo.execution_records.get_task_event('local', settled.id) == settled
-    assert repo.creation_narration_usage('local', job.id) == usage
+    assert repo.narration_units.creation_narration_usage('local', job.id) == usage
     assert repo.get_narration_artifact('local', 'cache_1') == audio
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
     assert scheduler._get(original_request).state == 'done'
@@ -5142,7 +5142,7 @@ def test_pcm_three_declared_inputs_merge_once_without_new_job_or_audio(tmp_path)
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     assert case.repo.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 3
     assert len(case.merged) == 1 and len(case.merged[0]) == 3 and len(case.generated) == 3
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == 3 * 48044 + 3 * 48000 + 44
     assert not usage['unsettled'] and len(case.execution.jobs('local', case.task_id)) == 1
     case.scheduler.close()
@@ -5188,7 +5188,7 @@ def test_pcm_sealed_two_input_unit_survives_larger_cap_and_prefix_uses_one_slot(
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     assert case.repo.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 5
     assert [len(unit) for unit in case.merged] == [2, 3, 2]
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == 5 * 48044 + 96044 + 96008 + 48008
     assert not usage['unsettled'] and len(case.generated) == 5
     case.scheduler.close()
@@ -5213,7 +5213,7 @@ def test_local_goal_twenty_sections_keep_finite_units_without_task_total_cap(tmp
         assert grant.unit_key.startswith('narration:merge:')
         assert case.scheduler._get(grant.request_id).resources['input_count'] <= 5
         case.executor.execute(grant, case.scheduler)
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['budget']['parent_timeout_seconds'] is None
     assert usage['budget']['parent_max_output_bytes'] is None
     assert usage['used_seconds'] > 0 and usage['used_output_bytes'] > 0 and not usage['unsettled']
@@ -5243,8 +5243,8 @@ def test_scope_shrink_before_real_grant_start_rolls_back_started_and_pending_seg
     with pytest.raises(BudgetScopeExhausted):
         case.executor.execute(grant, case.scheduler)
     assert case.repo.job_records.get_job_run('local', case.job.id).status == 'queued'
-    assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
-    assert case.repo.creation_narration_usage('local', case.job.id)['budget'] is None
+    assert not case.repo.narration_units.creation_narration_usage('local', case.job.id)['unsettled']
+    assert case.repo.narration_units.creation_narration_usage('local', case.job.id)['budget'] is None
     assert case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['unit_count'] == 0
     assert case.generated == []
     case.scheduler.close()
@@ -5254,7 +5254,7 @@ def test_legacy_tts_sealed_parent_declaration_keeps_actual_remaining_context(tmp
     case = _narration_units_case(tmp_path)
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
-    used = case.repo.creation_narration_usage('local', case.job.id)
+    used = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     grant = case.scheduler.pick_and_grant()
     original = case.scheduler._get(grant.request_id)
     assert original.resources['max_output_bytes'] == used['budget']['parent_max_output_bytes']
@@ -5392,7 +5392,7 @@ def test_single_segment_executor_keeps_full_pending_rows_and_existing_ready_with
         assert case.repo.narration_records.get_narration_segment('local', case.task_id, ready.id) == ready
         assert case.scheduler._get(first.request_id).resources == original.resources
         assert case.scheduler._get(second.request_id).state == 'done'
-        usage = case.repo.creation_narration_usage('local', case.job.id)
+        usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert usage['used_output_bytes'] > 0 and usage['used_seconds'] > 0 and not usage['unsettled']
         assert len(case.generated) == 2 and case.merged == []
         assert len(case.execution.jobs('local', case.task_id)) == 1
@@ -5432,7 +5432,7 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
     request = case.scheduler._get(grant.request_id)
     release = case.scheduler._released_for_commit
     observe = case.scheduler._observed_current
-    settle = case.repo.settle_creation_narration_unit
+    settle = case.repo.narration_units.settle_creation_narration_unit
     def released_for_commit(conn, current):
         result = release(conn, current)
         released.append(current.request_id)
@@ -5456,7 +5456,7 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
         return settle(*args, **kwargs)
     monkeypatch.setattr(case.scheduler, '_released_for_commit', released_for_commit)
     monkeypatch.setattr(case.scheduler, '_observed_current', change_after_observation)
-    monkeypatch.setattr(case.repo, 'settle_creation_narration_unit', counted_settlement)
+    monkeypatch.setattr(case.repo.narration_units, 'settle_creation_narration_unit', counted_settlement)
     # The real conflict path returns before next_creation_intent, even when authorized.
     monkeypatch.setattr('app.creation_execution.next_creation_intent', lambda *a, **k: pytest.fail('conflict must have no next owner'))
     try:
@@ -5472,7 +5472,7 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
             current = case.scheduler._get(grant.request_id)
             assert current.state == 'granted' and current.resources == request.resources
             assert current.last_grant_generation == grant.generation
-            usage = case.repo.creation_narration_usage('local', case.job.id)
+            usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
             assert len(usage['unsettled']) == 1 and usage['used_output_bytes'] == usage['used_seconds'] == 0
             with pytest.raises(KeyError):
                 case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
@@ -5502,7 +5502,7 @@ def test_single_segment_target_sql_abort_rolls_back_publication_and_keeps_origin
         case.executor.execute(grant, case.scheduler)
         request = case.scheduler._get(grant.request_id)
         assert request.state == 'failed'
-        usage = case.repo.creation_narration_usage('local', case.job.id)
+        usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert usage['used_output_bytes'] > 0 and not usage['unsettled']
         with case.repo._connect() as conn:
             assert conn.execute('SELECT checkpoint_ref FROM device_work_requests WHERE id=?', (grant.request_id,)).fetchone()[0] is None
@@ -6138,7 +6138,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
             assert repo.task_records.get_creation_task('local', case.task.id).current_timeline_version_id == case.base.id
             assert repo.narration_records.get_narration_segment('local', case.task.id, case.rows[0].id) == case.rows[0]
             assert not repo.edit_records.list_edit_operations('local', case.task.id)
-            assert repo.creation_narration_usage('local', job.id)['unsettled']
+            assert repo.narration_units.creation_narration_usage('local', job.id)['unsettled']
             if outcome in {'unknown', 'source_blocked'}:
                 monkeypatch.setattr(repo.edit_adoption, 'confirm', original_commit)
                 if outcome == 'source_blocked':
@@ -6162,7 +6162,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
             events = [e for e in repo.execution_records.list_task_events('local', case.task.id)
                 if e.job_id == job.id and e.event_type == 'narration_edit_result_reconciled']
             assert len(events) == 1 and events[0].payload['publication_blocked']
-            assert not repo.creation_narration_usage('local', job.id)['unsettled']
+            assert not repo.narration_units.creation_narration_usage('local', job.id)['unsettled']
         with repo._connect() as conn:
             assert conn.execute('SELECT COUNT(*) FROM job_runs WHERE workspace_id=? AND task_id=?',
                 ('local', case.task.id)).fetchone()[0] == 1
@@ -6340,7 +6340,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
         with pytest.raises(RecoveryBlocked, match='原PCM结果未知'):
             case.executor.execute(final, case.scheduler)
         assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key is None
-        usage = case.repo.creation_narration_usage('local', case.job.id)
+        usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert usage['unsettled'] and usage['used_output_bytes'] == checkpoint['pcm']['generated_bytes']
         if outcome == 'unknown':
             monkeypatch.setattr(case.repo.narration_completion, 'complete_creation_task_narration', original_complete)
@@ -6349,7 +6349,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
         task = case.repo.task_records.get_creation_task('local', case.task_id)
         assert task.stage == 'montage' and task.narration_cache_key
         assert case.scheduler._get(final.request_id).state == 'done'
-        usage = case.repo.creation_narration_usage('local', case.job.id)
+        usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert not usage['unsettled'] and usage['used_output_bytes'] == 196
         record = case.repo.get_narration_artifact('local', task.narration_cache_key)
         expected = hashlib.sha256('\n'.join('ready-section_'+str(i) for i in range(1, 4)).encode()).hexdigest()
@@ -6530,7 +6530,7 @@ def test_bounded_segment_video_unknown_audio_keeps_original_request(tmp_path, mo
         assert case.repo.execution_records.get_task_event('local', waiting.id) == waiting
     assert [row['id'] for row in case.repo.list_creation_job_request_states('local', case.job.id)] == [original.id]
     assert case.scheduler._get(original.id) == original
-    assert case.repo.creation_narration_usage('local', case.job.id)['unsettled'][0]['request_id'] == original.id
+    assert case.repo.narration_units.creation_narration_usage('local', case.job.id)['unsettled'][0]['request_id'] == original.id
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert not case.generated and not case.merged
     case.scheduler.close()

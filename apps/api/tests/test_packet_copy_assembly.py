@@ -145,7 +145,7 @@ def test_original_job_packet_tree_restarts_with_original_parents_and_real_limits
     with repo._connect() as conn:
         receipts = [json.loads(row[0]) for row in conn.execute("SELECT payload_json FROM task_events WHERE job_id=? AND event_type='picture_packet_output_measured'", (case.job.id,))]
     assert len(receipts) == 2 and all(row['consumption_known'] and row['output_bytes'] > 0 for row in receipts)
-    usage = repo.creation_narration_usage('local', case.job.id)['scope']['usage']
+    usage = repo.narration_units.creation_narration_usage('local', case.job.id)['scope']['usage']
     assert usage['generated_bytes'] >= sum(row['output_bytes'] for row in receipts)
     scheduler.close()
 

@@ -544,7 +544,7 @@ class SegmentProductionUseCase:
                 'used_output_bytes':sum(json.loads(row['payload_json'])['output_bytes'] for row in rows),
                 'remaining_budget':None}
         else:
-            measured = self.repository.creation_narration_usage(workspace_id,job_id)
+            measured = self.repository.narration_units.creation_narration_usage(workspace_id,job_id)
             budget = measured['budget']
             usage = {'settled':measured['consumption_known'],'used_seconds':measured['used_seconds'],
                 'used_output_bytes':measured['used_output_bytes'],'remaining_budget':None if budget is None else {
@@ -798,7 +798,7 @@ class SegmentProductionUseCase:
             return 'dependency'
 
     def require_settled_narration(self, job, *, connection):
-        if self.repository.creation_narration_usage(job.workspace_id, job.id, connection=connection)['unsettled']:
+        if self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id, connection=connection)['unsettled']:
             raise RecoveryBlocked('原配音请求消耗未知，须先核对原单元，不能排入段落视频')
 
     def next_initial(self, job, owner, *, connection=None):

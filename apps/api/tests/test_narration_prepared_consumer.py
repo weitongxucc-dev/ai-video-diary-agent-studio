@@ -55,7 +55,7 @@ def test_prepared_owner_uses_real_shape_and_single_unit_bounds_for_long_goal(tmp
     assert narration_write_volumes_valid(request.resources, budget)
     case.executor.execute(grant, case.scheduler)
     assert len(case.generated) == 1
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] > 0
     assert usage['scope']['authorization']['scope_id'] == 'isolated-local-goal'
     following = case.scheduler.pick_and_grant()
@@ -71,7 +71,7 @@ def test_prepared_budget_cannot_self_certify_different_authorized_inputs(tmp_pat
     with pytest.raises(ValueError, match='形状|后端|实际执行器'):
         next_creation_intent(case.repo, case.scheduler, case.job)
     assert not case.generated
-    usage = case.repo.creation_narration_usage('local', case.job.id)
+    usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == 0 and not usage['unsettled']
     case.scheduler.close()
 

@@ -1036,7 +1036,7 @@ class CreationJobOwnerVerifier:
             raise ValueError('配音单次输入尚无明确执行范围；原总量374不能默认作为生产单段标定')
         if self.narration_audio_budget is None:
             raise ValueError('逐段配音缺少独立CPU音频合并预算，尚未调用声音模型')
-        usage = self.repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)
+        usage = self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id, connection=conn)
         unresolved = usage['unsettled']
         if unresolved and (request is None or not original_recovery and request.state not in {'granted', 'yield_requested'} or len(unresolved) != 1
                 or unresolved[0]['usage_id'] != f'{request.id}:{request.last_grant_generation}'):
@@ -1170,7 +1170,7 @@ class CreationJobOwnerVerifier:
         if not sources:
             raise RecoveryBlocked('原PCM检查点没有可追加的片段')
         work = Path(source_files[0][1]).parent / ('.pcm-job-' + hashlib.sha256(job.id.encode()).hexdigest()[:24]) / 'narration.wav'
-        usage = self.repository.creation_narration_usage(job.workspace_id,job.id,connection=conn)
+        usage = self.repository.narration_units.creation_narration_usage(job.workspace_id,job.id,connection=conn)
         absolute = finite_unit_limit(audio.max_output_bytes, limits['parent_max_output_bytes'])
         remaining_seconds, remaining_bytes = narration_remaining(usage, limits, request=request)
         baseline = work_baseline(work, checkpoint['pcm'] if checkpoint else None,
@@ -1276,7 +1276,7 @@ class CreationJobOwnerVerifier:
         if write_guard is not None:
             write_guard(conn)
         original = CreationExecutionActor.from_event(job.workspace_id, event)
-        usage = self.repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)
+        usage = self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id, connection=conn)
         binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
         stage = 'narration' if job.kind == KIND else 'narration_edit'
         if original != actor or self.authorization_verdict(task, original, stage, connection=conn) != 'ready':
@@ -1340,7 +1340,7 @@ class CreationJobOwnerVerifier:
         job, snapshot, event = self._snapshot_facts(conn, request.workspace_id, request.owner_id)
         if CreationExecutionActor.from_event(job.workspace_id, event) != actor:
             raise PermissionError('不能继续其他成员的原配音作业')
-        self.repository.resume_creation_narration_job(job.workspace_id, job.id, connection=conn)
+        self.repository.narration_units.resume_creation_narration_job(job.workspace_id, job.id, connection=conn)
         intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, request.unit_key, request.policy)
         preparation=self.persisted_pcm_sources(request,conn) if request.resources.get('execution_mode')=='cpu_pcm_wav_assembly' else None
         return self.verify_submission(intent, actor, connection=conn,pcm_preparation=preparation,request=request)
@@ -1372,7 +1372,7 @@ class CreationJobOwnerVerifier:
                     if self.narration_budget is not None and self.narration_budget.input_scope == 'single_call_prepared_v1' else None))
             if self.narration_budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'} or self.narration_audio_budget is None:
                 raise ValueError('局部配音缺少明确单次范围或独立PCM预算')
-            usage = self.repository.creation_narration_usage(job.workspace_id,job.id,connection=conn)
+            usage = self.repository.narration_units.creation_narration_usage(job.workspace_id,job.id,connection=conn)
             if usage['unsettled'] and (request is None or len(usage['unsettled']) != 1
                     or usage['unsettled'][0]['usage_id'] != f'{request.id}:{request.last_grant_generation}'
                     or not original_recovery and request.state not in {'granted','yield_requested'}):
@@ -1895,7 +1895,7 @@ class CreationJobOwnerVerifier:
             verify(conn)
             def resume(current):
                 job = verify(current)
-                self.repository.resume_creation_narration_job(job.workspace_id, job.id, connection=current)
+                self.repository.narration_units.resume_creation_narration_job(job.workspace_id, job.id, connection=current)
             return VerifiedRetry(actor.member_id, owner_write=resume)
         if request.unit_key.startswith("cover:") and self.cover is not None:
             raise PermissionError("封面只能续交原请求的固定回执，不能盲重试生成")
@@ -2007,7 +2007,7 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
                     (job.workspace_id, job.id, old.id)).fetchone():
                 return old
             return None
-        if repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)['unsettled']:
+        if repository.narration_units.creation_narration_usage(job.workspace_id, job.id, connection=conn)['unsettled']:
             raise RecoveryBlocked('原配音单元消耗未知，须核对原请求，不能转换来源或创建新单元')
         if (old.last_grant_generation is not None or old.attempt_number != 1
                 or current.attempt != 0 or current.started_at is not None):
@@ -2030,7 +2030,7 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
 
 
 def resume_original_narration(repository, scheduler, job, actor, *, write_guard=None, executor=None):
-    usage = repository.creation_narration_usage(job.workspace_id, job.id)
+    usage = repository.narration_units.creation_narration_usage(job.workspace_id, job.id)
     if usage['unsettled'] and executor is not None and executor.recover_pcm_unit(job,actor,scheduler,write_guard=write_guard):
         return True
     if usage['budget'] is None or job.status not in {'failed', 'cancelled'}:
@@ -2501,7 +2501,7 @@ class CreationJobUnitExecutor:
     def recover_pcm_unit(self, job, actor, scheduler, *, write_guard=None):
         """Adopt a sealed original attempt after proving its process group released."""
         from app.creation.narration_pcm import prepared_receipt
-        usage=self.repository.creation_narration_usage(job.workspace_id,job.id)
+        usage=self.repository.narration_units.creation_narration_usage(job.workspace_id,job.id)
         if not usage['unsettled']:
             return False
         active=usage['unsettled'][0]
@@ -2572,7 +2572,7 @@ class CreationJobUnitExecutor:
                         or owner.authorization_verdict(current_task,actor,request.unit_key.split(':',1)[0],connection=conn)!='ready'):
                     raise PermissionError('原PCM恢复提交前授权或目标已变化')
                 verify_prepared()
-                self.repository.settle_creation_narration_unit(grant,elapsed_seconds=elapsed,
+                self.repository.narration_units.settle_creation_narration_unit(grant,elapsed_seconds=elapsed,
                     output_bytes=receipt['generated_bytes'],connection=conn)
                 if source_error is not None:
                     reconciled = TaskEvent(id=f'event_{job.id}_pcm_reconciled_{grant.generation}',
@@ -2639,7 +2639,7 @@ class CreationJobUnitExecutor:
         with self.repository.creation_execution_read() as conn:
             job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
-        job, remaining_seconds, remaining_bytes = self.repository.start_creation_narration_unit(grant, resources, None,
+        job, remaining_seconds, remaining_bytes = self.repository.narration_units.start_creation_narration_unit(grant, resources, None,
             pending_segment_for=self.narration_stage.pending_segment if resources['narration_phase'] == 'segment' else None)
         already_elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation = threading.Event()
@@ -2653,13 +2653,13 @@ class CreationJobUnitExecutor:
         actor = CreationExecutionActor.from_event(job.workspace_id, event.payload)
         result_bytes = 0
         output_file = None
-        previous_output = self.repository.previous_creation_narration_output(grant)
+        previous_output = self.repository.narration_units.previous_creation_narration_output(grant)
 
         def settle(conn, current):
             measured = context.narration_output_usage[0]
             if measured is None:
                 raise RecoveryBlocked('本次配音输出消耗未知，保留原开始记录等待核对')
-            return self.repository.settle_creation_narration_unit(current,
+            return self.repository.narration_units.settle_creation_narration_unit(current,
                 elapsed_seconds=max(0, time.monotonic() - started),
                 output_bytes=max(measured, 0 if output_file is not None and output_file == previous_output else result_bytes),
                 output_file=output_file, connection=conn)
@@ -2668,12 +2668,12 @@ class CreationJobUnitExecutor:
         def continue_unit(conn, current):
             if video_preparation is not None and video_preparation.event_type == 'segment_visual_planning_conflict':
                 return None
-            usage = self.repository.creation_narration_usage(job.workspace_id, job.id, connection=conn)
+            usage = self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id, connection=conn)
             limits = usage['budget']
             current_task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             if (current_task.stage == 'narration'
                     and exhausted(limits, usage['used_seconds'], usage['used_output_bytes'])):
-                self.repository.exhaust_creation_narration_budget(current, job.task_id, connection=conn)
+                self.repository.narration_units.exhaust_creation_narration_budget(current, job.task_id, connection=conn)
                 return None
             intent = next_creation_intent(self.repository, scheduler, job, connection=conn, pcm_preparation=pcm_preparation)
             return (intent, owner.verify_submission(intent, actor, connection=conn, pcm_preparation=pcm_preparation)) if intent is not None else None
@@ -3067,7 +3067,7 @@ class CreationJobUnitExecutor:
             _job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
             task, plan = snapshot.task, snapshot.plan
         actor=CreationExecutionActor.from_event(grant.workspace_id,event)
-        job,remaining_seconds,remaining_bytes=self.repository.start_creation_narration_unit(grant,resources,[])
+        job,remaining_seconds,remaining_bytes=self.repository.narration_units.start_creation_narration_unit(grant,resources,[])
         started=time.monotonic()-max(0,(datetime.now(timezone.utc)-datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
         cancellation=threading.Event()
         context=CreationStageGrantContext(scheduler,grant,started+min(remaining_seconds,resources['timeout_seconds']),
@@ -3078,7 +3078,7 @@ class CreationJobUnitExecutor:
             measured=context.narration_output_usage[0]
             if measured is None:
                 raise RecoveryBlocked('原局部配音的消耗未知，保留原started等待对账')
-            return self.repository.settle_creation_narration_unit(current,
+            return self.repository.narration_units.settle_creation_narration_unit(current,
                 elapsed_seconds=max(0,time.monotonic()-started),output_bytes=measured,connection=conn)
         pcm_preparation=None
         def next_unit(conn,current):
@@ -3668,7 +3668,7 @@ class CreationExecution:
             raise PermissionError('不能重新输出其他身份的原作业')
         if self.render_is_valid(job.workspace_id, job.task_id):
             return False
-        if self.repository.creation_narration_usage(job.workspace_id, job.id)['unsettled']:
+        if self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id)['unsettled']:
             raise RecoveryBlocked('原配音消耗尚未核实，不能重开输出')
         version_id = task.current_timeline_version_id
         if not version_id:
@@ -3706,7 +3706,7 @@ class CreationExecution:
             return latest
         if latest.status == "interrupted":
             return latest
-        if self.repository.creation_narration_usage(workspace_id, latest.id)['budget'] is not None:
+        if self.repository.narration_units.creation_narration_usage(workspace_id, latest.id)['budget'] is not None:
             raise ValueError('原配音已有累计消耗，须继续原作业单元，不能创建新作业重置额度')
         script_id = str(event.payload["script_id"])
         snapshot = self.validate_input_snapshot(workspace_id, task_id, script_id, latest.input_digest)
