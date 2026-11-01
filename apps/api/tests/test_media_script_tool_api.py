@@ -674,7 +674,31 @@ def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, m
     monkeypatch.setattr(MediaScriptTools, 'create_from_job', lambda *a, **k: pytest.fail('recovery must never POST save'))
     before = reopened.get_turn(state.turn_id)
     jobs = [job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)]
+    monkeypatch.setattr(main, '_goal_continuation_service', None)
+    service = main._goal_service()
+    original_observe = service.observe_business_result
+    original_wake = main._wake_assistant_continuations
+    publication_order, observed_results = [], []
+    def observe_committed(turn_id, event):
+        assert turn_id == state.turn_id
+        persisted = ConversationRepository(state.conversations.database_path).get_turn(turn_id)
+        assert any(item.get('event_id') == event['event_id'] for item in persisted['events'])
+        marker = state.production.execution_records.get_task_event(state.workspace_id, event['event_id'])
+        assert marker.event_type == 'assistant_business_projected'
+        publication_order.append('observe')
+        result = original_observe(turn_id, event)
+        observed_results.append(result)
+        return result
+    def wake_after_observe():
+        assert publication_order == ['observe'] and observed_results == [True]
+        publication_order.append('wake')
+        original_wake()
+    monkeypatch.setattr(service, 'observe_business_result', observe_committed)
+    monkeypatch.setattr(main, '_wake_assistant_continuations', wake_after_observe)
     assert main._reconcile_assistant_business_results() == 1
+    assert len(observed_results) == 1
+    assert publication_order == ['observe'] + (['wake'] if observed_results[0] else [])
+    completed_order = list(publication_order)
     after = reopened.get_turn(state.turn_id)
     assert after['status'] == before['status'] == 'completed'
     event = after['result']['continuation']
@@ -688,6 +712,7 @@ def test_unknown_receipt_completed_request_projects_original_v1(receipt_state, m
     assert [job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)] == jobs
     assert main._reconcile_assistant_business_results() == 0
     assert reopened.get_turn(state.turn_id) == after
+    assert publication_order == completed_order and len(observed_results) == 1
     assert len(reopened.list_turns(after['conversation_id'])) == 1
 
 

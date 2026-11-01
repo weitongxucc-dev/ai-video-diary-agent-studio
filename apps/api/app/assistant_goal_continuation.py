@@ -954,6 +954,20 @@ class GoalResultProjection:
             return True
         return False
 
+    def project_script_tool_candidate(self, candidate, *, verify_actor, read_saved_receipt, observe, wake):
+        context = self.script_tool_candidate(candidate)
+        if isinstance(context, bool):
+            return context
+        if not self.authorized(context, verify_actor(context.actor)):
+            return True
+        receipt = read_saved_receipt(context)
+        projection = self.script_tool_projection(context, receipt)
+        if self.commit(context, projection):
+            if observe(context.source['assistant_turn_id'], projection.event):
+                wake()
+            return True
+        return False
+
     def authorized(self, context, identity_status):
         from app.source_policy import knowledge_item_readable as content_readable
 

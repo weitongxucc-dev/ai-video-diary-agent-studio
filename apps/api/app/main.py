@@ -7655,13 +7655,8 @@ def _assistant_script_tool_candidates():
     return _goal_projection().script_tool_candidates()
 
 
-def _project_assistant_script_tool_candidate(candidate):
-    owner = _goal_projection()
-    context = owner.script_tool_candidate(candidate)
-    if isinstance(context, bool):
-        return context
-    if not owner.authorized(context, _verify_creation_identity(context.actor)):
-        return True
+def _assistant_saved_script_tool_receipt(context):
+    candidate = context.candidate
     located = candidate["located"]
     registry = _media_script_tools()
     tool = registry.get_created_for_request(context.actor, UUID(located["request_id"]))
@@ -7674,18 +7669,21 @@ def _project_assistant_script_tool_candidate(candidate):
     receipt = AssistantScriptToolReceipt(action="save", status="recorded", request_id=located["request_id"],
         tool_id=tool["tool_id"], tool_version=tool["version"], query_url=located["query_url"],
         submitted_input=located["submitted_input"], tool=tool_metadata(tool)).model_dump(mode="json")
-    projection = owner.script_tool_projection(context, receipt)
-    if owner.commit(context, projection):
-        if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
-            _wake_assistant_continuations()
-        return True
-    return False
+    return receipt
+
+
+def _assistant_script_tool_projector():
+    from functools import partial
+    return partial(_goal_projection().project_script_tool_candidate,
+        verify_actor=_verify_creation_identity, read_saved_receipt=_assistant_saved_script_tool_receipt,
+        observe=lambda turn_id, event: _goal_service().observe_business_result(turn_id, event),
+        wake=_wake_assistant_continuations)
 
 
 def _reconcile_assistant_business_results():
     projected = sum(_assistant_business_projector()(candidate)
                     for candidate in production_repo.assistant_business_candidates())
-    return projected + sum(_project_assistant_script_tool_candidate(candidate)
+    return projected + sum(_assistant_script_tool_projector()(candidate)
                            for candidate in _assistant_script_tool_candidates()) + _project_assistant_execution_results()
 
 
