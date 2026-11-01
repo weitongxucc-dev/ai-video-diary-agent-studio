@@ -788,7 +788,7 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
         watched={**source,'source':{**source['source'],'input_id':'watched-input','input_turn_id':goal['original_turn_id'],'action':'observe'}}
         connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('watch-locator','workspace','task','execution',
             'assistant_execution_located',json.dumps(watched)))
-        start['arguments']['_typed_source'].update(input_id='watched-input',input_turn_id='root')
+        start['arguments']['_typed_source'].update(input_id='watched-input',input_turn_id=goal['source_input_turn_id'])
     result = {'target':{'kind':'final'},'output_role':'composed_output','timeline_version_id':'final',
         'timeline_sequence':2,'measurement_scope':'actual_output_bounded_frames',
         'output':{key:value for key,value in output.items() if key not in {'logical_ref','mtime_ns','ctime_ns'}},
@@ -810,8 +810,9 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
             connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('unknown','workspace','task',None,'assistant_edit_request_located',json.dumps(payload)))
     repository=SimpleNamespace(_connect=lambda:connection,execution_records=SimpleNamespace(get_task_event=lambda *_:SimpleNamespace(payload=start)))
     from types import MethodType
-    from app.production import ProductionRepository
-    repository.goal_output_provenance_rows=MethodType(ProductionRepository.goal_output_provenance_rows,repository)
+    from app.creation.execution_records import ExecutionRecordStore
+    repository.execution_records._connect=repository._connect
+    repository.execution_records.goal_output_provenance_rows=MethodType(ExecutionRecordStore.goal_output_provenance_rows,repository.execution_records)
     monkeypatch.setattr(main,'production_repo',repository)
     monkeypatch.setattr(main,'conversation_repo',SimpleNamespace(get_task_goal=lambda identifier:
         {'original_turn_id':'foreign' if mutation=='foreign_goal' and identifier=='producer' else goal['original_turn_id']}))

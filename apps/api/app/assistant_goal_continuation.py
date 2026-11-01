@@ -748,7 +748,7 @@ class GoalResultProjection:
         if (result.get("output") != {key: value for key, value in output.items() if key not in {"logical_ref", "mtime_ns", "ctime_ns"}}
                 or observation["observed_start"]["input_facts"]["output"] != output):
             return None
-        rendered, located, pending, unknown = self.production.goal_output_provenance_rows(
+        rendered, located, pending, unknown = self.production.execution_records.goal_output_provenance_rows(
             task.workspace_id, task.id, version.snapshot.get("creation_render_request_id"),
             goal["conversation_id"], goal["member_id"], TASK_MEDIA_KIND,
             input_id=goal.get("source_input_id"),input_turn_id=goal.get("source_input_turn_id"))
