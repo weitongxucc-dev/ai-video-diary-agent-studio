@@ -5,7 +5,7 @@ import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationV
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
 import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptSectionWindow, CreationTaskScriptWindowStartInput, CreationTaskScriptSectionsPatchInput, CreationTaskScriptWindowSaved, CreationTaskScriptWindowUnsettled, CreationTaskScriptConfirmSavedInput, CreationTaskScriptConfirmed, CreationTaskScriptWindowResult, CreationTaskScriptRequestLocator, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
-import type { CreationTaskSubtitleSaveInput, CreationTaskEditRequestReceipt, CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
+import type { CreationTaskMetadataSaveInput, CreationTaskEditRequestReceipt, CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
 import type { CreationTaskAssistantTurnResponse, CreationTaskAssistantHistory, AssistantStreamEvent } from '../types/assistant';
 import type { CreationTaskTimelineVersionDetail, CreationTaskTimelineVersionList } from '../types/timeline-history';
 import type { ContentVisibility } from '../types/common';
@@ -166,7 +166,7 @@ export function generateCreationTaskPersonRender(taskId: string, input: {
 }): Promise<CreationTaskPersonRender> {
     return creationPlanRequest<CreationTaskPersonRender>(`/api/creation-tasks/${encodeURIComponent(taskId)}/person-renders/generate`, { method: "POST", body: JSON.stringify(input) });
 }
-export function applyCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput | CreationTaskSubtitleSaveInput): Promise<CreationTaskEditResult> {
+export function applyCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput | CreationTaskMetadataSaveInput): Promise<CreationTaskEditResult> {
     return creationPlanRequest<CreationTaskEditResult>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`, { method: "POST", body: JSON.stringify(input) });
 }
 export function previewCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {

@@ -283,19 +283,28 @@ export type CreationTaskEditQueuedResponse = {
 };
 export type CreationTaskEditResult = CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse;
 
-/** A single subtitle write, retained unchanged until its original receipt is known. */
+export type CreationTaskClipMetadataInput = Extract<CreationTaskExactEditInput, {
+    operation_type: "ChangeCrop" | "ReplaceClip" | "SplitClip" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip";
+}> | (Extract<CreationTaskExactEditInput, { operation_type: "ChangeClipSpeed" | "ChangeLinkedSpeed" }> & {
+    operation_type: "ChangeClipSpeed";
+});
+
+/** 保存输入在原请求结果核实前保持不变。 */
 export type CreationTaskSubtitleSaveInput = Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }> & {
     request_id: string;
     expected_timeline_version_id: string | null;
     expected_timeline_sequence: number;
 };
+export type CreationTaskMetadataSaveInput = (CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, {
+    operation_type: "UpdateSubtitleCue";
+}>) & Pick<CreationTaskSubtitleSaveInput, "request_id" | "expected_timeline_version_id" | "expected_timeline_sequence">;
 export type CreationTaskEditRequestReceipt = {
     request_id: string;
     task_id: string;
     phase: "apply";
     input_digest: string;
     status: "unknown" | "recorded";
-    submitted_input: CreationTaskSubtitleSaveInput;
+    submitted_input: CreationTaskMetadataSaveInput;
     result_status_code: number | null;
     result: CreationTaskEditResult | { detail: unknown } | null;
 };
