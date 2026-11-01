@@ -64,7 +64,8 @@ from app.creation.contracts import (
     TimelineVersion,
 )
 from app.creation.narration_artifacts import NarrationArtifactRecord
-from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository
+from app.creation.person_renders import PersonRender
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionBatch, ProductionProfile, ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.video_jobs import VideoJobRunner
@@ -673,7 +674,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         viewer_user_id=member.member_id,
     )
     base_cache_key = avatar_lipsync_cache_key(render_request)
-    old_render = production.create_person_render(
+    old_render = production.person_renders.create_person_render(
         PersonRender(
             id=f"person_render_{base_cache_key[:24]}",
             workspace_id=workspace_id,
@@ -691,11 +692,11 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
             status="pending",
         )
     )
-    production.claim_person_render(workspace_id, task.id, old_render.id)
+    production.person_renders.claim_person_render(workspace_id, task.id, old_render.id)
     old_render_path = output_root / "legacy" / "old-person-render.mp4"
     old_render_path.parent.mkdir(parents=True, exist_ok=True)
     old_render_path.write_bytes(b"old-person-render")
-    old_render = production.finish_person_render(
+    old_render = production.person_renders.finish_person_render(
         workspace_id,
         task.id,
         old_render.id,
@@ -1083,9 +1084,9 @@ def prepare_current_presenter_media(state, monkeypatch):
     segment, request = presenter_inputs(state.production, task, script, plan, main_module._presenter_model_ids())[0]
     inputs = presenter_input_facts(request)
     key = avatar_lipsync_cache_key(request, input_facts=inputs)
-    render = state.production.create_person_render(replace(state.old_render, id="synthetic-current-presenter", cache_key=key,
+    render = state.production.person_renders.create_person_render(replace(state.old_render, id="synthetic-current-presenter", cache_key=key,
         status="pending", output_path=None, artifact_ref=None, duration_seconds=None, alignment_evidence=None))
-    state.production.claim_person_render(state.workspace_id, task.id, render.id)
+    state.production.person_renders.claim_person_render(state.workspace_id, task.id, render.id)
     published = main_module.artifact_store.publish_file(f"artifacts/{task.id}/synthetic-presenter.mp4", path)
     job = state.production.job_records.create_job_run(JobRun(id="synthetic-presenter-job", workspace_id=state.workspace_id,
         task_id=task.id, kind="person_render", idempotency_key=key, input_digest=key))
@@ -1096,9 +1097,9 @@ def prepare_current_presenter_media(state, monkeypatch):
         task_id=task.id, job_id=job.id, transform_type="person_render", input_digest=key, input_refs=[segment.audio_reference],
         output_refs=[published.logical_ref], engine="synthetic-presenter", parameters={"language":segment.language,
         "presenter_input_facts":inputs}, status="succeeded", started_at=job.created_at, finished_at=job.created_at))
-    state.old_render = state.production.finish_person_render(state.workspace_id, task.id, render.id, status="ready",
+    state.old_render = state.production.person_renders.finish_person_render(state.workspace_id, task.id, render.id, status="ready",
         output_path=str(path), duration_seconds=4, alignment_evidence='{"engine":"synthetic-presenter"}')
-    state.old_render = state.production.bind_person_render_artifact(state.workspace_id, task.id, render.id, published.logical_ref)
+    state.old_render = state.production.person_renders.bind_person_render_artifact(state.workspace_id, task.id, render.id, published.logical_ref)
     state.montage = replace(state.montage, clips=[replace(clip, person_render_id=render.id,
         asset_id=f"person:{render.id}", source_path=f"person-render://{render.id}") if clip.person_render_id else clip for clip in state.montage.clips])
     state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, task.id, state.montage.id,
@@ -3238,7 +3239,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
     operation = confirm.json()['operation']
     assert operation['operation_type'] == 'ChangePersonSegment'
     assert operation['payload']['person_render_id'] == new_render_id
-    renders = production.list_person_renders(state.workspace_id, state.task.id)
+    renders = production.person_renders.list_person_renders(state.workspace_id, state.task.id)
     assert {render.id for render in renders} == {state.old_render.id, new_render_id}
     new_render = next(render for render in renders if render.id == new_render_id)
     expected_cache_key = hashlib.sha256(
@@ -3287,7 +3288,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
     )
     assert restored_plan.clips[0].person_render_id == state.old_render.id
     assert asdict(restored_plan.clips[1]) == unchanged_clip
-    assert {render.id for render in production.list_person_renders(
+    assert {render.id for render in production.person_renders.list_person_renders(
         state.workspace_id, state.task.id
     )} == {state.old_render.id, new_render_id}
 
@@ -3367,7 +3368,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
     assert reused_plan.narration_audio_path == rerendered_plan.narration_audio_path
     assert reused_plan.output_path is None
     assert reused_plan.subtitle_path is None
-    assert {render.id for render in production.list_person_renders(
+    assert {render.id for render in production.person_renders.list_person_renders(
         state.workspace_id, state.task.id
     )} == {state.old_render.id, new_render_id}
 
@@ -5607,8 +5608,8 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
         size_bytes=published_person.size_bytes, producer_job_id=person_job.id, input_refs=person_input_refs,
     ))
     state.production.job_records.finish_job_run(state.workspace_id, person_job.id, status="succeeded", output_refs=[person_artifact_ref])
-    state.production.bind_person_render_artifact(state.workspace_id, state.task.id, state.old_render.id, person_artifact_ref)
-    state.old_render = state.production.get_person_render(state.workspace_id, state.task.id, state.old_render.id)
+    state.production.person_renders.bind_person_render_artifact(state.workspace_id, state.task.id, state.old_render.id, person_artifact_ref)
+    state.old_render = state.production.person_renders.get_person_render(state.workspace_id, state.task.id, state.old_render.id)
     state.production.lineage_records.create_transform_run(TransformRun(
         id="transform_job_v3_person_lineage", workspace_id=state.workspace_id, task_id=state.task.id,
         job_id=person_job.id, transform_type="person_render", input_digest=state.old_render.cache_key,

@@ -220,7 +220,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         assert not runtime.run_once()
         assert json.dumps(observations,sort_keys=True)==before
         assert counts==(len(repo.job_records.list_job_runs('local',task_id)),len(repo.timeline_records.list_timeline_versions('local',task_id)),len(repo.lineage_records.list_transform_runs('local',task_id)))
-        assert not repo.list_person_renders('local',task_id)
+        assert not repo.person_renders.list_person_renders('local',task_id)
         if destination:
             Path(destination,'NORMAL_SUMMARY.json').write_text(json.dumps({'task':asdict(task),'outer_job':asdict(outer),
                 'child_job':asdict(child),'transform':asdict(transform),'version':asdict(version),'base':asdict(base),

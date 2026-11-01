@@ -36,7 +36,7 @@ class PersonPreviewUseCase:
             if selected_person is None:
                 raise ValueError('当前任务没有绑定人物声音版本')
             person = self.repository.get_person_profile(workspace_id, selected_person.profile_id, selected_person.version)
-            current_render = self.repository.get_person_render(workspace_id, task.id, clip.person_render_id) if clip.person_render_id else None
+            current_render = self.repository.person_renders.get_person_render(workspace_id, task.id, clip.person_render_id) if clip.person_render_id else None
             if current_render is not None:
                 person = self.repository.get_person_profile(workspace_id, current_render.person_profile_id, current_render.person_version)
         except (KeyError, StopIteration) as exc:
@@ -65,7 +65,7 @@ class PersonPreviewUseCase:
         except ValueError as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
         person_transforms = self.repository.lineage_records.list_transform_runs(workspace_id, task.id)
-        existing_render = next((item for item in reversed(self.repository.list_person_renders(workspace_id, task.id)) if item.narration_segment_id == segment.id and item.person_profile_id == person.id and (item.person_version == person.version) and (item.voice_profile_id == segment.voice_profile_id) and (item.voice_version == segment.voice_version) and (item.model_id == person_provider.model_id) and (item.motion == 'natural') and (item.expression == 'neutral') and (item.status == 'ready') and self.render_matches_narration(item, segment, person_transforms) and (self.metadata.picture_renderer.person_path(item) is not None)), None)
+        existing_render = next((item for item in reversed(self.repository.person_renders.list_person_renders(workspace_id, task.id)) if item.narration_segment_id == segment.id and item.person_profile_id == person.id and (item.person_version == person.version) and (item.voice_profile_id == segment.voice_profile_id) and (item.voice_version == segment.voice_version) and (item.model_id == person_provider.model_id) and (item.motion == 'natural') and (item.expression == 'neutral') and (item.status == 'ready') and self.render_matches_narration(item, segment, person_transforms) and (self.metadata.picture_renderer.person_path(item) is not None)), None)
         operation_type = 'RegeneratePersonRender' if regenerate_requested else 'ChangePersonSegment'
         intent_type = 'regenerate_person_render' if regenerate_requested else 'change_person_segment'
         base_version = self.metadata.ensure_montage_base(workspace_id, task, montage, source=request_source)

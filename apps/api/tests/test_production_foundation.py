@@ -38,7 +38,8 @@ from app.creation.contracts import (
     TransformRun,
 )
 from app.creation.narration_artifacts import NarrationArtifactRecord
-from app.production import MaterialCollection, PersonRender, PronunciationEntry, ProductionBatch, ProductionProfile, ProductionRepository, VersionedVoiceProfile
+from app.creation.person_renders import PersonRender
+from app.production import MaterialCollection, PronunciationEntry, ProductionBatch, ProductionProfile, ProductionRepository, VersionedVoiceProfile
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker
 from app.creation.script_contracts import ScriptGenerationRun
 from app.repository import LEGACY_WORKSPACE_ID
@@ -2456,7 +2457,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         production._claim_workspace_media_reference(
             conn, workspace_id="workspace_a", reference=visual_reference
         )
-    pending = production.create_person_render(
+    pending = production.person_renders.create_person_render(
         PersonRender(
             id="person-render-a",
             workspace_id="workspace_a",
@@ -2498,16 +2499,16 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         )
     )
     with pytest.raises(ValueError, match="ready"):
-        production.bind_person_render_artifact(
+        production.person_renders.bind_person_render_artifact(
             "workspace_a", "task-person", pending.id, artifact.logical_ref
         )
-    assert production.claim_person_render(
+    assert production.person_renders.claim_person_render(
         "workspace_a", "task-person", pending.id
     ).status == "running"
     output = tmp_path / "outputs" / "person-render.mp4"
     output.parent.mkdir()
     output.write_bytes(b"person-render")
-    ready = production.finish_person_render(
+    ready = production.person_renders.finish_person_render(
         "workspace_a",
         "task-person",
         pending.id,
@@ -2545,7 +2546,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         )
     )
     with pytest.raises(ValueError, match="不属于当前工作区与创作任务"):
-        production.bind_person_render_artifact(
+        production.person_renders.bind_person_render_artifact(
             "workspace_a", "task-person", ready.id, foreign_artifact.logical_ref
         )
     wrong_kind_artifact = production.execution_records.create_artifact_record(
@@ -2557,21 +2558,21 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         )
     )
     with pytest.raises(ValueError, match="类型必须为 person_render"):
-        production.bind_person_render_artifact(
+        production.person_renders.bind_person_render_artifact(
             "workspace_a", "task-person", ready.id, wrong_kind_artifact.logical_ref
         )
-    ready = production.bind_person_render_artifact(
+    ready = production.person_renders.bind_person_render_artifact(
         "workspace_a", "task-person", ready.id, artifact.logical_ref
     )
     assert ready.artifact_ref == artifact.logical_ref
     assert (
-        production.bind_person_render_artifact(
+        production.person_renders.bind_person_render_artifact(
             "workspace_a", "task-person", ready.id, artifact.logical_ref
         )
         == ready
     )
     with pytest.raises(ValueError, match="已绑定其他"):
-        production.bind_person_render_artifact(
+        production.person_renders.bind_person_render_artifact(
             "workspace_a", "task-person", ready.id, foreign_artifact.logical_ref
         )
     with sqlite3.connect(production.database_path) as conn:
@@ -2592,10 +2593,10 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
         duration_reader=lambda _path: 25.0,
         scene_reader=lambda _path, _duration: [5.0, 17.0],
     )
-    assert restarted.list_person_renders("workspace_a", "task-person") == [ready]
+    assert restarted.person_renders.list_person_renders("workspace_a", "task-person") == [ready]
     with pytest.raises(KeyError):
-        restarted.get_person_render("workspace_b", "task-person", ready.id)
-    interrupted = restarted.create_person_render(
+        restarted.person_renders.get_person_render("workspace_b", "task-person", ready.id)
+    interrupted = restarted.person_renders.create_person_render(
         replace(
             pending,
             id="person-render-interrupted",
@@ -2603,9 +2604,9 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
             cache_key="b" * 64,
         )
     )
-    restarted.claim_person_render("workspace_a", "task-person", interrupted.id)
-    assert restarted.interrupt_running_person_renders("workspace_a") == 1
-    recovered = restarted.get_person_render(
+    restarted.person_renders.claim_person_render("workspace_a", "task-person", interrupted.id)
+    assert restarted.person_renders.interrupt_running_person_renders("workspace_a") == 1
+    recovered = restarted.person_renders.get_person_render(
         "workspace_a", "task-person", interrupted.id
     )
     assert (recovered.status, recovered.failure_reason) == (

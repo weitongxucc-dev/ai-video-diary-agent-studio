@@ -81,7 +81,7 @@ class VisualPreviewUseCase:
         def resolve_target(target):
             preview_target=replace(target)
             if target.person_render_id:
-                person=self.repository.get_person_render(workspace_id,task_id,target.person_render_id)
+                person=self.repository.person_renders.get_person_render(workspace_id,task_id,target.person_render_id)
                 source=self.renderer.person_path(person)
                 cue=next(cue for cue in plan.cues if cue.id==target.cue_id)
                 if source is None or person.narration_segment_id != cue.narration_segment_id:

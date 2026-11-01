@@ -31,7 +31,7 @@ from app.member_permits import MemberDeviceAccess,creation_job_registration
 from app.montage import CreationTaskMontagePlan,MontageClip,NarrationCue,creation_task_montage_plan_to_payload
 from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, NarrationSegment
 from app.creation.narration_artifacts import NarrationArtifactRecord
-from app.production import PersonRender
+from app.creation.person_renders import PersonRender
 from app.video_jobs import VideoJobRunner
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles,synthetic_wav_bytes,write_synthetic_video
@@ -223,7 +223,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     while not s.runtime.run_once():
         assert time.monotonic()<deadline,s.runtime.last_error
         time.sleep(.1)
-    renders=repo.list_person_renders('local',s.task_id)
+    renders=repo.person_renders.list_person_renders('local',s.task_id)
     assert len(renders)==1 and all(r.status=='ready' and r.artifact_ref and r.alignment_evidence for r in renders)
     by_segment={r.narration_segment_id:r for r in renders}
     initial_files={r.id:_file_fact(s.case.metadata.picture_renderer.person_path(r)) for r in renders}
@@ -268,8 +268,8 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     assert [asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]==narration_before
     assert all(_file_fact(fact['path'])==fact for fact in [*initial_files.values(),*narration_files.values()])
     assert _file_fact(rendered_file['path'])==rendered_file
-    final_renders=repo.list_person_renders('local',s.task_id);assert len(final_renders)==2
-    replacement=repo.get_person_render('local',s.task_id,changed['clips'][0]['person_render_id'])
+    final_renders=repo.person_renders.list_person_renders('local',s.task_id);assert len(final_renders)==2
+    replacement=repo.person_renders.get_person_render('local',s.task_id,changed['clips'][0]['person_render_id'])
     assert replacement.status=='ready' and replacement.cache_key!=by_segment[s.sections[0].id].cache_key
     child_jobs=[j for j in repo.job_records.list_job_runs('local',s.task_id) if j.kind=='person_render']
     assert len(child_jobs)==2 and all(j.status=='succeeded' for j in child_jobs)

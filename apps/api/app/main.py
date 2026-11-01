@@ -34,6 +34,7 @@ from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStag
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
 from app.creation.narration_stage_use_case import NarrationStageUseCase,NarrationStageRejected
 from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.creation.person_renders import PersonRender
 
 import hashlib
 import hmac
@@ -286,7 +287,7 @@ from app.schemas import (MaterialDiscoveryStartRequest,
 from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
-from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
 from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
@@ -581,7 +582,7 @@ def _lipsync_provider(quality):
 @app.on_event("startup")
 def recover_legacy_video_jobs() -> None:
     video_job_runner.recover_after_restart()
-    production_repo.interrupt_running_person_renders()
+    production_repo.person_renders.interrupt_running_person_renders()
 
 
 edit_plan_apply_runner = None
@@ -2596,7 +2597,7 @@ def _clip_preview_use_case(repository=None):
             for segment, request in presenter_inputs(repo, task, script, plan, _presenter_model_ids())]
         if not any(item is not None and item.id == clip.person_render_id for item in matches):
             raise PermissionError("当前人物/声音授权或片段版本已失效")
-        return _person_render_media_path(repo.get_person_render(task.workspace_id, task.id, clip.person_render_id))
+        return _person_render_media_path(repo.person_renders.get_person_render(task.workspace_id, task.id, clip.person_render_id))
     return ClipPreviewUseCase(repo, resolve_presenter_source=presenter_source, budget=profile)
 
 
@@ -3081,6 +3082,7 @@ def _current_subtitle_tracks(
 
 
 def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
+    repo = production_repo
     return TaskWorkspaceReadUseCase(
         read_plan=production_repo.plan_records.get_creation_plan,
         read_topics=production_repo.topic_records.list_topic_candidates,
@@ -3102,7 +3104,7 @@ def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
         read_voice_reference=production_repo.creation_plan_voice_reference,
         read_pronunciations=production_repo.list_applicable_pronunciation_entries,
         portrait_available=lambda ws: _portrait_processor(ws).available,
-        read_person_renders=production_repo.list_person_renders,
+        read_person_renders=lambda workspace_id, task_id: repo.person_renders.list_person_renders(workspace_id, task_id),
     )
 
 

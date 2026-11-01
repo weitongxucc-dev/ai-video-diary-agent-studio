@@ -964,7 +964,7 @@ class MetadataEditUseCase:
     def trim_clip_source_url(self, workspace_id, task_id, clip, cue):
         """Return an authorized source interval; browser playback does no media work."""
         if clip.person_render_id:
-            render = self.repository.get_person_render(workspace_id, task_id, clip.person_render_id)
+            render = self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)
             if render.narration_segment_id != cue.narration_segment_id:
                 raise ValueError('人物口型镜头与当前配音段落不匹配')
             synthetic_source = clip.asset_id == f'person:{render.id}' and clip.source_path == f'person-render://{render.id}'

@@ -10,7 +10,7 @@ def build_task_person_render_router(*, workspace_for, task_for, production_for, 
     def list_creation_task_person_renders(task_id: str, request: Request) -> CreationTaskPersonRendersResponse:
         workspace_id = workspace_for()(request)
         task_for()(workspace_id, task_id)
-        items = production_for().list_person_renders(workspace_id, task_id)
+        items = production_for().person_renders.list_person_renders(workspace_id, task_id)
         return list_response_for()(items=[render_response_for()(item) for item in items], total_count=len(items))
 
     @router.post('/api/creation-tasks/{task_id}/person-renders/generate', response_model=CreationTaskPersonRenderResponse)
@@ -23,7 +23,7 @@ def build_task_person_render_router(*, workspace_for, task_for, production_for, 
         workspace_id = workspace_for()(request)
         readable_for()(request, task_id)
         try:
-            render = production_for().get_person_render(workspace_id, task_id, render_id)
+            render = production_for().person_renders.get_person_render(workspace_id, task_id, render_id)
         except KeyError as exc:
             raise http_error_for()(status_code=404, detail='person render not found') from exc
         output = media_path_for()(render)

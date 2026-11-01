@@ -10,7 +10,7 @@ from app.task_runtime import JobResult
 from app.creation.contracts import JobRun
 from app.materials.contracts import MediaAuthorityError
 from pathlib import Path
-from app.production import PersonRender
+from app.creation.person_renders import PersonRender
 from app.creation.contracts import TransformRun
 from app.avatar_lipsync import avatar_lipsync_cache_key
 from app.montage import creation_task_montage_plan_from_payload
@@ -67,7 +67,7 @@ class PersonStageUseCase:
             input_facts = presenter_input_facts(render_request)
             base_cache_key = avatar_lipsync_cache_key(render_request, input_facts=input_facts)
             cache_key = hashlib.sha256(f'{base_cache_key}\nregenerate:{regeneration_token}'.encode('utf-8')).hexdigest() if regeneration_token else base_cache_key
-            render = self.repository.create_person_render(PersonRender(id=f'person_render_{cache_key[:24]}', workspace_id=workspace_id, task_id=task_id, person_profile_id=person.id, person_version=person.version, voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version, narration_segment_id=segment.id, visual_reference=person.avatar_reference, model_id=provider.model_id, motion=payload.motion, expression=payload.expression, cache_key=cache_key, status='pending'))
+            render = self.repository.person_renders.create_person_render(PersonRender(id=f'person_render_{cache_key[:24]}', workspace_id=workspace_id, task_id=task_id, person_profile_id=person.id, person_version=person.version, voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version, narration_segment_id=segment.id, visual_reference=person.avatar_reference, model_id=provider.model_id, motion=payload.motion, expression=payload.expression, cache_key=cache_key, status='pending'))
             if render.status == 'ready':
                 if self.metadata.picture_renderer.person_path(render) is None:
                     raise ValueError('已记录的人物片段输出缺失，请重新生成')
@@ -83,17 +83,17 @@ class PersonStageUseCase:
 
             def person_render_job(context) -> JobResult:
                 grant_context.check()
-                current = self.repository.get_person_render(context.workspace_id, task_id, render.id)
+                current = self.repository.person_renders.get_person_render(context.workspace_id, task_id, render.id)
                 source = self.metadata.picture_renderer.person_path(current)
                 duration_seconds = current.duration_seconds
                 alignment_evidence = current.alignment_evidence
                 claimed = current.status != 'ready'
                 try:
                     if source is None:
-                        self.repository.claim_person_render(context.workspace_id, task_id, current.id)
+                        self.repository.person_renders.claim_person_render(context.workspace_id, task_id, current.id)
                         result = AvatarAndLipSyncService(self.settings.video_output_path, provider).render(render_request, output_cache_key=cache_key, grant_context=grant_context, repository=self.repository, viewer_user_id=task.owner_user_id)
                         if result.status != 'succeeded' or not result.artifact_path:
-                            failed = self.repository.finish_person_render(context.workspace_id, task_id, current.id, status='failed', failure_reason=result.failure_code or 'person_render_failed', impact=result.failure_impact or '人物片段未生成，当前任务等待人物制作完成，尚未生成成片。', repair_action=result.remediation_action or '检查人物口型运行环境后重试。')
+                            failed = self.repository.person_renders.finish_person_render(context.workspace_id, task_id, current.id, status='failed', failure_reason=result.failure_code or 'person_render_failed', impact=result.failure_impact or '人物片段未生成，当前任务等待人物制作完成，尚未生成成片。', repair_action=result.remediation_action or '检查人物口型运行环境后重试。')
                             raise JobFailure(failed.failure_reason or 'person_render_failed', failed.impact or '人物片段未生成，当前任务等待人物制作完成，尚未生成成片。', failed.repair_action or '检查人物口型运行环境后重试。')
                         source = Path(result.artifact_path)
                         duration_seconds = result.duration_seconds
@@ -126,20 +126,20 @@ class PersonStageUseCase:
                             self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=edge_id, workspace_id=context.workspace_id, task_id=task_id, upstream_ref=upstream_ref, downstream_ref=logical_ref, created_by_transform_id=transform.id))
                     grant_context.check()
                     if claimed:
-                        current = self.repository.finish_person_render(context.workspace_id, task_id, current.id, status='ready', output_path=str(self.metadata.artifact_store.resolve_file(logical_ref)), duration_seconds=duration_seconds, alignment_evidence=alignment_evidence)
-                    self.repository.bind_person_render_artifact(context.workspace_id, task_id, current.id, logical_ref)
+                        current = self.repository.person_renders.finish_person_render(context.workspace_id, task_id, current.id, status='ready', output_path=str(self.metadata.artifact_store.resolve_file(logical_ref)), duration_seconds=duration_seconds, alignment_evidence=alignment_evidence)
+                    self.repository.person_renders.bind_person_render_artifact(context.workspace_id, task_id, current.id, logical_ref)
                     return JobResult((logical_ref,))
                 except (RecoveryBlocked, PermissionError, GrantedCommandError) as exc:
                     boundary_failure.append(exc)
-                    if self.repository.get_person_render(context.workspace_id, task_id, current.id).status == 'running':
-                        self.repository.finish_person_render(context.workspace_id, task_id, current.id, status='failed', failure_reason='permit_execution_interrupted', impact='人物片段未完成，当前配音及已完成片段保留。', repair_action='重新核验许可、输入与专属预算后继续制作。')
+                    if self.repository.person_renders.get_person_render(context.workspace_id, task_id, current.id).status == 'running':
+                        self.repository.person_renders.finish_person_render(context.workspace_id, task_id, current.id, status='failed', failure_reason='permit_execution_interrupted', impact='人物片段未完成，当前配音及已完成片段保留。', repair_action='重新核验许可、输入与专属预算后继续制作。')
                     raise
                 except JobFailure:
                     raise
                 except (FileNotFoundError, MediaAuthorityError, OSError, ValueError) as exc:
                     if claimed:
                         try:
-                            self.repository.finish_person_render(context.workspace_id, task_id, current.id, status='failed', failure_reason='person_render_lineage_failed', impact='人物片段未进入可信产物记录，当前时间线保持不变。', repair_action=str(exc))
+                            self.repository.person_renders.finish_person_render(context.workspace_id, task_id, current.id, status='failed', failure_reason='person_render_lineage_failed', impact='人物片段未进入可信产物记录，当前时间线保持不变。', repair_action=str(exc))
                         except ValueError:
                             pass
                     raise JobFailure('person_render_lineage_failed', '人物片段未进入可信产物记录，当前时间线保持不变。', str(exc)) from exc
@@ -147,7 +147,7 @@ class PersonStageUseCase:
             if boundary_failure:
                 raise boundary_failure[0]
             grant_context.check()
-            completed = self.repository.get_person_render(workspace_id, task_id, render.id)
+            completed = self.repository.person_renders.get_person_render(workspace_id, task_id, render.id)
             if completed_job.status != 'succeeded':
                 raise stage_failure(status_code=503, error=completed_job.failure_reason or 'person_render_failed', reason=completed_job.failure_reason or '人物口型片段没有生成可信输出。', impact=completed_job.impact or '当前时间线和成片保持不变。', repair_action=completed_job.repair_action or '检查人物口型运行环境后重试。', retryable=True)
             return completed
@@ -226,7 +226,7 @@ class PersonStageUseCase:
             if operation_type != 'ChangePersonSegment' or not isinstance(reuse_person_render_id, str) or (not reuse_person_render_id):
                 raise PersonStageRejected(status_code=409, detail='invalid person render reuse operation')
             try:
-                render = self.repository.get_person_render(workspace_id, task.id, reuse_person_render_id)
+                render = self.repository.person_renders.get_person_render(workspace_id, task.id, reuse_person_render_id)
             except KeyError as exc:
                 raise PersonStageRejected(status_code=409, detail='person render reuse target no longer exists') from exc
             if render.status != 'ready' or render.person_profile_id != required_strings['person_profile_id'] or render.person_version != required_strings['person_version'] or (render.narration_segment_id != required_strings['narration_segment_id']) or (render.voice_profile_id != segment.voice_profile_id) or (render.voice_version != segment.voice_version) or (render.model_id != person_provider.model_id) or (not self.person_preview.render_matches_narration(render, segment, self.repository.lineage_records.list_transform_runs(workspace_id, task.id))) or (render.motion != required_strings['motion']) or (render.expression != required_strings['expression']) or (self.metadata.picture_renderer.person_path(render) is None):

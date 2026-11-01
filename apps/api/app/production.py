@@ -84,7 +84,7 @@ from app.creation.contracts import (
     CreationTask as _CreationTask, NarrationSegmentStatus as _NarrationSegmentStatus,
     validate_logical_reference as _validate_logical_reference,
 )
-from app.creation.person_renders import PersonRenderStore, PersonRender, PersonRenderStatus
+from app.creation.person_renders import PersonRenderStore
 from app.creation.task_records import TaskRecordStore
 from app.creation.narration_segment_records import (
     NarrationSegmentRecordStore, validate_narration_segment,
@@ -442,7 +442,7 @@ class ProductionRepository:
             self._connect, self._profile_records, self._media_authorizations,
             self._workspace_profiles, self._legacy_voice_profiles, self._profile_references,
             self._workspace_media_references, self._material_assets)
-        self._person_renders = PersonRenderStore(
+        self.person_renders = PersonRenderStore(
             self._connect, self._profile_records, self._workspace_media_references)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         initialize_production_schema(self._connect)
@@ -614,7 +614,7 @@ class ProductionRepository:
         from app.creation.editing.sources import EditClipSourceReader
         self.clip_sources = EditClipSourceReader(
             connection_factory=self._connect, read_montage=self.get_creation_task_montage_plan,
-            read_asset=self.get_asset, read_person_render=self.get_person_render,
+            read_asset=self.get_asset, read_person_render=lambda workspace_id, task_id, render_id: self.person_renders.get_person_render(workspace_id, task_id, render_id),
             asset_reference=self.workspace_media_reference_for_asset, resolve_reference=self.resolve_clip_media_reference,
             segment_eligible=material_segment_eligible, conflict_error=TimelineVersionConflict)
         self.creation_requests = CreationRequestRecordStore(self._connect)
@@ -2250,51 +2250,12 @@ class ProductionRepository:
             yield replacement if segment.id == replacement.id else segment
 
 
-    def create_person_render(self, render: PersonRender) -> PersonRender:
-        return self._person_renders.create_person_render(render)
 
-    def claim_person_render(
-        self, workspace_id: str, task_id: str, render_id: str
-    ) -> PersonRender:
-        return self._person_renders.claim_person_render(workspace_id, task_id, render_id)
 
-    def finish_person_render(
-        self,
-        workspace_id: str,
-        task_id: str,
-        render_id: str,
-        *,
-        status: Literal["ready", "failed"],
-        output_path: str | None = None,
-        duration_seconds: float | None = None,
-        alignment_evidence: str | None = None,
-        failure_reason: str | None = None,
-        impact: str | None = None,
-        repair_action: str | None = None,
-    ) -> PersonRender:
-        return self._person_renders.finish_person_render(workspace_id, task_id, render_id, status=status, output_path=output_path, duration_seconds=duration_seconds, alignment_evidence=alignment_evidence, failure_reason=failure_reason, impact=impact, repair_action=repair_action)
 
-    def bind_person_render_artifact(
-        self,
-        workspace_id: str,
-        task_id: str,
-        render_id: str,
-        artifact_ref: str,
-    ) -> PersonRender:
-        return self._person_renders.bind_person_render_artifact(workspace_id, task_id, render_id, artifact_ref)
 
-    def get_person_render(
-        self, workspace_id: str, task_id: str, render_id: str
-    ) -> PersonRender:
-        return self._person_renders.get_person_render(workspace_id, task_id, render_id)
 
-    def list_person_renders(
-        self, workspace_id: str, task_id: str
-    ) -> list[PersonRender]:
-        return self._person_renders.list_person_renders(workspace_id, task_id)
 
-    def interrupt_running_person_renders(self, workspace_id: str | None = None) -> int:
-        return self._person_renders.interrupt_running_person_renders(workspace_id)
 
 
 

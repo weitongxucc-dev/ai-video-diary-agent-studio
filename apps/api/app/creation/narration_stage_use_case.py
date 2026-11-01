@@ -354,7 +354,7 @@ class NarrationStageUseCase:
                 if (previous.asset_id, previous.segment_id, previous.cue_id, previous.person_render_id) == (original.asset_id, original.segment_id, original.cue_id, original.person_render_id) and abs(previous.source_end_seconds - original.source_start_seconds) < 0.001:
                     clip.source_start_seconds = updated.clips[index - 1].source_end_seconds
             if clip.person_render_id:
-                render = self.repository.get_person_render(workspace_id, plan.task_id, clip.person_render_id)
+                render = self.repository.person_renders.get_person_render(workspace_id, plan.task_id, clip.person_render_id)
                 source_end = render.duration_seconds if render.status == 'ready' else None
             else:
                 asset = self.repository.get_asset(workspace_id, clip.asset_id)

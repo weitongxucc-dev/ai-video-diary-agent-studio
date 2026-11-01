@@ -589,7 +589,7 @@ def _complete_presenter_fixture(case, context=None):
     from app.avatar_lipsync import avatar_lipsync_cache_key
     from app.creation_execution import presenter_inputs, presenter_input_facts
     from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
-    from app.production import PersonRender
+    from app.creation.person_renders import PersonRender
     from app.task_runtime import TaskRuntime, JobResult
     task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
     script = case.repo.script_records.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
@@ -597,9 +597,9 @@ def _complete_presenter_fixture(case, context=None):
     segment, request = presenter_inputs(case.repo, task, script, plan, {"fast": "fixture-avatar"})[0]
     input_facts = presenter_input_facts(request)
     cache = avatar_lipsync_cache_key(request, input_facts=input_facts)
-    render = case.repo.create_person_render(PersonRender("person-render", WORKSPACE, task.id, "person", "v1",
+    render = case.repo.person_renders.create_person_render(PersonRender("person-render", WORKSPACE, task.id, "person", "v1",
         "voice", "v1", segment.id, "workspace://person.mp4", "fixture-avatar", "natural", "neutral", cache, "pending"))
-    case.repo.claim_person_render(WORKSPACE, task.id, render.id)
+    case.repo.person_renders.claim_person_render(WORKSPACE, task.id, render.id)
     output = case.tmp_path / "synthetic-person.mp4"
     if context is not None:
         context.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'synthetic-provider-output')",
@@ -617,10 +617,10 @@ def _complete_presenter_fixture(case, context=None):
             {"language": segment.language, "presenter_input_facts": input_facts}, "succeeded", datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
         return JobResult((logical_ref,))
     assert TaskRuntime(case.repo.job_records).run(inner, work).status == "succeeded"
-    case.repo.finish_person_render(WORKSPACE, task.id, render.id, status="ready", output_path=str(output),
+    case.repo.person_renders.finish_person_render(WORKSPACE, task.id, render.id, status="ready", output_path=str(output),
         duration_seconds=1, alignment_evidence="synthetic timing; no media decoding")
-    case.repo.bind_person_render_artifact(WORKSPACE, task.id, render.id, logical_ref)
-    return case.repo.get_person_render(WORKSPACE, task.id, render.id)
+    case.repo.person_renders.bind_person_render_artifact(WORKSPACE, task.id, render.id, logical_ref)
+    return case.repo.person_renders.get_person_render(WORKSPACE, task.id, render.id)
 
 
 def test_presenter_unit_executes_with_registered_child_and_queues_metadata_after_release(presenter_permit_case):
@@ -763,7 +763,8 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
     from app.creation_execution import CreationStageGrantContext, presenter_inputs, presenter_input_facts, current_presenter_render, montage_waiting_for_confirmation, submit_creation_stage
     from app.materials.contracts import MediaAuthorityError
     from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TransformRun
-    from app.production import PersonRender, utc_now
+    from app.creation.person_renders import PersonRender
+    from app.production import utc_now
     from app.schemas import CreationTaskPersonRenderRequest
     from app.task_runtime import JobFailure, JobResult
     from app.video_jobs import VideoJobRunner
@@ -811,7 +812,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
             namespace["_generate_creation_task_person_render_record"](WORKSPACE, case.task.id,
                 CreationTaskPersonRenderRequest(narration_segment_id="segment", person_profile_id="person", person_version="v1"))
         assert retired.value.status_code == 409
-        assert case.repo.list_person_renders(WORKSPACE, case.task.id) == []
+        assert case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id) == []
         request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
         assert namespace["_creation_execution_status"](WORKSPACE, case.task.id)["current_stage"] == "person_render"
         grant = scheduler.pick_and_grant()
@@ -820,7 +821,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         scheduler.assert_released(grant)
         assert scheduler._get(request_id).state == "done"
         assert namespace["_creation_execution_status"](WORKSPACE, case.task.id)["current_stage"] == "montage_plan"
-        rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
+        rendered = case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id)
         assert len(rendered) == 1 and rendered[0].status == "ready"
         assert store.resolve_file(rendered[0].artifact_ref).read_bytes() == b"synthetic-person"
         assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == "queued"
@@ -961,7 +962,7 @@ def test_presenter_row_owner_executes_after_reader_release_and_reuses_original_r
         assert scheduler._get(request_id).resources == original.resources
         assert scheduler._get(request_id).state == 'done'
         assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == 'queued'
-        assert len(case.repo.list_person_renders(WORKSPACE, case.task.id)) == 1
+        assert len(case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id)) == 1
         scheduler.assert_released(grant)
     finally:
         if grant is not None and scheduler._get(grant.request_id).state in {'granted', 'yield_requested'}:
@@ -1012,7 +1013,7 @@ def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(pre
         assert next_units == [None] and injected and boundary == [request_id]
         assert scheduler._get(request_id).state != 'done'
         assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == 'interrupted'
-        rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
+        rendered = case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id)
         assert len(rendered) == 1 and rendered[0].status == 'ready'
         assert not [event for event in case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)
             if event.job_id == case.job.id and event.event_type == 'creation_execution_stage'

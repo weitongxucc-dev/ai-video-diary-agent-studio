@@ -720,7 +720,7 @@ class RenderStageUseCase:
                         segment = segments_by_id.get(cue.narration_segment_id) if cue and cue.narration_segment_id else None
                         if segment is None:
                             return False
-                        person_render = self.repository.get_person_render(workspace_id, task_id, clip.person_render_id)
+                        person_render = self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)
                         if (person_render.status != "ready"
                                 or person_render.narration_segment_id != segment.id
                                 or not self.person_preview.render_matches_narration(person_render, segment, person_transforms)):

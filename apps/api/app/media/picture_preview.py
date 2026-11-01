@@ -12,7 +12,8 @@ from app.linked_timeline import remove_time_ranges
 from app.local_portrait import LocalPortrait
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.materials.contracts import MediaAuthorityError
-from app.production import PersonRender, material_allows_footage
+from app.creation.person_renders import PersonRender
+from app.production import material_allows_footage
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.contracts import SubtitleTrack, SubtitleCue
 from app.task_audio import TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
@@ -270,7 +271,7 @@ class PicturePreviewRenderer:
                     if item.get('kind')=='image' else item for item in original_graphics]
             for clip in plan.clips:
                 if clip.person_render_id:
-                    render = self.repository.get_person_render(
+                    render = self.repository.person_renders.get_person_render(
                         workspace_id, plan.task_id, clip.person_render_id
                     )
                     output = self.person_path(render)
@@ -398,7 +399,7 @@ class PicturePreviewRenderer:
                 asset = self.repository.get_asset(workspace_id, clip.asset_id)
                 if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False, visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                     raise PermissionError('当前成员不能读取镜头素材')
-            path = self.person_path(self.repository.get_person_render(workspace_id, task_id, clip.person_render_id)) if clip.person_render_id else self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            path = self.person_path(self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)) if clip.person_render_id else self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
             if path is None:
                 raise ValueError('当前人物片段没有有效媒体')
             remember(clip.source_path, path)

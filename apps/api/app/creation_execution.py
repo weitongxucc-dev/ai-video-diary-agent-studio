@@ -306,7 +306,7 @@ def presenter_input_facts(request):
 def current_presenter_render(repository, task, segment, request, resolve_output):
     input_facts = presenter_input_facts(request)
     key = avatar_lipsync_cache_key(request, input_facts=input_facts)
-    render = next((item for item in repository.list_person_renders(task.workspace_id, task.id)
+    render = next((item for item in repository.person_renders.list_person_renders(task.workspace_id, task.id)
                    if item.cache_key == key and item.narration_segment_id == segment.id
                    and item.person_profile_id == request.person.id and item.person_version == request.person.version
                    and item.voice_profile_id == segment.voice_profile_id and item.voice_version == segment.voice_version
@@ -2864,7 +2864,7 @@ class CreationJobUnitExecutor:
                 raise ValueError('制作阶段未产生匹配当前文案的可用结果')
             original = CreationExecutionActor.from_event(job.workspace_id, self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start').payload)
             next_intent = next_creation_intent(self.repository, scheduler, job)
-            output = task.narration_cache_key if stage == 'narration' else ','.join((item.id for item in self.repository.list_person_renders(task.workspace_id, task.id) if item.status == 'ready')) if stage == 'person_render' else task.montage_plan_id
+            output = task.narration_cache_key if stage == 'narration' else ','.join((item.id for item in self.repository.person_renders.list_person_renders(task.workspace_id, task.id) if item.status == 'ready')) if stage == 'person_render' else task.montage_plan_id
             def checkpoint(conn, current):
                 if stage in {'montage_plan', 'person_render'} and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
                     raise PermissionError('原制作检查点提交前授权或来源已变化')
