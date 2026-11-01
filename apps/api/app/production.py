@@ -4556,44 +4556,8 @@ class ProductionRepository:
 
 
 
-    def goal_completed_source_rows(self, workspace_id, task_id, conversation_id, member_id):
-        with self._connect() as conn:
-            return conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
-                "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
-                "AND j.status='succeeded' AND e.event_type='task_media_submitted' "
-                "AND json_extract(e.payload_json,'$.result_kind')='graphic_source' "
-                "AND json_extract(e.payload_json,'$.operation') IN ('media_script_preview','media_script_tool_preview') "
-                "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
-                "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at,j.id",
-                (workspace_id, task_id, conversation_id, member_id)).fetchall()
 
-    def goal_pending_preview_rows(self, workspace_id, task_id, timeline_version_id, conversation_id, member_id):
-        with self._connect() as conn:
-            proposals = conn.execute("SELECT p.id,i.constraints_json FROM edit_proposals p JOIN edit_intents i "
-                "ON i.workspace_id=p.workspace_id AND i.id=p.intent_id WHERE p.workspace_id=? AND p.task_id=? "
-                "AND p.status='proposed' AND json_extract(p.operation_json,'$.payload.base_version_id') IS ? "
-                "AND json_extract(i.constraints_json,'$.request_source.conversation_id')=? "
-                "AND json_extract(i.constraints_json,'$.request_source.member_id')=? ORDER BY p.created_at",
-                (workspace_id, task_id, timeline_version_id, conversation_id, member_id)).fetchall()
-            jobs = conn.execute("SELECT j.id,e.payload_json FROM job_runs j JOIN task_events e "
-                "ON e.workspace_id=j.workspace_id AND e.job_id=j.id WHERE j.workspace_id=? AND j.task_id=? "
-                "AND e.event_type='task_media_submitted' AND j.status IN ('queued','running','interrupted') "
-                "AND json_extract(e.payload_json,'$.result_kind')='edit_preview' "
-                "AND json_extract(e.payload_json,'$.arguments._typed_source.expected_timeline_version_id') IS ? "
-                "AND json_extract(e.payload_json,'$.arguments._typed_source.conversation_id')=? "
-                "AND json_extract(e.payload_json,'$.arguments._typed_source.member_id')=? ORDER BY j.created_at",
-                (workspace_id, task_id, timeline_version_id, conversation_id, member_id)).fetchall()
-        return proposals, jobs
 
-    def goal_request_effect_rows(self, workspace_id, task_id, request_id):
-        with self._connect() as conn:
-            jobs = conn.execute("SELECT 1 FROM task_events WHERE workspace_id=? AND task_id=? "
-                "AND event_type='task_media_submitted' AND json_extract(payload_json,'$.arguments._typed_source.request_id')=? LIMIT 1",
-                (workspace_id, task_id, request_id)).fetchone()
-            proposals = conn.execute("SELECT 1 FROM edit_intents WHERE workspace_id=? AND task_id=? "
-                "AND json_extract(constraints_json,'$.request_source.request_id')=? LIMIT 1",
-                (workspace_id, task_id, request_id)).fetchone()
-        return jobs, proposals
 
 
     def goal_unreleased_job_request(self, workspace_id, job_id):
@@ -4630,15 +4594,6 @@ class ProductionRepository:
                 (workspace_id, task_id, conversation_id, member_id)).fetchall()
         return rendered, located, pending, unknown
 
-    def assistant_script_tool_projection_rows(self):
-        with self._connect() as conn:
-            return conn.execute(
-                "SELECT e.* FROM task_events e JOIN job_runs j ON j.workspace_id=e.workspace_id "
-                "AND j.id=json_extract(e.payload_json,'$.registration_id') "
-                "WHERE e.event_type='assistant_script_tool_located' AND j.kind='media_script_tool_registration' "
-                "AND j.status='succeeded' AND NOT EXISTS (SELECT 1 FROM task_events done "
-                "WHERE done.id='event_assistant_script_tool_'||e.id) ORDER BY e.created_at LIMIT 32",
-            ).fetchall()
 
 
 

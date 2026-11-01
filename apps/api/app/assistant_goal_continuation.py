@@ -570,7 +570,7 @@ class GoalResultProjection:
         code = actual.get("result_status_code")
         if code in {401, 403, 409}:
             return {"status": "invalidated", "reason": "original_request_authority_or_version_rejected"}, False
-        jobs, proposals = self.production.goal_request_effect_rows(
+        jobs, proposals = self.production.execution_records.goal_request_effect_rows(
             goal["workspace_id"], goal["task_id"], event["edit_request"]["request_id"])
         return None, code == 422 and jobs is None and proposals is None
 
@@ -705,7 +705,7 @@ class GoalResultProjection:
             "requested_output": output, "input_refs": payload.get("input_refs", []), "base_version_id": start["input_facts"]["base_version_id"]}
 
     def completed_sources(self, goal, actor, artifact_store, outputs):
-        rows = self.production.goal_completed_source_rows(goal["workspace_id"], goal["task_id"], goal["conversation_id"], goal["member_id"])
+        rows = self.production.execution_records.goal_completed_source_rows(goal["workspace_id"], goal["task_id"], goal["conversation_id"], goal["member_id"])
         slots = []
         for row in rows:
             source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
@@ -714,7 +714,7 @@ class GoalResultProjection:
         return slots
 
     def pending_preview(self, goal, timeline_version_id):
-        proposals, jobs = self.production.goal_pending_preview_rows(goal["workspace_id"], goal["task_id"],
+        proposals, jobs = self.production.execution_records.goal_pending_preview_rows(goal["workspace_id"], goal["task_id"],
             timeline_version_id, goal["conversation_id"], goal["member_id"])
         for rows, status in ((proposals, "waiting_adoption"), (jobs, "waiting_result")):
             for row in rows:
@@ -1266,4 +1266,4 @@ class GoalResultProjection:
         return [{"kind": "script_tool", "id": row["id"], "workspace_id": row["workspace_id"],
             "task_id": row["task_id"], "created_at": row["created_at"],
             "source": json.loads(row["payload_json"])["source"], "located": json.loads(row["payload_json"]),
-            "event_id": f"event_assistant_script_tool_{row['id']}"} for row in self.production.assistant_script_tool_projection_rows()]
+            "event_id": f"event_assistant_script_tool_{row['id']}"} for row in self.production.execution_records.assistant_script_tool_projection_rows()]

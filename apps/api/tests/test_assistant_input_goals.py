@@ -136,8 +136,8 @@ def test_old_preview_source_and_unknown_locator_do_not_block_new_input(tmp_path)
     current={**old,"input_id":input_id,"input_turn_id":turn["id"]}
     pending=[{"id":"old-preview","constraints_json":json.dumps({"request_source":old})}]
     completed=[{"id":"old-source","payload_json":json.dumps({"arguments":{"_typed_source":old}})}]
-    production=SimpleNamespace(goal_pending_preview_rows=lambda *_:(pending,[]),
-        goal_completed_source_rows=lambda *_:completed)
+    production=SimpleNamespace(execution_records=SimpleNamespace(goal_pending_preview_rows=lambda *_:(pending,[]),
+        goal_completed_source_rows=lambda *_:completed))
     owner=GoalResultProjection(production,repo)
     assert owner.pending_preview(goal,"v1") is None
     assert owner.completed_sources(goal,None,None,None) == []
