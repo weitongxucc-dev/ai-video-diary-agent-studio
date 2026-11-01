@@ -524,3 +524,97 @@ def test_job_request_reads_keep_distinct_state_filters_rows_and_materialized_pen
     assert [value.id for value in pending] == decoded == [interrupted.id, queued.id]
     assert len(connections) > 1 and active == []
     assert not any(sql.strip().upper().startswith('BEGIN') for conn in connections for sql in conn.statements)
+
+
+def test_segment_unit_receipts_block_unknown_resume_and_keep_caller_atomicity(tmp_path, monkeypatch):
+    import socket
+    import subprocess
+    import threading
+    import wave
+    from PIL import Image
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
+    from app.device_scheduler import RecoveryBlocked
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('segment unit metadata forbids execution, media and networking')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn'):
+        monkeypatch.setattr(main, name, forbidden)
+    repo = ProductionRepository(tmp_path / 'segment-unit.sqlite3', tmp_path / 'library',
+        duration_reader=forbidden, scene_reader=forbidden)
+    plan = CreationPlan('unit-plan', 'metadata-ws', 'fixed goal', 'fixed plan', 1, 'zh-CN', '9:16', 4,
+        [], [], None, [], 0, 0, 'metadata', [], [], [], 'unit-fixture')
+    task = CreationTask('unit-task', 'metadata-ws', plan.id, 'fixed task', 'knowledge_explanation')
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='metadata-member')
+    job = repo.job_records.create_job_run(JobRun('original-unit-job', task.workspace_id, task.id,
+        'creation_task_segment_revision', 'original-unit-request', 'a' * 64))
+    identity = SimpleNamespace(workspace_id=task.workspace_id, owner_id=job.id,
+        request_id='metadata-unit-request', generation=1, unit_key='metadata-unit')
+    units = repo.segment_units
+    started = units.start_segment_unit(identity)
+    assert started.id == job.id and started.status == 'running' and started.attempt == 1
+    assert units.unsettled_segment_units(task.workspace_id, job.id)
+    repo.job_records.finish_job_run(task.workspace_id, job.id, status='failed',
+        failure_reason='declared interrupted work', impact='original output retained', repair_action='review original usage')
+    failed = repo.job_records.get_job_run(task.workspace_id, job.id)
+    with pytest.raises(RecoveryBlocked, match='用量未知'):
+        units.start_segment_unit(identity)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        with pytest.raises(ValueError, match='用量未核对'):
+            units.resume_segment_job(task.workspace_id, job.id, connection=conn)
+        assert conn.in_transaction
+        conn.rollback()
+    assert repo.job_records.get_job_run(task.workspace_id, job.id) == failed
+    append = repo.execution_records.append_task_event
+    def checkpoint_append_then_fail(event, **kwargs):
+        value = append(event, **kwargs)
+        if event.event_type == 'segment_execution_checkpoint':
+            raise RuntimeError('segment checkpoint receipt tail')
+        return value
+    with monkeypatch.context() as patch:
+        patch.setattr(repo.execution_records, 'append_task_event', checkpoint_append_then_fail)
+        with repo._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            units.settle_segment_unit(identity, elapsed_seconds=0.0, output_bytes=0, connection=conn)
+            assert units.resume_segment_job(task.workspace_id, job.id, connection=conn) is None
+            assert repo.job_records.get_job_run(task.workspace_id, job.id, connection=conn).status == 'interrupted'
+            assert repo.job_records.get_job_run(task.workspace_id, job.id) == failed
+            assert units.unsettled_segment_units(task.workspace_id, job.id)
+            with pytest.raises(RuntimeError, match='segment checkpoint receipt tail'):
+                units.checkpoint_segment_unit(identity, status='cancelled', connection=conn, reason='metadata cancellation')
+            assert conn.in_transaction
+            assert repo.job_records.get_job_run(task.workspace_id, job.id, connection=conn).status == 'cancelled'
+            assert repo.execution_records.get_task_event(task.workspace_id,
+                f'event_{job.id}_unit_checkpoint_1', connection=conn).payload['status'] == 'cancelled'
+            conn.rollback()
+    assert repo.job_records.get_job_run(task.workspace_id, job.id) == failed
+    assert units.unsettled_segment_units(task.workspace_id, job.id)
+    with repo._connect() as conn:
+        for suffix in ('unit_settle_1', 'unit_checkpoint_1'):
+            assert conn.execute('SELECT id FROM task_events WHERE id=?', (f'event_{job.id}_{suffix}',)).fetchone() is None
+        assert conn.execute('SELECT id FROM task_events WHERE id=?', (f'event_{job.id}_unit_start_1',)).fetchone()
+        conn.execute('BEGIN IMMEDIATE')
+        units.settle_segment_unit(identity, elapsed_seconds=0.0, output_bytes=0, connection=conn)
+        assert units.resume_segment_job(task.workspace_id, job.id, connection=conn) is None
+        assert conn.in_transaction
+    resumed = repo.job_records.get_job_run(task.workspace_id, job.id)
+    assert resumed.id == job.id and resumed.status == 'interrupted' and resumed.attempt == failed.attempt
+    assert resumed.failure_reason is None and resumed.finished_at is None
+    assert not units.unsettled_segment_units(task.workspace_id, job.id)
+    usage = repo.execution_records.get_task_event(task.workspace_id, f'event_{job.id}_unit_settle_1').payload
+    assert usage['usage_id'] == 'metadata-unit-request:1' and usage['permit_generation'] == 1
+    assert usage['elapsed_seconds'] == 0.0 and usage['output_bytes'] == 0
+    assert usage['usage_source'] == 'local_execution_measurement'
+    with repo._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM job_runs WHERE workspace_id=? AND task_id=?',
+            (task.workspace_id, task.id)).fetchone()[0] == 1

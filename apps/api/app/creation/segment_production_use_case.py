@@ -246,7 +246,7 @@ class SegmentProductionUseCase:
         requests = self.repository.job_records.list_creation_job_request_states(workspace_id, job.id)
         result = self.repository.segment_revision_result(workspace_id, job.id)
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
-        if self.repository.unsettled_segment_units(workspace_id, job.id):
+        if self.repository.segment_units.unsettled_segment_units(workspace_id, job.id):
             action, reason = 'query_original', 'original_unit_usage_unknown'
         elif job.status == 'queued' and not requests or (job.status in {'failed', 'cancelled'}
                 and len([item for item in requests if item['state'] in {'failed', 'cancelled'}]) == 1):
@@ -539,7 +539,7 @@ class SegmentProductionUseCase:
             with self.repository._connect() as conn:
                 rows = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
                     "AND event_type='task_execution_unit_settled'",(workspace_id,job_id)).fetchall()
-            usage = {'settled':not self.repository.unsettled_segment_units(workspace_id,job_id),
+            usage = {'settled':not self.repository.segment_units.unsettled_segment_units(workspace_id,job_id),
                 'used_seconds':sum(json.loads(row['payload_json'])['elapsed_seconds'] for row in rows),
                 'used_output_bytes':sum(json.loads(row['payload_json'])['output_bytes'] for row in rows),
                 'remaining_budget':None}
@@ -855,7 +855,7 @@ class SegmentProductionUseCase:
         def stopped(conn, current):
             job = self.repository.job_records.get_job_run(current.workspace_id,current.owner_id,connection=conn)
             if job.status == 'running':
-                return self.repository.checkpoint_segment_unit(current,status='interrupted',reason=reason,connection=conn)
+                return self.repository.segment_units.checkpoint_segment_unit(current,status='interrupted',reason=reason,connection=conn)
         scheduler.record_owner_stop(grant,owner_database_path=self.repository.database_path,owner_write=stopped)
 
     def resume_unit(self,conn,request,actor,owner,*,write_guard=None):
@@ -864,7 +864,7 @@ class SegmentProductionUseCase:
             raise PermissionError('不能恢复其他成员的原段落执行')
         if write_guard is not None:
             write_guard(conn)
-        self.repository.resume_segment_job(request.workspace_id,request.owner_id,connection=conn)
+        self.repository.segment_units.resume_segment_job(request.workspace_id,request.owner_id,connection=conn)
         return self.verify_submission(SubmissionIntent(request.workspace_id,request.owner_type,request.owner_id,
             request.input_digest,request.unit_key,request.policy),actor,owner,connection=conn)
 
@@ -958,7 +958,7 @@ class SegmentProductionUseCase:
             owner = owner.registrations['creation_job'].owner
         if self.repository.job_records.get_job_run(grant.workspace_id,grant.owner_id).status=='cancelled':
             scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,cancelled=True,
-                checkpoint_write=lambda conn,current:self.repository.checkpoint_segment_unit(current,
+                checkpoint_write=lambda conn,current:self.repository.segment_units.checkpoint_segment_unit(current,
                     status='cancelled',reason='user_cancelled',connection=conn))
             return
         scheduler.assert_grant(grant)
@@ -974,7 +974,7 @@ class SegmentProductionUseCase:
         executor.register_cancellation(grant.request_id,cancellation)
         context = CreationStageGrantContext(scheduler,grant,started+resources['timeout_seconds'],
             resources['max_output_bytes'],resources['threads'],cancellation,started_monotonic=started,narration_output_usage=[0])
-        job = self.repository.start_segment_unit(grant)
+        job = self.repository.segment_units.start_segment_unit(grant)
         event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
         actor = self.actor_from_event(job.workspace_id,event)
         task = self.require_actor(job.workspace_id,job.task_id,actor)
@@ -994,7 +994,7 @@ class SegmentProductionUseCase:
         def settle(conn,current):
             if context.narration_output_usage[0] is None:
                 raise RecoveryBlocked('局部配音输出消耗未知，保留原开始回执')
-            self.repository.settle_segment_unit(current,elapsed_seconds=max(0,time.monotonic()-started),
+            self.repository.segment_units.settle_segment_unit(current,elapsed_seconds=max(0,time.monotonic()-started),
                 output_bytes=max(measured_bytes,retained_bytes,context.narration_output_usage[0]),connection=conn)
 
         def next_unit(conn,current):
@@ -1027,7 +1027,7 @@ class SegmentProductionUseCase:
                         task_id=job.task_id,job_id=job.id,event_type='segment_revision_audio',payload={
                             'audio_cache_key':audio.cache_key,'segment':asdict(segment)}),connection=conn)
                     settle(conn,current)
-                    return self.repository.checkpoint_segment_unit(current,status='queued',connection=conn,
+                    return self.repository.segment_units.checkpoint_segment_unit(current,status='queued',connection=conn,
                         reason='waiting_for_user' if video_preparation.event_type in {'segment_visual_decision_required', 'segment_visual_planning_conflict'} else None,
                         payload={'audio_cache_key':audio.cache_key})
                 measure_retained()
@@ -1118,7 +1118,7 @@ class SegmentProductionUseCase:
                     expected_version_id=current_context['base_version_id'],expected_segment_version=current_context['segment_version'],
                     segment=segment,timeline_change=timeline_change,connection=conn)
                 settle(conn,current)
-                return self.repository.checkpoint_segment_unit(current,status='succeeded' if command else 'queued',
+                return self.repository.segment_units.checkpoint_segment_unit(current,status='succeeded' if command else 'queued',
                     connection=conn,payload={'publication_ref':publication.id})
             if command is None:
                 pcm_preparation=owner.prepare_pcm_sources(job)
@@ -1149,14 +1149,14 @@ class SegmentProductionUseCase:
             reason = 'application_quit' if quitting else 'resource_pressure' if pressure else str(exc)
             def stop(conn,current):
                 settle(conn,current)
-                return self.repository.checkpoint_segment_unit(current,status='interrupted' if quitting or pressure else 'failed',
+                return self.repository.segment_units.checkpoint_segment_unit(current,status='interrupted' if quitting or pressure else 'failed',
                     reason=reason or type(exc).__name__,connection=conn)
             cancelled = self.repository.job_records.get_job_run(job.workspace_id,job.id).status=='cancelled'
             measure_retained()
             if cancelled:
                 def cancel_write(conn,current):
                     settle(conn,current)
-                    return self.repository.checkpoint_segment_unit(current,status='cancelled',reason='user_cancelled',connection=conn)
+                    return self.repository.segment_units.checkpoint_segment_unit(current,status='cancelled',reason='user_cancelled',connection=conn)
                 scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=cancel_write,cancelled=True)
             elif quitting or pressure:
