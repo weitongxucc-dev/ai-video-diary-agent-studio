@@ -4180,7 +4180,7 @@ def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
     with pytest.raises(ValueError,match='变化'):
         case.call('native_task_file',{**args,'expected_sha256':'0'*64},'bad_cas')
     bad = case.repo.job_records.get_job_run_by_idempotency_key('local',f'native:{case.task_id}:{case.actor.member_id}:bad_cas')
-    assert bad.status=='failed' and case.repo.native_operation_result('local',bad.id)['submission_effect']=='not_submitted'
+    assert bad.status=='failed' and case.repo.native_execution_records.native_operation_result('local',bad.id)['submission_effect']=='not_submitted'
     root = case.native.task_root(case.actor,case.task_id)
     (root/'work'/'image.txt').write_bytes(b'\x89PNG\r\n\x1a\n'+b'\x00'*30)
     with pytest.raises(PermissionError,match='媒体'):
@@ -4200,7 +4200,7 @@ def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
     assert artifact['sha256']==changed['sha256'] and artifact['adopted'] is False
     assert case.native.artifact_path(case.actor,case.task_id,artifact['artifact_id']).read_bytes()==b'{"v":2}'
     # A started operation with no result cannot mutate again on a repeated request.
-    pending,_ = case.repo.create_native_operation(case.actor,case.origin,'unknown_write','native_task_file',
+    pending,_ = case.repo.native_execution_records.create_native_operation(case.actor,case.origin,'unknown_write','native_task_file',
         {**args,'path':'/task/work/unknown'}, {},write_guard=lambda conn:None)
     case.repo.job_records.claim_job_run('local',pending.id)
     with pytest.raises(RecoveryBlocked):
@@ -4222,7 +4222,7 @@ def test_native_queued_script_change_never_launches_and_origin_cancel_drains_all
     result = case.call('read_task_command',{'job_id':submitted['job_id']})
     assert result['status']=='failed' and result['process_state']=='not_started' and result['release_state']=='released'
     for index in range(105):
-        case.repo.create_native_operation(case.actor,case.origin,f'cancel_{index}','submit_task_command',
+        case.repo.native_execution_records.create_native_operation(case.actor,case.origin,f'cancel_{index}','submit_task_command',
             {'request_id':f'cancel_{index}','command':'not launched'}, {},write_guard=lambda conn:None)
     settled=case.native.cancel_origin(case.actor,{'task_id':case.task_id,'turn_id':'turn_native','session_id':'session_native'},
         case.runtime,deadline_monotonic=time.monotonic()+10)
@@ -7134,3 +7134,100 @@ def test_restore_receipt_metadata_tail_unknown_then_applied_replay_wins(tmp_path
     assert replay.operation==operation and replay.restore_request==receipt
     assert repo.timeline_records.list_timeline_versions(task.workspace_id,task.id)==before
     assert repo.job_records.list_job_runs(task.workspace_id,task.id)==[]
+
+
+def test_native_execution_records_keep_requests_transactions_and_receipt_facts(tmp_path, monkeypatch):
+    from app.creation.contracts import ArtifactRecord
+
+    repo, task_id, _script_id, _digest = _seed(tmp_path, voice=False)
+    actor = CreationExecutionActor('workspace_a', 'native-metadata-owner')
+    task = repo.task_records.get_creation_task(actor.workspace_id, task_id)
+    task.owner_user_id = actor.member_id
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task), default=str), actor.workspace_id, task_id))
+    records = repo.native_execution_records
+    origin = {'task_id': task_id, 'assistant_turn_id': 'native-turn', 'session_id': 'native-session'}
+    guards = []
+    def guard(conn):
+        assert conn.in_transaction
+        guards.append(conn)
+    def create(arguments):
+        return records.create_native_operation(actor, origin, 'original-request', 'submit_task_command',
+            arguments, {}, write_guard=guard)
+    job, started = create({'command': 'metadata 声明'})
+    replay, replay_started = create({'command': 'metadata 声明'})
+    assert replay.id == job.id and replay_started.id == started.id and len(guards) == 2
+    with pytest.raises(ValueError):
+        create({'command': 'different declaration'})
+    assert len(guards) == 3
+    assert records.native_operation_result(actor.workspace_id, job.id) is None
+    outputs = [{'path': '/task/work/first.json', 'sha256': 'a' * 64, 'size_bytes': 1},
+        {'path': '/task/work/second.json', 'sha256': 'b' * 64, 'size_bytes': 2}]
+    result = {'work_outputs': outputs, 'artifacts': [], 'release_state': 'unknown'}
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        event_id = records.complete_native_operation(job, result, status='succeeded', connection=conn)
+        assert conn.in_transaction
+        assert records.native_operation_result(actor.workspace_id, job.id, connection=conn) == {
+            'artifacts': [], 'release_state': 'unknown'}
+        assert records.native_operation_result(actor.workspace_id, job.id) is None
+        assert repo.job_records.get_job_run(actor.workspace_id, job.id, connection=conn).status == 'succeeded'
+        assert repo.job_records.get_job_run(actor.workspace_id, job.id).status == 'queued'
+        conn.rollback()
+    assert records.native_operation_result(actor.workspace_id, job.id) is None
+    assert records.native_output_window(actor.workspace_id, job.id)['items'] == []
+    finish = repo.job_records.finish_job_run
+    def finish_then_fail(*args, **kwargs):
+        finish(*args, **kwargs)
+        raise RuntimeError('native metadata finish tail')
+    with monkeypatch.context() as patch:
+        patch.setattr(repo.job_records, 'finish_job_run', finish_then_fail)
+        with pytest.raises(RuntimeError, match='native metadata finish tail'):
+            records.complete_native_operation(job, result, status='succeeded')
+    restored = repo.job_records.get_job_run(actor.workspace_id, job.id)
+    assert restored.status == 'queued' and restored.attempt == 0
+    assert records.native_operation_result(actor.workspace_id, job.id) is None
+    assert records.native_output_for_path(actor.workspace_id, job.id, outputs[0]['path']) is None
+    assert records.complete_native_operation(job, result, status='succeeded') == event_id
+    assert records.native_output_window(actor.workspace_id, job.id, limit=1) == {
+        'items': outputs[:1], 'total_count': 2, 'truncated': True}
+    assert records.native_output_for_path(actor.workspace_id, job.id, outputs[1]['path']) == outputs[1]
+    assert records.native_operation_result('other-workspace', job.id) is None
+    assert records.native_output_window('other-workspace', job.id)['total_count'] == 0
+    jobs, count = records.list_native_jobs(actor.workspace_id, task_id, turn_id='native-turn',
+        session_id='native-session', started_only=True, unreleased_only=True)
+    assert count == 1 and [item.id for item in jobs] == [job.id]
+    artifact = ArtifactRecord(id='native-metadata-artifact', workspace_id=actor.workspace_id,
+        task_id=task_id, kind='native_document', logical_ref=f'artifacts/{task_id}/metadata.json',
+        sha256='c' * 64, size_bytes=3, producer_job_id=job.id, input_refs=[])
+    repo.execution_records.create_artifact_record(artifact)
+    assert records.find_task_artifact_reference(actor.workspace_id, task_id, artifact.logical_ref) == artifact
+    assert records.find_task_artifact_reference('other-workspace', task_id, artifact.logical_ref) is None
+    available = records.native_available_inputs(actor.workspace_id, task_id)
+    assert [item['source_ref'] for item in available['items']] == [artifact.logical_ref]
+    assert available['total_count'] == 1
+    for _ in range(2):
+        records.record_native_input(actor, origin, 'metadata.json', {'source_ref': artifact.logical_ref}, write_guard=guard)
+    assert len(guards) == 5
+    grant = SimpleNamespace(workspace_id=actor.workspace_id, owner_id=job.id,
+        request_id='retained-metadata-unit', generation=2)
+    usage_id = f'event_{job.id}_native_usage_2'
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        records.settle_native_execution(grant, elapsed_seconds=1, output_bytes=None, connection=conn)
+        assert conn.in_transaction
+        with repo._connect() as reader:
+            assert reader.execute('SELECT id FROM task_events WHERE id=?', (usage_id,)).fetchone() is None
+        conn.rollback()
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        records.settle_native_execution(grant, elapsed_seconds=1, output_bytes=None, connection=conn)
+    with repo._connect() as conn:
+        usage = json.loads(conn.execute('SELECT payload_json FROM task_events WHERE id=?', (usage_id,)).fetchone()[0])
+        assert conn.execute("SELECT count(*) FROM task_events WHERE event_type='native_input_mapped'").fetchone()[0] == 1
+    assert usage['output_bytes'] is None and usage['output_coverage'] == 'unknown'
+    assert usage['usage_source'] == 'local_retained_output_measurement'
+    records.mark_native_released(job)
+    assert records.native_operation_result(actor.workspace_id, job.id)['release_state'] == 'released'
+    assert records.list_native_jobs(actor.workspace_id, task_id, unreleased_only=True) == ([], 0)

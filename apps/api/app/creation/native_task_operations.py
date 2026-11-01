@@ -140,7 +140,7 @@ class NativeTaskOperations:
             inputs = self.map_inputs(root,arguments.get('input_refs',[]),actor,origin,write_guard)
             return {'task_id':task_id,'root':'/task','work':'/task/work','outputs':'/task/outputs','inputs':inputs,
                 'tools':self.tool_facts(),
-                'available_inputs':self.repository.native_available_inputs(actor.workspace_id,task_id,
+                'available_inputs':self.repository.native_execution_records.native_available_inputs(actor.workspace_id,task_id,
                     offset=arguments.get('available_offset',0),limit=arguments.get('available_limit',30)),
                 'capabilities':{'max_read_bytes':READ_BYTES,'max_log_page_bytes':READ_BYTES,'max_editable_file_bytes':EDIT_BYTES,
                     'max_scan_bytes':SCAN_BYTES,'shell_absolute_virtual_paths':False},
@@ -166,7 +166,7 @@ class NativeTaskOperations:
             return self._map_inputs(root,inputs,actor,origin,write_guard)
 
     def require_files_released(self,actor,task_id):
-        _jobs,total = self.repository.list_native_jobs(actor.workspace_id,task_id,limit=1,unreleased_only=True,started_only=True)
+        _jobs,total = self.repository.native_execution_records.list_native_jobs(actor.workspace_id,task_id,limit=1,unreleased_only=True,started_only=True)
         if total:
             raise RecoveryBlocked('原通用进程尚未确认释放，不能改写任务文件或输入映射')
 
@@ -177,7 +177,7 @@ class NativeTaskOperations:
             name,reference = item['name'],item['source_ref']
             if Path(name).name!=name or name in {'.','..'} or '\\' in name:
                 raise ValueError('输入名必须是一个真实文件名')
-            record = self.repository.find_task_artifact_reference(actor.workspace_id,origin['task_id'],reference)
+            record = self.repository.native_execution_records.find_task_artifact_reference(actor.workspace_id,origin['task_id'],reference)
             if record is not None:
                 path = self.store.resolve_file(record.logical_ref)
                 sha = record.sha256
@@ -186,7 +186,7 @@ class NativeTaskOperations:
                 if authorization is None:
                     raise PermissionError('原任务尚未核实素材读取范围')
                 path = self.repository.resolve_workspace_media_reference(actor.workspace_id,reference,require_registered=True)
-                allowed = self.repository.task_asset_for_path(actor.workspace_id,str(path),authorization.resource_scope.get('assets',[]))
+                allowed = self.repository.native_execution_records.task_asset_for_path(actor.workspace_id,str(path),authorization.resource_scope.get('assets',[]))
                 if not allowed:
                     raise PermissionError('输入文件不在原任务授权素材范围')
                 sha = None
@@ -195,7 +195,7 @@ class NativeTaskOperations:
                 'file_revision':[stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]}
             if name in catalog and catalog[name]!=entry:
                 raise ValueError('输入别名已绑定其他文件或版本')
-            self.repository.record_native_input(actor,origin,name,entry,write_guard=write_guard)
+            self.repository.native_execution_records.record_native_input(actor,origin,name,entry,write_guard=write_guard)
             target = root/'inputs'/name
             if target.exists() or target.is_symlink():
                 if not target.is_symlink() or target.resolve()!=path.resolve():
@@ -217,7 +217,7 @@ class NativeTaskOperations:
         if action in {'write','mkdir'} and call_id:
             original = self.find_original(actor,origin,call_id,'native_task_file',arguments)
             if original is not None:
-                result = self.repository.native_operation_result(actor.workspace_id,original.id)
+                result = self.repository.native_execution_records.native_operation_result(actor.workspace_id,original.id)
                 if original.status=='succeeded' and result is not None:
                     return result
                 if result is not None:
@@ -273,7 +273,7 @@ class NativeTaskOperations:
                 'file_revision':{'size_bytes':size,'mtime_ns':path.stat().st_mtime_ns}}
         if not call_id:
             raise ValueError('文件写入缺少宿主调用身份')
-        job,event = self.repository.create_native_operation(actor,origin,call_id,'native_task_file',arguments,{},write_guard=write_guard)
+        job,event = self.repository.native_execution_records.create_native_operation(actor,origin,call_id,'native_task_file',arguments,{},write_guard=write_guard)
         if job.status!='queued':
             return self.read_job(job,actor)
         mutated = False
@@ -304,11 +304,11 @@ class NativeTaskOperations:
                     result = {**output,'work_outputs':[output]}
         except Exception as exc:
             if not mutated:
-                self.repository.complete_native_operation(job,{'error':str(exc),'submission_effect':'not_submitted',
+                self.repository.native_execution_records.complete_native_operation(job,{'error':str(exc),'submission_effect':'not_submitted',
                     'process_state':'not_started','release_state':'not_acquired'},status='failed')
             raise
         result.update(job_id=job.id,process_state='not_started',release_state='not_acquired')
-        self.repository.complete_native_operation(job,result,status='succeeded')
+        self.repository.native_execution_records.complete_native_operation(job,result,status='succeeded')
         return {key:value for key,value in result.items() if key!='work_outputs'}
 
     def resources(self,root,arguments):
@@ -369,7 +369,7 @@ class NativeTaskOperations:
             inputs = json.loads(catalog.read_text()) if catalog.exists() else {}
             fixed = {**arguments,'_file_manifest':self.file_manifest(root),'_tools':self.tool_facts(),'_inputs':inputs,
                 '_input_refs':[item['source_ref'] for item in inputs.values()]}
-            job,event = self.repository.create_native_operation(actor,origin,request_id,operation,fixed,resources,write_guard=write_guard)
+            job,event = self.repository.native_execution_records.create_native_operation(actor,origin,request_id,operation,fixed,resources,write_guard=write_guard)
         if job.status=='queued':
             runtime.scheduler.submit(SubmissionIntent(actor.workspace_id,'creation_job',job.id,job.input_digest,
                 f'native_command:{job.input_digest}',SchedulePolicy()),actor)
@@ -415,7 +415,7 @@ class NativeTaskOperations:
                         break
                     messages.append(json.loads(line));next_offset=source.tell()
         job = self.repository.job_records.get_job_run(job.workspace_id,job.id)
-        result = self.repository.native_operation_result(job.workspace_id,job.id) or {}
+        result = self.repository.native_execution_records.native_operation_result(job.workspace_id,job.id) or {}
         requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
         return {'job_id':job.id,'request_id':self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload['request_id'],
             'task_id':job.task_id,'status':job.status,'stdout':''.join(item['text'] for item in messages if item['stream']=='stdout'),
@@ -424,7 +424,7 @@ class NativeTaskOperations:
             'exit_code':result.get('exit_code'),'cancelled':result.get('cancelled',False),'timed_out':result.get('timed_out',False),
             'process_state':result.get('process_state','not_started' if job.attempt==0 else 'unknown'),
             'release_state':result.get('release_state','not_acquired' if job.attempt==0 else 'unknown'),
-            'artifacts':result.get('artifacts',[]),'work_outputs':self.repository.native_output_window(job.workspace_id,job.id),
+            'artifacts':result.get('artifacts',[]),'work_outputs':self.repository.native_execution_records.native_output_window(job.workspace_id,job.id),
             'failure_reason':job.failure_reason,'repair_action':job.repair_action,'submission_effect':result.get('submission_effect'),
             'output_file_sample':result.get('output_file_sample'),
             'waiting_reason':(requests[-1]['wait_reason'] or requests[-1]['last_failure_reason']) if requests else None}
@@ -440,7 +440,7 @@ class NativeTaskOperations:
             raise PermissionError('通用命令许可不属于原作业及固定输入')
         if owner.authorization_verdict(task,actor,'task_goal',connection=connection,check_scope=connection is None)!='ready':
             raise PermissionError('原任务执行授权已失效')
-        if job.attempt>0 and job.status!='running' and self.repository.native_operation_result(job.workspace_id,job.id,connection=connection) is None:
+        if job.attempt>0 and job.status!='running' and self.repository.native_execution_records.native_operation_result(job.workspace_id,job.id,connection=connection) is None:
             raise RecoveryBlocked('原通用命令结果未知，须沿原请求对账，不自动重放')
         return VerifiedWork(job.workspace_id,'creation_job',job.id,job.input_digest,intent.unit_key,actor.member_id,
             'normal_make',event['resources'])
@@ -479,7 +479,7 @@ class NativeTaskOperations:
                 runtime.scheduler.cancel(row['id'],actor)
                 runtime.registrations['creation_job'].executor.request_cancel(row['id'])
         if job.status=='queued':
-            self.repository.complete_native_operation(job,{'cancelled':True,'process_state':'not_started','release_state':'not_acquired'},status='cancelled')
+            self.repository.native_execution_records.complete_native_operation(job,{'cancelled':True,'process_state':'not_started','release_state':'not_acquired'},status='cancelled')
 
     def tool_facts(self):
         values = {}
@@ -650,15 +650,15 @@ class NativeTaskOperations:
             result['cancelled']=True
             status='cancelled'
         def finish(conn,current):
-            self.repository.settle_native_execution(current,elapsed_seconds=result['elapsed_seconds'],
+            self.repository.native_execution_records.settle_native_execution(current,elapsed_seconds=result['elapsed_seconds'],
                 output_bytes=result.get('output_bytes',sum(item['size_bytes'] for item in result.get('work_outputs',[]))+result['published_output_bytes']),connection=conn)
-            return self.repository.complete_native_operation(job,result,status=status,connection=conn)
+            return self.repository.native_execution_records.complete_native_operation(job,result,status=status,connection=conn)
         if status=='failed':
             scheduler.fail_unit(grant,reason='native_command_failed',failure_write=finish)
         else:
             scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,checkpoint_write=finish,
                 cancelled=status=='cancelled')
-        self.repository.mark_native_released(job)
+        self.repository.native_execution_records.mark_native_released(job)
         with self._completion:
             self._completion.notify_all()
 
@@ -690,7 +690,7 @@ class NativeTaskOperations:
         cursor = None
         condition = runtime.registrations['creation_job'].owner.native_case._completion
         while True:
-            jobs,total = self.repository.list_native_jobs(actor.workspace_id,binding['task_id'],limit=100,
+            jobs,total = self.repository.native_execution_records.list_native_jobs(actor.workspace_id,binding['task_id'],limit=100,
                 turn_id=binding['turn_id'],session_id=binding.get('session_id'),unreleased_only=True,before=cursor)
             if not total and cursor is None:
                 return {'jobs':[],'total_count':0,'truncated':False,'processed_count':len(processed),'cancellation_complete':True}
@@ -707,7 +707,7 @@ class NativeTaskOperations:
             cursor = None
             with condition:
                 condition.wait(timeout=min(.5,max(0,deadline_monotonic-time.monotonic())))
-        jobs,total = self.repository.list_native_jobs(actor.workspace_id,binding['task_id'],limit=100,
+        jobs,total = self.repository.native_execution_records.list_native_jobs(actor.workspace_id,binding['task_id'],limit=100,
             turn_id=binding['turn_id'],session_id=binding.get('session_id'),unreleased_only=True)
         values = []
         for job in jobs:
@@ -717,11 +717,11 @@ class NativeTaskOperations:
 
     def list_operations(self,actor,task_id,*,offset=0,limit=30):
         self.require_actor(actor,task_id)
-        jobs,total = self.repository.list_native_jobs(actor.workspace_id,task_id,offset=offset,limit=limit)
+        jobs,total = self.repository.native_execution_records.list_native_jobs(actor.workspace_id,task_id,offset=offset,limit=limit)
         values = []
         for job in jobs:
             event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
-            result = self.repository.native_operation_result(job.workspace_id,job.id) or {}
+            result = self.repository.native_execution_records.native_operation_result(job.workspace_id,job.id) or {}
             requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
             values.append({'job_id':job.id,'request_id':event['request_id'],'operation':event['operation'],'status':job.status,
                 'process_state':result.get('process_state','not_started' if not job.attempt else 'unknown'),
@@ -756,7 +756,7 @@ class NativeTaskOperations:
         arguments=event['arguments']; values=[]
         for index,item in enumerate(arguments['files']):
             path = self.path(root,item['path'])
-            source_output = self.repository.native_output_for_path(job.workspace_id,arguments['execution_job_id'],item['path'])
+            source_output = self.repository.native_execution_records.native_output_for_path(job.workspace_id,arguments['execution_job_id'],item['path'])
             if source_output is None or source_output['sha256']!=item['expected_sha256']:
                 raise ValueError('此文件及摘要不是所指原执行记录的实际输出')
             if not path.is_file() or path.stat().st_size<=0 or path.stat().st_size>event['resources']['max_output_bytes']:
