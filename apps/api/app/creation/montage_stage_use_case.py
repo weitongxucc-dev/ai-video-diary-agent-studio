@@ -66,7 +66,7 @@ def delivery_windows_for_task(repository, task, script, segments, *, exclude_sec
                 for segment in segments if segment.duration_seconds is not None and segment.status == 'ready'}
     def section_inputs():
         for section in script.sections:
-            state = repository.stage_segment_state(task.workspace_id, task.id, section.id)
+            state = repository.section_inputs.stage_segment_state(task.workspace_id, task.id, section.id)
             window = state['montage'].get('delivery_window') if state is not None else None
             yield section, measured.get(section.id, 0), window
     return delivery_windows_from_section_inputs(plan, section_inputs(), exclude_section=exclude_section,
@@ -89,10 +89,10 @@ def montage_dependency(repository, task, *, connection):
     add(asdict(narration))
     add([asdict(asset) for asset in repository.list_assets(task.workspace_id, connection=connection)])
     count = 0
-    for section, audio in repository.iter_creation_narration_sections(current, header, connection=connection):
+    for section, audio in repository.section_inputs.iter_creation_narration_sections(current, header, connection=connection):
         if audio is None or audio.status != 'ready' or audio.audio_reference is None or audio.duration_seconds is None:
             raise ValueError('当前创作任务缺少可用的分段配音事实')
-        add([asdict(section), asdict(audio), repository.stage_segment_state(
+        add([asdict(section), asdict(audio), repository.section_inputs.stage_segment_state(
             task.workspace_id, task.id, section.id, connection=connection)])
         path = repository.resolve_authorized_narration_audio_reference(task.workspace_id, audio.audio_reference)
         info = path.stat()
@@ -236,7 +236,7 @@ class MontageStageUseCase:
             task, creation_plan, header = snapshot.task, snapshot.plan, snapshot.script_header
             narration = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key, connection=conn)
             audio = {}
-            for section, segment in self.repository.iter_creation_narration_sections(task, header, connection=conn):
+            for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):
                 audio[section.id] = {'id': segment.id, 'reference': segment.audio_reference,
                     'duration': float(segment.duration_seconds or 0)}
             selected_sections = select_presenter_sections([(key, row['duration']) for key, row in audio.items()],
@@ -244,9 +244,9 @@ class MontageStageUseCase:
             if selected_sections and creation_plan.selected_voice is None:
                 raise ValueError('露脸段落缺少当前任务已授权的人物和声音')
             requirement, windows = delivery_windows_from_section_inputs(creation_plan,
-                self.repository.iter_creation_section_planning_inputs(task, header, connection=conn))
+                self.repository.section_inputs.iter_creation_section_planning_inputs(task, header, connection=conn))
             prepared = planner.prepare_creation_inputs(
-                lambda: (section for section, _ in self.repository.iter_creation_narration_sections(task, header, connection=conn)),
+                lambda: (section for section, _ in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn)),
                 profile=profile, duration_target_seconds=creation_plan.duration_target_seconds,
                 narration_duration_seconds=narration.duration_seconds,
                 narration_segment_ids_by_section={key: row['id'] for key, row in audio.items()},
@@ -310,13 +310,13 @@ class MontageStageUseCase:
             snapshot = self.repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             task, header = snapshot.task, snapshot.script_header
             audio = {}
-            for section, segment in self.repository.iter_creation_narration_sections(task, header, connection=conn):
+            for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):
                 if segment is None or segment.status != 'ready':
                     raise ValueError('完整故事板缺少实际段落配音')
                 audio[section.id] = {'id': segment.id, 'reference': segment.audio_reference,
                     'duration': float(segment.duration_seconds)}
             requirement, windows = delivery_windows_from_section_inputs(snapshot.plan,
-                self.repository.iter_creation_section_planning_inputs(task, header, connection=conn))
+                self.repository.section_inputs.iter_creation_section_planning_inputs(task, header, connection=conn))
             windows = {window.section_id: window for window in windows}
             from fractions import Fraction
             from app.subtitle_schedule import narration_schedule
@@ -324,7 +324,7 @@ class MontageStageUseCase:
                 narration_schedule(montage.cues, montage.duration_seconds))}
             cues,clips,cursor = [],[],0.0
             for section_id in audio:
-                state = self.repository.stage_segment_state(task.workspace_id, task.id, section_id, connection=conn)
+                state = self.repository.section_inputs.stage_segment_state(task.workspace_id, task.id, section_id, connection=conn)
                 window = windows[section_id]
                 if state is not None:
                     if state['narration_reference'] != audio[section_id]['reference']:

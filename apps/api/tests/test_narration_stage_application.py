@@ -84,7 +84,7 @@ def narration_preparation(tmp_path):
         job_records=SimpleNamespace(get_job_run=lambda _ws,_job:job),execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
         creation_execution_input=lambda *_:start.payload,
         task_records=SimpleNamespace(get_creation_task=read_task),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),script_records=SimpleNamespace(get_creation_task_script=lambda *_:script),
-        effective_creation_script=lambda *_:script,
+        section_inputs=SimpleNamespace(effective_creation_script=lambda *_:script),
         resolve_creation_task_narration_inputs=lambda **_:inputs,
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
         narration_records=SimpleNamespace(get_narration_segment=lambda _ws,_task,identity:segments[identity], list_narration_segments=lambda *_:list(reversed(list(segments.values()))), save_narration_segments=no_write),
@@ -121,8 +121,8 @@ def narration_preparation(tmp_path):
         section=next(item for item in script.sections if item.id==section_id)
         return {'section':section,'audio':segments.get(use_case.segment_id(task.id,script.id,section.id))}
     repository.read_creation_execution_snapshot=read_snapshot
-    repository.iter_creation_narration_sections=section_inputs
-    repository.read_creation_section_input=selected_input
+    repository.section_inputs.iter_creation_narration_sections=section_inputs
+    repository.section_inputs.read_creation_section_input=selected_input
     repository._connect=lambda:nullcontext(SimpleNamespace(execute=lambda *_:SimpleNamespace(fetchone=lambda:
         {'resources_json':json.dumps(resources())})))
     for section in script.sections:

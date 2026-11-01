@@ -995,7 +995,7 @@ def test_section_adoption_metadata_restore_tail_rollback_and_original_request_re
     repo.job_records.claim_job_run('ws', job.id)
     change = SectionTimelineChange(repo, s.store)
     change.prepare_current('ws', task.id, 'section', s.local, s.before, job, desired_version=s.section_base)
-    dependencies = repo.section_dependency_snapshot('ws', task.id, 'section')
+    dependencies = repo.section_inputs.section_dependency_snapshot('ws', task.id, 'section')
     with pytest.raises(ValueError, match='实际音画、字幕或来源依赖已变化'):
         repo.section_adoption.restore_script_section('ws', task.id, history=operation.payload,
             expected_dependencies={}, redo=False, changed_version_id=published.id,
@@ -1046,3 +1046,100 @@ def test_section_adoption_metadata_restore_tail_rollback_and_original_request_re
     assert restore.read_request('ws', task.id, 'metadata-unknown', s.actor)['status'] == 'result_unknown'
     with repo._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0] == before_jobs
+
+
+def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_path):
+    from app.creation.contracts import TaskEvent
+    from app.creation.section_inputs import SectionInputReader
+
+    s = _section_adoption_metadata_state(tmp_path)
+    repo, task_id = s.repo, s.task.id
+    reader = repo.section_inputs
+    assert isinstance(reader, SectionInputReader)
+    with repo._connect() as idle:
+        statements = []
+        idle.set_trace_callback(statements.append)
+        assert reader.stage_segment_state('ws', task_id, 'section', connection=idle)['segment_version'] == 'section-original'
+        assert reader.stage_section_version('ws', task_id, 'section', connection=idle) == 'section-original'
+        assert not idle.in_transaction and statements == []
+        with pytest.raises(ValueError, match='已开启的事务'):
+            reader.iter_creation_narration_sections(s.task, SimpleNamespace(), connection=idle).__next__()
+    with repo._connect() as conn:
+        before = reader.section_dependency_snapshot('ws', task_id, 'section', connection=conn)
+        assert conn.in_transaction
+        task = repo.task_records.get_creation_task('ws', task_id, connection=conn)
+        header, _ = repo.script_records.read_execution_script_metadata(conn, 'ws', task.confirmed_script_id)
+        original_digest = repo.read_creation_execution_snapshot('ws', task_id, connection=conn).input_digest
+        head = s.section_base
+        def advance_snapshot(stages, invalidations=None):
+            nonlocal head
+            snapshot = json.loads(json.dumps(head.snapshot))
+            snapshot['stage_segments'] = stages
+            if invalidations is not None:
+                snapshot['stage_segment_invalidations'] = invalidations
+            new = TimelineVersion(f'input-read-{head.sequence+1}', 'ws', task_id, head.id,
+                head.sequence+1, snapshot, None)
+            repo.timeline_records.create_timeline_version(new, connection=conn, expected_current_version_id=head.id)
+            for track in repo.subtitle_records.list_subtitle_tracks('ws', task_id,
+                    timeline_version_id=head.id, connection=conn):
+                repo.subtitle_records.create_subtitle_track(replace(track, id=track.id+'_'+new.id,
+                    timeline_version_id=new.id), connection=conn)
+            head = new
+        assert reader.creation_section_ids(task, header, offset=-2, limit=1, connection=conn) == ['section']
+        assert [row.id for row in reader.creation_section_neighbors(task, header, 'section', connection=conn)] == ['later-section']
+        assert reader.creation_section_titles('ws', task_id, ['section'], connection=conn) == {'section': '目标段'}
+        from contextlib import closing
+        with closing(reader.iter_creation_section_planning_inputs(task, header, connection=conn)) as stream:
+            first, measured, window = next(stream)
+            assert (first.id, first.content, measured, window) == ('section', '目标原文', 2.0, None)
+            original_event = repo.execution_records.get_task_event('ws', 'section-original', connection=conn)
+            repo.execution_records.append_task_event(TaskEvent('read-later-publication', 'ws', task_id, s.job.id,
+                'segment_publication', {**original_event.payload, 'section_id': 'later-section', 'text': '后段采用正文',
+                    'narration_reference': s.original_segments[1].audio_reference}), connection=conn)
+            stages = {'section': 'section-original', 'later-section': 'read-later-publication'}
+            advance_snapshot(stages)
+            conn.execute('UPDATE narration_segments SET text=? WHERE workspace_id=? AND task_id=? AND id=?',
+                ('后段采用正文', 'ws', task_id, s.original_segments[1].id))
+            second, measured, _ = next(stream)
+            assert (second.id, second.content, measured) == ('later-section', '后段采用正文', 2.0)
+            with pytest.raises(StopIteration):
+                next(stream)
+        assert reader.section_dependency_snapshot('ws', task_id, 'section', connection=conn) == before
+        repo.execution_records.append_task_event(TaskEvent('read-target-publication', 'ws', task_id, s.job.id,
+            'segment_publication', {**original_event.payload, 'text': '目标采用正文'}), connection=conn)
+        stages['section'] = 'read-target-publication'
+        advance_snapshot(stages, {'section': {'publication_id': 'read-target-publication', 'reason': 'changed_source'}})
+        conn.execute('UPDATE narration_segments SET text=? WHERE workspace_id=? AND task_id=? AND id=?',
+            ('目标采用正文', 'ws', task_id, s.before.id))
+        current = reader.read_creation_section_input(task, header, 'section', connection=conn)
+        assert current['section'].content == '目标采用正文'
+        assert current['adopted']['current_validity'] == 'invalidated'
+        assert current['adopted']['invalidation_reason'] == 'changed_source'
+        assert [section.content for section, audio in reader.iter_creation_narration_sections(task, header, connection=conn)] == [
+            '目标采用正文', '后段采用正文']
+        assert repo.read_creation_execution_snapshot('ws', task_id, connection=conn).input_digest == original_digest
+        conn.execute('SAVEPOINT orphan_audio')
+        conn.execute('DELETE FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? AND section_id=?',
+            ('ws', header.id, 'later-section'))
+        with pytest.raises(ValueError, match='现有配音片段集'):
+            next(reader.iter_creation_narration_sections(task, header, connection=conn))
+        conn.execute('ROLLBACK TO orphan_audio')
+        conn.execute('RELEASE orphan_audio')
+        advance_snapshot({'later-section': 'read-later-publication'})
+        assert reader.stage_segment_state('ws', task_id, 'section', connection=conn) is None
+        assert len(reader.stage_section_version('ws', task_id, 'section', connection=conn)) == 64
+        advance_snapshot(stages)
+        conn.execute('PRAGMA query_only=ON')
+        effective = reader.effective_creation_script('ws', task_id, connection=conn)
+        assert [section.content for section in effective.sections] == ['目标采用正文', '后段采用正文']
+        assert reader.section_dependency_snapshot('ws', task_id, 'section', connection=conn) != before
+        assert conn.in_transaction
+        conn.rollback()
+        assert not conn.in_transaction
+    assert reader.stage_section_version('ws', task_id, 'section') == 'section-original'
+    assert [section.content for section in reader.effective_creation_script('ws', task_id).sections] == ['目标原文', '后段原文']
+    with repo._connect() as idle:
+        idle.execute('PRAGMA query_only=ON')
+        reader.effective_creation_script('ws', task_id, connection=idle)
+        assert idle.in_transaction
+        idle.rollback()

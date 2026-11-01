@@ -265,7 +265,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
     monkeypatch.setattr(MontagePlanner, '_build_creation_plan', observed)
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, case.forbidden)
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else (case.repo.section_inputs if name in ('effective_creation_script',) else case.repo), name, case.forbidden)
     monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
     try:

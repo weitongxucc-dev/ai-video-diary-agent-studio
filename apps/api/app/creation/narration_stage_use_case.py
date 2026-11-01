@@ -88,7 +88,7 @@ class NarrationStageUseCase:
                 or grant.unit_key != expected_key):
             raise PermissionError('局部改写配音许可与原作业不一致')
         plan = self.repository.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
-        script = self.repository.effective_creation_script(task.workspace_id,task.id)
+        script = self.repository.section_inputs.effective_creation_script(task.workspace_id,task.id)
         inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
             task_id=task.id,voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         previous = self.repository.narration_records.get_narration_segment(task.workspace_id,task.id,
@@ -171,7 +171,7 @@ class NarrationStageUseCase:
         if not script.sections_total_count:
             raise ValueError('合并须包含当前确认文案的全部唯一配音片段')
         language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
-        for section, segment in self.repository.iter_creation_narration_sections(task, script, connection=connection):
+        for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=connection):
             if (segment is None or segment.status != 'ready' or segment.text != section.content
                     or segment.script_id != script.id or segment.language != language
                     or segment.pronunciation_version != pronunciation_version
@@ -244,9 +244,9 @@ class NarrationStageUseCase:
                 raise PermissionError('配音准备输入摘要与原作业许可不一致')
             # Validate the entire effective set without retaining its body. A
             # selected first section must not hide a changed/adopted/audio tail.
-            for _ in self.repository.iter_creation_narration_sections(task, script, connection=conn):
+            for _ in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):
                 pass
-            selected = self.repository.read_creation_section_input(task, script, section_id, connection=conn)
+            selected = self.repository.section_inputs.read_creation_section_input(task, script, section_id, connection=conn)
         # Current voice/source authorization can inspect media; release the
         # Production reader before that work and before invoking the generator.
         inputs = self.repository.resolve_creation_task_narration_inputs(

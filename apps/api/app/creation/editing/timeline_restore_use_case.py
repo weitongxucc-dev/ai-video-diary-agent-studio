@@ -435,7 +435,7 @@ class TimelineRestoreUseCase:
                             creation_task_montage_plan_from_payload(baseline.snapshot['montage']),
                             creation_task_montage_plan_from_payload(prospective['montage']),command.actor_identity,connection=None)
                     else:
-                        current_section=self.repository.stage_segment_state(workspace_id,task_id,history['section_id'])
+                        current_section=self.repository.section_inputs.stage_segment_state(workspace_id,task_id,history['section_id'])
                         if current_section is None:
                             raise EditConflict('目标段的当前采用来源已丢失')
                         authorization_write=self.montage_edits.prepare_material_scope(latest,

@@ -262,7 +262,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
     if plan.selected_voice is None or plan.lipsync_quality not in models:
         raise ValueError("人物模型或授权人物版本不可用")
     timings = []
-    for section, segment in repository.iter_creation_narration_sections(task, script, connection=connection):
+    for section, segment in repository.section_inputs.iter_creation_narration_sections(task, script, connection=connection):
         if segment is None or segment.status != 'ready' or not segment.duration_seconds:
             raise ValueError("人物制作缺少当前文案的可用配音分段")
         timings.append((section.id, segment.duration_seconds))
@@ -272,7 +272,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
     person = repository.get_person_profile(task.workspace_id, plan.selected_person.profile_id,
                                            plan.selected_person.version)
     for section_id in selected:
-        segment = repository.read_creation_section_input(task, script, section_id, connection=connection)['audio']
+        segment = repository.section_inputs.read_creation_section_input(task, script, section_id, connection=connection)['audio']
         if (segment.voice_profile_id, segment.voice_version) != (plan.selected_voice.profile_id, plan.selected_voice.version):
             raise ValueError("人物配音版本与当前方案不一致")
         audio = repository.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
@@ -454,7 +454,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
     if not original.is_file() or stat.st_size <= 0:
         raise ValueError("原配音来源缺失，未安排局部重做")
     count = 0
-    for _, audio in repository.iter_creation_narration_sections(task, script, connection=connection):
+    for _, audio in repository.section_inputs.iter_creation_narration_sections(task, script, connection=connection):
         if audio is None or audio.status != 'ready':
             raise ValueError('合并配音存在不可用片段，未安排局部重做')
         count += 1
@@ -1064,7 +1064,7 @@ class CreationJobOwnerVerifier:
             'reference': [saved['source_path'], saved['size_bytes'], saved['mtime_ns'], saved['ctime_ns']]}
         language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
         missing = None
-        for ordinal, (section, segment) in enumerate(self.repository.iter_creation_narration_sections(
+        for ordinal, (section, segment) in enumerate(self.repository.section_inputs.iter_creation_narration_sections(
                 task, script, connection=conn), 1):
             if segment is None or segment.status != 'ready':
                 if missing is None:
@@ -1116,7 +1116,7 @@ class CreationJobOwnerVerifier:
             # Segment bodies are encoded one row at a time in this snapshot.
             audio = self.narration_audio_budget
             ready_inputs, source_files, ordered_ids = [], [], []
-            for section, segment in self.repository.iter_creation_narration_sections(task, script, connection=conn):
+            for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):
                 record = self.repository.get_narration_artifact(task.workspace_id,
                     segment.audio_reference.removeprefix('narration://artifact/'), connection=conn)
                 path = Path(record.audio_path)
@@ -1131,7 +1131,7 @@ class CreationJobOwnerVerifier:
             manifest['source_files'] = source_files
             from app.creation.narration_pcm import pcm_manifest_digest
             def segments():
-                return (segment for _, segment in self.repository.iter_creation_narration_sections(
+                return (segment for _, segment in self.repository.section_inputs.iter_creation_narration_sections(
                     task, script, connection=conn))
             source_digest = pcm_manifest_digest(manifest, segments())
             resources = self.pcm_resources(conn, job, common, ready_inputs, source_files,
@@ -1213,7 +1213,7 @@ class CreationJobOwnerVerifier:
                     generated = self.repository.get_narration_artifact(job.workspace_id, candidate['cache_key'], connection=conn)
                     section_id = self.repository.narration_records.get_narration_segment(job.workspace_id, job.task_id,
                         candidate['segment_id'], connection=conn).source_section_id
-            for _, segment in self.repository.iter_creation_narration_sections(
+            for _, segment in self.repository.section_inputs.iter_creation_narration_sections(
                     task, snapshot.script_header, connection=conn):
                 if segment is None or segment.status!='ready' or generated is not None and segment.source_section_id==section_id:
                     continue
@@ -1394,7 +1394,7 @@ class CreationJobOwnerVerifier:
             target = self.repository.get_narration_artifact(job.workspace_id,candidate['cache_key'],connection=conn)
             script, _ = self.repository.script_records.read_execution_script_metadata(conn, task.workspace_id, task.confirmed_script_id)
             files,ready,ordered_ids = [],[],[]
-            for section, segment in self.repository.iter_creation_narration_sections(task, script, connection=conn):
+            for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):
                 ordered_ids.append(section.id)
                 record = target if segment.id == candidate['segment_id'] else self.repository.get_narration_artifact(
                     job.workspace_id,segment.audio_reference.removeprefix('narration://artifact/'),connection=conn)
@@ -1616,7 +1616,7 @@ class CreationJobOwnerVerifier:
         artifact = self.repository.get_narration_artifact(job.workspace_id, task.narration_cache_key, connection=conn)
         header, _ = self.repository.script_records.read_execution_script_metadata(conn, task.workspace_id, script.id)
         count, valid = 0, True
-        for _, segment in self.repository.iter_creation_narration_sections(task, header, connection=conn):
+        for _, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):
             count += 1
             valid = valid and segment is not None and segment.status == 'ready' and bool(segment.audio_reference)
         return (artifact is not None and artifact.task_id == task.id and artifact.script_id == header.id
@@ -2122,7 +2122,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
             with repository.creation_execution_read() as reader:
                 observed = repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=reader)
                 all_ready = all(segment is not None and segment.status == 'ready'
-                    for _, segment in repository.iter_creation_narration_sections(
+                    for _, segment in repository.section_inputs.iter_creation_narration_sections(
                         observed.task, observed.script_header, connection=reader))
             if all_ready:
                 pcm_preparation = owner.prepare_pcm_sources(job)
@@ -2366,7 +2366,7 @@ class CreationJobUnitExecutor:
             binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
             started = self.repository.execution_records.get_task_event(job.workspace_id,
                 f'event_{job.id}_narration_started_{generation}', connection=reader)
-            selected = self.repository.read_creation_section_input(task, script, request.resources['section_id'], connection=reader)
+            selected = self.repository.section_inputs.read_creation_section_input(task, script, request.resources['section_id'], connection=reader)
             section, pending = selected['section'], selected['audio']
         resources = request.resources
         usage_id = f'{request.id}:{generation}'
@@ -2448,7 +2448,7 @@ class CreationJobUnitExecutor:
                     model_id=resources['model_id'], language=resources['language'], pronunciation_version=resources['pronunciation_version'])
                 ready = replace(pending, status='ready', audio_reference=self.repository.narration_artifact_reference(cache_key),
                     duration_seconds=duration, sample_rate=rate, updated_at=datetime.now(timezone.utc))
-                version = self.repository.stage_section_version(job.workspace_id, job.task_id, section.id)
+                version = self.repository.section_inputs.stage_section_version(job.workspace_id, job.task_id, section.id)
                 prepared = self.segments.prepare_video(job, event, task, section.id, record, owner, text=section.content)
                 if prepared.event_type != 'segment_visual_decision_required':
                     raise RecoveryBlocked('原单段画面已不在明确等待边界，未自动继续制作')
@@ -2467,7 +2467,7 @@ class CreationJobUnitExecutor:
                             or json.loads(current_request['resources_json']) != resources
                             or self.repository.execution_records.get_task_event(job.workspace_id, settled_id, connection=conn) != settled
                             or identity(os.fstat(fd)) != identity(info) or identity(path.stat()) != identity(info)
-                            or self.repository.stage_section_version(job.workspace_id, job.task_id, section.id, connection=conn) != version):
+                            or self.repository.section_inputs.stage_section_version(job.workspace_id, job.task_id, section.id, connection=conn) != version):
                         raise RecoveryBlocked('原单段恢复提交前状态、文件或许可已变化')
                     verify_narration_source(self.repository, current_task, current_plan, source, connection=conn)
                     if owner.authorization_verdict(current_task, actor, 'narration', connection=conn) != 'ready':
@@ -2599,7 +2599,7 @@ class CreationJobUnitExecutor:
                         conn.execute('UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?',
                             (json.dumps(asdict(current_task),default=str),datetime.now(timezone.utc).isoformat(),job.workspace_id,job.task_id))
                         record = self.narration_stage.pcm_record(current_task, resources, receipt,
-                            (segment for _, segment in self.repository.iter_creation_narration_sections(
+                            (segment for _, segment in self.repository.section_inputs.iter_creation_narration_sections(
                                 current_task, current_script, connection=conn)))
                         self.repository.narration_completion.complete_creation_task_narration(record, connection=conn)
                         checkpoint=self._checkpoint(conn,grant,status='queued',output=record.cache_key,stage='narration')

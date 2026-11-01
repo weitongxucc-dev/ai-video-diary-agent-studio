@@ -2397,7 +2397,7 @@ def test_public_script_repository_reads_updates_and_confirms_all_25_rows(api_sta
     _, confirmed = state.repository.script_records.confirm_creation_task_script('local', 'task', script.id, title=script.title,
         sections=revised, expected_updated_at=saved.updated_at, verified_owner_user_id=state.owner.member_id)
     assert confirmed.selection_status == 'confirmed' and len(confirmed.sections) == 25
-    assert state.repository.effective_creation_script('local', 'task').sections == revised
+    assert state.repository.section_inputs.effective_creation_script('local', 'task').sections == revised
     with state.repository._connect() as conn:
         header = json.loads(conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?', (script.id,)).fetchone()[0])
         assert 'sections' not in header and header['_sections_storage'] == 'rows'

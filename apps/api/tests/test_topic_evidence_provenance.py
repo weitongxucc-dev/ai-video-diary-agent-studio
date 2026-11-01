@@ -130,7 +130,7 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     assert changed['items'][0]['status']=='changed' and 'text' not in changed['items'][0]
     with production.creation_execution_read() as conn:
         header, metadata = production.script_records.read_execution_script_metadata(conn,'qa',saved.id)
-        section = production.read_creation_section_input(task,header,'section',connection=conn)['section']
+        section = production.section_inputs.read_creation_section_input(task,header,'section',connection=conn)['section']
         unknown = case.source_bindings({**metadata,'run_id':'missing-historical-run'},section,connection=conn)
     assert len(unknown) == 2
     assert all(item['binding_status']=='unknown' and item['version_or_identity'] is None for item in unknown)

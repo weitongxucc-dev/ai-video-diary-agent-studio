@@ -58,12 +58,12 @@ class SegmentProductionUseCase:
         task = self.require_actor(workspace_id, task_id, actor, connection=connection)
         script, metadata = self.repository.script_records.read_execution_script_metadata(
             connection,workspace_id,task.confirmed_script_id)
-        current = self.repository.read_creation_section_input(task,script,section_id,connection=connection)
+        current = self.repository.section_inputs.read_creation_section_input(task,script,section_id,connection=connection)
         section, audio, adopted = current['section'], current['audio'], current['adopted']
         version = (adopted['segment_version'] if adopted is not None else
             digest_section_version(script.id,section.id,section.content,audio.audio_reference if audio else None))
         text_hash = hashlib.sha256(section.content.encode()).hexdigest()
-        dependencies = self.repository.section_dependency_snapshot(workspace_id,task_id,section_id,connection=connection)
+        dependencies = self.repository.section_inputs.section_dependency_snapshot(workspace_id,task_id,section_id,connection=connection)
         video = None
         if adopted is not None:
             record = self.repository.execution_records.get_artifact_record(workspace_id, adopted['video_artifact_id'], connection=connection)
@@ -79,7 +79,7 @@ class SegmentProductionUseCase:
             'source_binding_total_count': len(section.evidence_reference_ids),
             'source_bindings_truncated': len(section.evidence_reference_ids) > 24,
             'locked_body_digest': metadata['locked_body_digest'],
-            'adjacent_sections': [asdict(item) for item in self.repository.creation_section_neighbors(
+            'adjacent_sections': [asdict(item) for item in self.repository.section_inputs.creation_section_neighbors(
                 task,script,section_id,connection=connection)],
             'narration_segment_id': audio.id if audio is not None else None,
             'audio': {'kind': 'audio', 'artifact_ref': audio.audio_reference, 'status': audio.status,
@@ -123,9 +123,9 @@ class SegmentProductionUseCase:
         with self.repository.creation_execution_read() as conn:
             task = self.require_actor(workspace_id, task_id, actor, connection=conn)
             script, metadata = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
-            section = self.repository.read_creation_section_input(task,script,section_id,connection=conn)['section']
+            section = self.repository.section_inputs.read_creation_section_input(task,script,section_id,connection=conn)['section']
             bindings = self.source_bindings(metadata, section, offset=offset, limit=limit, connection=conn)
-            version = self.repository.stage_section_version(workspace_id,task_id,section_id,connection=conn)
+            version = self.repository.section_inputs.stage_section_version(workspace_id,task_id,section_id,connection=conn)
         items = []
         for binding in bindings:
             if binding['binding_status'] == 'unknown':
@@ -149,7 +149,7 @@ class SegmentProductionUseCase:
             'items': items, 'offset': offset, 'limit': limit, 'total_count': total, 'truncated': offset+len(items) < total}
 
     def adoption(self, task, result, *, connection=None):
-        current = (self.repository.stage_segment_state(task.workspace_id, task.id, result['section_id'], connection=connection)
+        current = (self.repository.section_inputs.stage_segment_state(task.workspace_id, task.id, result['section_id'], connection=connection)
             if result is not None else None)
         sequence = (self.repository.timeline_sequence(task.workspace_id, task.current_timeline_version_id, connection=connection)
             if task.current_timeline_version_id else None)
@@ -173,7 +173,7 @@ class SegmentProductionUseCase:
         with self.repository.creation_execution_read() as conn:
             task = self.require_actor(workspace_id, task_id, actor, connection=conn)
             script, _ = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
-            ids = self.repository.creation_section_ids(task,script,offset=offset,limit=limit,connection=conn)
+            ids = self.repository.section_inputs.creation_section_ids(task,script,offset=offset,limit=limit,connection=conn)
             values = [self.context(workspace_id,task_id,item,actor,connection=conn) for item in ids]
             receipts = self.repository.list_segment_revision_requests(workspace_id, task_id, actor.member_id, limit=limit, connection=conn)
             return {'task_id': task_id, 'total_count': script.sections_total_count, 'offset': offset,
@@ -267,7 +267,7 @@ class SegmentProductionUseCase:
 
     def planning_inputs(self, snapshot, section_id, *, connection, checksum):
         checksum.update(snapshot.input_digest.encode())
-        for section, measured, window in self.repository.iter_creation_section_planning_inputs(
+        for section, measured, window in self.repository.section_inputs.iter_creation_section_planning_inputs(
                 snapshot.task, snapshot.script_header, connection=connection):
             # The target uses a possibly not-yet-persisted audio/text override.
             # Its original version has a separate CAS; all other inputs belong
@@ -286,7 +286,7 @@ class SegmentProductionUseCase:
             if snapshot.task.confirmed_script_id != task.confirmed_script_id:
                 raise ValueError('当前确认文案在规划前变化')
             task, script, creation_plan = snapshot.task, snapshot.script_header, snapshot.plan
-            current = self.repository.read_creation_section_input(task, script, section_id, connection=conn)
+            current = self.repository.section_inputs.read_creation_section_input(task, script, section_id, connection=conn)
             section = current['section']
             section = replace(section, content=text) if text is not None else section
             checksum = hashlib.sha256()
@@ -342,7 +342,7 @@ class SegmentProductionUseCase:
         # Existing candidates retain their keys. Their saved global window and
         # duration agreement are the available clock proof; never rebuild them.
         from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
-        current = self.repository.read_creation_section_input(snapshot.task, snapshot.script_header,
+        current = self.repository.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header,
             payload['section_id'], connection=connection)
         audio = self.repository.get_narration_artifact(workspace_id, payload['audio_cache_key'], connection=connection)
         if audio is None:
@@ -358,7 +358,7 @@ class SegmentProductionUseCase:
     def video_facts(self, job, event, task, section_id, owner, *, connection=None):
         prepared = self.repository.execution_records.get_task_event(task.workspace_id,
             self.video_preparation_id(job,section_id),connection=connection).payload
-        if prepared['expected_segment_version'] != self.repository.stage_section_version(
+        if prepared['expected_segment_version'] != self.repository.section_inputs.stage_section_version(
                 task.workspace_id,task.id,section_id,connection=connection):
             raise ValueError('已准备的段落输入版本已变化')
         if event.get('command'):
@@ -380,7 +380,7 @@ class SegmentProductionUseCase:
         if text is None:
             with self.repository.creation_execution_read() as conn:
                 snapshot = self.repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
-                current = self.repository.read_creation_section_input(snapshot.task, snapshot.script_header,
+                current = self.repository.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header,
                     section_id, connection=conn)
                 text = current['section'].content
         plan, sources, payload, planning_dependency = self.section_plan(task, section_id, audio, owner, text=text)
@@ -461,7 +461,7 @@ class SegmentProductionUseCase:
         if (job.task_id != task.id or actor != self.actor_from_event(job.workspace_id,event)
                 or job.status not in {'queued','running','interrupted'} or payload['input_digest'] != job.input_digest
                 or payload['script_id'] != task.confirmed_script_id
-                or payload['expected_segment_version'] != self.repository.stage_section_version(
+                or payload['expected_segment_version'] != self.repository.section_inputs.stage_section_version(
                     job.workspace_id,task.id,payload['section_id'],connection=connection)):
             raise ValueError('原画面决定的作业或段落版本已变化')
         operation = 'narration_edit' if job.kind == SEGMENT_REVISION_KIND else 'render'
@@ -480,7 +480,7 @@ class SegmentProductionUseCase:
             snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, task.id, connection=connection)
             if snapshot.input_digest != job.input_digest:
                 raise ValueError('原画面决定的确认文案或方案版本已变化')
-            current = self.repository.read_creation_section_input(snapshot.task, snapshot.script_header,
+            current = self.repository.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header,
                 payload['section_id'], connection=connection)
             audio = current['audio']
             if audio is None or audio.status != 'ready' or audio.audio_reference != payload['audio_reference']:
@@ -522,7 +522,7 @@ class SegmentProductionUseCase:
             total=conn.execute('SELECT COUNT(*)'+sql,parameters).fetchone()[0]
         if not rows:
             return {'items':[],'total_count':total,'truncated':False}
-        titles=self.repository.creation_section_titles(workspace_id,task_id,[row['section_id'] for row in rows])
+        titles=self.repository.section_inputs.creation_section_titles(workspace_id,task_id,[row['section_id'] for row in rows])
         items=[]
         for row in rows:
             if self.actor_from_event(workspace_id,json.loads(row['start_json']))!=actor:
@@ -690,7 +690,7 @@ class SegmentProductionUseCase:
                 (request.workspace_id,task.plan_id)).fetchone()
             assets = [tuple(row) for row in current.execute('SELECT id,updated_at FROM material_assets WHERE workspace_id=? '
                 'AND id IN (SELECT value FROM json_each(?)) ORDER BY id',(request.workspace_id,json.dumps(selected_assets)))]
-            dependencies = self.repository.section_dependency_snapshot(request.workspace_id,task.id,section_id,connection=current)
+            dependencies = self.repository.section_inputs.section_dependency_snapshot(request.workspace_id,task.id,section_id,connection=current)
             return (tuple(task_row) if task_row else None,tuple(plan_row) if plan_row else None,
                 digest(dependencies),tuple(assets))
         before = read(conn)
@@ -809,13 +809,13 @@ class SegmentProductionUseCase:
             snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
             task, script = snapshot.task, snapshot.script_header
             event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn).payload
-            for section, audio in self.repository.iter_creation_narration_sections(task, script, connection=conn):
+            for section, audio in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):
                 # Finish the scan even after selecting a unit: a bad tail or
                 # orphan audio must not be hidden by an unfinished first section.
                 if audio is not None and audio.status == 'ready' and audio.id != self.narration_stage.segment_id(
                         task.id, script.id, section.id):
                     raise ValueError('现有配音片段不属于当前唯一文案段落')
-                state = self.repository.stage_segment_state(task.workspace_id, task.id, section.id, connection=conn)
+                state = self.repository.section_inputs.stage_segment_state(task.workspace_id, task.id, section.id, connection=conn)
                 if decided:
                     continue
                 if audio is None or audio.status != 'ready':

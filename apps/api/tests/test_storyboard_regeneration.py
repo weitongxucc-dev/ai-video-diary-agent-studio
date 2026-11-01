@@ -517,7 +517,7 @@ def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes
         base_key = 'montage_plan:' + hashlib.sha256(expected).hexdigest()
         for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                      'effective_creation_script', 'list_narration_segments'):
-            monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, case.forbidden)
+            monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else (case.repo.section_inputs if name in ('effective_creation_script',) else case.repo), name, case.forbidden)
         monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
         with case.repo.creation_execution_read() as conn:
             snapshot = case.repo.read_creation_execution_snapshot('local', case.task.id, connection=conn)
@@ -559,7 +559,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence})
         for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                      'effective_creation_script', 'list_narration_segments'):
-            monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else repo, name, case.forbidden)
+            monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else (repo.section_inputs if name in ('effective_creation_script',) else repo), name, case.forbidden)
         monkeypatch.setattr(repo.narration_records, '_decode_script', case.forbidden)
         monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
         observed = []
