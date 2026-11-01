@@ -4,6 +4,7 @@ Run from apps/api with the existing Python environment. Manifest files contain
 identities, revisions and digests only. Private record bodies remain in SQLite.
 """
 from __future__ import annotations
+from app.local_adoption_maintenance import LocalAdoptionMaintenance, _local_adoption_digest
 
 import argparse
 import json
@@ -12,7 +13,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from app.production import ProductionRepository, _local_adoption_digest
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "dry-run":
-            manifest = ProductionRepository.plan_local_adoption(args.database, args.media_root,
+            manifest = LocalAdoptionMaintenance.plan_local_adoption(args.database, args.media_root,
                 member_id=args.member_id, operation_id=args.operation_id, asset_ids=args.asset_id,
                 voice_id=args.voice_id, voice_version=args.voice_version,
                 new_voice_version=args.new_voice_version, authorization_basis=args.authorization_basis)
@@ -50,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
                 "voice_id": args.voice_id, "voice_version": args.new_voice_version}, ensure_ascii=False))
         else:
             manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-            result = ProductionRepository.apply_local_adoption(args.database, args.media_root,
+            result = LocalAdoptionMaintenance.apply_local_adoption(args.database, args.media_root,
                 member_id=args.member_id, manifest=manifest, manifest_sha256=args.manifest_sha256)
             print(json.dumps({"status": "applied", **result}, ensure_ascii=False))
     except (ValueError, OSError, sqlite3.Error, KeyError, TypeError) as exc:

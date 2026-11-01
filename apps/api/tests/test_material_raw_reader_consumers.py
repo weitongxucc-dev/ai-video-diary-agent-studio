@@ -1,4 +1,5 @@
 """Actual by-path source and maintenance consumers of the released asset readers."""
+from app.local_adoption_maintenance import LocalAdoptionMaintenance, _local_adoption_digest, _local_adoption_plan
 from dataclasses import replace
 import hashlib
 import json
@@ -7,7 +8,7 @@ import sqlite3
 import pytest
 
 from app.materials.assets import MaterialAssetStore
-from app.production import _local_adoption_plan, _local_adoption_digest
+
 from test_local_adoption import legacy as legacy, plan, OWNER
 from test_profile_raw_reader_consumers import reference_state
 
@@ -106,6 +107,7 @@ def test_maintenance_rejects_original_foreign_and_global_collisions(legacy, monk
 
 def test_maintenance_raw_rows_digests_use_uncommitted_caller_state_and_rollback(legacy, monkeypatch):
     repo, _ = legacy
+    maintenance = LocalAdoptionMaintenance(repo.database_path, repo.video_library_path)
     original_manifest = plan(repo)
     calls = observe_readers(monkeypatch)
     with repo._connect() as conn:
@@ -119,8 +121,8 @@ def test_maintenance_raw_rows_digests_use_uncommitted_caller_state_and_rollback(
             conn.execute('INSERT INTO material_assets(id,workspace_id,file_path,payload,updated_at,visibility) VALUES (?,?,?,?,?,?)',
                 (identity, 'foreign-' + identity, str(repo.video_library_path / 'foreign-unused.mp4'), old['payload'], old['updated_at'], 'private'))
         expected_paths = [tuple(row) for row in conn.execute("SELECT file_path FROM material_assets WHERE workspace_id!='local'")]
-        monkeypatch.setattr(repo._material_assets, '_connect', lambda: pytest.fail('must not open a second connection'))
-        manifest, originals = _local_adoption_plan(repo, conn, member_id=OWNER, operation_id='approved-operation',
+        monkeypatch.setattr(maintenance._material_assets, '_connect', lambda: pytest.fail('must not open a second connection'))
+        manifest, originals = _local_adoption_plan(maintenance, conn, member_id=OWNER, operation_id='approved-operation',
             asset_ids=[f'asset_{index}' for index in range(12)], voice_id='voice_cc', voice_version='v1',
             new_voice_version='v2', authorization_basis='属于我，允许接入并保持私有')
         assert {item[0] for item in calls} == set(READERS[1:])

@@ -1,3 +1,4 @@
+from app.local_adoption_maintenance import LocalAdoptionMaintenance, _local_adoption_digest
 import copy
 import hashlib
 import json
@@ -10,10 +11,7 @@ import pytest
 
 from app.avatar_lipsync import Authorization
 from app.local_adoption import main
-from app.production import (
-    MaterialAsset, MaterialSegment, ProductionRepository, VersionedVoiceProfile,
-    _local_adoption_digest, _versioned_voice_profile_payload,
-)
+from app.production import MaterialAsset, MaterialSegment, ProductionRepository, VersionedVoiceProfile, _versioned_voice_profile_payload
 
 OWNER = '00000000-0000-0000-0000-000000000001'
 
@@ -66,13 +64,13 @@ def plan(repo, **overrides):
         asset_ids=[f'asset_{i}' for i in range(12)], voice_id='voice_cc', voice_version='v1',
         new_voice_version='v2', authorization_basis='属于我，允许接入并保持私有')
     kwargs.update(overrides)
-    return ProductionRepository.plan_local_adoption(repo.database_path, repo.video_library_path, **kwargs)
+    return LocalAdoptionMaintenance.plan_local_adoption(repo.database_path, repo.video_library_path, **kwargs)
 
 
 def apply(repo, manifest, **overrides):
     kwargs = dict(member_id=OWNER, manifest=manifest, manifest_sha256=_local_adoption_digest(manifest))
     kwargs.update(overrides)
-    return ProductionRepository.apply_local_adoption(repo.database_path, repo.video_library_path, **kwargs)
+    return LocalAdoptionMaintenance.apply_local_adoption(repo.database_path, repo.video_library_path, **kwargs)
 
 
 def dump(repo):
@@ -237,7 +235,7 @@ def test_rejects_wrong_member_space_digest_and_database(legacy, tmp_path):
     other_db = tmp_path / 'different.sqlite'
     other_db.write_bytes(repo.database_path.read_bytes())
     with pytest.raises(ValueError, match='database_changed'):
-        ProductionRepository.apply_local_adoption(other_db, repo.video_library_path, member_id=OWNER,
+        LocalAdoptionMaintenance.apply_local_adoption(other_db, repo.video_library_path, member_id=OWNER,
             manifest=manifest, manifest_sha256=_local_adoption_digest(manifest))
     assert dump(repo) == before
 
@@ -266,7 +264,7 @@ def test_cli_private_manifest_and_safe_output(legacy, tmp_path, capsys):
 
 
 def test_late_file_change_rolls_back_entire_adoption(legacy, monkeypatch):
-    import app.production as module
+    import app.local_adoption_maintenance as module
     repo, wav_path = legacy
     manifest = plan(repo)
     original_revision = module._local_adoption_file_revision
@@ -285,3 +283,136 @@ def test_late_file_change_rolls_back_entire_adoption(legacy, monkeypatch):
     with pytest.raises(ValueError, match='file_changed'):
         apply(repo, manifest)
     assert dump(repo) == before
+
+
+@pytest.fixture
+def metadata_maintenance(tmp_path, monkeypatch):
+    import socket
+    import subprocess
+    from PIL import Image
+    from app.local_members import LocalMemberService
+    import app.local_adoption_maintenance as maintenance
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('maintenance metadata attempted media, network or execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    root = tmp_path / 'isolated-media'
+    root.mkdir()
+    repo = ProductionRepository(tmp_path / 'isolated.sqlite3', root,
+        duration_reader=forbidden, scene_reader=forbidden)
+    member, _token = LocalMemberService(repo.database_path).whoami(None)
+    now = datetime.now(timezone.utc)
+    authorization = Authorization(id='isolated-consent', workspace_id='local', version='v1',
+        rights_holder='metadata-rights-holder', content_types=('voice',), usage_scopes=('narration',),
+        effective_from=now - timedelta(days=1), expires_at=None, evidence_reference='metadata-evidence', status='active')
+    repo.save_authorization(authorization)
+    path = root / 'selected.mp4'
+    path.write_bytes(b'opaque selected material')
+    repo.material_assets.save_asset(MaterialAsset('isolated-asset', 'local', path.name, str(path),
+        path.stat().st_size, datetime.fromtimestamp(path.stat().st_mtime), visibility='shared',
+        duration_seconds=2, analysis_status='failed', analysis_message='metadata-private-body'))
+    wav_path = root / 'reference.wav'
+    wav_path.write_bytes(b'opaque duration-leaf declaration; no WAV or PCM')
+    voice = VersionedVoiceProfile(id='isolated-voice', workspace_id='local', version='v1', language='zh',
+        reference_audio_path='workspace://reference.wav', reference_text='metadata-private-reference',
+        authorization=authorization, owner_user_id=None, visibility='shared')
+    with repo._connect() as conn:
+        conn.execute("INSERT INTO material_ingestion_binding(id,workspace_id,library_path) VALUES(1,'local',?)", (str(root),))
+        conn.execute("INSERT INTO versioned_voice_profiles VALUES('local','isolated-voice','v1',?,?)",
+            (json.dumps(_versioned_voice_profile_payload(voice)), now.isoformat()))
+        conn.execute("INSERT INTO workspace_media_references VALUES('workspace://reference.wav','local',?)", (now.isoformat(),))
+        conn.execute('DROP TABLE local_adoption_receipts')
+    def declared_duration(path):
+        assert path == wav_path
+        return 2.0
+    monkeypatch.setattr(maintenance, '_profile_wav_duration', declared_duration)
+    arguments = dict(member_id=member.member_id, operation_id='isolated-operation', asset_ids=['isolated-asset'],
+        voice_id='isolated-voice', voice_version='v1', new_voice_version='v2', authorization_basis='isolated metadata consent')
+    return repo, wav_path, arguments
+
+
+def test_maintenance_metadata_plan_cli_apply_and_receipt_keep_original_facts(metadata_maintenance, tmp_path, monkeypatch, capsys):
+    repo, _wav, arguments = metadata_maintenance
+    before = dump(repo)
+    raw_before = hashlib.sha256(repo.database_path.read_bytes()).hexdigest()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('maintenance must not construct or connect through ProductionRepository')
+    with monkeypatch.context() as patch:
+        patch.setattr(ProductionRepository, '__init__', forbidden)
+        patch.setattr(ProductionRepository, '_connect', forbidden)
+        patch.setattr(ProductionRepository, '_initialize_profile_stores', forbidden)
+        manifest = LocalAdoptionMaintenance.plan_local_adoption(repo.database_path, repo.video_library_path, **arguments)
+    assert dump(repo) == before and hashlib.sha256(repo.database_path.read_bytes()).hexdigest() == raw_before
+    missing = tmp_path / 'does-not-exist.sqlite3'
+    with pytest.raises(sqlite3.OperationalError):
+        LocalAdoptionMaintenance.plan_local_adoption(missing, repo.video_library_path, **arguments)
+    assert not missing.exists()
+    manifest_path = tmp_path / 'approved.json'
+    argv = ['dry-run', '--database', str(repo.database_path), '--media-root', str(repo.video_library_path),
+        '--member-id', arguments['member_id'], '--manifest', str(manifest_path),
+        '--operation-id', arguments['operation_id'], '--asset-id', 'isolated-asset',
+        '--voice-id', 'isolated-voice', '--voice-version', 'v1', '--new-voice-version', 'v2',
+        '--authorization-basis', arguments['authorization_basis']]
+    assert main(argv) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)['manifest_sha256'] == _local_adoption_digest(manifest)
+    assert manifest_path.stat().st_mode & 0o777 == 0o600
+    assert 'metadata-private-reference' not in output.out and 'metadata-evidence' not in output.out
+    assert main(argv) == 1
+    error = capsys.readouterr()
+    assert json.loads(error.err) == {'status': 'failed', 'reason': 'FileExistsError'}
+    assert str(manifest_path) not in error.err
+    with repo._connect() as conn:
+        v1 = conn.execute("SELECT payload FROM versioned_voice_profiles WHERE version='v1'").fetchone()[0]
+    digest = _local_adoption_digest(manifest)
+    result = LocalAdoptionMaintenance.apply_local_adoption(repo.database_path, repo.video_library_path,
+        member_id=arguments['member_id'], manifest=manifest, manifest_sha256=digest)
+    after = dump(repo)
+    assert LocalAdoptionMaintenance.apply_local_adoption(repo.database_path, repo.video_library_path,
+        member_id=arguments['member_id'], manifest=manifest, manifest_sha256=digest) == result
+    assert dump(repo) == after
+    with repo._connect() as conn:
+        assert conn.execute("SELECT payload FROM versioned_voice_profiles WHERE version='v1'").fetchone()[0] == v1
+        updated = json.loads(conn.execute("SELECT payload FROM versioned_voice_profiles WHERE version='v2'").fetchone()[0])
+        asset = json.loads(conn.execute("SELECT payload FROM material_assets WHERE id='isolated-asset'").fetchone()[0])
+        assert asset['id'] == 'isolated-asset' and asset['owner_user_id'] == arguments['member_id']
+        assert asset['visibility'] == 'private'
+        assert updated['owner_user_id'] == arguments['member_id'] and updated['visibility'] == 'private'
+        assert updated['reference']['asset_id'] == result['voice_source_asset_id']
+        assert conn.execute('SELECT count(*) FROM local_adoption_receipts').fetchone()[0] == 1
+
+
+def test_maintenance_metadata_final_stat_fault_rolls_back_rows_and_receipt_schema(metadata_maintenance, monkeypatch):
+    import app.local_adoption_maintenance as maintenance
+    from app.materials.assets import MaterialAssetStore
+    repo, wav_path, arguments = metadata_maintenance
+    manifest = LocalAdoptionMaintenance.plan_local_adoption(repo.database_path, repo.video_library_path, **arguments)
+    before = dump(repo)
+    insert = MaterialAssetStore.insert_local_voice_source_asset
+    revision = maintenance._local_adoption_file_revision
+    state = {}
+    def insert_and_observe(self, conn, *args, **kwargs):
+        value = insert(self, conn, *args, **kwargs)
+        state['connection'] = conn
+        return value
+    def change_at_final_stat(path):
+        if 'connection' in state and path == wav_path:
+            conn = state['connection']
+            assert conn.execute("SELECT 1 FROM versioned_voice_profiles WHERE version='v2'").fetchone()
+            assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='local_adoption_receipts'").fetchone()
+            stat = path.stat()
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
+            state['changed_after_writes'] = True
+        return revision(path)
+    monkeypatch.setattr(MaterialAssetStore, 'insert_local_voice_source_asset', insert_and_observe)
+    monkeypatch.setattr(maintenance, '_local_adoption_file_revision', change_at_final_stat)
+    with pytest.raises(ValueError, match='local_adoption_file_changed'):
+        LocalAdoptionMaintenance.apply_local_adoption(repo.database_path, repo.video_library_path,
+            member_id=arguments['member_id'], manifest=manifest, manifest_sha256=_local_adoption_digest(manifest))
+    assert state['changed_after_writes'] and dump(repo) == before

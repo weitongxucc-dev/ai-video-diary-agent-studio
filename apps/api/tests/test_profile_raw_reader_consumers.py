@@ -1,4 +1,5 @@
 """Actual source-reference and synthetic maintenance raw-reader consumers."""
+from app.local_adoption_maintenance import LocalAdoptionMaintenance, _local_adoption_digest, _local_adoption_plan
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -9,9 +10,7 @@ import wave
 from PIL import Image
 import pytest
 
-from app.production import (
-    ProductionRepository, MaterialAsset, _local_adoption_plan, _local_adoption_digest,
-)
+from app.production import ProductionRepository, MaterialAsset
 from app.profiles.contracts import Authorization, PersonProfile, ProfileReference, VoiceProfile
 from app.profiles.records import ProfileRecordStore
 from app.profiles.authorizations import MediaAuthorizationStore
@@ -128,6 +127,7 @@ def test_maintenance_calls_released_readers_with_raw_row_order_and_digest(legacy
 
 def test_maintenance_consumer_reads_uncommitted_caller_rows_without_commit(legacy, monkeypatch):
     repo, _ = legacy
+    maintenance = LocalAdoptionMaintenance(repo.database_path, repo.video_library_path)
     original_manifest = plan(repo)
     calls = observed_maintenance_readers(monkeypatch)
     with repo._connect() as conn:
@@ -135,13 +135,13 @@ def test_maintenance_consumer_reads_uncommitted_caller_rows_without_commit(legac
         original_voice = conn.execute('SELECT payload FROM versioned_voice_profiles').fetchone()[0]
         changed_raw = ' \n' + original_voice + '\n '
         conn.execute('UPDATE versioned_voice_profiles SET payload=?', (changed_raw,))
-        auth = repo._media_authorizations._get_authorization(conn, 'local', 'consent', 'v1')
-        repo._media_authorizations._save_authorization(conn, 'local', replace(auth, version='v2'))
+        auth = maintenance._media_authorizations._get_authorization(conn, 'local', 'consent', 'v1')
+        maintenance._media_authorizations._save_authorization(conn, 'local', replace(auth, version='v2'))
         def forbidden():
             pytest.fail('maintenance raw reader must not open a second connection')
-        monkeypatch.setattr(repo._profile_records, '_connect', forbidden)
-        monkeypatch.setattr(repo._media_authorizations, '_connect', forbidden)
-        manifest, originals = _local_adoption_plan(repo, conn, member_id=OWNER, operation_id='approved-operation',
+        monkeypatch.setattr(maintenance._profile_records, '_connect', forbidden)
+        monkeypatch.setattr(maintenance._media_authorizations, '_connect', forbidden)
+        manifest, originals = _local_adoption_plan(maintenance, conn, member_id=OWNER, operation_id='approved-operation',
             asset_ids=[f'asset_{i}' for i in range(12)], voice_id='voice_cc', voice_version='v1',
             new_voice_version='v2', authorization_basis='属于我，允许接入并保持私有')
         assert all(item[1] is conn for item in calls)
