@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.assistant import turn_admission_use_case as admission
 from app.assistant import task_turn_use_case as task
+from app.assistant.task_business_adapter import TaskBusinessAdapter
+from app.creation.native_task_operations import NativeOperationHandler
 from app.assistant.input_delivery import AssistantInputDelivery
 from app.assistant.result_projection import (
     resolve_quality_continuation, resolve_segment_revision, resolve_timeline_restore,
@@ -24,7 +26,7 @@ from app.schemas import (
 
 
 class TaskTurnHTTPAdapter:
-    def __init__(self, *, conversations_for, window_case_for, workspace_for, read_task, read_task_record, read_caller, content_visible, read_member, conversation_owner, member_scope, clean_text, safe_text, validate_reference, profile_snapshot, knowledge_snapshot, access_task, read_subtitles, resolve_scope, read_timeline, timeline_for_task, clip_material, material_snapshot, settings_for, local_token, request_actor, require_actor, native_handler, run_task, register_control, forget_control, stop_control, stream_for, applied_edit, storyboard, script_tool, related_media, edit_request, media_binding, completed_media, read_media, read_script, bound_execution, bind_observation, bind_execution, read_proposal, read_intent, render_edit_preview, read_event, list_events, goal_for, bind_goal_scope, wake, read_quality, read_window, read_segment, read_restore, generation_for):
+    def __init__(self, *, conversations_for, window_case_for, workspace_for, read_task, read_task_record, read_caller, content_visible, read_member, conversation_owner, member_scope, clean_text, safe_text, validate_reference, profile_snapshot, knowledge_snapshot, access_task, read_subtitles, resolve_scope, read_timeline, timeline_for_task, clip_material, material_snapshot, settings_for, read_goal_plan, goal_shutting_down, runtime_for, local_token, request_actor, require_actor, native_handler, run_task, register_control, forget_control, stop_control, stream_for, applied_edit, storyboard, script_tool, related_media, edit_request, media_binding, completed_media, read_media, read_script, bound_execution, bind_observation, bind_execution, read_proposal, read_intent, render_edit_preview, read_event, list_events, goal_for, bind_goal_scope, wake, read_quality, read_window, read_segment, read_restore, generation_for):
         self._conversations_for = conversations_for
         self._window_case_for = window_case_for
         self._workspace_for = workspace_for
@@ -48,6 +50,9 @@ class TaskTurnHTTPAdapter:
         self._clip_material = clip_material
         self._material_snapshot = material_snapshot
         self._settings_for = settings_for
+        self._read_goal_plan = read_goal_plan
+        self._goal_shutting_down = goal_shutting_down
+        self._runtime_for = runtime_for
         self._local_token = local_token
         self._request_actor = request_actor
         self._require_actor = require_actor
@@ -99,6 +104,12 @@ class TaskTurnHTTPAdapter:
         if values["selected_knowledge_reference"] is not None:
             values["selected_knowledge_reference"] = task.KnowledgeReference(**values["selected_knowledge_reference"])
         return task.TaskTurnCommand(task_id=task_id, **values)
+
+    def run_goal(self, claim, fresh):
+        return self._drive(self.case().run_goal(claim, fresh), None)
+
+    def finish_goal(self, business, claim, reply, preview):
+        return self._drive(self.case().finish_goal(business, claim, reply, preview), None)
 
     def execute(self, task_id, request, payload, on_event=None):
         return self._drive(self.case().turn(self.command(task_id, payload)), request, on_event=on_event)
@@ -246,6 +257,25 @@ class TaskTurnHTTPAdapter:
             return self._content_visible(request, stage.workspace_id, stage.visibility, stage.owner_user_id)
         if isinstance(stage, task.ReadMember):
             return self._read_member(request, stage.workspace_id)
+        if isinstance(stage, task.ReadGoalPlan):
+            return self._read_goal_plan(stage.workspace_id, stage.task)
+        if isinstance(stage, task.GoalShuttingDown):
+            return self._goal_shutting_down()
+        if isinstance(stage, task.GoalStream):
+            return self._stream_for().sanitizer(stage.workspace_id), lambda value: self._safe_text(value, stage.workspace_id)
+        if isinstance(stage, task.RunGoalTask):
+            goal, business = stage.goal, stage.business
+            host = TaskBusinessAdapter(business)
+            native = NativeOperationHandler(business.native_case, stage.native_actor, None, self._runtime_for,
+                delegate=host.native_call)
+            return self._run_task(self._settings_for(goal['workspace_id']), workspace_id=goal['workspace_id'],
+                caller_user_id=goal['member_id'], task_id=goal['task_id'], conversation_id=goal['conversation_id'],
+                message=stage.message, stage=stage.stage, selected_refs=stage.selected_refs,
+                playhead_ms=stage.playhead_ms, on_event=stage.on_event, turn_id=stage.turn_id,
+                business_handler=host, native_handler=native, source_binding=stage.binding,
+                input_handler=business.input_delivery(stage.binding), profile_reference=stage.facts.get('profile_reference'),
+                knowledge_reference=stage.facts.get('knowledge_reference'), task_version=stage.task_version,
+                material_selection=None, selected_references=[], continuation_context=stage.continuation_context)
         if isinstance(stage, task.ReadSettings):
             return self._settings_for(stage.workspace_id)
         if isinstance(stage, task.SafeText):

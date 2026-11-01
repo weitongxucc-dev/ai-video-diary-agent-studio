@@ -22,7 +22,6 @@ from app.assistant.script_tool_result_binding import (AssistantScriptToolResultB
 from app.assistant.task_business import TaskBusiness
 from app.assistant.task_business_errors import TaskBusinessRejected
 from app.assistant.goal_readiness_use_case import GoalReadinessUseCase, GoalEvidenceUnavailable
-from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.source_errors import SourcePreflightError as _CreationTaskTopicPreflightError
 from app.creation.script_generation_intent import ScriptGenerationIntent
 from app.creation.script_generation_routes import build_script_generation_router
@@ -72,7 +71,7 @@ from starlette.concurrency import run_in_threadpool
 import httpx
 
 from app.assistant_pi import (
-    ASSISTANT_BUSINESS_TOOLS, AssistantStopped, AssistantUnavailable, forget_turn_control,
+    ASSISTANT_BUSINESS_TOOLS, AssistantStopped as AssistantStopped, AssistantUnavailable as AssistantUnavailable, forget_turn_control,
     pi_runtime_checks, register_turn_control,
     request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
@@ -4057,6 +4056,9 @@ def _task_turn_http_adapter():
         clip_material=_assistant_task_clip_material_selection,
         material_snapshot=_assistant_material_selection_snapshot,
         settings_for=_workspace_settings_for,
+        read_goal_plan=_creation_plan_for_task_or_404,
+        goal_shutting_down=lambda: assistant_continuation_driver is not None and assistant_continuation_driver.stop_event.is_set(),
+        runtime_for=lambda: _creation_runtime(),
         local_token=_local_member_token,
         request_actor=_request_permit_actor,
         require_actor=_require_permit_actor,
@@ -7451,107 +7453,8 @@ def _goal_readiness_use_case():
         read_subtitles=_goal_readiness_subtitles, safe_text=_assistant_stream_safe_text)
 
 
-def _finish_goal_business_turn(business,claim,reply,preview):
-    message = _assistant_text_without_credentials(reply,claim['goal']['workspace_id'])
-    if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
-        return business.finish(claim, message, script_window_request=preview)
-    if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
-        return business.finish(claim, message, quality_continuation=preview)
-    return business.finish(claim, message)
 
 
-def _run_goal_turn(claim, fresh):
-    goal, context, business = claim["goal"], claim["request_context"], fresh["business"]
-    task_id, workspace_id, turn_id = goal["task_id"], goal["workspace_id"], claim["turn_id"]
-    task = _creation_task_or_404(workspace_id, task_id)
-    # A verified adoption may legitimately move review back to montage. Keep
-    # the original selection and enforce the same current object validator.
-    stage = context["stage"]
-    if stage in {"topic", "script"} and task.confirmed_script_id:
-        from app.creation.intent_use_case import CreationIntentUseCase
-        adopted_script = production_repo.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        adopted_plan = _creation_plan_for_task_or_404(workspace_id, task)
-        if CreationIntentUseCase.adopted_for_execution(adopted_plan, adopted_script):
-            stage = task.stage
-    if (claim["event"].get("status") == "confirmed" and "adopted_operation" in fresh["facts"]
-            or stage == "review" and task.stage == "montage"):
-        stage = task.stage
-    message = claim['event']['message'] if claim['event'].get('phase') == 'input' else goal['original_instruction']
-    payload = CreationTaskAssistantTurnRequest(conversation_id=goal["conversation_id"], message=message,
-        client_request_id=turn_id, expected_draft_version=0, context_stage=context["stage"],
-        selected_object_refs=[ref for ref in context.get("selected_object_refs", [])
-            if ref not in fresh["task_version"].get("removed_selected_refs", [])], playhead_ms=context.get("playhead_ms"))
-    payload.context_stage = stage
-    stage, refs = _assistant_turn_scope(workspace_id, task, payload)
-    material_selection = None
-    register_turn_control(turn_id)
-    if assistant_continuation_driver is not None and assistant_continuation_driver.stop_event.is_set():
-        conversation_repo.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
-        forget_turn_control(turn_id)
-        return
-    sanitizer = _assistant_stream_transport().sanitizer(workspace_id)
-    def on_event(event):
-        _task_turn_http_adapter().case().record_window_event(event, workspace_id=workspace_id,
-            member_id=goal['member_id'], task_id=task_id, turn_id=turn_id)
-        if event.get('type') == 'context_compaction':
-            diagnostic = _safe_compaction_event(event)
-            if diagnostic is not None:
-                conversation_repo.append_event(turn_id,diagnostic)
-            return
-        if event.get("type") == "text_delta":
-            delta = sanitizer.feed(str(event.get("delta", "")))
-            if delta:
-                conversation_repo.append_event(turn_id, {"type": "text_delta", "delta": delta})
-        elif event.get("type") in {"tool_start", "tool_end"}:
-            safe = {key: value for key, value in event.items() if key in {"type", "tool_id", "label", "ok", "summary"}}
-            for key in ("label", "summary"):
-                if key in safe:
-                    safe[key] = _assistant_stream_safe_text(str(safe[key]), workspace_id)
-            if isinstance(event.get("failure"), dict):
-                safe["failure"] = {key: _assistant_stream_safe_text(value, workspace_id) if isinstance(value, str) else value
-                    for key, value in _safe_business_failure(event["failure"]).items()}
-            conversation_repo.append_event(turn_id, safe)
-    try:
-        binding={"workspace_id":workspace_id,"member_id":goal["member_id"],"task_id":task_id,
-            "conversation_id":goal["conversation_id"],"turn_id":turn_id,"goal_revision":str(goal.get("revision",0)),
-            "input_id":goal.get("source_input_id"),"input_turn_id":goal.get("source_input_turn_id"),"task_version":fresh["task_version"]}
-        from app.creation.native_task_operations import NativeOperationHandler
-        native_actor,_native_task,_native_scope = business.original(goal)
-        host = TaskBusinessAdapter(business)
-        native_handler = NativeOperationHandler(business.native_case,native_actor,None,_creation_runtime,delegate=host.native_call)
-        reply, preview = run_task_turn(_workspace_settings_for(workspace_id), workspace_id=workspace_id,
-            caller_user_id=goal["member_id"],
-            task_id=task_id, conversation_id=goal["conversation_id"], message=message, stage=stage,
-            selected_refs=refs, playhead_ms=context.get("playhead_ms"), on_event=on_event, turn_id=turn_id,
-            business_handler=host,native_handler=native_handler,source_binding=binding,input_handler=business.input_delivery(binding),
-            profile_reference=fresh["facts"].get("profile_reference"), knowledge_reference=fresh["facts"].get("knowledge_reference"),
-            task_version=fresh["task_version"], material_selection=material_selection,
-            selected_references=[],
-            continuation_context={"original_turn_id": goal["original_turn_id"], "business_event": claim["event"],
-                                  "source_input_id": goal.get("source_input_id"), "source_input_turn_id": goal.get("source_input_turn_id"),
-                                  "current_facts": fresh["facts"], "round_count": goal["round_count"],
-                                  "goal_checkpoint": {key: goal[key] for key in ("target_snapshot", "unfinished_steps", "handled_event_ids")},
-                                  "completed_source_slots": goal.get("completed_source_slots", []),
-                                  "completed_output_checkpoint": goal.get("completed_output_checkpoint"),
-                                  "unfinished_steps": goal["unfinished_steps"], "next_checkpoint": goal.get("next_checkpoint")})
-        tail = sanitizer.feed("", final=True)
-        if tail:
-            conversation_repo.append_event(turn_id, {"type": "text_delta", "delta": tail})
-        _finish_goal_business_turn(business,claim,reply,preview)
-    except AssistantUnavailable as exc:
-        failure_message = _assistant_stream_safe_text(str(exc), workspace_id)
-        conversation_repo.finish_turn(turn_id, "failed", failure_message, result={
-            "kind": "failure", "message": failure_message,
-            "business_failure":_safe_business_failure(getattr(exc,"business_failure",None)),
-        })
-        return
-    except AssistantStopped:
-        if assistant_continuation_driver is not None and assistant_continuation_driver.stop_event.is_set():
-            conversation_repo.finish_turn(turn_id, "failed", result={"reason": "api_shutdown"})
-        else:
-            conversation_repo.finish_turn(turn_id, "stopped", result={"kind": "task_turn", "response": {"turn_status": "stopped"}})
-    finally:
-        forget_turn_control(turn_id)
 
 
 def _goal_projection():
@@ -7565,7 +7468,7 @@ def _goal_projection():
 def _goal_service():
     global _goal_continuation_service
     if _goal_continuation_service is None:
-        _goal_continuation_service=GoalContinuationService(conversation_repo,verify_current_goal=_goal_readiness_use_case().verify,run_goal_turn=_run_goal_turn)
+        _goal_continuation_service=GoalContinuationService(conversation_repo,verify_current_goal=_goal_readiness_use_case().verify,run_goal_turn=lambda claim, fresh: _task_turn_http_adapter().run_goal(claim, fresh))
     return _goal_continuation_service
 
 

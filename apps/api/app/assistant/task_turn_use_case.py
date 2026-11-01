@@ -10,10 +10,12 @@ from uuid import UUID
 from pydantic import ValidationError
 from app.assistant.failures import AssistantUnavailable
 from app.assistant.turn_control import AssistantStopped
+from app.assistant.task_turn_scope_use_case import TaskTurnSelection
+from app.assistant.projection import _safe_business_failure, _safe_compaction_event
 from app.creation.media_result_use_case import MediaResultRejected
 from app.assistant.turn_admission_use_case import (
     TurnRejected, ReadWorkspace, CleanText, ResolveTurnScope, ReadTaskClipMaterial,
-    ProfileSnapshot, KnowledgeSnapshot, AccessTask,
+    ProfileSnapshot, KnowledgeSnapshot, AccessTask, RegisterControl,
 )
 
 
@@ -285,11 +287,127 @@ class WakeContinuations:
     pass
 
 
+@dataclass(frozen=True)
+class ReadGoalPlan:
+    workspace_id: str
+    task: object
+
+@dataclass(frozen=True)
+class GoalShuttingDown:
+    pass
+
+@dataclass(frozen=True)
+class GoalStream:
+    workspace_id: str
+
+@dataclass(frozen=True)
+class RunGoalTask:
+    goal: dict
+    turn_id: str
+    message: str
+    stage: str
+    selected_refs: list[str]
+    playhead_ms: object
+    business: object
+    native_actor: object
+    binding: dict
+    task_version: dict
+    facts: dict
+    continuation_context: dict
+    on_event: object
+
+
 class TaskAssistantTurnUseCase:
     def __init__(self, *, conversations_for, window_case_for, read_event, read_intent, list_events):
         self._conversations_for = conversations_for
         self._window_case_for = window_case_for
         self._read_event, self._read_intent, self._list_events = read_event, read_intent, list_events
+
+    def finish_goal(self, business, claim, reply, preview):
+        message = (yield CleanText(reply, claim['goal']['workspace_id']))
+        return business.finish_goal(claim, message, preview)
+
+    def run_goal(self, claim, fresh):
+        goal, context, business = claim['goal'], claim['request_context'], fresh['business']
+        task_id, workspace_id, turn_id = goal['task_id'], goal['workspace_id'], claim['turn_id']
+        task = (yield ReadTask(workspace_id, task_id))
+        stage = context['stage']
+        if stage in {'topic', 'script'} and task.confirmed_script_id:
+            from app.creation.intent_use_case import CreationIntentUseCase
+            adopted_script = (yield ReadScript(workspace_id, task.confirmed_script_id))
+            adopted_plan = (yield ReadGoalPlan(workspace_id, task))
+            if CreationIntentUseCase.adopted_for_execution(adopted_plan, adopted_script):
+                stage = task.stage
+        if (claim['event'].get('status') == 'confirmed' and 'adopted_operation' in fresh['facts']
+                or stage == 'review' and task.stage == 'montage'):
+            stage = task.stage
+        message = claim['event']['message'] if claim['event'].get('phase') == 'input' else goal['original_instruction']
+        selection = TaskTurnSelection(stage, [ref for ref in context.get('selected_object_refs', [])
+            if ref not in fresh['task_version'].get('removed_selected_refs', [])], context.get('playhead_ms'))
+        stage, refs = (yield ResolveTurnScope(workspace_id, task, selection))
+        yield RegisterControl(turn_id)
+        try:
+            if (yield GoalShuttingDown()):
+                self._conversations_for().finish_turn(turn_id, 'failed', result={'reason': 'api_shutdown'})
+                return
+            sanitizer, safe_text = (yield GoalStream(workspace_id))
+
+            def on_event(event):
+                self.record_window_event(event, workspace_id=workspace_id, member_id=goal['member_id'],
+                    task_id=task_id, turn_id=turn_id)
+                if event.get('type') == 'context_compaction':
+                    diagnostic = _safe_compaction_event(event)
+                    if diagnostic is not None:
+                        self._conversations_for().append_event(turn_id, diagnostic)
+                    return
+                if event.get('type') == 'text_delta':
+                    delta = sanitizer.feed(str(event.get('delta', '')))
+                    if delta:
+                        self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': delta})
+                elif event.get('type') in {'tool_start', 'tool_end'}:
+                    safe = {key: value for key, value in event.items() if key in {'type', 'tool_id', 'label', 'ok', 'summary'}}
+                    for key in ('label', 'summary'):
+                        if key in safe:
+                            safe[key] = safe_text(str(safe[key]))
+                    if isinstance(event.get('failure'), dict):
+                        safe['failure'] = {key: safe_text(value) if isinstance(value, str) else value
+                            for key, value in _safe_business_failure(event['failure']).items()}
+                    self._conversations_for().append_event(turn_id, safe)
+
+            try:
+                binding = {'workspace_id': workspace_id, 'member_id': goal['member_id'], 'task_id': task_id,
+                    'conversation_id': goal['conversation_id'], 'turn_id': turn_id, 'goal_revision': str(goal.get('revision', 0)),
+                    'input_id': goal.get('source_input_id'), 'input_turn_id': goal.get('source_input_turn_id'),
+                    'task_version': fresh['task_version']}
+                native_actor, _native_task, _native_scope = business.original(goal)
+                reply, preview = (yield RunGoalTask(goal, turn_id, message, stage, refs, context.get('playhead_ms'),
+                    business, native_actor, binding, fresh['task_version'], fresh['facts'],
+                    {'original_turn_id': goal['original_turn_id'], 'business_event': claim['event'],
+                     'source_input_id': goal.get('source_input_id'), 'source_input_turn_id': goal.get('source_input_turn_id'),
+                     'current_facts': fresh['facts'], 'round_count': goal['round_count'],
+                     'goal_checkpoint': {key: goal[key] for key in ('target_snapshot', 'unfinished_steps', 'handled_event_ids')},
+                     'completed_source_slots': goal.get('completed_source_slots', []),
+                     'completed_output_checkpoint': goal.get('completed_output_checkpoint'),
+                     'unfinished_steps': goal['unfinished_steps'], 'next_checkpoint': goal.get('next_checkpoint')}, on_event))
+                tail = sanitizer.feed('', final=True)
+                if tail:
+                    self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': tail})
+                yield from self.finish_goal(business, claim, reply, preview)
+            except AssistantUnavailable as exc:
+                failure_message = safe_text(str(exc))
+                self._conversations_for().finish_turn(turn_id, 'failed', failure_message, result={
+                    'kind': 'failure', 'message': failure_message,
+                    'business_failure': _safe_business_failure(getattr(exc, 'business_failure', None)),
+                })
+                return
+            except AssistantStopped:
+                if (yield GoalShuttingDown()):
+                    self._conversations_for().finish_turn(turn_id, 'failed', result={'reason': 'api_shutdown'})
+                else:
+                    self._conversations_for().finish_turn(turn_id, 'stopped',
+                        result={'kind': 'task_turn', 'response': {'turn_status': 'stopped'}})
+        finally:
+            yield ForgetControl(turn_id)
 
     def turn(self, payload):
         task_id = payload.task_id

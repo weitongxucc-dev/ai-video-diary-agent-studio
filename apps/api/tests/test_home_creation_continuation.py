@@ -1,4 +1,5 @@
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter
+from app.assistant.task_business_adapter import TaskBusinessAdapter
 import copy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -208,16 +209,16 @@ def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_st
     # The real native actor boundary permits local tokens only in the local workspace.
     # Keep the request fixture isolated while binding the same real local member.
     monkeypatch.setattr(main, "current_workspace_id", lambda _request: "local")
-    original_preflight = main._creation_plan_preflight
-    monkeypatch.setattr(main, "_creation_plan_preflight", lambda *args, **kwargs:
-        replace(original_preflight(*args, **kwargs), workspace_id="local"))
+    original_preflight = main.CreationPlanPreflightUseCase.prepare
+    monkeypatch.setattr(main.CreationPlanPreflightUseCase, "prepare", lambda case, workspace_id, *args, **kwargs:
+        replace(original_preflight(case, workspace_id, *args, **kwargs), workspace_id=workspace_id))
     monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(c.repository.database_path)))
     _, source, saved, message = adopted(c, workspace_id="local")
     model_calls = []
     def model(settings, **kwargs):
         origin = c.conversations.task_turn_source(kwargs["turn_id"], "local", c.member.member_id, kwargs["task_id"])
         assert origin["raw_command"] == message
-        assert isinstance(kwargs["business_handler"], main.TaskBusinessAdapter)
+        assert isinstance(kwargs["business_handler"], TaskBusinessAdapter)
         assert kwargs["business_handler"].business is business
         model_calls.append(kwargs)
         return "已读取任务，未执行模型或媒体。", None
@@ -233,7 +234,7 @@ def test_first_task_round_uses_existing_runner_and_trusted_task_source(client_st
     business = main._task_business()
     continuation = GoalContinuationService(c.conversations, verify_current_goal=lambda goal, event: {
         "status": "ready", "task_version": {"timeline_version_id": None, "timeline_sequence": 0},
-        "facts": {}, "request": request, "business": business}, run_goal_turn=main._run_goal_turn)
+        "facts": {}, "request": request, "business": business}, run_goal_turn=main._task_turn_http_adapter().run_goal)
     roots = continuation.register_creation_request(source["id"], "local", c.member.member_id, saved)
     for root_id in roots:
         main._bind_goal_business_scope(request, c.conversations.get_task_goal(root_id))

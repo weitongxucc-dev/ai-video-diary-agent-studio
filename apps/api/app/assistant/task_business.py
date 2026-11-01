@@ -369,6 +369,13 @@ class TaskBusiness:
             **{key:sealed.get(key) if frozen.get(key) else None for key in ('profile_reference','knowledge_reference')}}
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
+    def finish_goal(self, claim, reply, preview):
+        if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
+            return self.finish(claim, reply, script_window_request=preview)
+        if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
+            return self.finish(claim, reply, quality_continuation=preview)
+        return self.finish(claim, reply)
+
     def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])

@@ -534,7 +534,7 @@ def test_background_goal_turn_persists_the_same_finite_compaction_diagnostic(mon
     goal={'task_id':'task','workspace_id':'local','member_id':'member','conversation_id':chat['id'],
         'original_turn_id':turn['id'],'original_instruction':raw,'round_count':1,'target_snapshot':{},
         'unfinished_steps':['read_original'],'handled_event_ids':[]}
-    main_module._run_goal_turn({'goal':goal,'turn_id':turn['id'],'request_context':{'stage':'montage'},
+    main_module._task_turn_http_adapter().run_goal({'goal':goal,'turn_id':turn['id'],'request_context':{'stage':'montage'},
         'event':{'status':'succeeded'},'phase':'business'}, {'business':business,'facts':{},'task_version':{}})
     saved=repo.get_turn(turn['id'])
     assert saved['status']=='failed' and saved['user_message']==raw
@@ -543,6 +543,30 @@ def test_background_goal_turn_persists_the_same_finite_compaction_diagnostic(mon
     assert diagnostic['limit_seconds']==180 and diagnostic['sdk_estimate']=={'tokens_before':112607}
     assert 'provider_usage' not in diagnostic
     assert 'PRIVATE_CONTEXT' not in json.dumps(diagnostic) and 'fixture-secret-123' not in json.dumps(diagnostic)
+
+
+def test_background_goal_setup_failure_forgets_registered_control_without_model(monkeypatch, tmp_path):
+    repo = ConversationRepository(tmp_path / 'goal-setup.sqlite')
+    chat = repo.current_or_create('local', 'member', 'home', 'home')
+    draft = repo.save_draft(chat['id'], 'local', 'member', '原委托', 0)
+    turn, _ = repo.create_turn_idempotent(chat['id'], 'local', 'member', '原委托', 'setup-request', draft['draft_version'])
+    turn_id = turn['id']
+    monkeypatch.setattr(main_module, 'conversation_repo', repo)
+    monkeypatch.setattr(main_module, 'assistant_continuation_driver', None)
+    monkeypatch.setattr(main_module, '_creation_task_or_404', lambda *_: SimpleNamespace(confirmed_script_id=None, stage='montage'))
+    monkeypatch.setattr(main_module, '_assistant_turn_scope', lambda *_: ('montage', []))
+    def refuse_stream_setup():
+        assert turn_id in pi_module._turn_stop_events
+        raise ValueError('injected goal stream setup failure')
+    monkeypatch.setattr(main_module, '_assistant_stream_transport', refuse_stream_setup)
+    monkeypatch.setattr(main_module, 'run_task_turn', lambda *_args, **_kwargs: pytest.fail('setup failure must not invoke model'))
+    claim = {'goal': {'task_id': 'task', 'workspace_id': 'local', 'original_instruction': '原委托'},
+        'turn_id': turn_id, 'request_context': {'stage': 'montage'}, 'event': {}}
+    assert turn_id not in pi_module._turn_stop_events
+    with pytest.raises(ValueError, match='goal stream setup failure'):
+        main_module._task_turn_http_adapter().run_goal(claim, {'business': None, 'facts': {}, 'task_version': {}})
+    assert turn_id not in pi_module._turn_stop_events
+    assert repo.get_turn(turn_id)['user_message'] == '原委托'
 
 
 def test_assistant_stream_reports_version_rejection_before_turn_started(monkeypatch):
