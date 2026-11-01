@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.media_link_import import (
     DEFAULT_MAX_BYTES, MediaLinkImportError, MediaLinkImportService,
 )
+from app.materials.source_files import MaterialSourceFileAccess
 from app.schemas import (
     MediaLinkCheckRequest, MediaLinkCheckResponse,
     MediaLinkImportRequest, MediaLinkImportResponse,
@@ -21,7 +22,8 @@ from app.schemas import (
 
 
 class MaterialLinkHTTPRecords(Protocol):
-    def material_link_target(self, workspace_id): ...
+    @property
+    def material_source_files(self) -> MaterialSourceFileAccess: ...
     def get_asset(self, workspace_id, asset_id): ...
 
 
@@ -45,7 +47,7 @@ class MaterialLinkHTTPAdapter:
         """Build the direct-link importer on top of the existing intake binding."""
         repository = self._records_for()
         try:
-            intake_root = repository.material_link_target(workspace_id)
+            intake_root = repository.material_source_files.material_link_target(workspace_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return MediaLinkImportService(client_factory=lambda: httpx.Client(follow_redirects=False, timeout=60.0, trust_env=False), intake_root=intake_root, provenance=self._provenance_for(repository, workspace_id, verified_owner_user_id, local_diagnostic), max_bytes=DEFAULT_MAX_BYTES)

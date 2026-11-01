@@ -267,3 +267,20 @@ class MaterialSourceFileAccess:
         if not directory_accepts_writes(root):
             return "read_only"
         return "ready"
+
+    def material_link_target(self, workspace_id: str) -> Path:
+        """Return the intake directory a direct link may write into, or refuse.
+
+        Direct-link import reuses the existing binding and workspace checks; it
+        never creates its own directory or its own authorization path.
+        """
+        state = self.material_ingestion_directory_state(workspace_id)
+        if state["bound_to_another_workspace"]:
+            raise ValueError("素材目录已关联其他工作区；当前工作区不能写入。")
+        if state["configured_path_changed"]:
+            raise ValueError("当前设置的素材目录与本工作区原绑定目录不同；请先处理原绑定。")
+        if not state["bound_to_current_workspace"]:
+            raise ValueError("请先把素材目录关联到当前工作区，再导入链接。")
+        if state["status"] != "ready":
+            raise ValueError("素材目录当前不可写；请检查磁盘挂载方式或目录权限。")
+        return self.video_library_path

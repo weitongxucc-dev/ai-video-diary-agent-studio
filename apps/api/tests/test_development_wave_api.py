@@ -118,10 +118,10 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
     repository.material_source_files.bind_material_ingestion("local", expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
     repository.material_discovery = MaterialDiscoveryService(
         DiscoveryStore(repository._connect), root_provider=lambda: [source],
-        excluded_roots=lambda: [repository.video_library_path], target_for=repository.material_link_target,
+        excluded_roots=lambda: [repository.video_library_path], target_for=repository.material_source_files.material_link_target,
         accept_copy=DiscoveryIntake(repository._connect, repository._material_assets,
             workspace_references=repository._workspace_media_references,
-            target_for=repository.material_link_target, confirm_copy=repository.material_source_files.confirm_material_copy_complete),
+            target_for=repository.material_source_files.material_link_target, confirm_copy=repository.material_source_files.confirm_material_copy_complete),
     )
     monkeypatch.setattr(main, "material_ingestion", None)
     base = "/api/production/materials/discovery"

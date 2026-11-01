@@ -4526,7 +4526,7 @@ def test_foundation_video_voice_preparation_never_decodes_or_derives(foundation_
     state = foundation_state
     # Registration uses a controlled format qualification for synthetic video bytes.
     # Preparation must subsequently use source facts, never this decoder or a model.
-    monkeypatch.setattr(state.repo, "_material_file_intact", lambda _asset: True)
+    monkeypatch.setattr(state.repo.material_source_files, "material_file_intact", lambda _asset: True)
     voice = state.repo.save_versioned_voice_profile(VersionedVoiceProfile(
         id="video-voice", workspace_id=LEGACY_WORKSPACE_ID, version="v1", language="zh",
         display_name="合成视频声音参考", model_id="fixture-voice", reference_text="视频中的合成文字",
@@ -4540,7 +4540,7 @@ def test_foundation_video_voice_preparation_never_decodes_or_derives(foundation_
     def no_decoder(_asset):
         raise AssertionError("foundation preparation must not decode video")
 
-    monkeypatch.setattr(state.repo, "_material_file_intact", no_decoder)
+    monkeypatch.setattr(state.repo.material_source_files, "material_file_intact", no_decoder)
     response = state.client.get("/api/production/foundation", headers=state.headers)
     assert response.status_code == 200
     assert response.json()["readiness"]["ready"] is True

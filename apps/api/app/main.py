@@ -11,6 +11,7 @@ from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_mater
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
 from app.materials.link_routes import MaterialLinkHTTPAdapter, build_material_link_router
+from app.materials.link_intake import MaterialLinkProvenanceSink
 from app.creation.video_template_routes import VideoTemplateHTTPAdapter, build_video_template_router
 from app.assistant.task_turn_scope_use_case import TaskTurnScopeUseCase, TaskTurnSelection, TaskTurnScopeRejected
 from app.creation.editing.edit_capability_read_use_case import EditCapabilityReadUseCase
@@ -285,7 +286,7 @@ from app.schemas import (MaterialDiscoveryStartRequest,
 from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
-from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
 from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
@@ -5759,7 +5760,8 @@ def _material_link_http_adapter():
         records_for=lambda: production_repo,
         workspace_for=current_workspace_id,
         reader_for=_content_reader,
-        provenance_for=MaterialLinkProvenanceSink,
+        provenance_for=lambda repository, workspace_id, verified_owner_user_id, local_diagnostic: MaterialLinkProvenanceSink(
+            repository.material_links, workspace_id, verified_owner_user_id, local_diagnostic),
     )
 
 

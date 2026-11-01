@@ -124,6 +124,7 @@ from app.materials.analysis_execution import probe_duration, detect_scene_bounda
 from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.source_files import MaterialSourceFileAccess, directory_accepts_writes as directory_accepts_writes
 from app.materials.intake import MaterialIntakeUseCase
+from app.materials.link_intake import LinkMaterialIntakeUseCase
 from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 from app.profiles.reference_access import ProfileReferenceAccess, _profile_wav_duration
 from app.profiles.registration import ProfileRegistrationUseCase
@@ -150,7 +151,6 @@ from app.materials.contracts import (
     SuggestedUsageRole,
     AnalysisStatus,
     MaterialMediaType,
-    MATERIAL_MEDIA_LABEL,
     MATERIAL_MEDIA_BY_SUFFIX,
     BUSINESS_OBJECT_KINDS,
     ContentUseState,
@@ -175,7 +175,6 @@ from app.visual_semantics import (
     VisualSemanticProvider,
 )
 from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
-from app.media_link_import import RegisteredLink
 from app.material_scene import (
     SCENE_LOGICAL_WINDOW_SECONDS, SceneWindow, SceneWindowFacts, scene_unit_key,
     scene_window_for_key, scene_windows,
@@ -452,13 +451,18 @@ class ProductionRepository:
             self._connect, self._profile_records, self._workspace_media_references)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         initialize_production_schema(self._connect)
+        self.material_links = LinkMaterialIntakeUseCase(
+            assets=self._material_assets, source_files=self.material_source_files,
+            accept_discovered_asset=lambda workspace_id, path, *, media_type=None, source_url="", owner_user_id=None: self._upsert_discovered_asset(
+                workspace_id, path, media_type=media_type, source_url=source_url, owner_user_id=owner_user_id),
+        )
         self.material_discovery = MaterialDiscoveryService(
             DiscoveryStore(self._connect),
             excluded_roots=lambda: [self.video_library_path, self.database_path, *discovery_excluded_roots],
-            target_for=self.material_link_target,
+            target_for=self.material_source_files.material_link_target,
             accept_copy=DiscoveryIntake(self._connect, self._material_assets,
                 workspace_references=self._workspace_media_references,
-                target_for=self.material_link_target, confirm_copy=lambda workspace_id, **values: self.material_source_files.confirm_material_copy_complete(workspace_id, **values)),
+                target_for=self.material_source_files.material_link_target, confirm_copy=lambda workspace_id, **values: self.material_source_files.confirm_material_copy_complete(workspace_id, **values)),
         )
 
     @property
@@ -3062,141 +3066,16 @@ class ProductionRepository:
 
         return MobileTransfers(self._connect, assets=self._material_assets,
             workspace_references=self._workspace_media_references,
-            target_for=self.material_link_target, confirm_copy_in_transaction=confirm,
+            target_for=self.material_source_files.material_link_target, confirm_copy_in_transaction=confirm,
             min_free_disk_bytes=min_free_disk_bytes)
 
-    def material_link_target(self, workspace_id: str) -> Path:
-        """Return the intake directory a direct link may write into, or refuse.
 
-        Direct-link import reuses the existing binding and workspace checks; it
-        never creates its own directory or its own authorization path.
-        """
-        state = self.material_source_files.material_ingestion_directory_state(workspace_id)
-        if state["bound_to_another_workspace"]:
-            raise ValueError("素材目录已关联其他工作区；当前工作区不能写入。")
-        if state["configured_path_changed"]:
-            raise ValueError("当前设置的素材目录与本工作区原绑定目录不同；请先处理原绑定。")
-        if not state["bound_to_current_workspace"]:
-            raise ValueError("请先把素材目录关联到当前工作区，再导入链接。")
-        if state["status"] != "ready":
-            raise ValueError("素材目录当前不可写；请检查磁盘挂载方式或目录权限。")
-        return self.video_library_path
 
-    def _asset_by_source_url(self, workspace_id: str, source_url: str) -> MaterialAsset | None:
-        """Find the material already registered for one original direct link."""
-        return self._material_assets.find_asset_by_source_url(workspace_id, source_url)
 
-    def _material_file_intact(self, asset: MaterialAsset) -> bool:
-        return self._material_source_files.material_file_intact(asset)
 
-    def existing_link_material(
-        self, workspace_id: str, source_url: str, *,
-        viewer_user_id: str | None = None, local_diagnostic: bool = False,
-    ) -> MaterialAsset | None:
-        """The material already registered for one original direct link.
 
-        Returns it only while its own file is still there at the recorded size, so
-        a repeat submission of the same URL can reuse both instead of downloading
-        again over the top of it.
-        """
-        asset = self._asset_by_source_url(workspace_id, source_url)
-        if asset is not None and not _content_readable(
-            user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-            visibility=asset.visibility, owner_user_id=asset.owner_user_id,
-        ):
-            raise KeyError("material asset not found")
-        if asset is None or not self._material_file_intact(asset):
-            return None
-        return asset
 
-    def _discard_redundant_link_file(self, path: Path) -> None:
-        """Drop a link-import file that no material references.
 
-        The video whitelist scans the intake directory, so a leftover copy would
-        later be registered as a second material for the same source. Only files
-        this feature names after their URL are ever removed.
-        """
-        resolved = path.resolve()
-        try:
-            resolved.relative_to(self.video_library_path.resolve())
-        except ValueError as exc:
-            raise ValueError("素材文件不在配置的素材库中") from exc
-        if resolved.name.startswith("link-") and resolved.is_file():
-            resolved.unlink(missing_ok=True)
-
-    def _repoint_asset(self, asset: MaterialAsset) -> None:
-        """Move an existing material record onto a restored file, keeping its id.
-
-        `_save_asset` upserts on (workspace_id, file_path), so a record whose file
-        changed path cannot go through it without colliding on its own id.
-        """
-        self._material_assets.repoint_asset(asset)
-
-    def register_link_material(
-        self,
-        workspace_id: str,
-        path: Path,
-        *,
-        media_type: MaterialMediaType,
-        source_url: str,
-        verified_owner_user_id: str | None = None,
-        local_diagnostic: bool = False,
-    ) -> MaterialAsset:
-        """Register one fully downloaded direct link as a workspace material asset.
-
-        This is the only path that admits non-video media. The original URL is the
-        identity: re-submitting it reuses the record made on first import. This
-        ticket has no "refresh this source" scope, so an intact original file is
-        never overwritten by whatever the link returns later; the later download
-        is discarded. Only a missing or unreadable original file is restored, and
-        then onto the same record, keeping the original URL as its provenance.
-        """
-        if not source_url:
-            raise ValueError("链接素材必须记录来源地址")
-        resolved = Path(path).expanduser()
-        if not resolved.is_file() or resolved.stat().st_size == 0:
-            raise ValueError("素材文件不存在或为空，未登记。")
-        recorded = self._asset_by_source_url(workspace_id, source_url)
-        if recorded is not None:
-            if not _content_readable(
-                user_id=verified_owner_user_id, local_diagnostic=local_diagnostic,
-                visibility=recorded.visibility, owner_user_id=recorded.owner_user_id,
-            ):
-                raise KeyError("material asset not found")
-            if self._material_file_intact(recorded):
-                # 原记录和原文件都还在：复用它们，这次下载的那份不再需要。
-                if Path(recorded.path).resolve() != resolved.resolve():
-                    self._discard_redundant_link_file(resolved)
-                return recorded
-            # 原文件已缺失或读不出来：按既有导入契约把同一条记录恢复回来。
-            if Path(recorded.path).resolve() != resolved.resolve():
-                self._discard_redundant_link_file(Path(recorded.path))
-            stat = resolved.stat()
-            recorded.file_name = resolved.name
-            recorded.path = str(resolved.resolve())
-            recorded.size_bytes = stat.st_size
-            recorded.modified_at = datetime.fromtimestamp(stat.st_mtime, tz=utc_now().tzinfo)
-            recorded.media_type = media_type
-            recorded.updated_at = utc_now()
-            self._repoint_asset(recorded)
-            return self._apply_media_analysis_status(recorded)
-        asset = self._upsert_discovered_asset(
-            workspace_id, resolved, media_type=media_type, source_url=source_url,
-            owner_user_id=verified_owner_user_id,
-        )
-        return self._apply_media_analysis_status(asset)
-
-    def _apply_media_analysis_status(self, asset: MaterialAsset) -> MaterialAsset:
-        """Non-video has no shot/content analysis yet. Say so instead of reporting
-        ready or running video analysis on it."""
-        if asset.media_type == "video":
-            return asset
-        asset.analysis_status = "blocked"
-        asset.analysis_message = (
-            f"这条{MATERIAL_MEDIA_LABEL[asset.media_type]}已入库；"
-            "首批只支持视频的镜头与画面分析，内容分析尚未接入。"
-        )
-        return self._save_asset(asset)
 
     def _save_asset(self, asset: MaterialAsset, *, analysis_only: bool = False) -> MaterialAsset:
         return self._material_assets.save_asset(asset, analysis_only=analysis_only)
@@ -3283,52 +3162,6 @@ class ProductionRepository:
 
 
 
-class MaterialLinkProvenanceSink:
-    """Record a completed direct-link download on the existing material fact source.
-
-    The imported file becomes a `material_assets` row of the current workspace —
-    the same fact source, key and lookup the directory scan already uses. No
-    parallel store is introduced.
-    """
-
-    def __init__(
-        self,
-        repository: ProductionRepository,
-        workspace_id: str,
-        verified_owner_user_id: str | None = None,
-        local_diagnostic: bool = False,
-    ) -> None:
-        self._repository = repository
-        self._workspace_id = workspace_id
-        self._owner_user_id = verified_owner_user_id
-        self._local_diagnostic = local_diagnostic
-
-    def existing_link_import(self, url: str):
-        asset = self._repository.existing_link_material(
-            self._workspace_id, url, viewer_user_id=self._owner_user_id,
-            local_diagnostic=self._local_diagnostic,
-        )
-        if asset is None:
-            return None
-        return RegisteredLink(
-            url=asset.source_url,
-            file_path=asset.path,
-            file_name=asset.file_name,
-            media_type=asset.media_type,
-            size_bytes=asset.size_bytes,
-            asset_id=asset.id,
-        )
-
-    def record_link_import(self, record) -> str:
-        asset = self._repository.register_link_material(
-            self._workspace_id,
-            Path(record.file_path),
-            media_type=record.media_type,
-            source_url=record.url,
-            verified_owner_user_id=self._owner_user_id,
-            local_diagnostic=self._local_diagnostic,
-        )
-        return asset.id
 
 
 

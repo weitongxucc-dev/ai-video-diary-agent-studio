@@ -35,7 +35,7 @@ def env(tmp_path):
         repository.material_source_files.confirm_material_copy_complete(workspace_id, connection=conn, **values)
     def make():
         return MobileTransfers(repository._connect, assets=assets, workspace_references=references,
-            target_for=repository.material_link_target, confirm_copy_in_transaction=confirm,
+            target_for=repository.material_source_files.material_link_target, confirm_copy_in_transaction=confirm,
             min_free_disk_bytes=0, max_bytes=4 * 1024 * 1024)
     return SimpleNamespace(root=root, repository=repository, assets=assets,
         references=references, make=make, service=make(),

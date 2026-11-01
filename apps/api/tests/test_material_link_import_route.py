@@ -156,25 +156,25 @@ def test_link_reuse_and_restore_follow_current_visibility_without_transferring_o
     repo = link_client.repository
     source = link_client.library / "link-original.png"
     source.write_bytes(tmp_png())
-    asset = repo.register_link_material(
+    asset = repo.material_links.register_link_material(
         "workspace-a", source, media_type="image", source_url=PNG_URL,
         verified_owner_user_id="uploader",
     )
     with pytest.raises(KeyError):
-        repo.existing_link_material("workspace-a", PNG_URL, viewer_user_id="other-member")
+        repo.material_links.existing_link_material("workspace-a", PNG_URL, viewer_user_id="other-member")
     shared = repo.set_asset_visibility("workspace-a", asset.id, "shared")
-    assert repo.existing_link_material("workspace-a", PNG_URL, viewer_user_id="other-member").id == shared.id
+    assert repo.material_links.existing_link_material("workspace-a", PNG_URL, viewer_user_id="other-member").id == shared.id
     repo.set_asset_visibility("workspace-a", asset.id, "private")
     source.unlink()
     replacement = link_client.library / "link-replacement.png"
     replacement.write_bytes(tmp_png())
     with pytest.raises(KeyError):
-        repo.register_link_material(
+        repo.material_links.register_link_material(
             "workspace-a", replacement, media_type="image", source_url=PNG_URL,
             verified_owner_user_id="other-member",
         )
     assert replacement.is_file()
-    restored = repo.register_link_material(
+    restored = repo.material_links.register_link_material(
         "workspace-a", replacement, media_type="image", source_url=PNG_URL,
         verified_owner_user_id="uploader",
     )
@@ -561,3 +561,83 @@ def test_audio_and_video_links_register_their_real_type(link_client) -> None:
 
     served = link_client.client.get(f"/api/production/materials/{registered.id}/media")
     assert served.headers["content-type"] == "video/mp4"
+
+
+def test_link_intake_metadata_reuses_restores_and_preserves_private_provenance(tmp_path, monkeypatch):
+    import socket
+    import wave
+    from app.materials import source_files
+    from app.materials.link_intake import MaterialLinkProvenanceSink
+    from app.production import ProductionRepository
+
+    violations = []
+    def forbidden(*args, **kwargs):
+        violations.append('link file metadata attempted media, network or execution')
+        raise AssertionError(violations[-1])
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, 'scan_library', forbidden)
+    monkeypatch.setattr(ProductionRepository, 'analyze_asset', forbidden)
+    for name in ('run_plan_turn', 'run_task_turn', '_start_device_runtime', '_creation_runtime'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    library = tmp_path / 'metadata-library'
+    library.mkdir()
+    def declared_format(path):
+        assert Path(path).parent == library
+        return 'image'
+    monkeypatch.setattr(source_files, '_probe_file_media_type', declared_format)
+    repo = ProductionRepository(tmp_path / 'metadata.sqlite3', library,
+        duration_reader=forbidden, scene_reader=forbidden)
+    repo.material_source_files.bind_material_ingestion('metadata-ws', expected_directory=str(library),
+        verified_owner_user_id='metadata-owner')
+    assert repo.material_source_files.material_link_target('metadata-ws') == library
+    links = repo.material_links
+    url = 'https://metadata.example/original.png'
+    original = library / 'link-original.png'
+    original.write_bytes(b'opaque original metadata')
+    asset = links.register_link_material('metadata-ws', original, media_type='image', source_url=url,
+        verified_owner_user_id='metadata-owner')
+    assert asset.analysis_status == 'blocked' and asset.owner_user_id == 'metadata-owner'
+    assert asset.visibility == 'private' and asset.source_url == url
+    duplicate = library / 'link-duplicate.png'
+    duplicate.write_bytes(b'opaque later response of a different length')
+    with pytest.raises(KeyError):
+        links.existing_link_material('metadata-ws', url, viewer_user_id='other-member')
+    with pytest.raises(KeyError):
+        links.register_link_material('metadata-ws', duplicate, media_type='image', source_url=url,
+            verified_owner_user_id='other-member')
+    assert duplicate.is_file() and original.read_bytes() == b'opaque original metadata'
+    reused = links.register_link_material('metadata-ws', duplicate, media_type='image', source_url=url,
+        verified_owner_user_id='metadata-owner')
+    assert reused.id == asset.id and not duplicate.exists()
+    assert original.read_bytes() == b'opaque original metadata'
+    unowned_name = library / 'keep.png'
+    unowned_name.write_bytes(b'opaque non-link-name copy')
+    links.register_link_material('metadata-ws', unowned_name, media_type='image', source_url=url,
+        verified_owner_user_id='metadata-owner')
+    assert unowned_name.is_file()
+    original.unlink()
+    replacement = library / 'link-restored.png'
+    replacement.write_bytes(b'opaque restored metadata')
+    with pytest.raises(KeyError):
+        links.register_link_material('metadata-ws', replacement, media_type='image', source_url=url,
+            verified_owner_user_id='other-member')
+    assert replacement.is_file()
+    restored = links.register_link_material('metadata-ws', replacement, media_type='image', source_url=url,
+        verified_owner_user_id='metadata-owner')
+    assert restored.id == asset.id and restored.path == str(replacement.resolve())
+    assert restored.owner_user_id == 'metadata-owner' and restored.visibility == 'private'
+    assert restored.source_url == url and restored.analysis_status == 'blocked'
+    reopened = ProductionRepository(repo.database_path, library, duration_reader=forbidden, scene_reader=forbidden)
+    sink = MaterialLinkProvenanceSink(reopened.material_links, 'metadata-ws', 'metadata-owner')
+    receipt = sink.existing_link_import(url)
+    assert receipt.asset_id == asset.id and receipt.file_path == str(replacement.resolve())
+    assert receipt.url == url and receipt.media_type == 'image'
+    assert sink.record_link_import(receipt) == asset.id
+    assert reopened.list_assets_page('metadata-ws', limit=10, offset=0)[1] == 1
+    assert violations == []
