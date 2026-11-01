@@ -376,7 +376,7 @@ class NarrationStageUseCase:
         return updated
 
     def prepare_edit(self, workspace_id, task_id, context, proposal_id, resources):
-        candidate = self.repository.narration_edit_generated(workspace_id,context.grant.owner_id)
+        candidate = self.repository.narration_checkpoints.narration_edit_generated(workspace_id,context.grant.owner_id)
         receipt = context.run_pcm_assembly(resources)
         return self.prepare_edit_adoption(workspace_id,task_id,proposal_id,candidate,resources,receipt),receipt
 

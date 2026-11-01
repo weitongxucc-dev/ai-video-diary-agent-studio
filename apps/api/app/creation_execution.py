@@ -1143,7 +1143,7 @@ class CreationJobOwnerVerifier:
     def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *, pcm_preparation=None, request=None):
         from app.creation.narration_pcm import prepare_sources, prepared_source_facts, work_baseline
         audio = self.narration_audio_budget
-        checkpoint = self.repository.creation_narration_merge_checkpoint(job.workspace_id, job.id, connection=conn)
+        checkpoint = self.repository.narration_checkpoints.creation_narration_merge_checkpoint(job.workspace_id, job.id, connection=conn)
         covered = len(checkpoint['section_ids']) if checkpoint else 0
         if checkpoint and (checkpoint['source_digest'] != source_digest
                 or checkpoint['section_ids'] != ordered_ids[:covered] or covered >= len(ordered_ids)
@@ -1208,7 +1208,7 @@ class CreationJobOwnerVerifier:
             snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
             task, plan = snapshot.task, snapshot.plan
             if generated is None and job.kind == NARRATION_EDIT_KIND:
-                candidate = self.repository.narration_edit_generated(job.workspace_id, job.id, connection=conn)
+                candidate = self.repository.narration_checkpoints.narration_edit_generated(job.workspace_id, job.id, connection=conn)
                 if candidate is not None:
                     generated = self.repository.get_narration_artifact(job.workspace_id, candidate['cache_key'], connection=conn)
                     section_id = self.repository.narration_records.get_narration_segment(job.workspace_id, job.task_id,
@@ -1383,7 +1383,7 @@ class CreationJobOwnerVerifier:
                 'narration_reference':resources['narration_reference'],
                 'parent_timeout_seconds':limits['parent_timeout_seconds'],
                 'parent_max_output_bytes':limits['parent_max_output_bytes']}
-            candidate = self.repository.narration_edit_generated(job.workspace_id,job.id,connection=conn)
+            candidate = self.repository.narration_checkpoints.narration_edit_generated(job.workspace_id,job.id,connection=conn)
             if candidate is None:
                 return key,{**resources,**common,'narration_phase':'segment_edit',
                     'input_scope':self.narration_budget.input_scope,
@@ -2476,7 +2476,7 @@ class CreationJobUnitExecutor:
                         current_script, current_plan, request=request, original_recovery=True)
                     if current_key != request.unit_key or current_facts != resources:
                         raise RecoveryBlocked('原单段恢复提交前文案或来源版本已变化')
-                    self.repository.commit_creation_narration_segment(record, ready, connection=conn)
+                    self.repository.narration_checkpoints.commit_creation_narration_segment(record, ready, connection=conn)
                     conn.execute("UPDATE job_runs SET status='queued',failure_reason=NULL,finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
                         (datetime.now(timezone.utc).isoformat(), job.workspace_id, job.id))
                     current_task.stage_status = current_task.status = 'waiting_for_user'
@@ -2542,7 +2542,7 @@ class CreationJobUnitExecutor:
                 request.input_digest,request.attempt_number,request.last_grant_generation,'',scheduler.database_path)
             commit=None
             if receipt['finalized'] and job.kind==NARRATION_EDIT_KIND:
-                candidate=self.repository.narration_edit_generated(job.workspace_id,job.id)
+                candidate=self.repository.narration_checkpoints.narration_edit_generated(job.workspace_id,job.id)
                 commit=self.narration_stage.prepare_edit_adoption(job.workspace_id,job.task_id,event['edit_proposal_id'],
                     candidate,resources,receipt)
             with self.repository._connect() as conn:
@@ -2604,7 +2604,7 @@ class CreationJobUnitExecutor:
                         self.repository.narration_completion.complete_creation_task_narration(record, connection=conn)
                         checkpoint=self._checkpoint(conn,grant,status='queued',output=record.cache_key,stage='narration')
                 else:
-                    checkpoint=self.repository.checkpoint_creation_narration_merge(grant,
+                    checkpoint=self.repository.narration_checkpoints.checkpoint_creation_narration_merge(grant,
                         source_digest=resources['merge_source_digest'],section_ids=resources['merge_section_ids'],
                         input_references=[item['reference'] for item in resources['inputs']],pcm_receipt=receipt,connection=conn)
                 scheduler.complete_recovered_narration_pcm(conn,request,generation=free_generation,checkpoint_ref=checkpoint)
@@ -2722,7 +2722,7 @@ class CreationJobUnitExecutor:
                 settle(conn, current)
                 if segment is None:
                     if not resources['merge_final']:
-                        return self.repository.checkpoint_creation_narration_merge(current,
+                        return self.repository.narration_checkpoints.checkpoint_creation_narration_merge(current,
                             source_digest=resources['merge_source_digest'], section_ids=resources['merge_section_ids'],
                             input_references=[item['reference'] for item in resources['inputs']],
                             pcm_receipt=pcm_receipt, connection=conn)
@@ -2730,7 +2730,7 @@ class CreationJobUnitExecutor:
                     return self._checkpoint(conn, current, status='queued', output=artifact.cache_key, stage='narration')
                 if video_preparation is not None:
                     self.segments.persist_video_preparation(video_preparation,current,connection=conn)
-                return self.repository.checkpoint_creation_narration_segment(current, artifact, segment, resources['ordinal'], connection=conn)
+                return self.repository.narration_checkpoints.checkpoint_creation_narration_segment(current, artifact, segment, resources['ordinal'], connection=conn)
 
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=commit, next_unit_write=continue_unit)
@@ -3098,7 +3098,7 @@ class CreationJobUnitExecutor:
                 context.narration_output_usage[0]=max(context.narration_output_usage[0],Path(artifact.audio_path).stat().st_size)
                 def checkpoint(conn,current):
                     settle(conn,current)
-                    return self.repository.checkpoint_narration_edit_generated(current,artifact,segment,grant.unit_key,connection=conn)
+                    return self.repository.narration_checkpoints.checkpoint_narration_edit_generated(current,artifact,segment,grant.unit_key,connection=conn)
                 scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=checkpoint,next_unit_write=next_unit)
             else:
@@ -3110,7 +3110,7 @@ class CreationJobUnitExecutor:
                     settle(conn,current)
                     if receipt['finalized']:
                         return self._narration_edit_checkpoint(conn,current,'succeeded',commit=commit)
-                    return self.repository.checkpoint_creation_narration_merge(current,
+                    return self.repository.narration_checkpoints.checkpoint_creation_narration_merge(current,
                         source_digest=resources['merge_source_digest'],section_ids=resources['merge_section_ids'],
                         input_references=[item['reference'] for item in resources['inputs']],pcm_receipt=receipt,connection=conn)
                 scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,

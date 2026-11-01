@@ -3001,7 +3001,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
     assert first is not None, (case.repo.job_records.get_job_run('local',case.job.id).failure_reason,
         [dict(row) for row in case.repo.list_creation_job_request_states('local',case.job.id)])
     case.executor.execute(first,case.scheduler)
-    partial=case.repo.creation_narration_merge_checkpoint('local',case.job.id)
+    partial=case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local',case.job.id)
     assert partial is not None,case.repo.job_records.get_job_run('local',case.job.id).failure_reason
     assert partial['section_ids']==['section_1','section_2'] and 'output' not in partial
     assert partial['pcm']['generated_bytes']==960044
@@ -3148,7 +3148,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
         assert case.repo.creation_narration_source_binding('local',job.id)==binding
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     assert case.repo.narration_records.get_narration_segment('local',task.id,segments[0].id).audio_reference==segments[0].audio_reference
-    assert case.repo.narration_edit_generated('local',job.id)
+    assert case.repo.narration_checkpoints.narration_edit_generated('local',job.id)
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     if interrupt_final:
         from app.device_scheduler import RecoveryBlocked
@@ -3169,7 +3169,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
                 if event.job_id == job.id and event.event_type == 'narration_edit_result_reconciled']
             assert len(reconciled) == 1 and reconciled[0].payload['publication_blocked']
             assert reconciled[0].payload['pcm']['finalized']
-            assert case.repo.narration_edit_generated('local', job.id)
+            assert case.repo.narration_checkpoints.narration_edit_generated('local', job.id)
             return
         control.recover(SimpleNamespace(scheduler=case.scheduler,registrations={
             'creation_job':SimpleNamespace(owner=case.owner,executor=case.executor)},wake=lambda:None))
@@ -3864,7 +3864,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
     declared = case.scheduler._get(first.request_id).resources
     assert declared['input_count'] == 2 and not declared['merge_final']
     case.executor.execute(first, case.scheduler)
-    checkpoint = case.repo.creation_narration_merge_checkpoint('local', case.job.id)
+    checkpoint = case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local', case.job.id)
     partial_path=Path(checkpoint['pcm']['work_path'])
     assert checkpoint['section_ids'] == ['section_1', 'section_2'] and checkpoint['pcm']['pcm_bytes']/48000 == 2
     task = case.repo.task_records.get_creation_task('local', case.task_id)
@@ -3887,7 +3887,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
     monkeypatch.setattr(case.stage,'prepare_merge',fail_final)
     case.executor.execute(final, case.scheduler)
     assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
-    assert case.repo.creation_narration_merge_checkpoint('local', case.job.id) == checkpoint
+    assert case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local', case.job.id) == checkpoint
     failed_usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert failed_usage['used_output_bytes'] == consumed['used_output_bytes'] and not failed_usage['unsettled']
     monkeypatch.setattr(case.stage,'prepare_merge',original)
@@ -3916,7 +3916,7 @@ def test_narration_partial_merge_exhausts_parent_without_refund_or_reset(tmp_pat
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     for _ in range(4):
         case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
-    checkpoint = case.repo.creation_narration_merge_checkpoint('local', case.job.id)
+    checkpoint = case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local', case.job.id)
     assert checkpoint['section_ids'] == ['section_1', 'section_2']
     partial_path=Path(checkpoint['pcm']['work_path'])
     assert partial_path.is_file()
@@ -3942,7 +3942,7 @@ def test_narration_merge_checkpoint_rejects_changed_actual_dependency(tmp_path, 
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     for _ in range(4):
         case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
-    checkpoint = case.repo.creation_narration_merge_checkpoint('local', case.job.id)
+    checkpoint = case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local', case.job.id)
     if changed=='partial':
         Path(checkpoint['pcm']['work_path']).write_bytes(b'changed dependency')
         request=case.scheduler._get(next(row['id'] for row in case.repo.list_creation_job_request_states('local',case.job.id) if row['state']=='waiting'))
@@ -3965,17 +3965,17 @@ def test_narration_unit_rollback_and_explicit_resume_preserve_consumed_allowance
     case = _narration_units_case(tmp_path)
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     grant = case.scheduler.pick_and_grant()
-    original_commit = case.repo.commit_creation_narration_segment
+    original_commit = case.repo.narration_checkpoints.commit_creation_narration_segment
     def refused(*args, **kwargs):
         original_commit(*args, **kwargs)
         raise RuntimeError('injected segment commit failure')
-    monkeypatch.setattr(case.repo, 'commit_creation_narration_segment', refused)
+    monkeypatch.setattr(case.repo.narration_checkpoints, 'commit_creation_narration_segment', refused)
     case.executor.execute(grant, case.scheduler)
     assert case.scheduler._get(grant.request_id).state == 'failed'
     assert all(s.status == 'pending' for s in case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id))
     consumed = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert consumed['used_output_bytes'] > 0 and not consumed['unsettled']
-    monkeypatch.setattr(case.repo, 'commit_creation_narration_segment', original_commit)
+    monkeypatch.setattr(case.repo.narration_checkpoints, 'commit_creation_narration_segment', original_commit)
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job': SimpleNamespace(owner=case.owner,executor=case.executor)}, wake=lambda: None)
     control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
@@ -6104,7 +6104,7 @@ def test_local_edit_pcm_stream_original_control_commit_and_recovery(tmp_path, mo
             grant = case.scheduler.pick_and_grant()
             assert grant is not None
             case.executor.execute(grant, case.scheduler)
-        checkpoint = repo.creation_narration_merge_checkpoint('local', job.id)
+        checkpoint = repo.narration_checkpoints.creation_narration_merge_checkpoint('local', job.id)
         assert checkpoint['section_ids'] == ['section_1', 'section_2']
         final = case.scheduler.pick_and_grant()
         assert final is not None
@@ -6300,7 +6300,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
     assert first is not None
     sealed = case.scheduler._get(first.request_id).resources
     case.executor.execute(first, case.scheduler)
-    checkpoint = case.repo.creation_narration_merge_checkpoint('local', case.job.id)
+    checkpoint = case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local', case.job.id)
     assert checkpoint['section_ids'] == ['section_1', 'section_2']
     assert checkpoint['source_digest'] == sealed['merge_source_digest']
     assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key is None

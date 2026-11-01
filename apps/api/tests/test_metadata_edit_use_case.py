@@ -1285,3 +1285,124 @@ def test_narration_unit_transactions_keep_real_scope_receipts_and_original_job(t
         assert conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0] == count_before
     with pytest.raises(KeyError):
         repo.execution_records.get_task_event('local', f'event_{job.id}_narration_started_3')
+
+
+def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate_pcm(tmp_path, monkeypatch):
+    from app.creation.contracts import JobRun
+
+    s = _section_adoption_metadata_state(tmp_path)
+    repo, checkpoints = s.repo, s.repo.narration_checkpoints
+    opaque = tmp_path / 'declared-narration-artifact'
+    opaque.write_bytes(b'opaque checkpoint source, never decoded')
+    artifact = replace(s.narration, id='checkpoint-artifact', voice_profile_id=s.before.voice_profile_id,
+        cache_key='checkpoint-ready', audio_path=str(opaque), duration_seconds=2, sample_rate=24000,
+        model_id=s.before.model_id)
+    ready = replace(s.before, audio_reference=repo.narration_artifact_reference(artifact.cache_key))
+    grant = SimpleNamespace(workspace_id='ws', owner_id=s.job.id, request_id='declared-segment-request',
+        generation=1, unit_key='narration:segment:declared')
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        checkpoints.commit_creation_narration_segment(artifact, ready, connection=conn)
+        assert conn.in_transaction
+        assert repo.get_narration_artifact('ws', artifact.cache_key, connection=conn) == artifact
+        assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+        conn.rollback()
+    assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+    assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
+    original_commit = checkpoints.commit_creation_narration_segment
+    committed = []
+    def refused(*args, **kwargs):
+        original_commit(*args, **kwargs)
+        committed.append(kwargs['connection'].in_transaction)
+        raise RuntimeError('metadata failure after real commit port')
+    with monkeypatch.context() as guard:
+        guard.setattr(checkpoints, 'commit_creation_narration_segment', refused)
+        with pytest.raises(RuntimeError, match='real commit port'):
+            with repo._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                checkpoints.checkpoint_creation_narration_segment(grant, artifact, ready, 0, connection=conn)
+    assert committed == [True]
+    assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+    assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
+    assert repo.job_records.get_job_run('ws', s.job.id).status == 'running'
+    append = repo.execution_records.append_task_event
+    event_id = f'event_{s.job.id}_narration_segment_1'
+    tail = []
+    def tail_failure(event, **kwargs):
+        result = append(event, **kwargs)
+        if event.id == event_id:
+            tail.append(kwargs['connection'].in_transaction)
+            raise RuntimeError('metadata failure after real checkpoint event')
+        return result
+    with monkeypatch.context() as guard:
+        guard.setattr(repo.execution_records, 'append_task_event', tail_failure)
+        with pytest.raises(RuntimeError, match='real checkpoint event'):
+            with repo._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                checkpoints.checkpoint_creation_narration_segment(grant, artifact, ready, 0, connection=conn)
+    assert tail == [True]
+    assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+    assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
+    assert repo.job_records.get_job_run('ws', s.job.id).status == 'running'
+    with pytest.raises(KeyError):
+        repo.execution_records.get_task_event('ws', event_id)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert checkpoints.checkpoint_creation_narration_segment(grant, artifact, ready, 0, connection=conn) == event_id
+        assert conn.in_transaction
+        assert repo.job_records.get_job_run('ws', s.job.id, connection=conn).status == 'queued'
+    assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == ready
+    event = repo.execution_records.get_task_event('ws', event_id)
+    assert event.payload['request_id'] == grant.request_id and event.payload['output'] == ready.audio_reference
+    edit_job = repo.job_records.create_job_run(JobRun('checkpoint-edit-job', 'ws', s.task.id,
+        'creation_task_narration_edit', 'checkpoint-edit-job', 'declared-edit-input'))
+    repo.job_records.claim_job_run('ws', edit_job.id)
+    candidate = replace(artifact, id='candidate-artifact', cache_key='checkpoint-candidate')
+    edit_grant = SimpleNamespace(workspace_id='ws', owner_id=edit_job.id, request_id='declared-edit-request',
+        generation=2, unit_key='narration:edit:declared')
+    assert checkpoints.narration_edit_generated('ws', edit_job.id) is None
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        candidate_event = checkpoints.checkpoint_narration_edit_generated(edit_grant, candidate,
+            replace(ready, audio_reference=repo.narration_artifact_reference(candidate.cache_key)), 'declared-source-key', connection=conn)
+        candidate_payload = checkpoints.narration_edit_generated('ws', edit_job.id, connection=conn)
+        assert candidate_payload == {'source_key': 'declared-source-key', 'segment_id': ready.id,
+            'cache_key': candidate.cache_key, 'request_id': edit_grant.request_id, 'permit_generation': 2}
+        assert checkpoints.narration_edit_generated('ws', edit_job.id) is None
+        assert conn.in_transaction
+    assert checkpoints.narration_edit_generated('ws', edit_job.id) == candidate_payload
+    assert repo.execution_records.get_task_event('ws', candidate_event).job_id == edit_job.id
+    assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == ready
+    repo.job_records.claim_job_run('ws', s.job.id)
+    with repo._connect() as conn:
+        task = repo.task_records.get_creation_task('ws', s.task.id, connection=conn)
+        task.stage = 'narration'
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+        artifacts_before = conn.execute('SELECT COUNT(*) FROM narration_artifacts').fetchone()[0]
+    merge = SimpleNamespace(**{**vars(grant), 'generation': 3, 'request_id': 'declared-pcm-request', 'unit_key': 'narration:merge:declared'})
+    pcm = {'job_id': s.job.id, 'unit_id': f'{merge.request_id}:{merge.generation}',
+        'source_digest': 'declared-pcm-source', 'finalized': False}
+    values = dict(source_digest=pcm['source_digest'], section_ids=['section', 'later-section'],
+        input_references=[ready.audio_reference, s.original_segments[1].audio_reference], pcm_receipt=pcm)
+    assert checkpoints.creation_narration_merge_checkpoint('ws', s.job.id) is None
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        with pytest.raises(ValueError, match='中间PCM检查点'):
+            checkpoints.checkpoint_creation_narration_merge(merge, **{**values, 'pcm_receipt': {**pcm, 'finalized': True}}, connection=conn)
+        assert repo.job_records.get_job_run('ws', s.job.id, connection=conn).status == 'running'
+        merge_event = checkpoints.checkpoint_creation_narration_merge(merge, **values, connection=conn)
+        assert checkpoints.creation_narration_merge_checkpoint('ws', s.job.id, connection=conn)['pcm'] == pcm
+        assert checkpoints.creation_narration_merge_checkpoint('ws', s.job.id) is None
+        assert conn.in_transaction
+        conn.rollback()
+    assert checkpoints.creation_narration_merge_checkpoint('ws', s.job.id) is None
+    assert repo.job_records.get_job_run('ws', s.job.id).status == 'running'
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert checkpoints.checkpoint_creation_narration_merge(merge, **values, connection=conn) == merge_event
+    payload = checkpoints.creation_narration_merge_checkpoint('ws', s.job.id)
+    assert (payload['request_id'], payload['source_digest'], payload['pcm']) == (merge.request_id, pcm['source_digest'], pcm)
+    assert repo.job_records.get_job_run('ws', s.job.id).status == 'queued'
+    assert repo.task_records.get_creation_task('ws', s.task.id).stage == 'narration'
+    with repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM narration_artifacts').fetchone()[0] == artifacts_before
