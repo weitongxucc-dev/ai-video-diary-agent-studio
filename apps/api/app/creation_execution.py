@@ -1049,9 +1049,9 @@ class CreationJobOwnerVerifier:
         reference_preparation=(pcm_preparation or {}).get('_narration_reference')
         if reference_preparation is None:
             reference_preparation = (request.resources.get('narration_reference') if request is not None else
-                self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn))
+                self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn))
             if reference_preparation is None and job.attempt == 0 and job.started_at is None:
-                self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
+                self.repository.creation_execution_jobs.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
         inputs,reference_input,reference_preparation=narration_reference_facts(self.repository,task,plan,reference_preparation)
         pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
             workspace_id=task.workspace_id, person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
@@ -1107,7 +1107,7 @@ class CreationJobOwnerVerifier:
             resources.update(narration_scope_fields(budget, task=task, inputs=inputs,
                 reference=reference_input, language=language, max_output_bytes=resources['max_output_bytes'],
                 runtime_facts=self.narration_runtime_facts,
-                source_binding=(self.repository.creation_narration_source_binding(
+                source_binding=(self.repository.creation_execution_jobs.creation_narration_source_binding(
                     job.workspace_id, job.id, connection=conn).payload
                     if budget.input_scope == 'single_call_prepared_v1' else None)))
             prefix = f'narration:segment:v1:{section.id}:'
@@ -1277,7 +1277,7 @@ class CreationJobOwnerVerifier:
             write_guard(conn)
         original = CreationExecutionActor.from_event(job.workspace_id, event)
         usage = self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id, connection=conn)
-        binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
+        binding = self.repository.creation_execution_jobs.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
         stage = 'narration' if job.kind == KIND else 'narration_edit'
         if original != actor or self.authorization_verdict(task, original, stage, connection=conn) != 'ready':
             raise PermissionError('原配音身份或任务授权不可核实')
@@ -1361,13 +1361,13 @@ class CreationJobOwnerVerifier:
                     reference = request.resources.get('narration_reference')
                 elif conn.execute('SELECT 1 FROM task_events WHERE workspace_id=? AND id=?',
                         (job.workspace_id, f'event_{job.id}_start')).fetchone():
-                    reference = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+                    reference = self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn)
                     if reference is None and job.attempt == 0 and job.started_at is None:
-                        self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
+                        self.repository.creation_execution_jobs.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
             key,resources = narration_edit_stage_facts(self.repository,task,proposal,plan,self.narration_budget,
                 reference_preparation=reference, comparison_reference=comparison_reference, connection=conn,
                 narration_runtime_facts=self.narration_runtime_facts,
-                source_binding=(self.repository.creation_narration_source_binding(
+                source_binding=(self.repository.creation_execution_jobs.creation_narration_source_binding(
                     job.workspace_id, job.id, connection=conn).payload
                     if self.narration_budget is not None and self.narration_budget.input_scope == 'single_call_prepared_v1' else None))
             if self.narration_budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'} or self.narration_audio_budget is None:
@@ -1428,7 +1428,7 @@ class CreationJobOwnerVerifier:
         if event.task_id != job.task_id or event.job_id != job.id:
             raise KeyError('创作任务或开始记录不存在')
         snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, job.task_id, connection=conn)
-        return job, snapshot, self.repository.creation_execution_input(workspace_id, job.id, connection=conn)
+        return job, snapshot, self.repository.creation_execution_jobs.creation_execution_input(workspace_id, job.id, connection=conn)
 
     def _facts(self, conn: sqlite3.Connection, workspace_id: str, job_id: str):
         row = conn.execute(
@@ -1448,7 +1448,7 @@ class CreationJobOwnerVerifier:
         if task_row is None or event_row is None:
             raise KeyError("创作任务或开始记录不存在")
         task = creation_task_from_payload(json.loads(task_row["payload"]))
-        event = self.repository.creation_execution_input(workspace_id, job.id, connection=conn)
+        event = self.repository.creation_execution_jobs.creation_execution_input(workspace_id, job.id, connection=conn)
         script_row = conn.execute(
             "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=? AND task_id=?",
             (workspace_id, event.get("script_id"), job.task_id),
@@ -2014,7 +2014,7 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
             raise RecoveryBlocked('原配音已有授予或结果未知，不能重验证未执行来源')
         if len(narration) != 1:
             raise RecoveryBlocked('原作业来源请求不唯一，须先按原请求核对')
-        source = repository.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
+        source = repository.creation_execution_jobs.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
     from app.creation.narration_pcm import prepare_narration_source
     with prepare_narration_source(repository, task, plan, actor, binding=source.payload) as prepared:
         def audit(conn, previous, replacement):
@@ -2363,7 +2363,7 @@ class CreationJobUnitExecutor:
         with self.repository.execution_inputs.creation_execution_read() as reader:
             original_job, snapshot, event = owner._snapshot_facts(reader, job.workspace_id, job.id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
-            binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
+            binding = self.repository.creation_execution_jobs.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
             started = self.repository.execution_records.get_task_event(job.workspace_id,
                 f'event_{job.id}_narration_started_{generation}', connection=reader)
             selected = self.repository.section_inputs.read_creation_section_input(task, script, request.resources['section_id'], connection=reader)
@@ -2811,7 +2811,7 @@ class CreationJobUnitExecutor:
             if hasattr(owner, 'registrations'):
                 owner = owner.registrations[DEVICE_OWNER_TYPE].owner
 
-            event = self.repository.creation_execution_input(job.workspace_id, job.id)
+            event = self.repository.creation_execution_jobs.creation_execution_input(job.workspace_id, job.id)
             if event.get('operation') == 'regenerate_storyboard':
                 from app.creation.storyboard_regeneration import StoryboardRegeneration
                 if stage != 'montage_plan':
@@ -3712,7 +3712,7 @@ class CreationExecution:
         snapshot = self.validate_input_snapshot(workspace_id, task_id, script_id, latest.input_digest)
         task, plan = snapshot.task, snapshot.plan
         if task.stage == 'narration' and task.narration_cache_key is None and plan.selected_voice is not None:
-            self.repository.creation_narration_source_binding(workspace_id, latest.id)
+            self.repository.creation_execution_jobs.creation_narration_source_binding(workspace_id, latest.id)
         rejection=creation_input_rejection(self.repository.execution_records.list_task_events(workspace_id,task_id),latest.id)
         if rejection is not None and (admission_recheck is None or not admission_recheck(rejection)):
             raise CreationInputRejected(rejection)
@@ -3721,7 +3721,7 @@ class CreationExecution:
             if job.input_digest == latest.input_digest
         ]
         retry_number = len(same_input)
-        resumed_payload=dict(self.repository.creation_execution_input(workspace_id, latest.id))
+        resumed_payload=dict(self.repository.creation_execution_jobs.creation_execution_input(workspace_id, latest.id))
         if resumed_payload.get("operation")=="regenerate_storyboard":
             resumed_payload={key:resumed_payload[key] for key in ("script_id","plan_id","input_digest","member_id","identity_kind","device_id","user_id") if key in resumed_payload}
         def verify_retry(conn):

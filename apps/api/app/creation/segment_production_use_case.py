@@ -722,7 +722,7 @@ class SegmentProductionUseCase:
         if reference is None:
             from app.profile_reference_media import ProfileReferenceInput
             with self.repository._connect() as conn:
-                saved = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+                saved = self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn)
             if saved is None:
                 from app.device_scheduler import RecoveryBlocked
                 raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
@@ -747,7 +747,7 @@ class SegmentProductionUseCase:
             plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
             if reference_preparation is None:
                 with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-                    reference_preparation = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+                    reference_preparation = self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn)
                 if reference_preparation is None:
                     from app.device_scheduler import RecoveryBlocked
                     raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
@@ -766,7 +766,7 @@ class SegmentProductionUseCase:
             resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
                 language=language, max_output_bytes=resources['max_output_bytes'],
                 runtime_facts=self.narration_runtime_facts,
-                source_binding=(self.repository.creation_narration_source_binding(
+                source_binding=(self.repository.creation_execution_jobs.creation_narration_source_binding(
                     job.workspace_id, job.id, connection=connection).payload
                     if budget.input_scope == 'single_call_prepared_v1' else None)))
             key = self.revision_key(job, reference)

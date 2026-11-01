@@ -16,7 +16,7 @@ def _prepared_case(tmp_path, *, changed=None, case=None):
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
     inputs, reference, _ = narration_reference_facts(case.repo, task, plan)
-    source = case.repo.creation_narration_source_binding('local', case.job.id).payload
+    source = case.repo.creation_execution_jobs.creation_narration_source_binding('local', case.job.id).payload
     shape = dict(voice_identity=profile_cache_identity(inputs.voice), reference=asdict(reference),
         reference_sha256=source['sha256'], reference_text=inputs.voice.reference_text, language='zh',
         pronunciation_dictionary=())

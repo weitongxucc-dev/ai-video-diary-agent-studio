@@ -631,7 +631,7 @@ class CreationExecutionControl:
             else:
                 queued = migrate_creation_narration_request(self.repository, runtime.scheduler, job, actor)
                 if queued is None:
-                    original = self.repository.creation_execution_input(workspace_id, job.id)
+                    original = self.repository.creation_execution_jobs.creation_execution_input(workspace_id, job.id)
                     key, _ = owner.narration_edit_facts(job, task, original, plan)
                     queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id,
                         digest, key, SchedulePolicy()), actor)
@@ -752,7 +752,7 @@ class CreationExecutionControl:
         if job.kind=='creation_task_segment_revision':
             start=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start').payload
         else:
-            start=self.repository.creation_execution_input(workspace_id,job.id)
+            start=self.repository.creation_execution_jobs.creation_execution_input(workspace_id,job.id)
             latest=self.execution.latest(workspace_id,task_id)
             if latest is None or latest.id!=job.id:
                 raise ValueError('原制作作业已被新的制作请求替代')

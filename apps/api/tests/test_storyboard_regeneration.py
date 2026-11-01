@@ -459,7 +459,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     assert state.repo.job_records.list_creation_job_request_states('ws', job.id) == requests
     from app.creation_execution import next_creation_intent
     from app.device_scheduler import SubmissionIntent, SchedulePolicy
-    effective = state.repo.creation_execution_input('ws', job.id)
+    effective = state.repo.creation_execution_jobs.creation_execution_input('ws', job.id)
     assert effective['operation'] == 'render_current' and effective['render_unit_key'] == pending[0]['unit_key']
     assert effective['render_input_timeline_version_id'] == confirmed.id
     assert next_creation_intent(state.repo, state.scheduler, job).unit_key == pending[0]['unit_key']

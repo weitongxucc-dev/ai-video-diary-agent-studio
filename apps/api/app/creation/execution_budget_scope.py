@@ -151,7 +151,7 @@ class ExecutionBudgetScopes:
         if job.input_digest == binding.payload['input_digest']:
             return
         try:
-            effective = self.repository.creation_execution_input(job.workspace_id, job.id, connection=connection)
+            effective = self.repository.creation_execution_jobs.creation_execution_input(job.workspace_id, job.id, connection=connection)
         except KeyError as exc:
             raise PermissionError('原执行输入已变化且缺少原绑定版本回执') from exc
         if effective['input_digest'] != job.input_digest:

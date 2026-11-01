@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
 import json
+from contextlib import nullcontext
 
 from app.creation.contracts import JobRun as _JobRun, TaskEvent as _TaskEvent
 from app.creation.task_input_reads import require_creation_task
@@ -152,3 +154,71 @@ class CreationExecutionJobTransactions:
                 task_id=saved.task_id, job_id=saved.id, event_type="storyboard_regeneration_requested",
                 payload=payload, created_at=saved.created_at), connection=conn)
         return saved, True
+
+    def creation_execution_input(self, workspace_id, job_id, *, connection=None):
+        """Read effective inputs while keeping the original start audit immutable."""
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            job = self.job_records.get_job_run(workspace_id, job_id, connection=conn)
+            start = self.execution_records.get_task_event(workspace_id, f'event_{job_id}_start', connection=conn)
+            if (start.task_id, start.job_id) != (job.task_id, job.id):
+                raise ValueError('原制作开始记录不属于当前任务')
+            payload = start.payload
+            if payload['input_digest'] != job.input_digest:
+                row = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? AND job_id=? "
+                    "AND event_type='creation_execution_input_rebound' AND json_extract(payload_json,'$.input_digest')=? "
+                    "ORDER BY rowid DESC LIMIT 1", (workspace_id, job.task_id, job.id, job.input_digest)).fetchone()
+                if row is None or json.loads(row['payload_json'])['start_event_id'] != start.id:
+                    from app.device_scheduler import RecoveryBlocked
+                    raise RecoveryBlocked('原作业有效输入缺少声音改选回执，不能继续')
+                rebound = json.loads(row['payload_json'])
+                payload = {**payload, 'input_digest': job.input_digest,
+                    'source_binding_event_id': rebound.get('source_binding_event_id')}
+            render = conn.execute("SELECT id,task_id,job_id,payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+                "AND event_type='creation_execution_stage' AND json_extract(payload_json,'$.execution_purpose')='render_current' "
+                "ORDER BY rowid DESC LIMIT 1", (workspace_id, job_id)).fetchone()
+            if render is not None:
+                current = json.loads(render['payload_json'])
+                head, unit = current.get('input_timeline_version_id'), current.get('unit_key')
+                identity = hashlib.sha256(json.dumps([head, unit]).encode()).hexdigest()
+                if (render['task_id'] != job.task_id or render['job_id'] != job.id
+                        or render['id'] != f'event_{job_id}_render_requested_{identity}'
+                        or current.get('stage') != 'render' or current.get('status') != 'pending'
+                        or current.get('start_event_id') != start.id
+                        or not isinstance(head, str) or not head or not isinstance(unit, str) or not unit.startswith('render:')
+                        or current.get('script_id') != payload.get('script_id')
+                        or current.get('input_digest') != job.input_digest
+                        or any(current.get(key) != payload.get(key) for key in ('member_id','identity_kind','device_id','user_id'))):
+                    raise ValueError('重新输出事实与原作业身份、输入或成片单元不一致')
+                payload = {**payload, 'operation': 'render_current', 'render_request_id': render['id'],
+                    'render_unit_key': unit, 'render_input_timeline_version_id': head}
+            return payload
+
+    def creation_narration_source_binding(self, workspace_id, job_id, *, connection=None):
+        from app.device_scheduler import RecoveryBlocked
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
+            job = self.job_records.get_job_run(workspace_id, job_id, connection=conn)
+            inputs = self.creation_execution_input(workspace_id, job_id, connection=conn)
+            source_id = inputs.get('source_binding_event_id')
+            if source_id is None:
+                raise RecoveryBlocked('original_source_content_proof_missing: 原作业未封存来源字节，须实际重新选择声音')
+            event = self.execution_records.get_task_event(workspace_id, source_id, connection=conn)
+            payload = event.payload
+            if (event.event_type != 'creation_narration_source_bound' or event.task_id != job.task_id
+                    or payload.get('version') != 1 or payload.get('business_input_digest') != job.input_digest
+                    or payload.get('workspace_id') != workspace_id or payload.get('task_id') != job.task_id):
+                raise RecoveryBlocked('原作业来源封存引用不可核实')
+            origin = self.execution_records.get_task_event(workspace_id, payload['origin_event_id'], connection=conn)
+            if origin.job_id != event.job_id or origin.payload.get('source_binding_event_id') != source_id:
+                raise RecoveryBlocked('原作业来源缺少同事务采用关联')
+            return event
+
+    def creation_narration_reference(self, workspace_id, job_id, *, connection):
+        inputs = self.creation_execution_input(workspace_id, job_id, connection=connection)
+        if not inputs.get('source_binding_event_id'):
+            return None  # Legacy started work retains its existing physical fences.
+        source = self.creation_narration_source_binding(workspace_id, job_id, connection=connection)
+        row = connection.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
+            "AND event_type='creation_narration_source_revalidated' "
+            "AND json_extract(payload_json,'$.source_binding_event_id')=? ORDER BY rowid DESC LIMIT 1",
+            (workspace_id, job_id, source.id)).fetchone()
+        return json.loads(row['payload_json'])['narration_reference'] if row else source.payload['narration_reference']

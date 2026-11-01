@@ -83,7 +83,7 @@ def narration_preparation(tmp_path):
         pytest.fail('preparation must leave the business checkpoint to its owner')
     repository=SimpleNamespace(
         job_records=SimpleNamespace(get_job_run=lambda _ws,_job:job),execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
-        creation_execution_input=lambda *_:start.payload,
+        creation_execution_jobs=SimpleNamespace(creation_execution_input=lambda *_:start.payload),
         task_records=SimpleNamespace(get_creation_task=read_task, fail_creation_task_stage=no_write),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),script_records=SimpleNamespace(get_creation_task_script=lambda *_:script),
         section_inputs=SimpleNamespace(effective_creation_script=lambda *_:script),
         profile_inputs=SimpleNamespace(resolve_creation_task_narration_inputs=lambda **_:inputs),

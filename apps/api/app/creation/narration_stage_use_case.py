@@ -79,7 +79,7 @@ class NarrationStageUseCase:
         from app.creation.segment_production_use_case import revision_execution_key
         from app.profile_reference_media import ProfileReferenceInput
         with self.repository._connect() as conn:
-            saved = self.repository.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+            saved = self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn)
         if saved is None:
             from app.device_scheduler import RecoveryBlocked
             raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
@@ -217,7 +217,7 @@ class NarrationStageUseCase:
             raise PermissionError('配音准备工作区与原作业许可不一致')
         job = self.repository.job_records.get_job_run(workspace_id, grant.owner_id)
         event = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start')
-        execution_input = self.repository.creation_execution_input(workspace_id, job.id)
+        execution_input = self.repository.creation_execution_jobs.creation_execution_input(workspace_id, job.id)
         if (job.kind != 'creation_task_execution' or job.workspace_id != workspace_id or job.task_id != task_id
                 or job.input_digest != grant.input_digest
                 or (event.workspace_id, event.task_id, event.job_id) != (workspace_id, task_id, job.id)
