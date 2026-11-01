@@ -54,7 +54,7 @@ from app.models import utc_now
 
 if TYPE_CHECKING:
     from app.creation.contracts import CreationTask, NarrationSegment
-    from app.production import NarrationArtifactRecord
+    from app.creation.narration_artifacts import NarrationArtifactRecord
     from app.creation.contracts import TimelineVersion
     from app.montage import CreationTaskMontagePlan
     from app.audio_timeline import AudioTimeline
@@ -655,7 +655,7 @@ class MetadataEditUseCase:
             self.repository.get_creation_task_montage_plan(workspace_id, task.id)
         )
         narration = (
-            self.repository.get_narration_artifact(workspace_id, current_task.narration_cache_key)
+            self.repository.narration_artifacts.get_narration_artifact(workspace_id, current_task.narration_cache_key)
             if current_task.narration_cache_key
             else None
         )
@@ -723,7 +723,7 @@ class MetadataEditUseCase:
             return persisted_operation
         persisted_plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
         current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
-        current_narration = self.repository.get_narration_artifact(workspace_id, current_task.narration_cache_key) if current_task.narration_cache_key else None
+        current_narration = self.repository.narration_artifacts.get_narration_artifact(workspace_id, current_task.narration_cache_key) if current_task.narration_cache_key else None
         return MetadataEditResult(persisted_operation, persisted_plan, current_task, current_narration,execution_readiness=readiness)
 
 

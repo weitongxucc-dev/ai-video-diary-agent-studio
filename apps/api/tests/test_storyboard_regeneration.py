@@ -36,11 +36,11 @@ def state(tmp_path, monkeypatch):
     plan.duration_target_seconds = 4
     with state.repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
-    state.segments = [replace(item, audio_reference=state.repo.narration_artifact_reference(state.narration.cache_key))
+    state.segments = [replace(item, audio_reference=state.repo.narration_artifacts.narration_artifact_reference(state.narration.cache_key))
         for item in state.segments]
     state.repo.narration_records.save_narration_segments("ws", state.task.id, "fixed-script", state.segments)
     old = creation_task_montage_plan_from_payload(state.repo.get_creation_task_montage_plan("ws", state.task.id))
-    old.narration_audio_path = state.repo.narration_artifact_reference(state.narration.cache_key)
+    old.narration_audio_path = state.repo.narration_artifacts.narration_artifact_reference(state.narration.cache_key)
     old.graphic_overlays = [TextOverlay(text="保留人工文字", start_seconds=0, end_seconds=4, font_size=42).model_dump()]
     old.audio_timeline = narration_audio_timeline(old.narration_audio_path, 4)
     old.audio_timeline.tracks[0].gain_db = -3
@@ -110,7 +110,7 @@ def test_http_queue_original_receipt_granted_commit_and_undo(state):
     payload = inputs(state)
     task = state.repo.task_records.get_creation_task("ws", state.task.id)
     script, plan = state.execution.validate_input("ws", task, payload["script_id"], payload["input_digest"])
-    assert state.repo.get_narration_artifact("ws", task.narration_cache_key).script_id == script.id
+    assert state.repo.narration_artifacts.get_narration_artifact("ws", task.narration_cache_key).script_id == script.id
     state.owner.stage_facts(task, script, plan, "montage_plan")
     before = state.repo.get_creation_task_montage_plan("ws", state.task.id)
     versions = state.repo.timeline_records.list_timeline_versions("ws", state.task.id)
@@ -427,7 +427,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     from app.task_audio import TaskAudio
     from test_creation_audio_mix import audio_budget
     plan = state.repo.plan_records.get_creation_plan('ws', state.task.plan_id)
-    state.repo.save_narration_artifact(replace(state.narration, voice_profile_id=plan.selected_voice.profile_id))
+    state.repo.narration_artifacts.save_narration_artifact(replace(state.narration, voice_profile_id=plan.selected_voice.profile_id))
     receipt = enqueue(state)
     run(state)
     completed = state.client.get(receipt['result_url']).json()
@@ -439,7 +439,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     confirmed = replace(base, id='confirmed-storyboard-head', parent_version_id=base.id, sequence=base.sequence+1,
         created_by_operation_id=None)
     state.repo.timeline_records.create_timeline_version(confirmed)
-    audio = state.repo.get_narration_artifact('ws', task.narration_cache_key)
+    audio = state.repo.narration_artifacts.get_narration_artifact('ws', task.narration_cache_key)
     import hashlib
     audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
     usage = state.repo.narration_units.creation_narration_usage('ws', job.id)
@@ -496,11 +496,11 @@ def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes
     case = _montage_stream_case(tmp_path, monkeypatch)
     try:
         rows = case.repo.narration_records.list_narration_segments('local', case.task.id, case.script.id)
-        references = dict.fromkeys([case.repo.narration_artifact_reference(case.record.cache_key),
+        references = dict.fromkeys([case.repo.narration_artifacts.narration_artifact_reference(case.record.cache_key),
             *(row.audio_reference for row in rows)])
         files = []
         for reference in references:
-            path = case.repo.resolve_authorized_narration_audio_reference('local', reference)
+            path = case.repo.narration_artifacts.resolve_authorized_narration_audio_reference('local', reference)
             info = path.stat()
             files.append((reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
         signature = hashlib.sha256(json.dumps([asdict(case.record), [asdict(row) for row in rows], files],

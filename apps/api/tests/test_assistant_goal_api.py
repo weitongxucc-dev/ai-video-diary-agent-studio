@@ -1080,7 +1080,7 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
             control.read_visual_decision('local',case.task_id,job.id,'section_1',replace(case.actor,member_id='other-member'))
         payload={'decision_digest':decision['decision_digest'],'confirmed_clip_ids':decision['required_confirmation_ids']}
         assert client.post(locator['detail_url'],json={**payload,'automatically_confirm':True}).status_code==422
-        audio_path=case.repo.resolve_authorized_narration_audio_reference('local',decision['audio']['artifact_reference'])
+        audio_path=case.repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',decision['audio']['artifact_reference'])
         before_audio=audio_path.read_bytes()
         before_segments=case.repo.narration_records.list_narration_segments('local',case.task_id,case.script_id)
         before_usage=case.repo.narration_units.creation_narration_usage('local',job.id)

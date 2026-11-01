@@ -23,7 +23,7 @@ from app.media.picture_preview import PicturePreviewRenderer
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.creation.contracts import CreationPlanVoiceReference, NarrationSegment, SubtitleCue, SubtitleTrack
-from app.production import NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 from test_creation_execution import _seed
@@ -64,7 +64,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         sample_rate=8000, model_id=voice.model_id, language='zh', pronunciation_version='fixture-rules')
     segment = NarrationSegment(id='declared-render-section', workspace_id='local', task_id=task_id,
         script_id=script_id, source_section_id=script.sections[0].id, text=script.sections[0].content,
-        audio_reference=repo.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
+        audio_reference=repo.narration_artifacts.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
         model_id=voice.model_id, voice_profile_id=voice.id, voice_version=voice.version, language='zh',
         pronunciation_version='fixture-rules', status='ready')
     repo.narration_completion.complete_creation_task_narration(record, segments=[segment])

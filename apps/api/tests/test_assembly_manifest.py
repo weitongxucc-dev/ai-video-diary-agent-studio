@@ -138,7 +138,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
             source_start_seconds=0, source_end_seconds=2, timeline_start_seconds=0, timeline_end_seconds=2,
             match_score=1, match_reasons=['隔离许可素材'], needs_confirmation=False)],
         duration_seconds=2, low_confidence_clip_count=0,
-        narration_audio_path=case.repo.narration_artifact_reference(task.narration_cache_key), audio_timeline=graph)
+        narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(task.narration_cache_key), audio_timeline=graph)
     if preflight_attack in {'normalization_failure', 'normalization_unknown'}:
         montage.narration_linkage_created_audio_timeline = True
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))

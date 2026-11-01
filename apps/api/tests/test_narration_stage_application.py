@@ -30,7 +30,8 @@ from app.creation.contracts import (
     SubtitleCue,
     SubtitleTrack,
 )
-from app.production import NarrationArtifactRecord, PronunciationEntry
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import PronunciationEntry
 from app.voice_clone import Qwen3TTSSubprocessProvider
 from app.creation.narration_stage_use_case import NarrationStageUseCase
 from app.audio_timeline import narration_audio_timeline
@@ -89,10 +90,10 @@ def narration_preparation(tmp_path):
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
         narration_records=SimpleNamespace(get_narration_segment=lambda _ws,_task,identity:segments[identity], list_narration_segments=lambda *_:list(reversed(list(segments.values()))), save_narration_segments=no_write),
 
-        narration_artifact_reference=lambda key:'narration://artifact/'+key,
-        resolve_authorized_narration_audio_reference=lambda _ws,ref:Path(records[ref.rsplit('/',1)[1]].audio_path),
-        get_narration_artifact=lambda _ws,key:records.get(key),
-        start_creation_task_narration=no_write,save_narration_artifact=no_write,
+        narration_artifacts=SimpleNamespace(narration_artifact_reference=lambda key:'narration://artifact/'+key, resolve_authorized_narration_audio_reference=lambda _ws,ref:Path(records[ref.rsplit('/',1)[1]].audio_path), get_narration_artifact=lambda _ws,key:records.get(key), save_narration_artifact=no_write),
+
+
+        start_creation_task_narration=no_write,
         narration_completion=SimpleNamespace(complete_creation_task_narration=no_write),fail_creation_task_stage=no_write)
     def artifact(key):
         path=tmp_path/(key+'.wav');path.write_bytes(b'controlled-output')
@@ -149,7 +150,7 @@ def narration_preparation(tmp_path):
                 duration_seconds=generated.duration_seconds,sample_rate=generated.sample_rate,model_id=generated.model_id,
                 language=generated.language,pronunciation_version=generated.pronunciation_version)
             records[record.cache_key]=record
-            segments[pending.id]=replace(pending,status='ready',audio_reference=repository.narration_artifact_reference(record.cache_key),
+            segments[pending.id]=replace(pending,status='ready',audio_reference=repository.narration_artifacts.narration_artifact_reference(record.cache_key),
                 duration_seconds=record.duration_seconds,sample_rate=record.sample_rate,model_id=record.model_id,
                 pronunciation_version=record.pronunciation_version)
     return SimpleNamespace(case=use_case,task=task,script=script,voice=voice,segments=segments,
@@ -414,8 +415,8 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     assert task.stage=='montage' and task.narration_cache_key
     sections=repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)
     assert len(sections)==2 and all(item.status=='ready' for item in sections)
-    combined=repo.get_narration_artifact('local',task.narration_cache_key)
-    initial_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in sections}
+    combined=repo.narration_artifacts.get_narration_artifact('local',task.narration_cache_key)
+    initial_files={item.id:_file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in sections}
     for fact in [*initial_files.values(),_file_fact(combined.audio_path)]:
         with wave.open(fact['path']) as stream:assert stream.getnchannels()==1 and stream.getframerate()==24000
     event=repo.execution_records.get_task_event('local',f'event_{full_job}_narration_queued')
@@ -430,7 +431,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
         s.asset.segments[i].start_seconds+cue.duration_seconds,float(i),float(i)+cue.duration_seconds,1,['合成 normal'],False)
         for i,cue in enumerate(cues)]
     montage=CreationTaskMontagePlan('normal-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
-        narration_audio_path=repo.narration_artifact_reference(combined.cache_key))
+        narration_audio_path=repo.narration_artifacts.narration_artifact_reference(combined.cache_key))
     repo.montage_plan_adoption.save_creation_task_montage_plan('local',s.task_id,montage.id,creation_task_montage_plan_to_payload(montage))
     base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     caption_ref,caption_transform=s.case.metadata.publish_subtitle_text(workspace_id='local',task_id=s.task_id,
@@ -454,15 +455,15 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     changed=next(item for item in updated if item.id==target.id)
     assert changed.audio_reference!=target.audio_reference
     assert next(item for item in updated if item.id==untouched.id)==untouched
-    assert _file_fact(repo.resolve_authorized_narration_audio_reference('local',untouched.audio_reference))==initial_files[untouched.id]
-    assert all(repo.get_narration_artifact('local',item.audio_reference.removeprefix('narration://artifact/')) for item in updated)
-    new_combined=repo.get_narration_artifact('local',current.narration_cache_key)
+    assert _file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',untouched.audio_reference))==initial_files[untouched.id]
+    assert all(repo.narration_artifacts.get_narration_artifact('local',item.audio_reference.removeprefix('narration://artifact/')) for item in updated)
+    new_combined=repo.narration_artifacts.get_narration_artifact('local',current.narration_cache_key)
     assert current.narration_cache_key!=combined.cache_key
     changed_montage=repo.get_creation_task_montage_plan('local',s.task_id)
-    assert changed_montage['narration_audio_path']==repo.narration_artifact_reference(new_combined.cache_key)
+    assert changed_montage['narration_audio_path']==repo.narration_artifacts.narration_artifact_reference(new_combined.cache_key)
     tracks=repo.subtitle_records.list_subtitle_tracks('local',s.task_id,timeline_version_id=current.current_timeline_version_id)
     assert len(tracks)==1 and tracks[0].status=='unavailable' and tracks[0].artifact_ref is None
-    final_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in updated}
+    final_files={item.id:_file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in updated}
     replay_started=time.monotonic()
     assert s.client.post(confirm_url,json={}).status_code==409
     queried=s.client.get(url+'/execution',params={'job_id':full_job});assert queried.status_code==200

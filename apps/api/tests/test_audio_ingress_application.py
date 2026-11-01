@@ -19,7 +19,8 @@ from app.local_members import LocalMemberService
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
-from app.production import NarrationArtifactRecord, ProductionRepository
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import ProductionRepository
 from app.creation.contracts import NarrationSegment
 from app.task_audio import TASK_MEDIA_CONTEXT
 from test_cpu_audio_budget import audio_budget
@@ -162,7 +163,7 @@ def seed_narration(repo, media, tmp_path):
     path=store.resolve_file(ref)
     narration=NarrationArtifactRecord('fixed-recorded','local',script.id,None,'fixed-recorded',str(path),.2,16000,None,
         task_id=task.id,source_kind='recorded',source_artifact_ref=ref,source_sha256=artifact.sha256,source_script_digest=digest)
-    repo.save_narration_artifact(narration)
+    repo.narration_artifacts.save_narration_artifact(narration)
     segment=NarrationSegment('segment','local',task.id,script.id,'section','合成配音',ref,.2,16000,None,None,None,'zh','',
         'ready',source_kind='recorded',source_artifact_ref=ref,source_sha256=artifact.sha256,source_script_digest=digest)
     repo.narration_records.save_narration_segments('local',task.id,script.id,[segment])

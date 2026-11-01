@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import os
 from uuid import uuid4
 import hashlib
-from app.production import NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.creation.contracts import NarrationSegment
 from collections import Counter
 from pathlib import Path
@@ -112,7 +112,7 @@ class AudioIngressUseCase:
                 current_narration_refs = {clip.source_ref for track in effective_audio_timeline(plan).tracks
                                           if track.role == "narration" for clip in track.clips}
         if task.narration_cache_key:
-            current_narration = self.repository.get_narration_artifact(
+            current_narration = self.repository.narration_artifacts.get_narration_artifact(
                 workspace_id, task.narration_cache_key,
             )
             if (current_narration is not None and current_narration.task_id == task.id
@@ -168,7 +168,7 @@ class AudioIngressUseCase:
             audio_path = self.task_audio.source(workspace_id, task.id, source.logical_ref)
             cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
             cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
-            narration_ref = self.repository.narration_artifact_reference(cache_key)
+            narration_ref = self.repository.narration_artifacts.narration_artifact_reference(cache_key)
             narration_id = f"narration_segment_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:20]}"
             language = {"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language]
             record = NarrationArtifactRecord(
@@ -247,7 +247,7 @@ class AudioIngressUseCase:
             except (KeyError, StopIteration, ValueError, AudioWaveformError) as exc:
                 raise AudioIngressRejected(422, '无法读取所选音频的波形，请检查源文件') from exc
         elif action == 'narration_waveform':
-            artifact = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
+            artifact = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
             if artifact is None or artifact.task_id != task.id:
                 raise AudioIngressRejected(404, '当前任务还没有可读取的配音。')
 
@@ -319,7 +319,7 @@ class AudioIngressUseCase:
     def narration_waveform(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
-        artifact = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
+        artifact = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
         if artifact is None or artifact.task_id != task.id:
             raise AudioIngressRejected(status_code=404, detail='当前任务还没有可读取的配音。')
         try:
@@ -370,7 +370,7 @@ class AudioIngressUseCase:
         if operation == 'narration_waveform':
             if not task.narration_cache_key:
                 raise ValueError('当前任务没有可读取的配音')
-            reference = self.repository.narration_artifact_reference(task.narration_cache_key)
+            reference = self.repository.narration_artifacts.narration_artifact_reference(task.narration_cache_key)
             remember(reference, self.task_audio.source(workspace_id, task_id, reference, actor=actor))
         facts = {'base_version_id':task.current_timeline_version_id, 'script_id':task.confirmed_script_id,
             'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)

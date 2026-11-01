@@ -110,7 +110,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     audio_path=tmp_path / "outputs/artifacts/task/fixed-narration.wav"
     with wave.open(str(audio_path),"wb") as audio:
         audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(16000); audio.writeframes(b"\0\0" * 64000)
-    state.repo.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
+    state.repo.narration_artifacts.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
     segment=NarrationSegment("fixed-segment","ws",task.id,script.id,"section","原字幕",state.narration.audio_path,4,16000,
         "fixture-input","fixture-voice","1","zh","fixture-rules","ready")
     state.repo.narration_records.save_narration_segments("ws",task.id,script.id,[segment])

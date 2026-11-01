@@ -50,7 +50,7 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
     def get_creation_task_narration_audio(task_id: str, request: Request) -> FileResponse:
         workspace_id = workspace_for()(request)
         task = readable_for()(request, task_id)
-        artifact = production_for().get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
+        artifact = production_for().narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
         if artifact is None or artifact.task_id != task.id:
             raise http_error_for()(status_code=404, detail='creation task narration not found')
         media_type = {'.wav': 'audio/wav', '.webm': 'audio/webm', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.mp4': 'audio/mp4'}.get(path_for()(artifact.audio_path).suffix.lower(), 'application/octet-stream')
@@ -70,7 +70,7 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
             raise http_error_for()(status_code=404, detail='creation task narration segment not found') from exc
         if segment.status != 'ready' or not segment.audio_reference:
             raise http_error_for()(status_code=409, detail='creation task narration segment is not ready')
-        path = production_for().resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
+        path = production_for().narration_artifacts.resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
         media_type = {'.wav': 'audio/wav', '.webm': 'audio/webm', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.mp4': 'audio/mp4'}.get(path.suffix.lower(), 'application/octet-stream')
         return file_response_for()(path, media_type=media_type, filename=f'{segment.id}{path.suffix}')
     return router

@@ -63,7 +63,8 @@ from app.creation.contracts import (
     SubtitleTrack,
     TimelineVersion,
 )
-from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, NarrationArtifactRecord, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.video_jobs import VideoJobRunner
@@ -595,7 +596,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     narration_path = tmp_path / "person-narration.wav"
     narration_path.write_bytes(synthetic_wav_bytes(4))
     narration_cache_key = "person-segment-cache"
-    narration_reference = production.narration_artifact_reference(
+    narration_reference = production.narration_artifacts.narration_artifact_reference(
         narration_cache_key
     )
     segment = NarrationSegment(
@@ -1063,7 +1064,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     from _media_preview_test_fixtures import configure_synthetic_media_budgets
     from _media_preview_test_fixtures import synthetic_wav_bytes
     state.original_person_clip = replace(state.montage.clips[0])
-    narration = state.production.resolve_authorized_narration_audio_reference(state.workspace_id, state.montage.narration_audio_path)
+    narration = state.production.narration_artifacts.resolve_authorized_narration_audio_reference(state.workspace_id, state.montage.narration_audio_path)
     narration.write_bytes(synthetic_wav_bytes(state.montage.duration_seconds))
     _save_fixture_narration_duration(state, state.montage.duration_seconds)
     # Real decoding tests use a synthetic four-second presenter source.
@@ -2337,7 +2338,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
-        production,
+        production.narration_artifacts,
         "resolve_authorized_narration_audio_reference",
         lambda _workspace_id, _reference: audio_path,
     )
@@ -2850,7 +2851,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     segment_audio.write_bytes(b"segment-audio")
     whole_audio = tmp_path / "whole.wav"
     whole_audio.write_bytes(b"whole-audio")
-    production.save_narration_artifact(
+    production.narration_artifacts.save_narration_artifact(
         NarrationArtifactRecord(
             id="segment-artifact",
             workspace_id=workspace_id,
@@ -4987,7 +4988,7 @@ def test_person_lineage_requires_matching_language_and_success(person_render_edi
         input_digest=render.cache_key, output_refs=[render.artifact_ref],
         input_refs=[segment.audio_reference], parameters={'language': segment.language})
     assert not main_module._person_render_matches_narration(render, segment, [transform])
-    audio = state.production.resolve_authorized_narration_audio_reference(state.workspace_id, segment.audio_reference)
+    audio = state.production.narration_artifacts.resolve_authorized_narration_audio_reference(state.workspace_id, segment.audio_reference)
     person = state.production.get_person_profile(state.workspace_id, render.person_profile_id, render.person_version)
     visual = state.production.resolve_workspace_media_reference(
         state.workspace_id, person.avatar_reference, require_registered=True)
@@ -5077,12 +5078,12 @@ def test_person_preview_respects_locked_clip_before_generation(person_render_edi
 def _save_fixture_narration_duration(state, duration_seconds):
     """Match the persisted source fact to the media authored by this test."""
     reference = state.montage.narration_audio_path
-    record = state.production.get_narration_artifact(
+    record = state.production.narration_artifacts.get_narration_artifact(
         state.workspace_id, reference.removeprefix("narration://artifact/"))
     import wave
     with wave.open(record.audio_path) as audio:
         sample_rate = audio.getframerate()
-    state.production.save_narration_artifact(replace(record, duration_seconds=duration_seconds, sample_rate=sample_rate))
+    state.production.narration_artifacts.save_narration_artifact(replace(record, duration_seconds=duration_seconds, sample_rate=sample_rate))
 
 
 def test_audio_draft_uses_registered_duration_without_probe(person_render_edit_state, monkeypatch):
@@ -5122,7 +5123,7 @@ def test_extract_original_audio_real_media_preview_confirm_undo(permitted_media_
     asset.size_bytes=source.stat().st_size
     asset.modified_at=datetime.fromtimestamp(source.stat().st_mtime,timezone.utc)
     state.production._save_asset(asset)
-    narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
+    narration=state.production.narration_artifacts.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','anullsrc=r=48000:cl=mono','-t','8',str(narration)],check=True)
     _save_fixture_narration_duration(state, 8)
     state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
@@ -5212,7 +5213,7 @@ def test_silence_edit_real_preview_confirm_and_undo(permitted_media_state, grant
     asset.size_bytes=source.stat().st_size
     asset.modified_at=datetime.fromtimestamp(source.stat().st_mtime,timezone.utc)
     state.production._save_asset(asset)
-    narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
+    narration=state.production.narration_artifacts.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
         'aevalsrc=if(between(t\\,1\\,2)\\,0\\,0.2*sin(2*PI*440*t)):s=48000:d=8',str(narration)],check=True)
     _save_fixture_narration_duration(state, 8)
@@ -5576,7 +5577,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     person_profile = state.production.get_person_profile(
         state.workspace_id, state.old_render.person_profile_id, state.old_render.person_version,
     )
-    person_audio = state.production.resolve_authorized_narration_audio_reference(
+    person_audio = state.production.narration_artifacts.resolve_authorized_narration_audio_reference(
         state.workspace_id, person_segment.audio_reference,
     )
     person_visual = state.production.resolve_workspace_media_reference(

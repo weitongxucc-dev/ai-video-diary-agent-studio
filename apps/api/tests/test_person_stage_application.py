@@ -30,7 +30,8 @@ from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess,creation_job_registration
 from app.montage import CreationTaskMontagePlan,MontageClip,NarrationCue,creation_task_montage_plan_to_payload
 from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, NarrationSegment
-from app.production import NarrationArtifactRecord, PersonRender
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import PersonRender
 from app.video_jobs import VideoJobRunner
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles,synthetic_wav_bytes,write_synthetic_video
@@ -156,11 +157,11 @@ def person_application(tmp_path,monkeypatch):
     for index,section in enumerate(script.sections):
         audio=tmp_path/f'declared-narration-{index}.wav';audio.write_bytes(synthetic_wav_bytes(2))
         cache=hashlib.sha256(f'declared-person-narration-{index}'.encode()).hexdigest()
-        record=repo.save_narration_artifact(NarrationArtifactRecord(id='narration-'+str(index),workspace_id='local',task_id=task_id,
+        record=repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(id='narration-'+str(index),workspace_id='local',task_id=task_id,
             script_id=script_id,voice_profile_id=voice.id,cache_key=cache,audio_path=str(audio),duration_seconds=2,sample_rate=8000,
             model_id='declared-synthetic-narration',language='zh',pronunciation_version='fixture-rules'))
         sections.append(NarrationSegment(id='normal-person-narration-'+str(index),workspace_id='local',task_id=task_id,
-            script_id=script_id,source_section_id=section.id,text=section.content,audio_reference=repo.narration_artifact_reference(cache),
+            script_id=script_id,source_section_id=section.id,text=section.content,audio_reference=repo.narration_artifacts.narration_artifact_reference(cache),
             duration_seconds=2,sample_rate=8000,model_id=record.model_id,voice_profile_id=voice.id,voice_version=voice.version,
             language='zh',pronunciation_version=record.pronunciation_version,status='ready'))
     combined=tmp_path/'declared-combined.wav';combined.write_bytes(synthetic_wav_bytes(2))
@@ -213,7 +214,7 @@ def person_application(tmp_path,monkeypatch):
 def test_full_person_segment_then_selected_regeneration_preserves_early_child(person_application):
     s=person_application;repo=s.repo;url='/api/creation-tasks/'+s.task_id
     narration_before=[asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]
-    narration_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in s.sections}
+    narration_files={item.id:_file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in s.sections}
     request={'script_id':s.script_id,'input_digest':revision_digest(repo.script_records.get_creation_task_script('local',s.script_id),s.plan),'requirements_confirmed':True}
     first=s.client.post(url+'/execution/start',json=request);assert first.status_code==202,first.text
     assert first.json()['current_stage']=='person_render'
@@ -237,7 +238,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
         'person-render://'+original.id,float(i),float(i+1),float(i),float(i+1),1,['合成人物 normal'],False,
         person_render_id=original.id,role='a_roll') for i in range(2)]
     montage=CreationTaskMontagePlan('normal-person-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
-        narration_audio_path=repo.narration_artifact_reference(s.combined.cache_key))
+        narration_audio_path=repo.narration_artifacts.narration_artifact_reference(s.combined.cache_key))
     payload=creation_task_montage_plan_to_payload(montage);repo.montage_plan_adoption.save_creation_task_montage_plan('local',s.task_id,montage.id,payload)
     base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     # Actual queued render is the existing rendered-only preview prerequisite, not a fixture status rewrite.

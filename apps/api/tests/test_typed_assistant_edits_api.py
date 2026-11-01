@@ -282,13 +282,13 @@ def test_task_turn_scope_uses_current_metadata_refs_and_original_stage_gates(sco
     task = replace(state.task, confirmed_script_id="fixed-script", montage_plan_id="montage")
     # Artifact lookup requires an existing file. Seed opaque bytes only, never a WAV/decoder.
     narration_reference = state.narration.audio_path
-    assert state.repo.get_narration_artifact("ws", task.narration_cache_key) is None
+    assert state.repo.narration_artifacts.get_narration_artifact("ws", task.narration_cache_key) is None
     opaque_audio = state.case.output_root / "declared-narration.opaque"
     opaque_audio.parent.mkdir(parents=True, exist_ok=True)
     opaque_audio.write_bytes(b"declared metadata existence only; never decode")
     state.narration = replace(state.narration, audio_path=str(opaque_audio))
-    state.repo.save_narration_artifact(state.narration)
-    assert state.repo.get_narration_artifact("ws", task.narration_cache_key) is not None
+    state.repo.narration_artifacts.save_narration_artifact(state.narration)
+    assert state.repo.narration_artifacts.get_narration_artifact("ws", task.narration_cache_key) is not None
     script = CreationTaskScript("fixed-script", "ws", task.id, "declared-run", "declared-topic", "已确认稿", "zh-CN",
         [CreationTaskScriptSection("section", "段落", "原配音", "素材画面", []),
          CreationTaskScriptSection("pending-section", "待配音", "待配音文字", "素材画面", [])],

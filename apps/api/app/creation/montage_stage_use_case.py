@@ -83,7 +83,7 @@ def montage_dependency(repository, task, *, connection):
     def add(value):
         checksum.update(json.dumps(value, sort_keys=True, default=str).encode())
     add([snapshot.input_digest, current.current_timeline_version_id, current.narration_cache_key])
-    narration = repository.get_narration_artifact(task.workspace_id, current.narration_cache_key, connection=connection)
+    narration = repository.narration_artifacts.get_narration_artifact(task.workspace_id, current.narration_cache_key, connection=connection)
     if narration is None or narration.task_id != task.id or narration.script_id != header.id:
         raise ValueError('当前创作任务的配音产物不可用')
     add(asdict(narration))
@@ -94,7 +94,7 @@ def montage_dependency(repository, task, *, connection):
             raise ValueError('当前创作任务缺少可用的分段配音事实')
         add([asdict(section), asdict(audio), repository.section_inputs.stage_segment_state(
             task.workspace_id, task.id, section.id, connection=connection)])
-        path = repository.resolve_authorized_narration_audio_reference(task.workspace_id, audio.audio_reference)
+        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, audio.audio_reference)
         info = path.stat()
         add([str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns])
         count += 1
@@ -234,7 +234,7 @@ class MontageStageUseCase:
         with self.repository.creation_execution_read() as conn:
             snapshot, dependency = montage_dependency(self.repository, task, connection=conn)
             task, creation_plan, header = snapshot.task, snapshot.plan, snapshot.script_header
-            narration = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key, connection=conn)
+            narration = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key, connection=conn)
             audio = {}
             for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):
                 audio[section.id] = {'id': segment.id, 'reference': segment.audio_reference,
@@ -269,7 +269,7 @@ class MontageStageUseCase:
         montage = planner.build_for_creation_inputs(workspace_id=workspace_id, task_id=task.id,
             script_header=header, prepared=prepared, assets=assets,
             media_reference_for_asset=lambda asset_id: self.repository.workspace_media_reference_for_asset(workspace_id, asset_id),
-            narration_audio_path=self.repository.narration_artifact_reference(narration.cache_key),
+            narration_audio_path=self.repository.narration_artifacts.narration_artifact_reference(narration.cache_key),
             person_render_by_section={key: (f'pending:{key}', audio[key]['duration']) for key in selected_sections},
             presenter_share_target=creation_plan.presenter_share_target, delivery_windows=windows)
         montage.duration_requirement = requirement.payload()

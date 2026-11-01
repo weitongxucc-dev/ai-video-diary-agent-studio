@@ -346,7 +346,7 @@ class RenderStageUseCase:
                     rendered = plan
                     rendered.status = "rendered"
                 except FileNotFoundError:
-                    narration_path = self.repository.resolve_authorized_narration_audio_reference(
+                    narration_path = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(
                         workspace_id, plan.narration_audio_path or ""
                     )
                     rendering_payload = creation_task_montage_plan_to_payload(plan)

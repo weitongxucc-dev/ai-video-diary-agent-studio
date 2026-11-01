@@ -367,7 +367,7 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
     from types import SimpleNamespace
     from app.creation_execution import CreationExecution, revision_digest
     from app.host_resource_probes import MontageBudget, PresenterBudget
-    from app.production import NarrationArtifactRecord
+    from app.creation.narration_artifacts import NarrationArtifactRecord
     from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationPlanVoiceReference, CreationTask, NarrationSegment
     from app.creation.contracts import CreationPlanPersonReference
@@ -425,7 +425,7 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
             visual_prompt='', evidence_reference_ids=[]))
     audio = tmp_path / "spoken.wav"
     audio.write_bytes(synthetic_wav_bytes())
-    repo.save_narration_artifact(NarrationArtifactRecord(id="narration", workspace_id=WORKSPACE,
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(id="narration", workspace_id=WORKSPACE,
         task_id=task.id, script_id="script", voice_profile_id="voice", cache_key="narration",
         audio_path=str(audio), duration_seconds=1, sample_rate=16000, model_id="fixture"))
     from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection

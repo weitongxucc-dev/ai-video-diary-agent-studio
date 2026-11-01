@@ -58,7 +58,7 @@ def test_waveform_api_rejects_another_tasks_artifact(monkeypatch):
 
     monkeypatch.setattr(main, "_creation_task_or_404", lambda workspace_id, task_id:
                         SimpleNamespace(id=task_id, narration_cache_key="cache"))
-    monkeypatch.setattr(main.production_repo, "get_narration_artifact", lambda *args:
+    monkeypatch.setattr(main.production_repo.narration_artifacts, "get_narration_artifact", lambda *args:
                         SimpleNamespace(task_id="another-task", audio_path="unread"))
     response = TestClient(main.app).get("/api/creation-tasks/this-task/narration/waveform")
     assert response.status_code == 404

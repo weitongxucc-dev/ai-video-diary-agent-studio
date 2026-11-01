@@ -24,7 +24,7 @@ def restore_state(tmp_path, *, empty=False):
     # Inputs are synthetic, preexisting editorial facts, not a generation result.
     voice = state.case.output_root / state.narration.audio_path
     state.narration = replace(state.narration, audio_path=str(voice))
-    state.repo.save_narration_artifact(state.narration)
+    state.repo.narration_artifacts.save_narration_artifact(state.narration)
     stamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
     segment = NarrationSegment('fixed-segment', 'ws', state.task.id, 'fixed-script', 'section',
         '原配音', 'artifacts/task/fixed-narration.wav', 4, 16000, 'synthetic-fixture-input',

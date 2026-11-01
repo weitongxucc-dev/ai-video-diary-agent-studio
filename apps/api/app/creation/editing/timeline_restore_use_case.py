@@ -25,7 +25,8 @@ from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from
 
 if TYPE_CHECKING:
     from app.creation.contracts import CreationTask, NarrationSegment
-    from app.production import NarrationArtifactRecord, ProductionRepository
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.production import ProductionRepository
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ class TimelineRestoreUseCase:
         payload = version.snapshot.get('montage')
         plan = creation_task_montage_plan_from_payload(payload) if payload else None
         key = version.snapshot.get('narration_cache_key')
-        narration = self.repository.get_narration_artifact(workspace_id, key) if key else None
+        narration = self.repository.narration_artifacts.get_narration_artifact(workspace_id, key) if key else None
         return MetadataEditResult(operation, plan, self.repository.task_records.get_creation_task(workspace_id, task_id), narration, receipt,
             receipt.get('execution_readiness'))
 
@@ -278,7 +279,7 @@ class TimelineRestoreUseCase:
             restored_narration = None
             restored_cache_key = target_version.snapshot.get("narration_cache_key")
             if isinstance(restored_cache_key, str) and restored_cache_key:
-                restored_narration = self.repository.get_narration_artifact(
+                restored_narration = self.repository.narration_artifacts.get_narration_artifact(
                     workspace_id, restored_cache_key
                 )
                 if restored_narration is None:

@@ -129,7 +129,7 @@ class CreationExecutionControl:
         except ValueError as exc:
             raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
         narration_artifact = (
-            self.repository.get_narration_artifact(workspace_id, task.narration_cache_key)
+            self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key)
             if task.narration_cache_key
             else None
         )

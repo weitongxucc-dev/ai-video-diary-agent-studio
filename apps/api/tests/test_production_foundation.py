@@ -37,7 +37,8 @@ from app.creation.contracts import (
     TimelineVersion,
     TransformRun,
 )
-from app.production import MaterialCollection, NarrationArtifactRecord, PersonRender, PronunciationEntry, ProductionBatch, ProductionProfile, ProductionRepository, VersionedVoiceProfile
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialCollection, PersonRender, PronunciationEntry, ProductionBatch, ProductionProfile, ProductionRepository, VersionedVoiceProfile
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker
 from app.creation.script_contracts import ScriptGenerationRun
 from app.repository import LEGACY_WORKSPACE_ID
@@ -1735,7 +1736,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
             initial_artifact,
             segments=initial_segments[:1],
         )
-    assert production.get_narration_artifact(
+    assert production.narration_artifacts.get_narration_artifact(
         "workspace_a", initial_artifact.cache_key
     ) is None
     assert production.narration_records.list_narration_segments(
@@ -2400,8 +2401,8 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
     narration_path = tmp_path / "narration-source.wav"
     narration_path.write_bytes(synthetic_wav_bytes(6))
     narration_cache_key = "person-render-narration-v1"
-    narration_reference = production.narration_artifact_reference(narration_cache_key)
-    production.save_narration_artifact(NarrationArtifactRecord(
+    narration_reference = production.narration_artifacts.narration_artifact_reference(narration_cache_key)
+    production.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration-artifact-person", workspace_id="workspace_a", task_id="task-person",
         script_id="script-task-person", voice_profile_id=voice.id,
         cache_key=narration_cache_key, audio_path=str(narration_path), duration_seconds=5.5,
@@ -4171,7 +4172,7 @@ def test_persisted_narration_reference_is_workspace_scoped_and_never_an_absolute
     audio = tmp_path / "outputs" / "narration.wav"
     audio.parent.mkdir()
     audio.write_bytes(b"audio")
-    production.save_narration_artifact(
+    production.narration_artifacts.save_narration_artifact(
         NarrationArtifactRecord(
             id="narration_1",
             workspace_id="workspace_a",
@@ -4185,14 +4186,14 @@ def test_persisted_narration_reference_is_workspace_scoped_and_never_an_absolute
             model_id="voice-model",
         )
     )
-    reference = production.narration_artifact_reference("cache_1")
+    reference = production.narration_artifacts.narration_artifact_reference("cache_1")
 
     assert reference == "narration://artifact/cache_1"
-    assert production.resolve_authorized_narration_audio_reference(
+    assert production.narration_artifacts.resolve_authorized_narration_audio_reference(
         "workspace_a", reference
     ) == audio
     with pytest.raises(MediaAuthorityError) as rejected:
-        production.resolve_authorized_narration_audio_reference("workspace_b", reference)
+        production.narration_artifacts.resolve_authorized_narration_audio_reference("workspace_b", reference)
     assert type(rejected.value) is MediaAuthorityError
     response = main_module._media_authority_http_error(rejected.value)
     assert response.status_code == 409
@@ -4203,7 +4204,7 @@ def test_persisted_narration_reference_is_workspace_scoped_and_never_an_absolute
         "retryable": False,
     }
     with pytest.raises(MediaAuthorityError):
-        production.resolve_authorized_narration_audio_reference("workspace_a", str(audio))
+        production.narration_artifacts.resolve_authorized_narration_audio_reference("workspace_a", str(audio))
 
 
 
@@ -4226,11 +4227,11 @@ def test_narration_artifact_cache_requires_existing_audio(tmp_path):
         sample_rate=24000,
         model_id="voice-model",
     )
-    production.save_narration_artifact(record)
+    production.narration_artifacts.save_narration_artifact(record)
 
-    assert production.get_narration_artifact("workspace_a", "cache_1") == record
+    assert production.narration_artifacts.get_narration_artifact("workspace_a", "cache_1") == record
     audio.unlink()
-    assert production.get_narration_artifact("workspace_a", "cache_1") is None
+    assert production.narration_artifacts.get_narration_artifact("workspace_a", "cache_1") is None
 
 
 

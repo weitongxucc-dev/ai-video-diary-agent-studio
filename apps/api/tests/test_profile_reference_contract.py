@@ -961,8 +961,8 @@ def test_range_presenter_consumes_explicit_person_not_voice_relationship():
             observed.append((ws, id, version))
             return SimpleNamespace(id=id, version=version, authorization=None)
 
-        def resolve_authorized_narration_audio_reference(self, *args):
-            return Path("artifact.wav")
+        narration_artifacts = SimpleNamespace(
+            resolve_authorized_narration_audio_reference=lambda *args: Path("artifact.wav"))
 
         def resolve_avatar_lipsync_request(self, **kwargs):
             assert (

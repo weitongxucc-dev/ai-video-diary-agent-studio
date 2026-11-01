@@ -565,7 +565,7 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
     from types import SimpleNamespace
     from app import main
     from app.creation.contracts import CreationTask, NarrationSegment
-    from app.production import NarrationArtifactRecord
+    from app.creation.narration_artifacts import NarrationArtifactRecord
 
     task = CreationTask(id="task-language", workspace_id="local", plan_id="plan-language",
         name="Language response", scenario="test")
@@ -580,7 +580,7 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
         language=language, pronunciation_version="", status="ready")
     monkeypatch.setattr(main, "production_repo", SimpleNamespace(
         narration_records=SimpleNamespace(list_narration_segments=lambda *_: [segment]),
-        narration_artifact_reference=lambda _: artifact.audio_path))
+        narration_artifacts=SimpleNamespace(narration_artifact_reference=lambda _: artifact.audio_path)))
     response = main._creation_task_narration_response(task, artifact).model_dump(mode="json")
     assert response["language"] == language
     assert response["segments"][0]["language"] == language

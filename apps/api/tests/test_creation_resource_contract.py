@@ -33,7 +33,8 @@ from app.host_resource_probes import (CpuRenderBudget, HostBudget, HostCapacity,
                                       admit_resource)
 from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
                          creation_task_montage_plan_to_payload)
-from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment
 
 from test_creation_execution import _seed
 
@@ -133,7 +134,7 @@ def _render_ready_state(tmp_path, *, aspect_ratio: str = "9:16", clips: int = 1,
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="蓝色画面", review_status="approved")],
     ))
-    repo.save_narration_artifact(NarrationArtifactRecord(
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="workspace_a", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
         audio_path=str(audio), duration_seconds=1, sample_rate=44100, model_id="test",

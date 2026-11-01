@@ -21,7 +21,7 @@ from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import MontagePlanner
 from app.creation.contracts import CreationPlanVoiceReference, NarrationSegment
-from app.production import NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.visual_effects import reusable_color_settings
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 from test_creation_execution import _seed
@@ -58,7 +58,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         sample_rate=8000, model_id=voice.model_id, language='zh', pronunciation_version='fixture-rules')
     segment = NarrationSegment(id='declared-montage-section', workspace_id='local', task_id=task_id,
         script_id=script_id, source_section_id=script.sections[0].id, text=script.sections[0].content,
-        audio_reference=repo.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
+        audio_reference=repo.narration_artifacts.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
         model_id=voice.model_id, voice_profile_id=voice.id, voice_version=voice.version, language='zh',
         pronunciation_version='fixture-rules', status='ready')
     repo.narration_completion.complete_creation_task_narration(record, segments=[segment])
@@ -208,9 +208,9 @@ def _montage_stream_case(tmp_path, monkeypatch):
     record = NarrationArtifactRecord(id='paid', workspace_id='local', task_id=task.id, script_id=script.id,
         voice_profile_id='voice_1', cache_key='paid', audio_path=str(path), duration_seconds=4,
         sample_rate=24000, model_id='fixture', language='zh', pronunciation_version='v1')
-    repo.save_narration_artifact(record)
+    repo.narration_artifacts.save_narration_artifact(record)
     rows = [NarrationSegment('audio-'+section.id, 'local', task.id, script.id, section.id, section.content,
-        repo.narration_artifact_reference('paid'), 2, 24000, 'fixture', 'voice_1', 'v1', 'zh', 'v1', 'ready',
+        repo.narration_artifacts.narration_artifact_reference('paid'), 2, 24000, 'fixture', 'voice_1', 'v1', 'zh', 'v1', 'ready',
         created_at=script.created_at-timedelta(seconds=i)) for i, section in enumerate(script.sections)]
     repo.narration_records.save_narration_segments('local', task.id, script.id, rows)
     task.narration_cache_key = 'paid'; task.stage = 'montage'

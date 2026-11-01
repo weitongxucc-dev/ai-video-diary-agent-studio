@@ -1,4 +1,6 @@
 """Task narration refusal metadata; no voice selection mutation or media response."""
+
+from app.creation.narration_artifacts import NarrationArtifactStore
 import subprocess
 import wave
 
@@ -36,7 +38,7 @@ def test_task_narration_rejections_and_missing_audio_do_not_write(tmp_path, monk
     monkeypatch.setattr(wave, 'open', forbidden)
     monkeypatch.setattr(CreationExecutionControl, 'select_narration_voice', forbidden)
     monkeypatch.setattr(NarrationVoiceSelectionTransaction, 'select_creation_task_narration_voice', forbidden)
-    monkeypatch.setattr(ProductionRepository, 'resolve_authorized_narration_audio_reference', forbidden)
+    monkeypatch.setattr(NarrationArtifactStore, 'resolve_authorized_narration_audio_reference', forbidden)
     monkeypatch.setattr(main, '_creation_execution_control', forbidden)
     monkeypatch.setattr(main, 'FileResponse', forbidden)
     for name in ('start', 'run_once', 'wake'):

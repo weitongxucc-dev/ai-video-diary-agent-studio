@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from app.persistence_json import _json_object, _json_payload
 
 if TYPE_CHECKING:
-    from app.production import NarrationArtifactRecord
+    from app.creation.narration_artifacts import NarrationArtifactRecord
 
 from app.creation.contracts import CreationTask, CoverAsset, EditIntent, EditOperation, EditProposal, NarrationSegment, SubtitleTrack, TimelineVersion
 from app.models import utc_now

@@ -24,7 +24,8 @@ from app.montage import (
     CreationTaskMontagePlan, MontageClip, NarrationCue,
     creation_task_montage_plan_to_payload,
 )
-from app.production import ProductionRepository, MaterialAsset, MaterialSegment, NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import ProductionRepository, MaterialAsset, MaterialSegment
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 from app.task_audio import TaskAudio
@@ -68,7 +69,7 @@ def metadata_state(tmp_path):
     repo.montage_plan_adoption.save_creation_task_montage_plan('ws', task.id, montage.id, payload)
     narration = NarrationArtifactRecord('narration', 'ws', 'fixed-script', None, 'fixed-narration',
         montage.narration_audio_path, 4, 16000, 'fixture-input', task_id=task.id)
-    repo.save_narration_artifact(narration)
+    repo.narration_artifacts.save_narration_artifact(narration)
     base = TimelineVersion('base', 'ws', task.id, None, 1,
         {'montage': payload, 'subtitle_track_ids': ['base-zh'], 'narration_cache_key': narration.cache_key}, None)
     repo.timeline_records.create_timeline_version(base)
@@ -215,7 +216,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     with wave.open(str(audio_path),'wb') as stream:
         stream.setparams((1,2,16000,0,'NONE','not compressed'))
         stream.writeframes(b'\x01\x00'*64000)
-    s.repo.save_narration_artifact(replace(s.narration,audio_path=str(audio_path),voice_profile_id='fixture-voice'))
+    s.repo.narration_artifacts.save_narration_artifact(replace(s.narration,audio_path=str(audio_path),voice_profile_id='fixture-voice'))
     from app.creation.contracts import NarrationSegment
     now=datetime.now(timezone.utc)
     s.task.confirmed_script_id='fixed-script'
@@ -1297,17 +1298,17 @@ def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate
     artifact = replace(s.narration, id='checkpoint-artifact', voice_profile_id=s.before.voice_profile_id,
         cache_key='checkpoint-ready', audio_path=str(opaque), duration_seconds=2, sample_rate=24000,
         model_id=s.before.model_id)
-    ready = replace(s.before, audio_reference=repo.narration_artifact_reference(artifact.cache_key))
+    ready = replace(s.before, audio_reference=repo.narration_artifacts.narration_artifact_reference(artifact.cache_key))
     grant = SimpleNamespace(workspace_id='ws', owner_id=s.job.id, request_id='declared-segment-request',
         generation=1, unit_key='narration:segment:declared')
     with repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         checkpoints.commit_creation_narration_segment(artifact, ready, connection=conn)
         assert conn.in_transaction
-        assert repo.get_narration_artifact('ws', artifact.cache_key, connection=conn) == artifact
-        assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+        assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key, connection=conn) == artifact
+        assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key) is None
         conn.rollback()
-    assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+    assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key) is None
     assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
     original_commit = checkpoints.commit_creation_narration_segment
     committed = []
@@ -1322,7 +1323,7 @@ def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate
                 conn.execute('BEGIN IMMEDIATE')
                 checkpoints.checkpoint_creation_narration_segment(grant, artifact, ready, 0, connection=conn)
     assert committed == [True]
-    assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+    assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key) is None
     assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
     assert repo.job_records.get_job_run('ws', s.job.id).status == 'running'
     append = repo.execution_records.append_task_event
@@ -1341,7 +1342,7 @@ def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate
                 conn.execute('BEGIN IMMEDIATE')
                 checkpoints.checkpoint_creation_narration_segment(grant, artifact, ready, 0, connection=conn)
     assert tail == [True]
-    assert repo.get_narration_artifact('ws', artifact.cache_key) is None
+    assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key) is None
     assert repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
     assert repo.job_records.get_job_run('ws', s.job.id).status == 'running'
     with pytest.raises(KeyError):
@@ -1364,7 +1365,7 @@ def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate
     with repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         candidate_event = checkpoints.checkpoint_narration_edit_generated(edit_grant, candidate,
-            replace(ready, audio_reference=repo.narration_artifact_reference(candidate.cache_key)), 'declared-source-key', connection=conn)
+            replace(ready, audio_reference=repo.narration_artifacts.narration_artifact_reference(candidate.cache_key)), 'declared-source-key', connection=conn)
         candidate_payload = checkpoints.narration_edit_generated('ws', edit_job.id, connection=conn)
         assert candidate_payload == {'source_key': 'declared-source-key', 'segment_id': ready.id,
             'cache_key': candidate.cache_key, 'request_id': edit_grant.request_id, 'permit_generation': 2}
@@ -1406,3 +1407,23 @@ def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate
     assert repo.task_records.get_creation_task('ws', s.task.id).stage == 'narration'
     with repo._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM narration_artifacts').fetchone()[0] == artifacts_before
+    from app.creation.narration_artifacts import narration_artifact_from_payload
+    encoded = json.loads(json.dumps(asdict(artifact), default=str))
+    assert narration_artifact_from_payload(encoded) == artifact
+    legacy = {key: value for key, value in encoded.items() if key not in {
+        'source_kind', 'source_artifact_ref', 'source_sha256', 'source_script_digest'}}
+    assert narration_artifact_from_payload(legacy).source_kind == 'generated'
+    updated = replace(artifact, id='same-cache-new-record', duration_seconds=3)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert repo.narration_artifacts.save_narration_artifact(updated, connection=conn) is updated
+        assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key, connection=conn) == updated
+        assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key) == artifact
+        assert conn.in_transaction
+    assert repo.narration_artifacts.get_narration_artifact('ws', artifact.cache_key) == updated
+    recorded = replace(artifact, id='missing-recorded-source', cache_key='missing-recorded-source',
+        voice_profile_id=None, model_id=None, source_kind='recorded',
+        source_artifact_ref=f'artifacts/{s.task.id}/missing-source.wav', source_sha256='0'*64,
+        source_script_digest='1'*64)
+    repo.narration_artifacts.save_narration_artifact(recorded)
+    assert repo.narration_artifacts.get_narration_artifact('ws', recorded.cache_key) is None

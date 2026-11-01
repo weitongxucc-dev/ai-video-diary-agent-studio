@@ -32,6 +32,7 @@ from app.creation.render_stage_use_case import RenderStageUseCase, RenderRejecte
 from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected
 from app.creation.person_stage_use_case import PersonStageUseCase,PersonStageRejected,PersonEditGrantRequired
 from app.creation.narration_stage_use_case import NarrationStageUseCase,NarrationStageRejected
+from app.creation.narration_artifacts import NarrationArtifactRecord
 
 import hashlib
 import hmac
@@ -284,7 +285,7 @@ from app.schemas import (MaterialDiscoveryStartRequest,
 from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
-from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
 from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
@@ -1480,7 +1481,7 @@ def _montage_narration_status(workspace_id: str, narration_reference: str | None
     if not narration_reference:
         return "unavailable"
     try:
-        path = production_repo.resolve_authorized_narration_audio_reference(
+        path = production_repo.narration_artifacts.resolve_authorized_narration_audio_reference(
             workspace_id,
             narration_reference,
         )
@@ -1917,7 +1918,7 @@ def _creation_task_narration_response(
         {
             "task": project_task_summary(production_repo, task).summary,
             "script_id": artifact.script_id,
-            "audio_reference": production_repo.narration_artifact_reference(artifact.cache_key),
+            "audio_reference": production_repo.narration_artifacts.narration_artifact_reference(artifact.cache_key),
             "duration_seconds": artifact.duration_seconds,
             "sample_rate": artifact.sample_rate,
             "model_id": artifact.model_id,
@@ -3083,7 +3084,7 @@ def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
         read_plan=production_repo.plan_records.get_creation_plan,
         read_topics=production_repo.topic_records.list_topic_candidates,
         read_topic_evidence=production_repo.topic_records.list_topic_evidence_references,
-        read_narration=production_repo.get_narration_artifact,
+        read_narration=production_repo.narration_artifacts.get_narration_artifact,
         read_montage=production_repo.get_creation_task_montage_plan,
         read_summary=lambda task: project_task_summary(production_repo, task),
         person_provider=_lipsync_provider,
@@ -3928,7 +3929,7 @@ app.include_router(build_task_turn_router(_task_turn_http_adapter))
 def _task_turn_scope_use_case():
     return TaskTurnScopeUseCase(
         read_script_inputs=lambda ws, task_id: _script_context_use_case().read_inputs(ws, task_id),
-        read_narration=lambda ws, key: production_repo.get_narration_artifact(ws, key),
+        read_narration=lambda ws, key: production_repo.narration_artifacts.get_narration_artifact(ws, key),
         read_segments=lambda ws, task_id, script_id: production_repo.narration_records.list_narration_segments(ws, task_id, script_id),
         read_montage=lambda ws, task_id: production_repo.get_creation_task_montage_plan(ws, task_id),
         read_version=lambda ws, version_id: production_repo.timeline_records.get_timeline_version(ws, version_id),

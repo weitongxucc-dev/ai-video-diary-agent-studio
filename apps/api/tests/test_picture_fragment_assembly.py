@@ -52,7 +52,7 @@ def _leaf_case(tmp_path, monkeypatch):
             segment_id='segment', source_path=reference, source_start_seconds=0, source_end_seconds=1,
             timeline_start_seconds=0, timeline_end_seconds=2, match_score=1, match_reasons=['explicit slow picture'],
             needs_confirmation=False)], duration_seconds=2, low_confidence_clip_count=0, aspect_ratio='16:9',
-        narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key))
+        narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key))
     montage.graphic_overlays = [{'kind': 'text', 'id': 'title', 'text': '原图层', 'start_seconds': .4,
         'end_seconds': 1.8, 'x': .5, 'y': .15, 'width': .8}]
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))

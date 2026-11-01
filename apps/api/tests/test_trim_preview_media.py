@@ -15,7 +15,8 @@ from app import main as main_module
 from app.local_members import LocalMemberService
 from app.artifact_store import ArtifactStore
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, NarrationArtifactRecord, ProductionRepository
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 
@@ -76,7 +77,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         owner_user_id=creator_id,
     )
     repository.plan_confirmation.confirm_creation_plan(plan, task)
-    repository.save_narration_artifact(NarrationArtifactRecord(
+    repository.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="voice-trim", workspace_id=workspace_id, script_id="script-trim", voice_profile_id=None,
         cache_key="voice-trim", audio_path=str(voice), duration_seconds=1, sample_rate=44100,
         model_id="test-sine", task_id=task_id,
@@ -106,7 +107,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(
-        repository, "resolve_authorized_narration_audio_reference", lambda _workspace_id, _reference: voice,
+        repository.narration_artifacts, "resolve_authorized_narration_audio_reference", lambda _workspace_id, _reference: voice,
     )
 
     client = TestClient(main_module.app)

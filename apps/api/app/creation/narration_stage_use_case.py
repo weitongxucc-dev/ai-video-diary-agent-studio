@@ -1,7 +1,7 @@
 from __future__ import annotations
 from app.materials.contracts import MediaAuthorityError
 from app.narration import NarrationArtifact, _pronunciation_dictionary, _pronunciation_version
-from app.production import NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.creation.contracts import NarrationSegment
 from app.creation.contracts import CreationTask
 from app.montage import CreationTaskMontagePlan
@@ -64,7 +64,7 @@ class NarrationStageUseCase:
         segment = NarrationSegment(
             id=segment_id, workspace_id=workspace_id, task_id=task.id, script_id=script.id,
             source_section_id=section.id, text=section.content,
-            audio_reference=self.repository.narration_artifact_reference(record.cache_key),
+            audio_reference=self.repository.narration_artifacts.narration_artifact_reference(record.cache_key),
             duration_seconds=record.duration_seconds, sample_rate=record.sample_rate,
             model_id=record.model_id, voice_profile_id=inputs.voice.id, voice_version=inputs.voice.version,
             language=artifact.language, pronunciation_version=record.pronunciation_version, status='ready',
@@ -106,7 +106,7 @@ class NarrationStageUseCase:
             language={'zh-CN':'zh','en-US':'en','zh-CN/en-US':'zh-en'}[script.language],grant_context=grant_context)
         record, size = self._prepared_artifact(task.workspace_id,task,script,artifact,grant_context)
         segment = replace(previous,text=command.replacement_text,
-            audio_reference=self.repository.narration_artifact_reference(record.cache_key),
+            audio_reference=self.repository.narration_artifacts.narration_artifact_reference(record.cache_key),
             duration_seconds=record.duration_seconds,sample_rate=record.sample_rate,model_id=record.model_id,
             pronunciation_version=record.pronunciation_version,status='ready',updated_at=utc_now())
         return record, segment, size
@@ -138,8 +138,8 @@ class NarrationStageUseCase:
         for reference in input_references:
             if not reference.startswith('narration://artifact/'):
                 continue
-            audio_path = self.repository.resolve_authorized_narration_audio_reference(workspace_id, reference)
-            record = self.repository.get_narration_artifact(
+            audio_path = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(workspace_id, reference)
+            record = self.repository.narration_artifacts.get_narration_artifact(
                 workspace_id, reference.removeprefix('narration://artifact/'))
             if (record is None or record.task_id != task.id or record.script_id != script.id
                     or record.voice_profile_id != inputs.voice.id
@@ -292,7 +292,7 @@ class NarrationStageUseCase:
         maximum_duration = min(plan.duration_target_seconds, budget.max_duration_seconds)
         generated = self.generator.generate_for_creation_task(workspace_id=workspace_id, task_id=task.id, script_id=script.id, narration_text=target.text, language=target.language, max_duration_seconds=maximum_duration, voice_identity=inputs.voice, pronunciation_entries=inputs.pronunciation_entries, resolved_reference_audio_path=reference.source_path, repository=self.repository, viewer_user_id=task.owner_user_id, grant_context=context, segment_id=target.id, delivery_instruction=delivery_instruction, generation_identity=generation_identity)
         generated_record = NarrationArtifactRecord(id=f'narration_{generated.cache_key[:16]}', workspace_id=workspace_id, task_id=task.id, script_id=script.id, voice_profile_id=generated.voice_profile_id, cache_key=generated.cache_key, audio_path=generated.audio_path, duration_seconds=generated.duration_seconds, sample_rate=generated.sample_rate, model_id=generated.model_id, language=generated.language, pronunciation_version=generated.pronunciation_version)
-        updated_target = replace(target, audio_reference=self.repository.narration_artifact_reference(generated_record.cache_key), duration_seconds=generated_record.duration_seconds, sample_rate=generated_record.sample_rate, model_id=generated_record.model_id, voice_profile_id=inputs.voice.id, voice_version=inputs.voice.version, pronunciation_version=generated_record.pronunciation_version, status='ready', updated_at=utc_now())
+        updated_target = replace(target, audio_reference=self.repository.narration_artifacts.narration_artifact_reference(generated_record.cache_key), duration_seconds=generated_record.duration_seconds, sample_rate=generated_record.sample_rate, model_id=generated_record.model_id, voice_profile_id=inputs.voice.id, voice_version=inputs.voice.version, pronunciation_version=generated_record.pronunciation_version, status='ready', updated_at=utc_now())
         context.check()
         return updated_target,generated_record
 
@@ -389,9 +389,9 @@ class NarrationStageUseCase:
                 raise ValueError('局部配音缺少同一原Job的生成候选')
             if not receipt['finalized']:
                 return None
-            target = self.repository.get_narration_artifact(workspace_id, candidate['cache_key'], connection=conn)
+            target = self.repository.narration_artifacts.get_narration_artifact(workspace_id, candidate['cache_key'], connection=conn)
             original = self.repository.narration_records.get_narration_segment(workspace_id, task.id, candidate['segment_id'], connection=conn)
-            updated_target = replace(original, audio_reference=self.repository.narration_artifact_reference(target.cache_key),
+            updated_target = replace(original, audio_reference=self.repository.narration_artifacts.narration_artifact_reference(target.cache_key),
                 duration_seconds=target.duration_seconds, sample_rate=target.sample_rate, model_id=target.model_id,
                 pronunciation_version=target.pronunciation_version, status='ready', updated_at=utc_now())
             # This is the real immutable final snapshot, in the legacy script order.
@@ -403,14 +403,14 @@ class NarrationStageUseCase:
                 self.repository.get_creation_task_montage_plan(workspace_id, task.id, connection=conn))
         montage = self.retime_for_durations(workspace_id, montage,
             {row['id']: float(row['duration_seconds'] or 0) for row in narration_snapshot if row['status'] == 'ready'},
-            self.repository.narration_artifact_reference(combined.cache_key))
+            self.repository.narration_artifacts.narration_artifact_reference(combined.cache_key))
 
         def commit(connection):
             current = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
             if current.current_timeline_version_id != payload['base_version_id']:
                 raise ValueError('当前时间线已变化，未提交局部配音')
             base = self.repository.timeline_records.get_timeline_version(workspace_id, payload['base_version_id'], connection=connection)
-            self.repository.save_narration_artifact(target, connection=connection)
+            self.repository.narration_artifacts.save_narration_artifact(target, connection=connection)
             try:
                 return self.metadata.persist_montage_edit(workspace_id=workspace_id, task=current, proposal=proposal, base_version=base, updated_plan=montage, operation_type='RegenerateNarrationSegment', operation_payload=payload, narration_replacement=updated_target, narration_snapshot=narration_snapshot, narration_artifact=combined, connection=connection)
             except LegacyMontageReference as exc:

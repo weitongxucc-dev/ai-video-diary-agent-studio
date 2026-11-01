@@ -19,7 +19,8 @@ from app.creation_execution import (CpuRenderLimits, CreationExecution,
                                     cpu_render_facts, next_creation_intent, revision_digest)
 from app.audio_timeline import AudioEditRequest, apply_audio_edit, narration_audio_timeline
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment, ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
@@ -94,7 +95,7 @@ def recording_task(tmp_path, monkeypatch):
               "selection_status": "confirmed", "created_at": now, "updated_at": now, "confirmed_at": now}
     old_audio = tmp_path / "old.wav"
     old_audio.write_bytes(wav_bytes())
-    repo.save_narration_artifact(NarrationArtifactRecord(
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_old", workspace_id=workspace_id, task_id=task_id, script_id=script_id,
         voice_profile_id="voice_1", cache_key="old_voice", audio_path=str(old_audio),
         duration_seconds=1, sample_rate=16_000, model_id="test"))
@@ -201,7 +202,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     task = repo.task_records.get_creation_task("local", task_id)
     assert task.narration_cache_key == body["audio_reference"].removeprefix("narration://artifact/")
     assert task.montage_plan_id is None and task.current_timeline_version_id is None
-    saved_artifact = repo.get_narration_artifact("local", task.narration_cache_key)
+    saved_artifact = repo.narration_artifacts.get_narration_artifact("local", task.narration_cache_key)
     assert saved_artifact is not None and saved_artifact.source_artifact_ref == saved["source_ref"]
     assert saved_artifact.source_sha256 == next(
         item.sha256 for item in repo.execution_records.list_artifact_records("local", task_id)
@@ -243,7 +244,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
                      (json.dumps(asdict(plan), default=str), "local", plan.id))
 
     restarted = ProductionRepository(repo.database_path, repo.video_library_path)
-    reloaded = restarted.get_narration_artifact("local", task.narration_cache_key)
+    reloaded = restarted.narration_artifacts.get_narration_artifact("local", task.narration_cache_key)
     assert reloaded == saved_artifact
     assert restarted.narration_records.list_narration_segments("local", task_id) == [segment]
     current_script = restarted.script_records.get_creation_task_script("local", "script_recording")
@@ -731,13 +732,13 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     assert body['task']['stage']=='montage' and body['source_artifact_ref']==state.source.logical_ref
     assert client.get(state.route).json()['items'][0]['applied'] is True
     current = repo.task_records.get_creation_task('local',task.id)
-    artifact = repo.get_narration_artifact('local',current.narration_cache_key)
+    artifact = repo.narration_artifacts.get_narration_artifact('local',current.narration_cache_key)
     segment, = repo.narration_records.list_narration_segments('local',task.id)
     assert (segment.source_kind,segment.source_section_id,segment.text)==('recorded','section_1','真实待制作文案')
     assert segment.model_id is None and segment.voice_profile_id is None and segment.voice_version is None
     assert artifact.source_sha256==state.source.sha256 and artifact.source_script_digest==segment.source_script_digest
     reopened = ProductionRepository(repo.database_path,repo.video_library_path)
-    assert reopened.get_narration_artifact('local',current.narration_cache_key)==artifact
+    assert reopened.narration_artifacts.get_narration_artifact('local',current.narration_cache_key)==artifact
     assert reopened.narration_records.list_narration_segments('local',task.id)==[segment]
     preview = client.get(f'/api/creation-tasks/{task.id}/execution/preview')
     assert preview.status_code==200,preview.text

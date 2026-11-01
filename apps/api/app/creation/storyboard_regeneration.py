@@ -110,10 +110,10 @@ def narration_signature(repository, task, *, connection=None) -> str:
     if connection is None:
         with repository.creation_execution_read() as conn:
             return narration_signature(repository, task, connection=conn)
-    artifact = repository.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=connection)
+    artifact = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=connection)
     if artifact is None or artifact.task_id != task.id or artifact.script_id != task.confirmed_script_id:
         raise ValueError("故事板必须复用当前文案的真实配音")
-    references = dict.fromkeys([repository.narration_artifact_reference(artifact.cache_key)])
+    references = dict.fromkeys([repository.narration_artifacts.narration_artifact_reference(artifact.cache_key)])
     count = 0
     for item in repository.narration_records.iter_narration_segments(task.workspace_id, task.id, task.confirmed_script_id, connection=connection):
         if item.status != 'ready' or not item.audio_reference or not item.duration_seconds:
@@ -124,7 +124,7 @@ def narration_signature(repository, task, *, connection=None) -> str:
         raise ValueError('当前文案缺少可用的真实分段配音')
     files = []
     for reference in references:
-        path = repository.resolve_authorized_narration_audio_reference(task.workspace_id, reference)
+        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, reference)
         info = path.stat()
         if info.st_size <= 0:
             raise ValueError('故事板配音文件为空')

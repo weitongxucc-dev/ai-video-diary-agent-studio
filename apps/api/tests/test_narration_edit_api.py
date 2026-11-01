@@ -135,7 +135,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         path.write_bytes(b"x" * (context.max_output_bytes+1) if state.generated_oversize else wav_bytes(state.generated_duration))
         unchanged_task = state.repo.task_records.get_creation_task("local", state.task.id)
         assert unchanged_task.current_timeline_version_id == state.base.id
-        assert state.repo.get_narration_artifact("local", "1" * 64) is None
+        assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
         return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=state.generated_duration,
             sample_rate=8000, model_id="synthetic-provider", voice_profile_id=state.plan.selected_voice.profile_id,
             cache_key="1" * 64, language="zh", pronunciation_version="rules-v1")
@@ -144,7 +144,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         context.check()
         assert context.max_output_bytes < state.budget.max_output_bytes
         assert [item.cache_key for item in kwargs["segments"]] == ["1" * 64, "old"]
-        assert state.repo.get_narration_artifact("local", "1" * 64) is None
+        assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
         path = tmp_path / "combined.wav"
         path.write_bytes(wav_bytes(state.combined_duration))
         return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=state.combined_duration,
@@ -245,7 +245,7 @@ def test_draft_narration_retime_still_rejects_insufficient_source_footage(genera
     current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id == state.base.id
     assert state.repo.narration_records.list_narration_segments("local", state.task.id, "script") == state.segments
-    assert state.repo.get_narration_artifact("local", "1" * 64) is None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
 
 
 def test_rendered_narration_preview_keeps_existing_comparison_contract(generator_api):
@@ -278,9 +278,9 @@ def test_draft_narration_requires_current_version_script_and_persisted_audio(gen
         script = state.repo.script_records.get_creation_task_script("local", "script")
         monkeypatch.setattr(state.repo.script_records, "get_creation_task_script", lambda *_: replace(script, selection_status="draft"))
     elif mutation == "missing_artifact":
-        monkeypatch.setattr(state.repo, "get_narration_artifact", lambda *_: None)
+        monkeypatch.setattr(state.repo.narration_artifacts, "get_narration_artifact", lambda *_: None)
     elif mutation == "missing_file":
-        monkeypatch.setattr(state.repo, "resolve_authorized_narration_audio_reference", lambda *_: state.repo.database_path.parent / "missing.wav")
+        monkeypatch.setattr(state.repo.narration_artifacts, "resolve_authorized_narration_audio_reference", lambda *_: state.repo.database_path.parent / "missing.wav")
     else:
         payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
         payload["cues"][0]["narration_segment_id"] = "another-segment"
@@ -313,8 +313,8 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id != state.base.id
     assert current.narration_cache_key == "2" * 64 and not current.output_ready
-    assert state.repo.get_narration_artifact("local", "1" * 64) is not None
-    assert state.repo.get_narration_artifact("local", "2" * 64) is not None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is not None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "2" * 64) is not None
     segments = state.repo.narration_records.list_narration_segments("local", state.task.id, "script")
     assert segments[0].audio_reference == "narration://artifact/" + "1" * 64
     assert segments[1] == state.segments[1]
@@ -343,8 +343,8 @@ def test_actual_callback_failure_keeps_original_audio_and_version(generator_api,
     assert state.runtime.run_once()
     assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
     assert state.repo.narration_records.list_narration_segments("local", state.task.id, "script") == state.segments
-    assert state.repo.get_narration_artifact("local", "1" * 64) is None
-    assert state.repo.get_narration_artifact("local", "2" * 64) is None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "2" * 64) is None
     assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "failed"
 
 
@@ -358,7 +358,7 @@ def test_queue_seals_all_audio_and_montage_consumed_by_combination(generator_api
             [state.segments[0], replace(state.segments[1], pronunciation_version="changed-rules")])
     elif mutation == "other_source":
         from pathlib import Path
-        path = Path(state.repo.get_narration_artifact("local", "old").audio_path)
+        path = Path(state.repo.narration_artifacts.get_narration_artifact("local", "old").audio_path)
         path.write_bytes(path.read_bytes() + b"changed")
     else:
         montage = state.repo.get_creation_task_montage_plan("local", state.task.id)
@@ -368,7 +368,7 @@ def test_queue_seals_all_audio_and_montage_consumed_by_combination(generator_api
     assert not state.runtime.run_once()
     assert not state.generated_calls
     assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.get_narration_artifact("local", "1" * 64) is None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
 
 
 def test_actual_generator_cancellation_retains_original_facts(generator_api, monkeypatch):
@@ -384,7 +384,7 @@ def test_actual_generator_cancellation_retains_original_facts(generator_api, mon
     assert state.runtime.run_once()
     assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "cancelled"
     assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.get_narration_artifact("local", "1" * 64) is None
+    assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
 
 
 def test_actual_callback_unknown_release_does_not_publish(generator_api):
@@ -397,8 +397,8 @@ def test_actual_callback_unknown_release_does_not_publish(generator_api):
         with pytest.raises(RecoveryBlocked):
             state.runtime.run_once()
         assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.base.id
-        assert state.repo.get_narration_artifact("local", "1" * 64) is None
-        assert state.repo.get_narration_artifact("local", "2" * 64) is None
+        assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
+        assert state.repo.narration_artifacts.get_narration_artifact("local", "2" * 64) is None
         with state.repo._connect() as connection:
             row = connection.execute("SELECT state,request_id FROM device_permit WHERE id=1").fetchone()
             assert row["state"] != "free" and row["request_id"] == response.json()["request_id"]

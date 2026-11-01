@@ -30,8 +30,8 @@ def audio_budget():
 
 def case(tmp_path, *, normalize=False, budget=True):
     repo, task_id, script_id, digest, actor, execution, owner, scheduler, base, members = _render_version_fixture(tmp_path)
-    narration = repo.get_narration_artifact('local', 'cache_1')
-    repo.save_narration_artifact(replace(narration, sample_rate=8000, duration_seconds=2))
+    narration = repo.narration_artifacts.get_narration_artifact('local', 'cache_1')
+    repo.narration_artifacts.save_narration_artifact(replace(narration, sample_rate=8000, duration_seconds=2))
     music = tmp_path / 'library/music.wav'
     music.write_bytes(synthetic_wav_bytes())
     repo._save_asset(MaterialAsset(id='music', workspace_id='local', file_name=music.name, path=str(music),

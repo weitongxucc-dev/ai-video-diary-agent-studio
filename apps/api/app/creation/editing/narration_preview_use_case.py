@@ -65,10 +65,10 @@ class NarrationPreviewUseCase:
                 section = next((item for item in script.sections if item.id == segment.source_section_id))
                 if segment.status != 'ready' or not segment.audio_reference or (not segment.audio_reference.startswith('narration://artifact/')):
                     raise ValueError('当前配音片段尚未生成有效音频')
-                artifact = self.repository.get_narration_artifact(workspace_id, segment.audio_reference.removeprefix('narration://artifact/'))
+                artifact = self.repository.narration_artifacts.get_narration_artifact(workspace_id, segment.audio_reference.removeprefix('narration://artifact/'))
                 if script.task_id != task.id or script.selection_status != 'confirmed' or segment.script_id != script.id or (segment.text != section.content) or (snapshot_segments is not None and segment not in snapshot_segments) or (not segment.duration_seconds) or (segment.duration_seconds <= 0) or (artifact is None) or (artifact.task_id != task.id) or (artifact.script_id != script.id) or (current_version.task_id != task.id) or (snapshot_montage.task_id != task.id) or (snapshot_montage.script_id != script.id) or (montage.script_id != script.id) or (not any((cue.narration_segment_id == segment.id for cue in snapshot_montage.cues))) or (not any((cue.narration_segment_id == segment.id for cue in montage.cues))):
                     raise ValueError('所选配音与当前确认文案及草稿版本不一致')
-                original_audio = self.repository.resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
+                original_audio = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
                 if not original_audio.is_file() or original_audio.stat().st_size <= 0:
                     raise ValueError('当前配音产物已不可用')
             except (KeyError, StopIteration, ValueError, MediaAuthorityError, OSError) as exc:

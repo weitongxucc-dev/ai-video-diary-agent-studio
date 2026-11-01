@@ -153,7 +153,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
         snapshot={"montage": {"clips": [asdict(clip)]}, "narration_segments": [
             {"id": "segment-current", "workspace_id": task.workspace_id, "task_id": task.id}]}))
     task = material_repo.task_records.get_creation_task("local", task.id)
-    monkeypatch.setattr(material_repo, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
+    monkeypatch.setattr(material_repo.narration_artifacts, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
             task_id=task.id, script_id=task.confirmed_script_id,
         ))
     monkeypatch.setattr(material_repo.narration_records, "list_narration_segments", lambda workspace_id, task_id, script_id: [

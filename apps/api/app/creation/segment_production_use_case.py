@@ -304,7 +304,7 @@ class SegmentProductionUseCase:
             script_header=script, section=section, profile=self.repository.get_profile(task.workspace_id),
             duration_target_seconds=max(1, math.ceil(window.duration_seconds)), assets=assets,
             media_reference_for_asset=lambda asset_id: self.repository.workspace_media_reference_for_asset(task.workspace_id, asset_id),
-            narration_audio_path=self.repository.narration_artifact_reference(audio.cache_key),
+            narration_audio_path=self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key),
             narration_duration_seconds=audio.duration_seconds,
             narration_segment_id=self.narration_stage.segment_id(task.id, script.id, section_id))
         from app.audio_timeline import narration_audio_timeline
@@ -344,7 +344,7 @@ class SegmentProductionUseCase:
         from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
         current = self.repository.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header,
             payload['section_id'], connection=connection)
-        audio = self.repository.get_narration_artifact(workspace_id, payload['audio_cache_key'], connection=connection)
+        audio = self.repository.narration_artifacts.get_narration_artifact(workspace_id, payload['audio_cache_key'], connection=connection)
         if audio is None:
             raise ValueError('原画面决定的音频不可读取，不能复核原规划')
         requirement, windows = delivery_windows_from_section_inputs(snapshot.plan, inputs,
@@ -393,12 +393,12 @@ class SegmentProductionUseCase:
             'clip_count': len(plan.clips), 'overlay_count': len(plan.graphic_overlays),
             'max_output_bytes': limits.max_output_bytes, 'threads': limits.threads, 'timeout_seconds': limits.timeout_seconds}
         version = command['expected_segment_version'] if command else digest_section_version(task.confirmed_script_id,
-            section_id,text,self.repository.narration_artifact_reference(audio.cache_key))
+            section_id,text,self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key))
         facts = {'section_id':section_id,'audio_cache_key':audio.cache_key,'montage':payload,'sources':sources,
             'expected_segment_version':version,'resources':resources}
         facts['unit_key'] = f'segment_video:{section_id}:{digest(facts)}'
         facts.update(input_digest=job.input_digest,script_id=task.confirmed_script_id,
-            audio_reference=self.repository.narration_artifact_reference(audio.cache_key))
+            audio_reference=self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key))
         facts['decision_digest'] = digest(facts)
         facts['planning_dependency_digest'] = planning_dependency
         waiting = any(clip.needs_confirmation for clip in plan.clips)
@@ -485,7 +485,7 @@ class SegmentProductionUseCase:
             audio = current['audio']
             if audio is None or audio.status != 'ready' or audio.audio_reference != payload['audio_reference']:
                 raise ValueError('原段落音频检查点已变化')
-        artifact = self.repository.get_narration_artifact(job.workspace_id,payload['audio_reference'].removeprefix('narration://artifact/'),connection=connection)
+        artifact = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id,payload['audio_reference'].removeprefix('narration://artifact/'),connection=connection)
         if artifact is None or not Path(artifact.audio_path).is_file() or Path(artifact.audio_path).stat().st_size <= 0:
             raise ValueError('原段落音频产物不可用')
         for source in payload['sources']:
@@ -581,9 +581,9 @@ class SegmentProductionUseCase:
                     'candidate_offset': offset, 'next_offset': None, 'confirmed_clip_ids': [],
                     'device_request_id': None, 'required_confirmation_ids': [],
                     'reason': '合法画面已准备，原请求继续执行' if resolved else conflict.payload['reason'],
-                    'kept_audio_reference': self.repository.narration_artifact_reference(conflict.payload['audio_cache_key']),
-                    'audio': {'artifact_reference': self.repository.narration_artifact_reference(conflict.payload['audio_cache_key']),
-                        'persisted': self.repository.get_narration_artifact(workspace_id, conflict.payload['audio_cache_key']) is not None},
+                    'kept_audio_reference': self.repository.narration_artifacts.narration_artifact_reference(conflict.payload['audio_cache_key']),
+                    'audio': {'artifact_reference': self.repository.narration_artifacts.narration_artifact_reference(conflict.payload['audio_cache_key']),
+                        'persisted': self.repository.narration_artifacts.get_narration_artifact(workspace_id, conflict.payload['audio_cache_key']) is not None},
                     'usage': self.visual_usage(job),
                     'recovery': {'action': 'resume_original', 'requires_revalidation': True,
                         'detail': '原配音和消耗已保存；处理时长或合法素材冲突后恢复原请求，不会重新生成已就绪配音。'}}
@@ -833,7 +833,7 @@ class SegmentProductionUseCase:
                 return None
             if connection is not None and connection.in_transaction:
                 raise ValueError('段落视频输入须先在写事务外准备')
-            record = self.repository.get_narration_artifact(job.workspace_id,audio.audio_reference.removeprefix('narration://artifact/'))
+            record = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id,audio.audio_reference.removeprefix('narration://artifact/'))
             prepared = self.prepare_video(job,event,task,section.id,record,owner,text=audio.text)
             conflict = self.planning_conflict(job, section.id)
             if conflict is not None:
@@ -884,7 +884,7 @@ class SegmentProductionUseCase:
                 prepared = self.repository.execution_records.get_task_event(workspace_id, self.video_preparation_id(job, section_id))
             except KeyError:
                 paid = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_revision_audio').payload
-                audio = self.repository.get_narration_artifact(workspace_id, paid['audio_cache_key'])
+                audio = self.repository.narration_artifacts.get_narration_artifact(workspace_id, paid['audio_cache_key'])
                 prepared = self.prepare_video(job, start, task, section_id, audio, owner, text=command.replacement_text)
                 with self.repository._connect() as conn:
                     conn.execute('BEGIN IMMEDIATE')
@@ -1021,7 +1021,7 @@ class SegmentProductionUseCase:
                 def commit_audio(conn,current):
                     context.check()
                     self.verify_revision(job.workspace_id,job.task_id,actor,command,connection=conn)
-                    self.repository.save_narration_artifact(audio,connection=conn)
+                    self.repository.narration_artifacts.save_narration_artifact(audio,connection=conn)
                     self.persist_video_preparation(video_preparation,current,connection=conn)
                     self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_revision_audio',workspace_id=job.workspace_id,
                         task_id=job.task_id,job_id=job.id,event_type='segment_revision_audio',payload={
@@ -1040,11 +1040,11 @@ class SegmentProductionUseCase:
             if command:
                 self.verify_revision(job.workspace_id,job.task_id,actor,command)
                 prepared = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_revision_audio').payload
-                audio = self.repository.get_narration_artifact(job.workspace_id,prepared['audio_cache_key'])
+                audio = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id,prepared['audio_cache_key'])
                 text = command.replacement_text
             else:
                 reference = current_context['audio']['artifact_ref']
-                audio = self.repository.get_narration_artifact(job.workspace_id,reference.removeprefix('narration://artifact/'))
+                audio = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id,reference.removeprefix('narration://artifact/'))
                 text = current_context['text']
             from app.montage import creation_task_montage_plan_from_payload
             prepared_video = self.repository.execution_records.get_task_event(job.workspace_id,self.video_preparation_id(job,section_id)).payload
@@ -1077,7 +1077,7 @@ class SegmentProductionUseCase:
                     expected_duration_seconds=plan.duration_seconds,scheduler=scheduler,grant=grant,
                     cancel_event=cancellation,deadline_monotonic=context.deadline_monotonic)
             now = utc_now()
-            input_refs = [self.repository.narration_artifact_reference(audio.cache_key),*[clip.source_path for clip in plan.clips]]
+            input_refs = [self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key),*[clip.source_path for clip in plan.clips]]
             artifacts = [ArtifactRecord(id=f'artifact_{job.id}_{digest(grant.unit_key)[:20]}_{kind}',workspace_id=job.workspace_id,
                 task_id=job.task_id,kind=kind,logical_ref=value.logical_ref,sha256=value.sha256,size_bytes=value.size_bytes,
                 producer_job_id=job.id,input_refs=input_refs) for kind,value in [('rendered_video',published_video),('subtitle_track',published_subtitles)]]

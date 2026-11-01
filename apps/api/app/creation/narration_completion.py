@@ -12,7 +12,7 @@ from app.models import utc_now
 from app.persistence_json import _json_payload
 
 if TYPE_CHECKING:
-    from app.production import NarrationArtifactRecord
+    from app.creation.narration_artifacts import NarrationArtifactRecord
 
 
 class NarrationCompletionTransaction:

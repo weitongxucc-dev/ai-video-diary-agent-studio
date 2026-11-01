@@ -381,10 +381,10 @@ class TaskAudio:
             self.validate_source_access(workspace_id, task_id, reference, actor)
         self.validate_material_use(workspace_id, task_id, reference)
         if reference.startswith("narration://artifact/"):
-            record = self.repository.get_narration_artifact(workspace_id, reference.removeprefix("narration://artifact/"))
+            record = self.repository.narration_artifacts.get_narration_artifact(workspace_id, reference.removeprefix("narration://artifact/"))
             if record is None or record.task_id != task_id:
                 raise ValueError("配音不属于当前任务")
-            return self.repository.resolve_authorized_narration_audio_reference(workspace_id, reference)
+            return self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(workspace_id, reference)
         if reference.startswith("workspace://"):
             return self.repository.resolve_workspace_media_reference(workspace_id, reference, require_registered=True)
         records = self.repository.execution_records.list_artifact_records(workspace_id, task_id)
@@ -493,7 +493,7 @@ class TaskAudio:
                             for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id))
                         durations[clip.source_ref] = self.probe(path, output=produced_here, context=context)
                     elif clip.source_ref.startswith("narration://artifact/"):
-                        artifact = self.repository.get_narration_artifact(
+                        artifact = self.repository.narration_artifacts.get_narration_artifact(
                             workspace_id, clip.source_ref.removeprefix("narration://artifact/"))
                         durations[clip.source_ref] = artifact.duration_seconds
                     elif clip.source_ref.startswith("workspace://"):
@@ -535,7 +535,7 @@ class TaskAudio:
     def source_metadata(self, workspace_id, task_id, reference):
         data = {"duration_seconds": None, "sample_rate": None, "channels": None}
         if reference.startswith("narration://artifact/"):
-            item = self.repository.get_narration_artifact(workspace_id, reference.removeprefix("narration://artifact/"))
+            item = self.repository.narration_artifacts.get_narration_artifact(workspace_id, reference.removeprefix("narration://artifact/"))
             if item is not None:
                 data.update(duration_seconds=item.duration_seconds, sample_rate=item.sample_rate)
                 if item.source_artifact_ref:

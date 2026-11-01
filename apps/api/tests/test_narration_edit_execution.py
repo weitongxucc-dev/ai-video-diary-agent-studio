@@ -30,7 +30,8 @@ from app.device_scheduler import (
 from app.host_resource_probes import NarrationBudget
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import NarrationArtifactRecord, ProductionRepository
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
@@ -194,7 +195,7 @@ def fixture(tmp_path):
         )
     audio = tmp_path / "original.wav"
     audio.write_bytes(wav_bytes())
-    repo.save_narration_artifact(
+    repo.narration_artifacts.save_narration_artifact(
         NarrationArtifactRecord(
             id="old",
             workspace_id="local",
@@ -536,8 +537,8 @@ def test_waiting_stale_or_unauthorized_never_calls_provider(fixture, mutation):
         asset = f.repo.get_asset("local", voice.reference.asset_id)
         Path(asset.path).write_bytes(wav_bytes() + b"changed")
     elif mutation == "artifact_scope":
-        artifact = f.repo.get_narration_artifact("local", "old")
-        f.repo.save_narration_artifact(replace(artifact, task_id="other-task"))
+        artifact = f.repo.narration_artifacts.get_narration_artifact("local", "old")
+        f.repo.narration_artifacts.save_narration_artifact(replace(artifact, task_id="other-task"))
     elif mutation == "member":
         f.members.remove_member(f.actor.member_id)
     else:
@@ -701,8 +702,8 @@ def test_wrong_grant_cannot_enter_narration_callback(fixture):
 @pytest.mark.parametrize("scope", ["other_task", "old_script"])
 def test_combination_rejects_other_segment_artifact_scope_before_dispatch(fixture, scope):
     state = fixture
-    record = state.repo.get_narration_artifact("local", "old")
-    state.repo.save_narration_artifact(replace(record, id="other-source", cache_key="other-source",
+    record = state.repo.narration_artifacts.get_narration_artifact("local", "old")
+    state.repo.narration_artifacts.save_narration_artifact(replace(record, id="other-source", cache_key="other-source",
         task_id="other-task" if scope == "other_task" else state.task.id,
         script_id="old-script" if scope == "old_script" else "script"))
     state.segments = [state.segments[0], replace(state.segments[1], audio_reference="narration://artifact/other-source")]
@@ -717,13 +718,13 @@ def test_combination_rejects_other_segment_artifact_scope_before_dispatch(fixtur
 
 def test_combination_artifact_metadata_change_while_waiting_blocks_dispatch(fixture):
     state = fixture
-    record = state.repo.get_narration_artifact("local", "old")
+    record = state.repo.narration_artifacts.get_narration_artifact("local", "old")
     other = replace(record, id="other-source", cache_key="other-source")
-    state.repo.save_narration_artifact(other)
+    state.repo.narration_artifacts.save_narration_artifact(other)
     state.segments = [state.segments[0], replace(state.segments[1], audio_reference="narration://artifact/other-source")]
     state.repo.narration_records.save_narration_segments("local", state.task.id, "script", state.segments)
     request = submit(state)
-    state.repo.save_narration_artifact(replace(other, sample_rate=16000))
+    state.repo.narration_artifacts.save_narration_artifact(replace(other, sample_rate=16000))
     state.resources.allowed = True
     assert not state.runtime.run_once()
     assert not state.calls

@@ -1701,7 +1701,7 @@ def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeyp
         lambda *args: SimpleNamespace(id="person", version="p1", authorization=None),
     )
     monkeypatch.setattr(
-        repo,
+        repo.narration_artifacts,
         "resolve_authorized_narration_audio_reference",
         lambda *args: tmp_path / "synthetic.wav",
     )

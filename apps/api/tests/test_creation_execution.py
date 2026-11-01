@@ -33,7 +33,8 @@ from app.device_scheduler import DeviceScheduler, ProcessIdentity
 from app.host_resource_probes import HostCapacity, HostProcessProbe
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord, ProductionRepository
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment, ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
     CreationPlanVoiceReference,
@@ -201,7 +202,7 @@ def _render_version_fixture(tmp_path):
         repo._claim_workspace_media_reference(
             conn, workspace_id="local", reference=source_reference
         )
-    repo.save_narration_artifact(NarrationArtifactRecord(
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="local", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
         audio_path=str(audio), duration_seconds=1, sample_rate=24000, model_id="fixture",
@@ -607,7 +608,7 @@ def test_granted_render_failure_reads_actual_reason_and_preserves_upstream(tmp_p
     reason = "运行中可用内存低于安全线，本次制作已停止。" if failure == "http_detail" else "actual render worker failed"
     task_before = repo.task_records.get_creation_task("local", task_id)
     montage_before = repo.get_creation_task_montage_plan("local", task_id)
-    narration_before = repo.get_narration_artifact("local", task_before.narration_cache_key)
+    narration_before = repo.narration_artifacts.get_narration_artifact("local", task_before.narration_cache_key)
     try:
         monkeypatch.setattr("app.creation_execution.sample_host_capacity", lambda: HostCapacity(
             cpu_count=8, cpu_threads_ceiling=7, available_memory_bytes=8 * 1024 ** 3, load_avg_1m=.5))
@@ -639,7 +640,7 @@ def test_granted_render_failure_reads_actual_reason_and_preserves_upstream(tmp_p
         assert task_after.current_timeline_version_id == base.id
         assert task_after.narration_cache_key == task_before.narration_cache_key
         assert repo.get_creation_task_montage_plan("local", task_id) == montage_before
-        assert repo.get_narration_artifact("local", task_after.narration_cache_key) == narration_before
+        assert repo.narration_artifacts.get_narration_artifact("local", task_after.narration_cache_key) == narration_before
         assert Path(narration_before.audio_path).is_file()
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (request_id,)).fetchone()[0] == "failed"
@@ -1064,7 +1065,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="蓝色画面", review_status="approved")],
     ))
-    repo.save_narration_artifact(NarrationArtifactRecord(
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="workspace_a", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
         audio_path=str(audio), duration_seconds=1, sample_rate=44100, model_id="test",
@@ -1312,7 +1313,7 @@ def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch):
     audio = tmp_path / "narration.wav"
     attempts = []
     monkeypatch.setattr(repo, "get_creation_task_montage_plan", lambda *_: {})
-    monkeypatch.setattr(repo, "get_narration_artifact", lambda *_: SimpleNamespace(
+    monkeypatch.setattr(repo.narration_artifacts, "get_narration_artifact", lambda *_: SimpleNamespace(
         task_id=task_id, script_id=script_id, audio_path=str(audio)))
 
     def narration(workspace_id, current_task_id):
@@ -1519,7 +1520,7 @@ def test_failed_new_narration_never_reuses_leftover_old_audio(tmp_path, monkeypa
     with sqlite3.connect(repo.database_path) as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), "workspace_a", task_id))
-    monkeypatch.setattr(repo, "get_narration_artifact", lambda *_: SimpleNamespace(
+    monkeypatch.setattr(repo.narration_artifacts, "get_narration_artifact", lambda *_: SimpleNamespace(
         task_id=task_id, script_id=script_id, audio_path=str(old_audio)))
     attempts = []
 
@@ -2055,7 +2056,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         if after_wait in {"ordinary_error", "user_cancel"}:
             repo.narration_completion.complete_creation_task_narration(record)
             return
-        repo.save_narration_artifact(record)
+        repo.narration_artifacts.save_narration_artifact(record)
         task = repo.task_records.get_creation_task(workspace, current_task)
         task.narration_cache_key = record.cache_key
         with repo._connect() as conn:
@@ -3085,7 +3086,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     clips=[MontageClip('edit-clip-'+str(i),cue.id,asset.id,asset.segments[0].id,reference,i,i+1,i,i+1,1,[],False)
         for i,cue in enumerate(cues)]
     montage=CreationTaskMontagePlan('edit-montage','local',task.id,case.script_id,'fixture','ready',cues,clips,3,0,
-        narration_audio_path=case.repo.narration_artifact_reference(task.narration_cache_key))
+        narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(task.narration_cache_key))
     payload=creation_task_montage_plan_to_payload(montage)
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',task.id,montage.id,payload)
     base=case.repo.timeline_records.create_timeline_version(TimelineVersion('edit-base','local',task.id,None,1,
@@ -3133,7 +3134,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     if interrupt_final == 'dependency_changed':
         from app.device_scheduler import RecoveryBlocked
         _replace_fixed_voice_file(SimpleNamespace(**{**vars(case),'job':job}))
-        original_audio=case.repo.resolve_authorized_narration_audio_reference('local',segments[1].audio_reference)
+        original_audio=case.repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',segments[1].audio_reference)
         original_audio.write_bytes(original_audio.read_bytes())
         with pytest.raises(RecoveryBlocked,match='其他产物或依赖已变化'):
             control.submit_narration_edit('local',task,proposal,case.actor,runtime,source=source)
@@ -3223,7 +3224,7 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
             clips=[MontageClip(f'clip_{section_id}',f'cue_{section_id}',asset.id,asset.segments[0].id,reference,0,audio.duration_seconds,
                 0,audio.duration_seconds,1,['controlled port'],False)],duration_seconds=audio.duration_seconds,
             low_confidence_clip_count=0,created_at=task.created_at,updated_at=task.created_at,
-            narration_audio_path=case.repo.narration_artifact_reference(audio.cache_key))
+            narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(audio.cache_key))
         paths = [Path(audio.audio_path),Path(asset.path)]
         sources = [{'path':str(path),'size':path.stat().st_size,'mtime_ns':path.stat().st_mtime_ns,
             'ctime_ns':path.stat().st_ctime_ns} for path in paths]
@@ -3380,7 +3381,7 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
         task = case.repo.task_records.get_creation_task('local',case.task_id)
         template = creation_task_montage_plan_from_payload(case.repo.section_inputs.stage_segment_state('local',case.task_id,'section_1')['montage'])
         full = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
-            replace(template,id='full_montage',narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
+            replace(template,id='full_montage',narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
         assert {cue.source_section_id for cue in full.cues}=={'section_1','section_2'}
         case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
         edits.ensure_montage_base('local',case.repo.task_records.get_creation_task('local',case.task_id),full)
@@ -3419,7 +3420,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     task=case.repo.task_records.get_creation_task('local',case.task_id)
     template=creation_task_montage_plan_from_payload(case.repo.section_inputs.stage_segment_state('local',case.task_id,'section_1')['montage'])
     full=MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
-        replace(template,id='full_before',narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
+        replace(template,id='full_before',narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
     edits.ensure_montage_base('local',task,full)
     _before,request,_runtime=_submit_section_revision(case)
@@ -3511,7 +3512,7 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     task=case.repo.task_records.get_creation_task('local',case.task_id)
     template=creation_task_montage_plan_from_payload(case.repo.section_inputs.stage_segment_state('local',case.task_id,'section_1')['montage'])
     full=MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
-        replace(template,id='full_before',narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
+        replace(template,id='full_before',narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
     full.clips[0].crop_x=.23
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
     base=edits.ensure_montage_base('local',case.repo.task_records.get_creation_task('local',case.task_id),full)
@@ -3720,8 +3721,8 @@ def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_pa
     final = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert not final['unsettled'] and final['used_seconds'] > usage['used_seconds']
     assert final['used_output_bytes'] == sum(Path(item.audio_path).stat().st_size for item in [
-        case.repo.get_narration_artifact('local', current.narration_cache_key), *[
-            case.repo.get_narration_artifact('local', s.audio_reference.removeprefix('narration://artifact/'))
+        case.repo.narration_artifacts.get_narration_artifact('local', current.narration_cache_key), *[
+            case.repo.narration_artifacts.get_narration_artifact('local', s.audio_reference.removeprefix('narration://artifact/'))
             for s in case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)]])
     with case.repo._connect() as conn:
         queued = conn.execute("SELECT unit_key FROM device_work_requests WHERE state='waiting'").fetchall()
@@ -3898,7 +3899,7 @@ def test_narration_three_inputs_checkpoint_failed_merge_and_resume_on_original_j
     assert retried.request_id == final.request_id and retried.owner_id == case.job.id
     case.executor.execute(retried, case.scheduler)
     task = case.repo.task_records.get_creation_task('local', case.task_id)
-    output = case.repo.get_narration_artifact('local', task.narration_cache_key)
+    output = case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key)
     assert task.stage == 'montage' and output.duration_seconds == 3
     assert case.merged == [section_keys[:2], [str(partial_path), section_keys[2]]]
     assert len(case.generated) == 3 and len(case.execution.jobs('local', case.task_id)) == 1
@@ -3950,7 +3951,7 @@ def test_narration_merge_checkpoint_rejects_changed_actual_dependency(tmp_path, 
             watcher=case.owner.capture_local(request,conn)
             assert watcher(conn)=='stale'
     else:
-        artifact=case.repo.get_narration_artifact('local',checkpoint['input_references'][0].removeprefix('narration://artifact/'))
+        artifact=case.repo.narration_artifacts.get_narration_artifact('local',checkpoint['input_references'][0].removeprefix('narration://artifact/'))
         Path(artifact.audio_path).write_bytes(b'changed dependency')
         with case.repo._connect() as conn:
             job,task,_event,script,plan=case.owner._facts(conn,'local',case.job.id)
@@ -4840,7 +4841,7 @@ def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=Fal
     assert case.scheduler._get(grant.request_id).state == 'failed'
     settled = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_narration_settled_{grant.generation}')
     assert settled.payload['output_file'] is None and settled.payload['output_bytes'] > 0
-    assert case.repo.get_narration_artifact('local', output['cache_key']) is None
+    assert case.repo.narration_artifacts.get_narration_artifact('local', output['cache_key']) is None
     monkeypatch.setattr(case.segments, 'prepare_video', prepare_video)
     monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', lambda **kw: pytest.fail('provider fallback'))
     from app.creation.execution_control import CreationExecutionControl
@@ -4875,7 +4876,7 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         from app.creation.execution_control import ExecutionControlRejected
         with pytest.raises(ExecutionControlRejected):
             case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
-        assert case.repo.get_narration_artifact('local', case.output['cache_key']) is None
+        assert case.repo.narration_artifacts.get_narration_artifact('local', case.output['cache_key']) is None
         with case.repo._connect() as conn:
             assert {row[0] for row in conn.execute('SELECT status FROM narration_segments WHERE task_id=?', (case.task_id,))} == {'pending'}
     else:
@@ -4883,7 +4884,7 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         result = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
         assert result['status'] == 'waiting_for_user' and result['audio']['persisted']
         assert case.repo.task_records.get_creation_task('local', case.task_id).stage_status == 'waiting_for_user'
-        record = case.repo.get_narration_artifact('local', case.output['cache_key'])
+        record = case.repo.narration_artifacts.get_narration_artifact('local', case.output['cache_key'])
         assert record.sample_rate == 24000 and record.duration_seconds == 1.0
         decision = case.segments.visual_decision(case.repo.job_records.get_job_run('local', case.job.id), 'section_1')
         case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False, write_guard=guard)
@@ -4909,7 +4910,7 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
         case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     assert task.stage == 'montage' and task.stage_status == 'failed'
-    assert case.repo.get_narration_artifact('local', task.narration_cache_key)
+    assert case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key)
     before = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     rows = case.repo.list_creation_job_request_states('local', case.job.id)
     montage = next(row for row in rows if row['unit_key'].startswith('montage_plan:'))
@@ -4974,7 +4975,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, montage['id'], montage)
     edited = repo.timeline_records.create_timeline_version(TimelineVersion('timeline_two_titles', 'local', task_id,
         base.id, 2, {'montage': repo.get_creation_task_montage_plan('local', task_id)}, 'two-title-edit'))
-    audio = repo.get_narration_artifact('local', 'cache_1')
+    audio = repo.narration_artifacts.get_narration_artifact('local', 'cache_1')
     audio_sha = hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest()
     usage = repo.narration_units.creation_narration_usage('local', job.id)
     control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
@@ -5026,7 +5027,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     assert repo.execution_records.get_task_event('local', old_output.id) == old_output
     assert repo.execution_records.get_task_event('local', settled.id) == settled
     assert repo.narration_units.creation_narration_usage('local', job.id) == usage
-    assert repo.get_narration_artifact('local', 'cache_1') == audio
+    assert repo.narration_artifacts.get_narration_artifact('local', 'cache_1') == audio
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
     assert scheduler._get(original_request).state == 'done'
 
@@ -5140,7 +5141,7 @@ def test_pcm_three_declared_inputs_merge_once_without_new_job_or_audio(tmp_path)
     assert declared['merge_final'] and declared['merge_section_ids'] == ['section_1', 'section_2', 'section_3']
     case.executor.execute(merge, case.scheduler)
     task = case.repo.task_records.get_creation_task('local', case.task_id)
-    assert case.repo.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 3
+    assert case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 3
     assert len(case.merged) == 1 and len(case.merged[0]) == 3 and len(case.generated) == 3
     usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == 3 * 48044 + 3 * 48000 + 44
@@ -5186,7 +5187,7 @@ def test_pcm_sealed_two_input_unit_survives_larger_cap_and_prefix_uses_one_slot(
     assert final['input_count'] == 2 and final['merge_final']
     case.executor.execute(last, case.scheduler)
     task = case.repo.task_records.get_creation_task('local', case.task_id)
-    assert case.repo.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 5
+    assert case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 5
     assert [len(unit) for unit in case.merged] == [2, 3, 2]
     usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     assert usage['used_output_bytes'] == 5 * 48044 + 96044 + 96008 + 48008
@@ -5586,7 +5587,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
         assert segment.created_at == pending.created_at and segment.id == pending.id and segment.status == 'ready'
         assert repo.narration_records.get_narration_segment('local', case.task_id, pending.id) == pending
         assert repo.job_records.get_job_run('local', case.job.id).status == 'queued'
-        assert repo.get_narration_artifact('local', artifact.cache_key) is None
+        assert repo.narration_artifacts.get_narration_artifact('local', artifact.cache_key) is None
     finally:
         case.scheduler.close()
 
@@ -5754,10 +5755,10 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
         audio_path=request.resources['narration_reference']['reference']['source_path'],
         duration_seconds=1, sample_rate=24000, model_id='test',
         pronunciation_version=request.resources['pronunciation_version'])
-    repo.save_narration_artifact(record)
+    repo.narration_artifacts.save_narration_artifact(record)
     segment = NarrationSegment(id=case.stage.segment_id(case.task_id, case.script_id, 'section_45'),
         workspace_id='local', task_id=case.task_id, script_id=case.script_id, source_section_id='section_45',
-        text='原文'*130, audio_reference=repo.narration_artifact_reference(record.cache_key), duration_seconds=1,
+        text='原文'*130, audio_reference=repo.narration_artifacts.narration_artifact_reference(record.cache_key), duration_seconds=1,
         sample_rate=24000, model_id='test', voice_profile_id=request.resources['voice_profile_id'],
         voice_version=request.resources['voice_version'], language='zh',
         pronunciation_version=request.resources['pronunciation_version'], status='ready')
@@ -5919,10 +5920,10 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
         record = NarrationArtifactRecord(id=key, workspace_id='local', task_id=task.id, script_id=script.id,
             voice_profile_id=inputs.voice.id, cache_key=key, audio_path=str(path), duration_seconds=.001,
             sample_rate=24000, model_id='test', language='zh', pronunciation_version=pronunciation)
-        repo.save_narration_artifact(record)
+        repo.narration_artifacts.save_narration_artifact(record)
         segments.append(NarrationSegment(id=case.stage.segment_id(task.id, script.id, section.id),
             workspace_id='local', task_id=task.id, script_id=script.id, source_section_id=section.id,
-            text=section.content, audio_reference=repo.narration_artifact_reference(key), duration_seconds=.001,
+            text=section.content, audio_reference=repo.narration_artifacts.narration_artifact_reference(key), duration_seconds=.001,
             sample_rate=24000, model_id='test', voice_profile_id=inputs.voice.id, voice_version=inputs.voice.version,
             language='zh', pronunciation_version=pronunciation, status='ready'))
     repo.narration_records.save_narration_segments('local', task.id, script.id, segments)
@@ -6019,10 +6020,10 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
         record = NarrationArtifactRecord(id=key, workspace_id='local', task_id=task.id, script_id=script.id,
             voice_profile_id='voice_1', cache_key=key, audio_path=str(path), duration_seconds=1,
             sample_rate=24000, model_id='test', language='zh', pronunciation_version='v1')
-        repo.save_narration_artifact(record)
+        repo.narration_artifacts.save_narration_artifact(record)
         rows.append(NarrationSegment(id=f'paid-row-{index}', workspace_id='local', task_id=task.id,
             script_id=script.id, source_section_id=section.id, text=section.content,
-            audio_reference=repo.narration_artifact_reference(key), duration_seconds=1, sample_rate=24000,
+            audio_reference=repo.narration_artifacts.narration_artifact_reference(key), duration_seconds=1, sample_rate=24000,
             model_id='test', voice_profile_id='voice_1', voice_version='v1', language='zh',
             pronunciation_version='v1', status='ready', created_at=script.created_at-timedelta(seconds=index)))
     repo.narration_records.save_narration_segments('local', task.id, script.id, rows)
@@ -6043,7 +6044,7 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
     clips = [MontageClip(f'paid-clip-{i}', cue.id, asset.id, 'paid-shot', reference,
         i, i+1, i, i+1, 1, [], False) for i, cue in enumerate(cues)]
     montage = CreationTaskMontagePlan('paid-montage', 'local', task.id, script.id, 'fixture', 'ready',
-        cues, clips, 3, 0, narration_audio_path=repo.narration_artifact_reference('paid-0'))
+        cues, clips, 3, 0, narration_audio_path=repo.narration_artifacts.narration_artifact_reference('paid-0'))
     payload = creation_task_montage_plan_to_payload(montage)
     repo.montage_plan_adoption.save_creation_task_montage_plan('local', task.id, montage.id, payload)
     base = repo.timeline_records.create_timeline_version(TimelineVersion('paid-base', 'local', task.id, None, 1,
@@ -6197,10 +6198,10 @@ def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_pa
             artifact = NarrationArtifactRecord(id=key, workspace_id='local', task_id=task.id,
                 script_id=script.id, voice_profile_id='voice_1', cache_key=key, audio_path=str(path),
                 duration_seconds=1, sample_rate=24000, model_id='test', language='zh', pronunciation_version='v1')
-            repo.save_narration_artifact(artifact)
+            repo.narration_artifacts.save_narration_artifact(artifact)
             rows.append(NarrationSegment(id=f'edit-row-{index}', workspace_id='local', task_id=task.id,
                 script_id=script.id, source_section_id=section.id, text=section.content,
-                audio_reference=repo.narration_artifact_reference(key), duration_seconds=1,
+                audio_reference=repo.narration_artifacts.narration_artifact_reference(key), duration_seconds=1,
                 sample_rate=24000, model_id='test', voice_profile_id='voice_1', voice_version='v1',
                 language='zh', pronunciation_version='v1', status='ready',
                 created_at=script.created_at - timedelta(seconds=index)))
@@ -6351,7 +6352,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
         assert case.scheduler._get(final.request_id).state == 'done'
         usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
         assert not usage['unsettled'] and usage['used_output_bytes'] == 196
-        record = case.repo.get_narration_artifact('local', task.narration_cache_key)
+        record = case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key)
         expected = hashlib.sha256('\n'.join('ready-section_'+str(i) for i in range(1, 4)).encode()).hexdigest()
         assert record.cache_key == expected and record.duration_seconds == .003
         assert [asdict(row) for row in case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)] == case.original_segments
@@ -6383,10 +6384,10 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
             script_id=script.id, voice_profile_id=inputs.voice.id, cache_key='paid-'+section.id,
             audio_path=str(path), duration_seconds=duration, sample_rate=24000, model_id='test',
             language='zh', pronunciation_version=pronunciation)
-        repo.save_narration_artifact(record)
+        repo.narration_artifacts.save_narration_artifact(record)
         rows.append(NarrationSegment(id=case.stage.segment_id(task.id, script.id, section.id),
             workspace_id='local', task_id=task.id, script_id=script.id, source_section_id=section.id,
-            text=section.content, audio_reference=repo.narration_artifact_reference(record.cache_key),
+            text=section.content, audio_reference=repo.narration_artifacts.narration_artifact_reference(record.cache_key),
             duration_seconds=duration, sample_rate=24000, model_id='test', voice_profile_id=inputs.voice.id,
             voice_version=inputs.voice.version, language='zh', pronunciation_version=pronunciation, status='ready'))
     pending = [replace(rows[0], id=case.stage.segment_id(task.id, script.id, section.id),
@@ -6633,8 +6634,8 @@ def test_bounded_segment_video_new_audio_preparation_precedes_its_original_commi
             "WHERE task_id=? AND source_section_id='section_1'", (case.task_id,))
     task = case.repo.task_records.get_creation_task('local', case.task_id)
     start = case.repo.execution_records.get_task_event('local', f'event_{case.job.id}_start').payload
-    audio = replace(case.repo.get_narration_artifact('local', 'paid-section_1'), id='not-committed', cache_key='not-committed')
-    assert case.repo.get_narration_artifact('local', audio.cache_key) is None
+    audio = replace(case.repo.narration_artifacts.get_narration_artifact('local', 'paid-section_1'), id='not-committed', cache_key='not-committed')
+    assert case.repo.narration_artifacts.get_narration_artifact('local', audio.cache_key) is None
     prepared = case.segments.prepare_video(case.job, start, task, 'section_1', audio, case.owner, text=case.paid_rows[0].text)
     with case.repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -6642,7 +6643,7 @@ def test_bounded_segment_video_new_audio_preparation_precedes_its_original_commi
         assert conn.in_transaction
         assert case.repo.execution_records.get_task_event('local', prepared.id, connection=conn).payload['unit_key'] == prepared.payload['unit_key']
         conn.rollback()
-    assert case.repo.get_narration_artifact('local', audio.cache_key) is None
+    assert case.repo.narration_artifacts.get_narration_artifact('local', audio.cache_key) is None
     with pytest.raises(KeyError):
         case.repo.execution_records.get_task_event('local', prepared.id)
     assert not case.generated and not case.merged

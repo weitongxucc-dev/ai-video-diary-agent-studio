@@ -103,7 +103,7 @@ class AudioEditUseCase:
                 original_ref = next((clip.source_ref for track in before.tracks if track.role == 'narration' for clip in track.clips))
                 service.source(workspace_id, task_id, original_ref, actor=actor)
                 if original_ref.startswith('narration://artifact/'):
-                    if original_ref != self.repository.narration_artifact_reference(task.narration_cache_key or ''):
+                    if original_ref != self.repository.narration_artifacts.narration_artifact_reference(task.narration_cache_key or ''):
                         raise ValueError('当前旁白引用与任务版本不一致，请刷新后重试')
                     before_url = f'/api/creation-tasks/{task_id}/narration/audio'
                 else:
