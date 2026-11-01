@@ -128,7 +128,7 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     sources.save_source_items('qa',[replace(sources.get_source_item('qa','manual-source'),body='同ID后来替换的正文')])
     changed = case.sources('qa',task.id,'section',actor,offset=1,limit=1)
     assert changed['items'][0]['status']=='changed' and 'text' not in changed['items'][0]
-    with production.creation_execution_read() as conn:
+    with production.execution_inputs.creation_execution_read() as conn:
         header, metadata = production.script_records.read_execution_script_metadata(conn,'qa',saved.id)
         section = production.section_inputs.read_creation_section_input(task,header,'section',connection=conn)['section']
         unknown = case.source_bindings({**metadata,'run_id':'missing-historical-run'},section,connection=conn)

@@ -160,15 +160,15 @@ class PersonStageUseCase:
 
     def generate_stage(self, workspace_id: str, task_id: str, context: CreationStageGrantContext):
         context.check()
-        with self.repository.creation_execution_read() as conn:
-            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
             selected = [segment.id for segment, _ in iter_presenter_inputs(self.repository, snapshot.task,
                 snapshot.script_header, snapshot.plan, self.presenter_model_ids(), connection=conn)]
         total_output_bytes = 0
         for segment_id in selected:
             context.check()
-            with self.repository.creation_execution_read() as conn:
-                current = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                current = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
                 target = next(((segment, request) for segment, request in iter_presenter_inputs(self.repository,
                     current.task, current.script_header, current.plan, self.presenter_model_ids(), connection=conn)
                     if segment.id == segment_id), None)

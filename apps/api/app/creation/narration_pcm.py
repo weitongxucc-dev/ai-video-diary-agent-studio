@@ -115,8 +115,8 @@ def _source_stat(info):
 def prepare_narration_source(repository, task, plan, actor, *, binding=None, selected_voice=None):
     """Host-owned full-byte evidence, held until the short adoption/recovery commit."""
     from app.creation.execution_input import execution_input_digest, validate_execution_relationships
-    with repository.creation_execution_read() as conn:
-        snapshot = repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+    with repository.execution_inputs.creation_execution_read() as conn:
+        snapshot = repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
         if (snapshot.task.confirmed_script_id != task.confirmed_script_id or snapshot.plan != plan):
             raise ValueError('文案或方案在来源准备前变化，未封存新输入')
         task, plan = snapshot.task, snapshot.plan

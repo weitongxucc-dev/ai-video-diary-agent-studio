@@ -54,7 +54,7 @@ class SectionTimelineChange:
 
     def compute(self,task,snapshot,section_id,local,segment,version_id,connection=None,*,desired_version=None):
         if connection is None:
-            with self.repository.creation_execution_read() as conn:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
                 return self.compute(task,snapshot,section_id,local,segment,version_id,conn,desired_version=desired_version)
         inputs = self.repository.read_section_change_inputs(task,segment,connection=connection)
         snapshot = dict(snapshot)
@@ -125,7 +125,7 @@ class SectionTimelineChange:
                 self.published_bytes += len(content)
 
     def prepare_current(self,workspace_id,task_id,section_id,local,segment,job,*,desired_version=None):
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.repository.task_records.get_creation_task(workspace_id,task_id,connection=conn)
             version = self.repository.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
             _snapshot,tracks,languages = self.compute(task,version.snapshot,section_id,local,segment,

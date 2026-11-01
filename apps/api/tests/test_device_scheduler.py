@@ -251,8 +251,8 @@ def test_production_snapshot_contends_with_original_scheduler_checkpoint(tmp_pat
                                        checkpoint_write=checkpoint)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with repository.creation_execution_read() as reader:
-            snapshot = repository.read_creation_execution_snapshot(job.workspace_id, task_id, connection=reader)
+        with repository.execution_inputs.creation_execution_read() as reader:
+            snapshot = repository.execution_inputs.read_creation_execution_snapshot(job.workspace_id, task_id, connection=reader)
             reader_facts = _sqlite_connection_facts(reader)
             assert snapshot.task.id == task_id and reader.in_transaction
             started = monotonic()

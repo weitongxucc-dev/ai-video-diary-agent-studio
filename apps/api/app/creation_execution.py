@@ -251,7 +251,7 @@ def presenter_inputs(repository, task, script, plan, models):
 def iter_presenter_inputs(repository, task, script, plan, models, *, connection=None):
     if not plan.presenter_share_target:
         return
-    with repository.creation_execution_read(connection) as conn:
+    with repository.execution_inputs.creation_execution_read(connection) as conn:
         header, _ = repository.script_records.read_execution_script_metadata(conn, task.workspace_id, script.id)
         yield from _presenter_inputs_in_snapshot(repository, task, header, plan, models, connection=conn)
 
@@ -332,7 +332,7 @@ def presenter_stage_facts(repository, task, script, plan, budget, models, *, con
     if budget is None:
         raise ValueError("人物制作预算尚未标定，请配置 DEVICE_PRESENTER_* 标定值")
     if connection is None:
-        with repository.creation_execution_read() as conn:
+        with repository.execution_inputs.creation_execution_read() as conn:
             return presenter_stage_facts(repository, task, script, plan, budget, models, connection=conn)
     inputs, files, duration = [], {}, 0
     for segment, request in iter_presenter_inputs(repository, task, script, plan, models, connection=connection):
@@ -416,7 +416,7 @@ def narration_scope_fields(budget, *, task, inputs, reference, language, max_out
 def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, reference_preparation=None, comparison_reference=None, narration_runtime_facts=None, source_binding=None, connection=None):
     """Seal one confirmed script segment; admission does not decode or generate."""
     if connection is None:
-        with repository.creation_execution_read() as reader:
+        with repository.execution_inputs.creation_execution_read() as reader:
             return narration_edit_stage_facts(repository, task, proposal, plan, budget,
                 reference_preparation=reference_preparation, comparison_reference=comparison_reference,
                 narration_runtime_facts=narration_runtime_facts, source_binding=source_binding, connection=reader)
@@ -558,7 +558,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                      actor=None, graphic_source_facts=None, audio_mix_facts=None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
     if not conn.in_transaction:
-        with repository.creation_execution_read() as reader:
+        with repository.execution_inputs.creation_execution_read() as reader:
             return cpu_render_facts(repository, reader, task, creation_plan, limits, request=request,
                 presenter_limits=presenter_limits, presenter_models=presenter_models,
                 resolve_presenter_output=resolve_presenter_output, actor=actor,
@@ -784,7 +784,7 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
             raise ValueError("故事板预算尚未标定，请配置 DEVICE_MONTAGE_* 标定值")
         if not task.narration_cache_key:
             raise ValueError("故事板缺少当前配音")
-        with repository.creation_execution_read(connection) as conn:
+        with repository.execution_inputs.creation_execution_read(connection) as conn:
             header, fields = repository.script_records.read_execution_script_metadata(conn, task.workspace_id, script.id)
             narration = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=conn)
             if narration is None or narration.script_id != header.id:
@@ -918,7 +918,7 @@ class CreationJobOwnerVerifier:
     def admission_basis_changed(self, rejection):
         """Reopen only when current fixed unit/profile facts resolve the refusal."""
         if rejection['stage'] == 'person_render':
-            with self.repository.creation_execution_read() as conn:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
                 job, snapshot, start = self._snapshot_facts(conn, rejection['workspace_id'], rejection['job_id'])
                 task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         else:
@@ -1005,7 +1005,7 @@ class CreationJobOwnerVerifier:
 
     def stage_facts(self, task, script, plan, stage, *, connection=None):
         if stage in {'montage_plan', 'person_render'} and connection is None:
-            with self.repository.creation_execution_read() as conn:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
                 return self.stage_facts(task, script, plan, stage, connection=conn)
         if stage == "person_render":
             return presenter_stage_facts(self.repository, task, script, plan, self.presenter_budget, self.presenter_models, connection=connection)
@@ -1204,8 +1204,8 @@ class CreationJobOwnerVerifier:
     def prepare_pcm_sources(self, job, *, generated=None, section_id=None):
         from app.creation.narration_pcm import prepare_sources, narration_reference_facts
         paths=[]
-        with self.repository.creation_execution_read() as conn:
-            snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
             task, plan = snapshot.task, snapshot.plan
             if generated is None and job.kind == NARRATION_EDIT_KIND:
                 candidate = self.repository.narration_checkpoints.narration_edit_generated(job.workspace_id, job.id, connection=conn)
@@ -1244,7 +1244,7 @@ class CreationJobOwnerVerifier:
 
     def pcm_assembly_baseline(self, request, conn, *, original_recovery=False):
         if not conn.in_transaction:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 return self.pcm_assembly_baseline(request, reader, original_recovery=original_recovery)
         if request.resources.get('execution_mode') != 'cpu_pcm_wav_assembly':
             raise RecoveryBlocked('原请求不是PCM组装许可')
@@ -1351,7 +1351,7 @@ class CreationJobOwnerVerifier:
                                       self.presenter_budget, self.presenter_models)
 
     def narration_edit_facts(self, job, task, event, plan, *, connection=None, request=None, original_recovery=False, pcm_preparation=None, comparison_reference=None):
-        with self.repository.creation_execution_read(connection) as conn:
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
             if pcm_preparation is None and request is not None and request.resources.get('execution_mode')=='cpu_pcm_wav_assembly':
                 pcm_preparation=self.persisted_pcm_sources(request,conn)
             proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id,event['edit_proposal_id'], connection=conn)
@@ -1412,8 +1412,8 @@ class CreationJobOwnerVerifier:
             return 'narration_edit:pcm:'+digest,resources
 
     def person_valid(self, task):
-        with self.repository.creation_execution_read() as conn:
-            snapshot = self.repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             valid = True
             for segment, request in iter_presenter_inputs(self.repository, snapshot.task,
                     snapshot.script_header, snapshot.plan, self.presenter_models, connection=conn):
@@ -1427,7 +1427,7 @@ class CreationJobOwnerVerifier:
         event = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start', connection=conn)
         if event.task_id != job.task_id or event.job_id != job.id:
             raise KeyError('创作任务或开始记录不存在')
-        snapshot = self.repository.read_creation_execution_snapshot(workspace_id, job.task_id, connection=conn)
+        snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, job.task_id, connection=conn)
         return job, snapshot, self.repository.creation_execution_input(workspace_id, job.id, connection=conn)
 
     def _facts(self, conn: sqlite3.Connection, workspace_id: str, job_id: str):
@@ -1497,7 +1497,7 @@ class CreationJobOwnerVerifier:
             return job, snapshot, event, stage, original, verdict
 
         if self.task_authorizations is not None and connection is None:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 _, observed, _, _, original, verdict = current_facts(reader)
             # ensure may persist the first authorization via another connection.
             # Release the observation first, then verify fresh facts below.
@@ -1507,13 +1507,13 @@ class CreationJobOwnerVerifier:
                 and intent.unit_key.startswith('narration:merge:v1:')):
             # External submission has no completion transaction's prepared WAV
             # facts. Qualify outside the snapshot, then recheck current facts.
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 observed_job, observed, _, observed_stage, original, verdict = current_facts(reader)
                 if verdict != 'ready' or self.authorization_verdict(
                         observed.task, original, observed_stage, connection=reader) != 'ready':
                     raise PermissionError('原PCM提交的身份或制作输入不可用')
             pcm_preparation = self.prepare_pcm_sources(observed_job)
-        with self.repository.creation_execution_read(connection) as conn:
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
             job, snapshot, event, stage, original, verdict = current_facts(conn)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             if (verdict == "ready" and self.task_authorizations is not None
@@ -1638,7 +1638,7 @@ class CreationJobOwnerVerifier:
         # Scheduler observations also supply idle read connections. Own the
         # snapshot for those observations; never replace an active write txn.
         if not conn.in_transaction:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 return self.check_current(request, reader)
         if request.unit_key.startswith('native_command:') and self.native_case is not None:
             return self.native_case.check_current(request,conn,self)
@@ -1703,7 +1703,7 @@ class CreationJobOwnerVerifier:
     def owns_task_stage(self, conn, workspace_id, job_id, stage):
         """Local final ownership check; never observes identity, resources or media."""
         if not conn.in_transaction:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 return self.owns_task_stage(reader, workspace_id, job_id, stage)
         try:
             job, snapshot, event = self._snapshot_facts(conn, workspace_id, job_id)
@@ -1719,7 +1719,7 @@ class CreationJobOwnerVerifier:
 
     def capture_local(self, request, conn):
         if not conn.in_transaction:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 return self.capture_local(request, reader)
         if request.unit_key.startswith('native_command:') and self.native_case is not None:
             return self.native_case.capture_local(request,conn,self)
@@ -1975,7 +1975,7 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
         return None
     if job.kind == KIND and owner.segments is not None and owner.segments.waiting_for_visual_decision(job):
         return None
-    with repository.creation_execution_read() as conn:
+    with repository.execution_inputs.creation_execution_read() as conn:
         rows = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
             "AND owner_id=? AND input_digest=? AND state!='cancelled' ORDER BY created_at,id",
             (job.workspace_id, job.id, job.input_digest)).fetchall()
@@ -2040,7 +2040,7 @@ def resume_original_narration(repository, scheduler, job, actor, *, write_guard=
     owner = scheduler.owners
     if hasattr(owner, 'registrations'):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-    with repository.creation_execution_read() as conn:
+    with repository.execution_inputs.creation_execution_read() as conn:
         current, snapshot, _event = owner._snapshot_facts(conn, job.workspace_id, job.id)
         task = snapshot.task
         if current.kind == KIND and task.stage == 'montage':
@@ -2058,7 +2058,7 @@ def resume_original_narration(repository, scheduler, job, actor, *, write_guard=
     if montage_request is not None:
         scheduler.retry_existing(montage_request, actor, reason='failed', write_guard=write_guard)
         return True
-    with repository.creation_execution_read() as conn:
+    with repository.execution_inputs.creation_execution_read() as conn:
         rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
             "AND owner_id=? AND state IN ('failed','cancelled') AND (unit_key LIKE 'narration:segment:v1:%' "
             "OR unit_key LIKE 'narration:merge:v1:%' OR unit_key LIKE 'segment_video:%') ORDER BY updated_at DESC LIMIT 2", (job.workspace_id, job.id)).fetchall()
@@ -2082,7 +2082,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
     owner = scheduler.owners
     if hasattr(owner, "registrations"):
         owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-    with repository.creation_execution_read(connection) as conn:
+    with repository.execution_inputs.creation_execution_read(connection) as conn:
         job, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
     if owner.segments is not None and job.kind == KIND and not event.get('operation'):
@@ -2119,23 +2119,23 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
             stage, _resources = owner.render_facts(conn, task, plan, actor=actor, job=job, prepare_assembly=True)
     elif stage == 'narration':
         if connection is None and pcm_preparation is None:
-            with repository.creation_execution_read() as reader:
-                observed = repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=reader)
+            with repository.execution_inputs.creation_execution_read() as reader:
+                observed = repository.execution_inputs.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=reader)
                 all_ready = all(segment is not None and segment.status == 'ready'
                     for _, segment in repository.section_inputs.iter_creation_narration_sections(
                         observed.task, observed.script_header, connection=reader))
             if all_ready:
                 pcm_preparation = owner.prepare_pcm_sources(job)
-        with repository.creation_execution_read(connection) as conn:
+        with repository.execution_inputs.creation_execution_read(connection) as conn:
             job, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             stage, _resources = owner.narration_unit_facts(conn, job, task, script, plan, pcm_preparation=pcm_preparation)
     elif stage == "person_render" or getattr(owner, stage.removesuffix("_plan") + "_budget", None) is not None:
-        with repository.creation_execution_read(connection) as conn:
+        with repository.execution_inputs.creation_execution_read(connection) as conn:
             if stage not in {'montage_plan', 'person_render'}:
                 _, _, _, script, _ = owner._facts(conn, job.workspace_id, job.id)
             else:
-                snapshot = repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
+                snapshot = repository.execution_inputs.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
                 task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         stage, _resources = (owner.stage_facts(task, script, plan, stage, connection=connection)
             if connection is not None else owner.stage_facts(task, script, plan, stage))
@@ -2360,7 +2360,7 @@ class CreationJobUnitExecutor:
         owner = scheduler.owners
         if hasattr(owner, 'registrations'):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository.creation_execution_read() as reader:
+        with self.repository.execution_inputs.creation_execution_read() as reader:
             original_job, snapshot, event = owner._snapshot_facts(reader, job.workspace_id, job.id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             binding = self.repository.creation_narration_source_binding(job.workspace_id, job.id, connection=reader)
@@ -2388,7 +2388,7 @@ class CreationJobUnitExecutor:
                     != tuple(resources[name] for name in ('model_id', 'voice_profile_id', 'voice_version', 'language', 'pronunciation_version'))):
             raise RecoveryBlocked('原单段不在原声音与文案的pending边界')
         with prepare_narration_source(self.repository, task, plan, actor, binding=binding.payload) as source:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 key, facts = owner.narration_unit_facts(reader, job, task, script, plan, request=request,
                     original_recovery=True)
             if key != request.unit_key or facts != resources:
@@ -2515,7 +2515,7 @@ class CreationJobUnitExecutor:
         owner=scheduler.owners
         if hasattr(owner,'registrations'):
             owner=owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             if job.kind in {KIND, NARRATION_EDIT_KIND}:
                 original, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
                 task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
@@ -2636,7 +2636,7 @@ class CreationJobUnitExecutor:
         owner = scheduler.owners
         if hasattr(owner, 'registrations'):
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         job, remaining_seconds, remaining_bytes = self.repository.narration_units.start_creation_narration_unit(grant, resources, None,
@@ -2834,7 +2834,7 @@ class CreationJobUnitExecutor:
             if already_valid and stage == 'montage_plan':
                 from app.creation.montage_stage_use_case import verify_saved_montage_preparation
                 request = scheduler._get(grant.request_id)
-                with self.repository.creation_execution_read() as reader:
+                with self.repository.execution_inputs.creation_execution_read() as reader:
                     observed = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=reader)
                     base = (self.repository.timeline_records.get_timeline_version(job.workspace_id, observed.current_timeline_version_id,
                         connection=reader) if observed.current_timeline_version_id else None)
@@ -3063,7 +3063,7 @@ class CreationJobUnitExecutor:
         owner=scheduler.owners
         if hasattr(owner,'registrations'):
             owner=owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             _job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
             task, plan = snapshot.task, snapshot.plan
         actor=CreationExecutionActor.from_event(grant.workspace_id,event)
@@ -3569,7 +3569,7 @@ class CreationExecution:
 
     def validate_input_snapshot(self, workspace_id, task_id, script_id, digest, *, connection=None):
         from app.creation.execution_input import validate_execution_relationships
-        snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=connection)
+        snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=connection)
         if snapshot.task.confirmed_script_id != script_id:
             raise ValueError("请先确认当前文案；方案确认不能代替文案确认")
         validate_execution_relationships(snapshot.task, snapshot.script_header, snapshot.plan)

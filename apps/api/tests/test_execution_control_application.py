@@ -101,11 +101,11 @@ def test_bounded_execution_preview_replays_the_original_job_and_keeps_full_valid
     assert plan.id == task.plan_id
     with repo._connect() as conn:
         conn.execute('BEGIN')
-        assert repo.read_creation_execution_snapshot('workspace_a', task_id, connection=conn).input_digest == old_digest
+        assert repo.execution_inputs.read_creation_execution_snapshot('workspace_a', task_id, connection=conn).input_digest == old_digest
         assert conn.in_transaction  # caller owns its transaction
     with repo._connect() as conn:
         with pytest.raises(ValueError, match='已开启的事务'):
-            repo.read_creation_execution_snapshot('workspace_a', task_id, connection=conn)
+            repo.execution_inputs.read_creation_execution_snapshot('workspace_a', task_id, connection=conn)
     with repo._connect() as conn:
         row = conn.execute('SELECT payload FROM creation_plans WHERE id=?', (task.plan_id,)).fetchone()
         payload = json.loads(row['payload'])
@@ -373,7 +373,7 @@ def test_bounded_narration_start_source_seal_rolls_back_preparation_race(tmp_pat
     from test_creation_execution import _bounded_narration_start_case
     case = _bounded_narration_start_case(tmp_path, monkeypatch)
     repo = case.repo
-    snapshot = repo.read_creation_execution_snapshot('local', case.task_id)
+    snapshot = repo.execution_inputs.read_creation_execution_snapshot('local', case.task_id)
     case.owner.task_authorizations.ensure(snapshot.task, case.actor)
     original_seal = repo.seal_creation_narration_source
     observed = []

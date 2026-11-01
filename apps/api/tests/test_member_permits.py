@@ -885,8 +885,8 @@ def test_presenter_row_admission_preserves_original_json_key_and_resources(prese
     for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
         monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else repo, name, forbidden)
     monkeypatch.setattr(repo.narration_records, '_decode_script', forbidden)
-    with repo.creation_execution_read() as conn:
-        snapshot = repo.read_creation_execution_snapshot(WORKSPACE, case.task.id, connection=conn)
+    with repo.execution_inputs.creation_execution_read() as conn:
+        snapshot = repo.execution_inputs.read_creation_execution_snapshot(WORKSPACE, case.task.id, connection=conn)
         actual, measured = presenter_stage_facts(repo, snapshot.task, snapshot.script_header, plan,
             case.budget, {'fast': 'fixture-avatar'}, connection=conn)
         assert actual == expected and measured == resources and conn.in_transaction
@@ -904,7 +904,7 @@ def _stream_person_executor(case, monkeypatch, boundary):
     from app.video_jobs import VideoJobRunner
     import app.creation.person_stage_use_case as module
     active = {}
-    read = case.repo.creation_execution_read
+    read = case.repo.execution_inputs.creation_execution_read
     @contextmanager
     def tracked(connection=None):
         with read(connection) as conn:
@@ -915,7 +915,7 @@ def _stream_person_executor(case, monkeypatch, boundary):
                 active[id(conn)] -= 1
                 if not active[id(conn)]:
                     del active[id(conn)]
-    monkeypatch.setattr(case.repo, 'creation_execution_read', tracked)
+    monkeypatch.setattr(case.repo.execution_inputs, 'creation_execution_read', tracked)
     store = ArtifactStore(case.tmp_path/'stream-output')
     metadata = SimpleNamespace(artifact_store=store, picture_renderer=SimpleNamespace(
         person_path=lambda render: Path(render.output_path) if render.output_path and Path(render.output_path).is_file() else None))
@@ -1044,5 +1044,5 @@ def test_presenter_cpu_row_inputs_keep_actual_source_accounting_and_cache_revali
         assert not idle.in_transaction and idle.execute('SELECT 1').fetchone()[0] == 1
     source = case.tmp_path/'spoken.wav'
     source.write_bytes(source.read_bytes()+b'changed')
-    with case.repo.creation_execution_read() as conn, pytest.raises(ValueError, match='失效'):
+    with case.repo.execution_inputs.creation_execution_read() as conn, pytest.raises(ValueError, match='失效'):
         case.registration.owner.render_facts(conn, task, plan)

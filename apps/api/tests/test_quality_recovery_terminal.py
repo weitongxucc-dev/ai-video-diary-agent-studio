@@ -77,8 +77,8 @@ def test_production_snapshot_contends_with_original_quality_recovery(tmp_path, m
             pending = pool.submit(service.recover, runtime.scheduler)
             try:
                 assert writer_ready.wait(10), "recovery did not reach its terminal owner transaction"
-                with repository.creation_execution_read() as reader:
-                    snapshot = repository.read_creation_execution_snapshot("local", snapshot_task_id, connection=reader)
+                with repository.execution_inputs.creation_execution_read() as reader:
+                    snapshot = repository.execution_inputs.read_creation_execution_snapshot("local", snapshot_task_id, connection=reader)
                     reader_facts = _sqlite_connection_facts(reader)
                     assert snapshot.task.id == snapshot_task_id and reader.in_transaction
                     started = monotonic()

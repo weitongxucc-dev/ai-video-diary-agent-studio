@@ -116,8 +116,8 @@ class NarrationStageUseCase:
                       grant_context: CreationStageGrantContext) -> tuple[NarrationArtifactRecord, int]:
         """Combine only the bounded inputs declared by this original Job's permit."""
         self._check_preparation_grant(grant_context, 'narration:merge:v1:', workspace_id, task_id, script_id)
-        with self.repository.creation_execution_read() as conn:
-            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
             task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
             if task.stage != 'narration' or script.id != script_id or script.selection_status != 'confirmed':
                 raise ValueError('配音单元不匹配当前任务阶段或确认文案')
@@ -162,7 +162,7 @@ class NarrationStageUseCase:
         receipt = grant_context.run_pcm_assembly(resources)
         record = None
         if receipt['finalized']:
-            with self.repository.creation_execution_read() as conn:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
                 record = self.pcm_record(task, resources, receipt, self._merge_segments(
                     task, script, inputs.voice, pronunciation_version, connection=conn))
         return record,receipt['generated_bytes'],receipt
@@ -225,9 +225,9 @@ class NarrationStageUseCase:
             raise PermissionError('配音准备任务、文案或输入摘要与原作业许可不一致')
 
     def _preparation_inputs(self, workspace_id, task_id, script_id, section_id, *, input_digest):
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             try:
-                snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+                snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
             except KeyError as exc:
                 raise NarrationStageRejected(status_code=404, detail='creation task not found') from exc
             task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
@@ -280,7 +280,7 @@ class NarrationStageUseCase:
             rebind_narration_audio(current_montage.audio_timeline, reference, reference, duration_ms, duration_ms)
         if task.confirmed_script_id is None:
             raise ValueError('当前任务没有已确认文案')
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             script, _ = self.repository.script_records.read_execution_script_metadata(conn, workspace_id, task.confirmed_script_id)
             target = self.repository.narration_records.get_narration_segment(workspace_id, task.id, segment_id, connection=conn)
         if target.script_id != script.id:
@@ -381,7 +381,7 @@ class NarrationStageUseCase:
         return self.prepare_edit_adoption(workspace_id,task_id,proposal_id,candidate,resources,receipt),receipt
 
     def prepare_edit_adoption(self, workspace_id, task_id, proposal_id, candidate, resources, receipt):
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
             proposal = self.repository.edit_records.get_edit_proposal(workspace_id, proposal_id, connection=conn)
             payload = proposal.operation['payload']

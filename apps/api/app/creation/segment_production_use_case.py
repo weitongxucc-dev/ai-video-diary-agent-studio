@@ -51,7 +51,7 @@ class SegmentProductionUseCase:
 
     def context(self, workspace_id, task_id, section_id, actor, *, connection=None):
         if connection is None:
-            with self.repository.creation_execution_read() as conn:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
                 return self.context(workspace_id,task_id,section_id,actor,connection=conn)
         if not connection.in_transaction:
             connection.execute('BEGIN')
@@ -120,7 +120,7 @@ class SegmentProductionUseCase:
     def sources(self, workspace_id, task_id, section_id, actor, *, offset=0, limit=8, text_offset=0, max_chars=3000):
         if offset < 0 or not 1 <= limit <= 24 or text_offset < 0 or not 1 <= max_chars <= 8000:
             raise ValueError('段落证据读取范围无效')
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.require_actor(workspace_id, task_id, actor, connection=conn)
             script, metadata = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
             section = self.repository.section_inputs.read_creation_section_input(task,script,section_id,connection=conn)['section']
@@ -170,7 +170,7 @@ class SegmentProductionUseCase:
             'current_segment_version': current_version, 'result_segment_version': result_version, 'reason': reason}
 
     def list_segments(self, workspace_id, task_id, actor, *, offset=0, limit=30):
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.require_actor(workspace_id, task_id, actor, connection=conn)
             script, _ = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
             ids = self.repository.section_inputs.creation_section_ids(task,script,offset=offset,limit=limit,connection=conn)
@@ -281,8 +281,8 @@ class SegmentProductionUseCase:
         from app.montage import MontagePlanner, creation_task_montage_plan_to_payload
         from app.creation.duration_requirement import SectionWindow
         from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
-        with self.repository.creation_execution_read(connection) as conn:
-            snapshot = self.repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             if snapshot.task.confirmed_script_id != task.confirmed_script_id:
                 raise ValueError('当前确认文案在规划前变化')
             task, script, creation_plan = snapshot.task, snapshot.script_header, snapshot.plan
@@ -330,7 +330,7 @@ class SegmentProductionUseCase:
         return plan, sources, creation_task_montage_plan_to_payload(plan), checksum.hexdigest()
 
     def validate_planning_dependency(self, payload, *, workspace_id, task_id, connection, target_text=None):
-        snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id, connection=connection)
+        snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=connection)
         checksum = hashlib.sha256()
         inputs = self.planning_inputs(snapshot, payload['section_id'], connection=connection, checksum=checksum)
         if 'planning_dependency_digest' in payload:
@@ -378,8 +378,8 @@ class SegmentProductionUseCase:
         if audio is None:
             raise ValueError('段落配音产物不可读取')
         if text is None:
-            with self.repository.creation_execution_read() as conn:
-                snapshot = self.repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
                 current = self.repository.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header,
                     section_id, connection=conn)
                 text = current['section'].content
@@ -455,7 +455,7 @@ class SegmentProductionUseCase:
         if check_scope is None:
             check_scope = connection is None
         if connection is None or not connection.in_transaction:
-            with self.repository.creation_execution_read() as reader:
+            with self.repository.execution_inputs.creation_execution_read() as reader:
                 return self._validate_visual_decision(job, task, actor, owner, payload, connection=reader, check_scope=check_scope)
         event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start',connection=connection).payload
         if (job.task_id != task.id or actor != self.actor_from_event(job.workspace_id,event)
@@ -477,7 +477,7 @@ class SegmentProductionUseCase:
         else:
             if owner is not None:
                 self.require_settled_narration(job, connection=connection)
-            snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, task.id, connection=connection)
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(job.workspace_id, task.id, connection=connection)
             if snapshot.input_digest != job.input_digest:
                 raise ValueError('原画面决定的确认文案或方案版本已变化')
             current = self.repository.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header,
@@ -804,9 +804,9 @@ class SegmentProductionUseCase:
     def next_initial(self, job, owner, *, connection=None):
         candidate = None
         decided = False
-        with self.repository.creation_execution_read(connection) as conn:
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
             self.require_settled_narration(job, connection=conn)
-            snapshot = self.repository.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(job.workspace_id, job.task_id, connection=conn)
             task, script = snapshot.task, snapshot.script_header
             event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn).payload
             for section, audio in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):

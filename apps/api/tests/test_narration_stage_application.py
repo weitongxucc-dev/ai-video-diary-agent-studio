@@ -109,7 +109,8 @@ def narration_preparation(tmp_path):
             'merge_final':True,'inputs':[{'reference':'narration://artifact/'+use_case.segment_id(task.id,script.id,section.id)}
                 for section in script.sections]}
     from contextlib import nullcontext
-    repository.creation_execution_read=lambda connection=None:nullcontext(SimpleNamespace(in_transaction=True))
+    repository.execution_inputs=SimpleNamespace()
+    repository.execution_inputs.creation_execution_read=lambda connection=None:nullcontext(SimpleNamespace(in_transaction=True))
     def read_snapshot(workspace_id,task_id,*,connection):
         read_task(workspace_id,task_id)
         header=SimpleNamespace(id=script.id,selection_status=script.selection_status,language=script.language,
@@ -121,7 +122,7 @@ def narration_preparation(tmp_path):
     def selected_input(current_task,header,section_id,*,connection):
         section=next(item for item in script.sections if item.id==section_id)
         return {'section':section,'audio':segments.get(use_case.segment_id(task.id,script.id,section.id))}
-    repository.read_creation_execution_snapshot=read_snapshot
+    repository.execution_inputs.read_creation_execution_snapshot=read_snapshot
     repository.section_inputs.iter_creation_narration_sections=section_inputs
     repository.section_inputs.read_creation_section_input=selected_input
     repository._connect=lambda:nullcontext(SimpleNamespace(execute=lambda *_:SimpleNamespace(fetchone=lambda:

@@ -121,7 +121,7 @@ class CreationExecutionControl:
     def preview(self, workspace_id: str, task_id: str) -> dict[str, object]:
         from app.creation.execution_input import validate_execution_relationships
         try:
-            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task_id)
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id)
             task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
             validate_execution_relationships(task, script, plan)
         except KeyError as exc:
@@ -576,8 +576,8 @@ class CreationExecutionControl:
     def submit_narration_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         """One original edit Job, source adoption, then its existing bounded queue."""
         owner = runtime.registrations['creation_job'].owner
-        with self.repository.creation_execution_read() as reader:
-            snapshot = self.repository.read_creation_execution_snapshot(workspace_id, task.id, connection=reader)
+        with self.repository.execution_inputs.creation_execution_read() as reader:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task.id, connection=reader)
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         digest = narration_edit_digest(proposal.operation)
         candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,

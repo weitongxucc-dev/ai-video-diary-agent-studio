@@ -3228,8 +3228,8 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
         paths = [Path(audio.audio_path),Path(asset.path)]
         sources = [{'path':str(path),'size':path.stat().st_size,'mtime_ns':path.stat().st_mtime_ns,
             'ctime_ns':path.stat().st_ctime_ns} for path in paths]
-        with case.repo.creation_execution_read() as conn:
-            snapshot = case.repo.read_creation_execution_snapshot('local', task.id, connection=conn)
+        with case.repo.execution_inputs.creation_execution_read() as conn:
+            snapshot = case.repo.execution_inputs.read_creation_execution_snapshot('local', task.id, connection=conn)
             checksum = hashlib.sha256()
             for _ in service.planning_inputs(snapshot, section_id, connection=conn, checksum=checksum):
                 pass
@@ -5520,7 +5520,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
     case, context, pending = _single_segment_preparation_case(tmp_path)
     repo = case.repo
     seen, readers, selected_readers, calls = {}, [], [], []
-    snapshot_read = repo.read_creation_execution_snapshot
+    snapshot_read = repo.execution_inputs.read_creation_execution_snapshot
     selected_read = repo.section_inputs.read_creation_section_input
     iterate = repo.section_inputs.iter_creation_narration_sections
     resolve = repo.profile_inputs.resolve_creation_task_narration_inputs
@@ -5574,7 +5574,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
                  'effective_creation_script', 'list_narration_segments'):
         monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else (repo.section_inputs if name in ('effective_creation_script',) else repo), name, no_full)
     monkeypatch.setattr(repo.narration_records, '_decode_script', no_full)
-    monkeypatch.setattr(repo, 'read_creation_execution_snapshot', snapshot)
+    monkeypatch.setattr(repo.execution_inputs, 'read_creation_execution_snapshot', snapshot)
     monkeypatch.setattr(repo.section_inputs, 'iter_creation_narration_sections', scan)
     monkeypatch.setattr(repo.section_inputs, 'read_creation_section_input', selected)
     monkeypatch.setattr(repo.profile_inputs, 'resolve_creation_task_narration_inputs', current_inputs)
@@ -5662,7 +5662,7 @@ def test_bounded_narration_start_reenters_original_unit_and_checks_current(tmp_p
     assert 'section_45' in seen
     assert start()['job']['id'] == job.id
     assert [row['id'] for row in case.repo.job_records.list_creation_job_request_states('local', job.id)] == [request.id]
-    with case.repo.creation_execution_read() as conn:
+    with case.repo.execution_inputs.creation_execution_read() as conn:
         assert case.owner.check_current(request, conn) == 'ready'
         assert conn.in_transaction
         local = case.owner.capture_local(request, conn)
@@ -5716,7 +5716,7 @@ def test_bounded_narration_start_unknown_and_other_member_keep_original(tmp_path
     with pytest.raises(RecoveryBlocked, match='未知'):
         submit_creation_stage(case.execution, case.scheduler, job, case.actor)
     request = case.scheduler._get(original_requests[0]['id'])
-    with case.repo.creation_execution_read() as conn:
+    with case.repo.execution_inputs.creation_execution_read() as conn:
         assert case.owner.check_current(request, conn) == 'dependency'
     assert case.control.status('local', case.task_id, verify_media=False, actor=case.actor)['job']['id'] == job.id
     assert case.scheduler.pick_and_grant() is None
@@ -5741,7 +5741,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
         repo.timeline_records.create_timeline_version(version, connection=conn)
         task.current_timeline_version_id = version.id
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
-    assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
+    assert repo.execution_inputs.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
     result = case.control.start('local', case.task_id, case.script_id, case.digest,
         case.actor, case.runtime, verify_media=False)
     job = repo.job_records.get_job_run('local', result['job']['id'])
@@ -5775,7 +5775,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
             conn.execute(f'UPDATE narration_segments SET {field}=? WHERE id=?', (value, segment.id))
         with pytest.raises(ValueError, match='配音片段'):
             next_creation_intent(repo, case.scheduler, job)
-        with repo.creation_execution_read() as conn:
+        with repo.execution_inputs.creation_execution_read() as conn:
             assert case.owner.check_current(request, conn) == 'dependency'
         with repo._connect() as conn:
             conn.execute(f'UPDATE narration_segments SET {field}=? WHERE id=?', (getattr(segment, field), segment.id))
@@ -5786,7 +5786,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
             + ','.join('?' for _ in orphan) + ')', tuple(orphan.values()))
     with pytest.raises(ValueError, match='配音片段集'):
         next_creation_intent(repo, case.scheduler, job)
-    with repo.creation_execution_read() as conn:
+    with repo.execution_inputs.creation_execution_read() as conn:
         assert case.owner.check_current(request, conn) == 'dependency'
     with repo._connect() as conn:
         conn.execute('DELETE FROM narration_segments WHERE id=?', ('orphan-audio',))
@@ -5804,7 +5804,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
         return 'segment_video:section_1:prepared', {}
     monkeypatch.setattr(case.owner.segments, 'video_facts', video_facts)
     assert next_creation_intent(repo, case.scheduler, job).unit_key == 'segment_video:section_1:prepared'
-    assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
+    assert repo.execution_inputs.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
     assert len(repo.job_records.list_creation_job_request_states('local', job.id)) == 1
     assert case.generated == [] and case.merged == []
 
@@ -6239,7 +6239,7 @@ def test_narration_edit_manifest_stream_preserves_raw_bytes_and_row_order(tmp_pa
         monkeypatch.setattr(repo.script_records, '_creation_task_script_from_payload', forbidden)
         monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', forbidden)
         monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
-        with repo.creation_execution_read() as conn:
+        with repo.execution_inputs.creation_execution_read() as conn:
             key, resources = narration_edit_stage_facts(repo, task, proposal, plan,
                 case.owner.narration_budget, connection=conn)
             assert key == expected_keys[-1]
@@ -6254,8 +6254,8 @@ def test_pcm_body_stream_preserves_original_encoding_and_keys(tmp_path, monkeypa
     from app.creation import narration_pcm
     case = _ready_pcm_body_case(tmp_path, monkeypatch)
     preparation = case.owner.prepare_pcm_sources(case.job)
-    with case.repo.creation_execution_read() as conn:
-        snapshot = case.repo.read_creation_execution_snapshot('local', case.task_id, connection=conn)
+    with case.repo.execution_inputs.creation_execution_read() as conn:
+        snapshot = case.repo.execution_inputs.read_creation_execution_snapshot('local', case.task_id, connection=conn)
         rows = [segment for _, segment in case.repo.section_inputs.iter_creation_narration_sections(
             snapshot.task, snapshot.script_header, connection=conn)]
         fields = {'script_id': case.script_id, 'voice': {'text': '中文\n"\\'}, 'source_files': [['a', 4]],
@@ -6543,8 +6543,8 @@ def test_bounded_segment_planning_ports_keep_snapshot_and_transaction_owner(tmp_
     repo = case.repo
     with repo._connect() as setup:
         setup.execute('PRAGMA journal_mode=WAL')
-    with repo.creation_execution_read() as reader:
-        snapshot = repo.read_creation_execution_snapshot('local', case.task_id, connection=reader)
+    with repo.execution_inputs.creation_execution_read() as reader:
+        snapshot = repo.execution_inputs.read_creation_execution_snapshot('local', case.task_id, connection=reader)
         inputs = repo.section_inputs.iter_creation_section_planning_inputs(snapshot.task, snapshot.script_header, connection=reader)
         first = next(inputs)
         with repo._connect() as writer:
@@ -6573,7 +6573,7 @@ def test_bounded_segment_planning_ports_keep_snapshot_and_transaction_owner(tmp_
         task.current_timeline_version_id = version.id
         borrowed.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
             (json.dumps(asdict(task), default=str), task.id))
-        snapshot = repo.read_creation_execution_snapshot('local', case.task_id, connection=borrowed)
+        snapshot = repo.execution_inputs.read_creation_execution_snapshot('local', case.task_id, connection=borrowed)
         current = repo.section_inputs.read_creation_section_input(snapshot.task, snapshot.script_header, 'section_1', connection=borrowed)
         assert current['section'].content == '已采用正文'
         assert current['adopted']['current_validity'] == 'invalidated'

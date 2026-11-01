@@ -519,8 +519,8 @@ def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes
                      'effective_creation_script', 'list_narration_segments'):
             monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else (case.repo.section_inputs if name in ('effective_creation_script',) else case.repo), name, case.forbidden)
         monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
-        with case.repo.creation_execution_read() as conn:
-            snapshot = case.repo.read_creation_execution_snapshot('local', case.task.id, connection=conn)
+        with case.repo.execution_inputs.creation_execution_read() as conn:
+            snapshot = case.repo.execution_inputs.read_creation_execution_snapshot('local', case.task.id, connection=conn)
             key, resources = creation_stage_facts(case.repo, snapshot.task, snapshot.script_header, snapshot.plan,
                 'montage_plan', None, case.owner.montage_budget, connection=conn)
             assert key == base_key and resources['input_bytes'] == len(expected)

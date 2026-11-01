@@ -286,7 +286,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
                 with case.repo._connect() as conn:
                     conn.execute('UPDATE narration_segments SET duration_seconds=3 WHERE id=?', (case.rows[-1].id,))
                 # The original raw stage key/aggregate permit cannot detect this change.
-                with case.repo.creation_execution_read() as conn:
+                with case.repo.execution_inputs.creation_execution_read() as conn:
                     assert case.owner.check_current(case.scheduler._get(grant.request_id), conn) == 'ready'
         elif outcome in {'tail', 'revoked'}:
             injected = []

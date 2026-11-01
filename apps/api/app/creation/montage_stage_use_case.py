@@ -77,7 +77,7 @@ def montage_dependency(repository, task, *, connection):
     """Internal preparation proof; never changes a persisted request's recipe."""
     from dataclasses import asdict
     from app.creation.storyboard_regeneration import material_signature
-    snapshot = repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=connection)
+    snapshot = repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=connection)
     current, header = snapshot.task, snapshot.script_header
     checksum = hashlib.sha256()
     def add(value):
@@ -231,7 +231,7 @@ class MontageStageUseCase:
                 owner = owner.registrations['creation_job'].owner
             if owner.task_authorizations is not None:
                 asset_ids = owner.task_authorizations.material_asset_ids(workspace_id, task.id)
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             snapshot, dependency = montage_dependency(self.repository, task, connection=conn)
             task, creation_plan, header = snapshot.task, snapshot.plan, snapshot.script_header
             narration = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key, connection=conn)
@@ -306,8 +306,8 @@ class MontageStageUseCase:
 
     def include_adopted_sections(self,task,montage):
         from app.audio_timeline import AudioTimeline,narration_audio_timeline
-        with self.repository.creation_execution_read() as conn:
-            snapshot = self.repository.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             task, header = snapshot.task, snapshot.script_header
             audio = {}
             for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):

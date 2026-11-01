@@ -327,7 +327,7 @@ class MetadataEditUseCase:
         if not task.confirmed_script_id:
             return {}
         if connection is None:
-            with self.repository.creation_execution_read() as conn:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
                 current = self.repository.task_records.get_creation_task(workspace_id, task.id, connection=conn)
                 return self.current_narration_snapshot(workspace_id, current, connection=conn)
         version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id,

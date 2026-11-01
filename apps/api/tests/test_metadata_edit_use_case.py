@@ -1049,7 +1049,7 @@ def test_section_adoption_metadata_restore_tail_rollback_and_original_request_re
         assert conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0] == before_jobs
 
 
-def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_path):
+def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_path, monkeypatch):
     from app.creation.contracts import TaskEvent
     from app.creation.section_inputs import SectionInputReader
 
@@ -1070,7 +1070,7 @@ def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_pat
         assert conn.in_transaction
         task = repo.task_records.get_creation_task('ws', task_id, connection=conn)
         header, _ = repo.script_records.read_execution_script_metadata(conn, 'ws', task.confirmed_script_id)
-        original_digest = repo.read_creation_execution_snapshot('ws', task_id, connection=conn).input_digest
+        original_digest = repo.execution_inputs.read_creation_execution_snapshot('ws', task_id, connection=conn).input_digest
         head = s.section_base
         def advance_snapshot(stages, invalidations=None):
             nonlocal head
@@ -1118,7 +1118,7 @@ def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_pat
         assert current['adopted']['invalidation_reason'] == 'changed_source'
         assert [section.content for section, audio in reader.iter_creation_narration_sections(task, header, connection=conn)] == [
             '目标采用正文', '后段采用正文']
-        assert repo.read_creation_execution_snapshot('ws', task_id, connection=conn).input_digest == original_digest
+        assert repo.execution_inputs.read_creation_execution_snapshot('ws', task_id, connection=conn).input_digest == original_digest
         conn.execute('SAVEPOINT orphan_audio')
         conn.execute('DELETE FROM creation_task_script_sections WHERE workspace_id=? AND script_id=? AND section_id=?',
             ('ws', header.id, 'later-section'))
@@ -1145,6 +1145,81 @@ def test_section_input_reader_keeps_snapshot_stream_and_caller_lifetimes(tmp_pat
         assert idle.in_transaction
         idle.rollback()
 
+    from app.creation.execution_input_reader import ExecutionInputReader
+    snapshot_reader = repo.execution_inputs
+    assert isinstance(snapshot_reader, ExecutionInputReader)
+    connections = []
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            self.statements.append(sql)
+            return super().execute(sql, parameters)
+        def close(self):
+            self.physically_closed = True
+            return super().close()
+    def connect():
+        current = sqlite3.connect(repo.database_path, factory=ObservedConnection)
+        current.row_factory = sqlite3.Row
+        current.statements = []
+        current.physically_closed = False
+        connections.append(current)
+        return current
+    monkeypatch.setattr(repo, '_connect', connect)
+    with snapshot_reader.creation_execution_read() as owned:
+        assert owned.in_transaction and not owned.physically_closed
+    assert owned.physically_closed and owned.statements == ['BEGIN']
+    with pytest.raises(sqlite3.ProgrammingError):
+        owned.execute('SELECT 1')
+    with pytest.raises(RuntimeError, match='owned reader tail'):
+        with snapshot_reader.creation_execution_read() as exceptional:
+            assert exceptional.in_transaction
+            raise RuntimeError('owned reader tail')
+    assert exceptional.physically_closed
+    with pytest.raises(KeyError):
+        snapshot_reader.read_creation_execution_snapshot('ws', 'missing-task')
+    assert connections[-1].physically_closed
+    borrowed = repo._connect()
+    try:
+        with pytest.raises(ValueError, match='已开启的事务'):
+            with snapshot_reader.creation_execution_read(borrowed):
+                pytest.fail('idle borrowed connection must be refused')
+        assert not borrowed.physically_closed and not borrowed.in_transaction
+        assert borrowed.execute('SELECT 1').fetchone()[0] == 1
+        borrowed.execute('BEGIN IMMEDIATE')
+        with pytest.raises(RuntimeError, match='borrowed reader tail'):
+            with snapshot_reader.creation_execution_read(borrowed) as active:
+                assert active is borrowed
+                raise RuntimeError('borrowed reader tail')
+        assert borrowed.in_transaction and not borrowed.physically_closed
+        observed = []
+        read_plan = repo.plan_records.read_creation_plan
+        read_header = repo.script_records.read_execution_script_metadata
+        read_sections = repo.script_records.iter_execution_script_sections
+        def plan_on_same_connection(conn, *args):
+            observed.append(('plan', conn))
+            return read_plan(conn, *args)
+        def header_on_same_connection(conn, *args):
+            observed.append(('header', conn))
+            return read_header(conn, *args)
+        def sections_on_same_connection(conn, *args):
+            observed.append(('sections', conn))
+            return read_sections(conn, *args)
+        with monkeypatch.context() as patch:
+            patch.setattr(repo.plan_records, 'read_creation_plan', plan_on_same_connection)
+            patch.setattr(repo.script_records, 'read_execution_script_metadata', header_on_same_connection)
+            patch.setattr(repo.script_records, 'iter_execution_script_sections', sections_on_same_connection)
+            snapshot = snapshot_reader.read_creation_execution_snapshot('ws', task_id, connection=borrowed)
+        assert snapshot.task.id == task_id and snapshot.script_header.id == header.id
+        assert [label for label, _ in observed] == ['plan', 'header', 'sections']
+        assert all(conn is borrowed for _, conn in observed)
+        assert borrowed.in_transaction and not borrowed.physically_closed
+        borrowed.rollback()
+        assert not borrowed.in_transaction and borrowed.execute('SELECT 1').fetchone()[0] == 1
+    finally:
+        borrowed.close()
+    owned_snapshot = snapshot_reader.read_creation_execution_snapshot('ws', task_id)
+    assert owned_snapshot.input_digest == snapshot.input_digest
+    assert connections[-1].physically_closed and connections[-1].statements[0] == 'BEGIN'
+
 
 def test_narration_unit_transactions_keep_real_scope_receipts_and_original_job(tmp_path, monkeypatch):
     from app.creation.contracts import JobRun, NarrationSegment, TaskEvent
@@ -1160,7 +1235,7 @@ def test_narration_unit_transactions_keep_real_scope_receipts_and_original_job(t
         task = repo.task_records.get_creation_task('local', task_id, connection=conn)
         task.owner_user_id = actor.member_id
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task_id))
-    digest = repo.read_creation_execution_snapshot('local', task_id).input_digest
+    digest = repo.execution_inputs.read_creation_execution_snapshot('local', task_id).input_digest
     job = repo.job_records.create_job_run(JobRun('metadata-unit-job', 'local', task_id,
         'creation_task_execution', 'metadata-unit-job', digest))
     repo.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start', 'local', task_id, job.id,

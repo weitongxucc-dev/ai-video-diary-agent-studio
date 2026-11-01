@@ -108,7 +108,7 @@ def move_preserved_subtitles(previous, candidate, tracks):
 
 def narration_signature(repository, task, *, connection=None) -> str:
     if connection is None:
-        with repository.creation_execution_read() as conn:
+        with repository.execution_inputs.creation_execution_read() as conn:
             return narration_signature(repository, task, connection=conn)
     artifact = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=connection)
     if artifact is None or artifact.task_id != task.id or artifact.script_id != task.confirmed_script_id:
@@ -155,7 +155,7 @@ def material_signature(repository, task, *, connection=None) -> str:
 
 def request_current(repository, task, event, *, connection=None) -> bool:
     if connection is None:
-        with repository.creation_execution_read() as conn:
+        with repository.execution_inputs.creation_execution_read() as conn:
             current = repository.task_records.get_creation_task(task.workspace_id, task.id, connection=conn)
             return request_current(repository, current, event, connection=conn)
     inputs = event["request_inputs"]
@@ -231,7 +231,7 @@ class StoryboardRegeneration:
             "result_url": f"/api/creation-tasks/{task_id}/montage/plan/requests/{request_id}"}
 
     def prepare(self, job, event, context):
-        with self.repository.creation_execution_read() as conn:
+        with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
             if not request_current(self.repository, task, event, connection=conn):
                 raise ValueError('故事板原请求的时间线、文案或配音已变化')
