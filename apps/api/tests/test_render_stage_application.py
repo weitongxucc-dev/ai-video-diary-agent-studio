@@ -67,7 +67,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         audio_reference=repo.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
         model_id=voice.model_id, voice_profile_id=voice.id, voice_version=voice.version, language='zh',
         pronunciation_version='fixture-rules', status='ready')
-    repo.complete_creation_task_narration(record, segments=[segment])
+    repo.narration_completion.complete_creation_task_narration(record, segments=[segment])
     asset, material_ref = register_synthetic_video_asset(repo, workspace_id='local', member_id=member.member_id,
         path=tmp_path / 'library/source.mp4', asset_id='declared-render-broll', seconds=21)
     monkeypatch.setattr(main, 'auth_context', SimpleNamespace(enabled=False))

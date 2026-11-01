@@ -2601,7 +2601,7 @@ class CreationJobUnitExecutor:
                         record = self.narration_stage.pcm_record(current_task, resources, receipt,
                             (segment for _, segment in self.repository.iter_creation_narration_sections(
                                 current_task, current_script, connection=conn)))
-                        self.repository.complete_creation_task_narration(record, connection=conn)
+                        self.repository.narration_completion.complete_creation_task_narration(record, connection=conn)
                         checkpoint=self._checkpoint(conn,grant,status='queued',output=record.cache_key,stage='narration')
                 else:
                     checkpoint=self.repository.checkpoint_creation_narration_merge(grant,
@@ -2726,7 +2726,7 @@ class CreationJobUnitExecutor:
                             source_digest=resources['merge_source_digest'], section_ids=resources['merge_section_ids'],
                             input_references=[item['reference'] for item in resources['inputs']],
                             pcm_receipt=pcm_receipt, connection=conn)
-                    self.repository.complete_creation_task_narration(artifact, connection=conn)
+                    self.repository.narration_completion.complete_creation_task_narration(artifact, connection=conn)
                     return self._checkpoint(conn, current, status='queued', output=artifact.cache_key, stage='narration')
                 if video_preparation is not None:
                     self.segments.persist_video_preparation(video_preparation,current,connection=conn)

@@ -209,7 +209,7 @@ class AudioIngressUseCase:
                 source_sha256=source.sha256,
                 source_script_digest=script_digest,
             )
-            task, record = self.repository.complete_creation_task_narration(record, segments=[segment])
+            task, record = self.repository.narration_completion.complete_creation_task_narration(record, segments=[segment])
         except (KeyError, ValueError, FileNotFoundError) as exc:
             raise AudioIngressRejected(409, f"当前录音未采用：{exc}") from exc
         return task, record

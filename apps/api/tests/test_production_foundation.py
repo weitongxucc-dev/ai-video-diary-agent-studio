@@ -1731,7 +1731,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
     )
 
     with pytest.raises(ValueError, match="每个段落"):
-        production.complete_creation_task_narration(
+        production.narration_completion.complete_creation_task_narration(
             initial_artifact,
             segments=initial_segments[:1],
         )
@@ -1745,7 +1745,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         "workspace_a", "task-narration"
     ).stage_status == "running"
 
-    completed_task, _ = production.complete_creation_task_narration(
+    completed_task, _ = production.narration_completion.complete_creation_task_narration(
         initial_artifact,
         segments=initial_segments,
     )
@@ -1947,7 +1947,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         duration_seconds=8.5,
         created_at=regenerated_time,
     )
-    regenerated_task, _ = production.complete_creation_task_narration(
+    regenerated_task, _ = production.narration_completion.complete_creation_task_narration(
         regenerated_artifact,
         segments=regenerated_segments,
     )
@@ -4810,3 +4810,90 @@ def test_edit_adoption_borrowed_pending_facts_and_task_tail_failure_are_atomic(t
         repo.narration_records.save_narration_segments('workspace_a','task-a',script.id,
             [replace(segments[0], updated_at=segments[0].created_at+timedelta(milliseconds=500)), segments[1]])
     assert repo.narration_records.list_narration_segments('workspace_a','task-a') == segments
+
+
+def test_narration_completion_metadata_preserves_caller_transaction_and_rolls_back_tail(tmp_path, monkeypatch):
+    import subprocess
+    import threading
+    import httpx
+    from PIL import Image
+    from app.device_runtime import DeviceRuntime
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('execution')
+        pytest.fail('completion metadata forbids runtime, audio, media and external transport')
+
+    for owner, name in ((subprocess, 'Popen'), (threading.Thread, 'start'), (wave, 'open'),
+            (Image, 'open'), (Image, 'new'), (Image.Image, 'save'),
+            (httpx.HTTPTransport, 'handle_request'), (httpx.AsyncHTTPTransport, 'handle_async_request'),
+            (DeviceRuntime, 'start'), (DeviceRuntime, 'run_once'), (DeviceRuntime, 'wake')):
+        monkeypatch.setattr(owner, name, forbidden)
+    production = _repository(tmp_path)
+    workspace_id, task_id = 'workspace', 'completion-metadata'
+    _save_creation_task(production, workspace_id=workspace_id, task_id=task_id)
+    script_id, sections = _seed_confirmed_script(production, workspace_id=workspace_id, task_id=task_id)
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    with production._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        data = json.loads(conn.execute(
+            'SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?',
+            (workspace_id, script_id)).fetchone()[0])
+        body = [CreationTaskScriptSection(**section) for section in data.pop('sections')]
+        for name in ('created_at', 'updated_at', 'confirmed_at'):
+            data[name] = datetime.fromisoformat(data[name])
+        script = CreationTaskScript(**data, sections=body)
+        payload = production.script_records._script_payload(conn, script)
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE workspace_id=? AND id=?',
+            (payload, workspace_id, script_id))
+    path = tmp_path / 'declared-narration.bin'
+    opaque = b'opaque completion metadata; not decoded audio'
+    path.write_bytes(opaque)
+    now = datetime.now(timezone.utc)
+    segments = [NarrationSegment(id=f'completion-segment-{index}', workspace_id=workspace_id,
+        task_id=task_id, script_id=script_id, source_section_id=str(section['id']), text=str(section['content']),
+        audio_reference=f'narration://segment/{index}/metadata', duration_seconds=2.5 + index,
+        sample_rate=24_000, model_id='declared-model', voice_profile_id='declared-voice', voice_version='v1',
+        language='zh-CN', pronunciation_version='declared-pronunciation', status='ready',
+        created_at=now, updated_at=now) for index, section in enumerate(sections, start=1)]
+    artifact = NarrationArtifactRecord(id='completion-artifact', workspace_id=workspace_id,
+        script_id=script_id, voice_profile_id='declared-voice', cache_key='completion-cache',
+        audio_path=str(path), duration_seconds=sum(segment.duration_seconds for segment in segments),
+        sample_rate=24_000, model_id='declared-model', task_id=task_id, language='zh-CN',
+        pronunciation_version='declared-pronunciation')
+
+    def snapshot(conn):
+        return {table: sorted([tuple(row) for row in conn.execute('SELECT * FROM ' + table)], key=repr)
+            for table in ('creation_tasks', 'narration_artifacts', 'narration_segments')}
+
+    def outside():
+        with sqlite3.connect(f'file:{production.database_path}?mode=ro', uri=True) as conn:
+            return snapshot(conn)
+
+    before = outside()
+    owner = production.narration_completion
+    with production._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        task, returned = owner.complete_creation_task_narration(artifact, segments, connection=conn)
+        assert returned is artifact and task.stage == 'montage' and task.stage_status == 'not_started'
+        assert task.narration_cache_key == artifact.cache_key and task.progress >= 60
+        assert conn.in_transaction
+        assert conn.execute('SELECT count(*) FROM narration_segments').fetchone()[0] == len(segments)
+        assert conn.execute('SELECT count(*) FROM narration_artifacts').fetchone()[0] == 1
+        assert json.loads(conn.execute('SELECT payload FROM creation_tasks WHERE id=?', (task_id,)).fetchone()[0])['stage'] == 'montage'
+        assert outside() == before
+        conn.rollback()
+        assert snapshot(conn) == before
+    assert outside() == before
+    with production._connect() as conn:
+        conn.executescript("""CREATE TRIGGER reject_completion_tail BEFORE UPDATE OF payload ON creation_tasks
+            WHEN NEW.id='completion-metadata' AND json_extract(NEW.payload,'$.stage')='montage'
+            AND EXISTS(SELECT 1 FROM narration_artifacts WHERE workspace_id=NEW.workspace_id AND cache_key='completion-cache')
+            AND (SELECT count(*) FROM narration_segments WHERE workspace_id=NEW.workspace_id AND task_id=NEW.id)=2
+            BEGIN SELECT RAISE(ABORT,'declared completion task-update failure'); END;""")
+    with pytest.raises(sqlite3.IntegrityError, match='declared completion task-update failure'):
+        owner.complete_creation_task_narration(artifact, segments)
+    assert outside() == before
+    assert production.task_records.get_creation_task(workspace_id, task_id).stage == 'narration'
+    assert path.read_bytes() == opaque and violations == []

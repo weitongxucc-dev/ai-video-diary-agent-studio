@@ -61,7 +61,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         audio_reference=repo.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
         model_id=voice.model_id, voice_profile_id=voice.id, voice_version=voice.version, language='zh',
         pronunciation_version='fixture-rules', status='ready')
-    repo.complete_creation_task_narration(record, segments=[segment])
+    repo.narration_completion.complete_creation_task_narration(record, segments=[segment])
     # This actual ffmpeg command creates input data, before the metadata execution window.
     asset, material_ref = register_synthetic_video_asset(repo, workspace_id='local', member_id=member.member_id,
         path=tmp_path / 'library/source.mp4', asset_id='declared-montage-broll', seconds=6)

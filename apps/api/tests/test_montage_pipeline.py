@@ -615,7 +615,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         pronunciation_version="p1",
         status="ready",
     )
-    production.complete_creation_task_narration(
+    production.narration_completion.complete_creation_task_narration(
         NarrationArtifactRecord(
             id="narration-artifact-person-edit",
             workspace_id=workspace_id,
@@ -2881,7 +2881,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         pronunciation_version="p1",
         status="ready",
     )
-    production.complete_creation_task_narration(
+    production.narration_completion.complete_creation_task_narration(
         NarrationArtifactRecord(
             id="whole-artifact",
             workspace_id=workspace_id,

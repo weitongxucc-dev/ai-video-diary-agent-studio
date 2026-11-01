@@ -93,7 +93,7 @@ def narration_preparation(tmp_path):
         resolve_authorized_narration_audio_reference=lambda _ws,ref:Path(records[ref.rsplit('/',1)[1]].audio_path),
         get_narration_artifact=lambda _ws,key:records.get(key),
         start_creation_task_narration=no_write,save_narration_artifact=no_write,
-        complete_creation_task_narration=no_write,fail_creation_task_stage=no_write)
+        narration_completion=SimpleNamespace(complete_creation_task_narration=no_write),fail_creation_task_stage=no_write)
     def artifact(key):
         path=tmp_path/(key+'.wav');path.write_bytes(b'controlled-output')
         return NarrationArtifact(str(path),1.,24000,'fixture-model',task_id=task.id,script_id=script.id,

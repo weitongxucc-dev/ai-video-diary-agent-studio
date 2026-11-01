@@ -167,7 +167,7 @@ def person_application(tmp_path,monkeypatch):
     combined_record=NarrationArtifactRecord(id='normal-person-combined',workspace_id='local',task_id=task_id,script_id=script_id,
         voice_profile_id=voice.id,cache_key=hashlib.sha256(b'declared-person-combined').hexdigest(),audio_path=str(combined),
         duration_seconds=2,sample_rate=8000,model_id='declared-synthetic-narration',language='zh',pronunciation_version='fixture-rules')
-    repo.complete_creation_task_narration(combined_record,segments=sections)
+    repo.narration_completion.complete_creation_task_narration(combined_record,segments=sections)
     monkeypatch.setattr(main,'auth_context',SimpleNamespace(enabled=False))
     monkeypatch.setattr(main,'local_members_service',members);monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'avatar_lipsync_provider',provider)

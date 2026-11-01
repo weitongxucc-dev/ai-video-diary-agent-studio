@@ -2050,10 +2050,10 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             script_id=script_id, voice_profile_id="voice_1", cache_key="pressure_cache",
             audio_path=str(audio), duration_seconds=0.01, sample_rate=24000, model_id="synthetic")
         if after_wait == "checkpoint_pressure":
-            repo.complete_creation_task_narration(record)
+            repo.narration_completion.complete_creation_task_narration(record)
             raise failure
         if after_wait in {"ordinary_error", "user_cancel"}:
-            repo.complete_creation_task_narration(record)
+            repo.narration_completion.complete_creation_task_narration(record)
             return
         repo.save_narration_artifact(record)
         task = repo.task_records.get_creation_task(workspace, current_task)
@@ -3007,12 +3007,12 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
     assert partial['pcm']['generated_bytes']==960044
     assert case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key is None
     second=case.scheduler.pick_and_grant()
-    original_commit=case.repo.complete_creation_task_narration
+    original_commit=case.repo.narration_completion.complete_creation_task_narration
     if corrupt_header=='commit_rollback':
         def rollback(*args,**kwargs):
             original_commit(*args,**kwargs)
             raise RuntimeError('模拟最终登记事务回滚')
-        monkeypatch.setattr(case.repo,'complete_creation_task_narration',rollback)
+        monkeypatch.setattr(case.repo.narration_completion,'complete_creation_task_narration',rollback)
     if corrupt_header:
         with pytest.raises(RecoveryBlocked):
             case.executor.execute(second,case.scheduler)
@@ -3020,7 +3020,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
         usage=case.repo.creation_narration_usage('local',case.job.id)
         assert usage['unsettled'] and usage['used_output_bytes']==original_usage['used_output_bytes']+960044
         if corrupt_header in {'seal_only','commit_rollback','pending_pair'}:
-            monkeypatch.setattr(case.repo,'complete_creation_task_narration',original_commit)
+            monkeypatch.setattr(case.repo.narration_completion,'complete_creation_task_narration',original_commit)
             from app.creation.execution_control import CreationExecutionControl
             executor=CreationJobUnitExecutor(case.repo,render_action=lambda *_:None,render_is_valid=lambda *_:False,
                 narration_stage=case.stage)
@@ -6306,7 +6306,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
     assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key is None
     final = case.scheduler.pick_and_grant()
     assert final is not None
-    original_complete = case.repo.complete_creation_task_narration
+    original_complete = case.repo.narration_completion.complete_creation_task_narration
     if outcome == 'revoked':
         # A legitimate downstream confirmation gate may produce no next unit;
         # narration adoption cannot rely on the next owner's authorization.
@@ -6316,7 +6316,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
         def rollback(*args, **kwargs):
             original_complete(*args, **kwargs)
             raise RuntimeError('sealed fixture: lose final owner commit')
-        monkeypatch.setattr(case.repo, 'complete_creation_task_narration', rollback)
+        monkeypatch.setattr(case.repo.narration_completion, 'complete_creation_task_narration', rollback)
     elif outcome in {'tail', 'source', 'revoked'}:
         # Mutate after outside observation inside the actual owner transaction.
         original_released = case.scheduler._released_for_commit
@@ -6343,7 +6343,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
         usage = case.repo.creation_narration_usage('local', case.job.id)
         assert usage['unsettled'] and usage['used_output_bytes'] == checkpoint['pcm']['generated_bytes']
         if outcome == 'unknown':
-            monkeypatch.setattr(case.repo, 'complete_creation_task_narration', original_complete)
+            monkeypatch.setattr(case.repo.narration_completion, 'complete_creation_task_narration', original_complete)
             assert case.executor.recover_pcm_unit(case.repo.job_records.get_job_run('local', case.job.id), case.actor, case.scheduler)
     if outcome in {'normal', 'unknown'}:
         task = case.repo.task_records.get_creation_task('local', case.task_id)
