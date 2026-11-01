@@ -442,7 +442,7 @@ class TimelineRestoreUseCase:
                             creation_task_montage_plan_from_payload(current_section['montage']),
                             creation_task_montage_plan_from_payload(publication.payload['montage']),command.actor_identity,connection=None)
                     try:
-                        operation,payload,current = self.repository.restore_script_section(workspace_id,task_id,
+                        operation,payload,current = self.repository.section_adoption.restore_script_section(workspace_id,task_id,
                             history=history,expected_dependencies=prepared.section_dependencies,redo=command.redo,
                             changed_version_id=prepared.changed_version.id,restore_version_id=prepared.target_version.id,
                             timeline_change=change,job=job,control_payload=command.control_payload(),write_guard=command.write_guard,

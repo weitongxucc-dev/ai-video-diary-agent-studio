@@ -844,3 +844,205 @@ def test_workspace_response_http_read_and_agent_port_share_real_metadata(tmp_pat
     assert http_values['portrait_available'] is False
     assert len(readers) == 2 and readers[0] is not readers[1]
     assert snapshot() == before and violations == []
+
+
+def _section_adoption_metadata_state(tmp_path):
+    from app.creation.contracts import ArtifactRecord, JobRun, NarrationSegment, TaskEvent, TransformRun
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.section_change_use_case import SectionTimelineChange
+    from app.creation_execution import CreationExecutionActor
+    from app.creation.editing.metadata_use_case import execution_subtitle_track
+    from app.subtitle_tracks import render_srt
+
+    s = metadata_state(tmp_path)
+    repo, task = s.repo, s.task
+    script = CreationTaskScript(id='fixed-script', workspace_id='ws', task_id=task.id,
+        run_id='metadata-script-run', topic_id='metadata-topic', title='声明段落', language='zh-CN',
+        sections=[CreationTaskScriptSection(id='section', title='目标段', content='目标原文',
+            visual_prompt='声明来源', evidence_reference_ids=[]),
+            CreationTaskScriptSection(id='later-section', title='另一段', content='后段原文',
+                visual_prompt='声明来源', evidence_reference_ids=[])], selection_status='confirmed',
+        confirmed_at=task.created_at)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        payload = repo.script_records._script_payload(conn, script)
+        conn.execute('INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
+            (script.id, 'ws', task.id, script.run_id, payload, script.updated_at.isoformat()))
+        task.confirmed_script_id = script.id
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    job = repo.job_records.create_job_run(JobRun('metadata-section-job', 'ws', task.id, 'narration',
+        'metadata-section-job', 'declared-section-input'))
+    repo.job_records.claim_job_run('ws', job.id)
+    rows = [NarrationSegment('section-audio', 'ws', task.id, script.id, 'section', '目标原文',
+        'narration://artifact/section-original', 2, 24000, 'metadata', 'metadata-voice', 'v1', 'zh', 'original', 'ready'),
+        NarrationSegment('later-audio', 'ws', task.id, script.id, 'later-section', '后段原文',
+        'narration://artifact/later-original', 2, 24000, 'metadata', 'metadata-voice', 'v1', 'zh', 'original', 'ready')]
+    repo.narration_records.save_narration_segments('ws', task.id, script.id, rows)
+    montage = replace(s.plan, cues=[NarrationCue('cue', 'section', '目标原文', 2, narration_segment_id='section-audio'),
+        NarrationCue('later-cue', 'later-section', '后段原文', 2, narration_segment_id='later-audio')],
+        clips=[replace(s.plan.clips[0], source_end_seconds=2, timeline_end_seconds=2),
+            replace(s.plan.clips[0], id='later-clip', cue_id='later-cue', source_start_seconds=2,
+                timeline_start_seconds=2)], narration_audio_path='narration://artifact/declared-composition')
+    full = creation_task_montage_plan_to_payload(montage)
+    local, _ = SectionTimelineChange.local_state(full, [], 'section')
+    repo.execution_records.create_artifact_record(ArtifactRecord('section-video', 'ws', task.id, 'video',
+        'video://artifact/declared-section', 'a'*64, 1, job.id, []))
+    repo.execution_records.append_task_event(TaskEvent('section-original', 'ws', task.id, job.id, 'segment_publication',
+        {'section_id': 'section', 'script_id': script.id, 'text': rows[0].text, 'adopted': True,
+         'video_artifact_id': 'section-video', 'duration_seconds': 2, 'narration_reference': rows[0].audio_reference,
+         'montage': local}))
+    snapshot = {**s.base.snapshot, 'montage': full, 'stage_segments': {'section': 'section-original'}}
+    base = TimelineVersion('section-base', 'ws', task.id, s.base.id, 2, snapshot, None)
+    repo.timeline_records.create_timeline_version(base, expected_current_version_id=s.base.id)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('ws', task.id, montage.id, full)
+    track = replace(s.track, id='section-base-zh', timeline_version_id=base.id,
+        cues=[SubtitleCue('cue', None, '目标原文', 0, 2), SubtitleCue('later-cue', None, '后段原文', 2, 4)])
+    reference, transform = s.case.publish_subtitle_text(workspace_id='ws', task_id=task.id, proposal_id='section-before',
+        kind='subtitle_cue_update', input_refs=['timeline:section-base'],
+        content=render_srt(execution_subtitle_track(track)), engine='subtitle-srt/v1', parameters={})
+    repo.subtitle_records.create_subtitle_track(replace(track, artifact_ref=reference, transform_id=transform))
+    replacement = replace(rows[0], text='目标修改后的正文', audio_reference='narration://artifact/section-replacement',
+        duration_seconds=3, updated_at=datetime.now(timezone.utc))
+    local = json.loads(json.dumps(local))
+    local.update(duration_seconds=3, narration_audio_path=replacement.audio_reference, audio_timeline=None)
+    local['cues'][0].update(text=replacement.text, duration_seconds=3)
+    local['clips'][0].update(source_end_seconds=3, timeline_end_seconds=3)
+    publication = TaskEvent('section-published', 'ws', task.id, job.id, 'segment_publication',
+        {'section_id': 'section', 'script_id': script.id, 'text': replacement.text,
+         'narration_reference': replacement.audio_reference, 'duration_seconds': 3, 'montage': local,
+         'video_artifact_id': 'section-video', 'request_id': 'declared-revision', 'input_id': 'declared-input', 'adopted': True})
+    now = datetime.now(timezone.utc)
+    transform = TransformRun('section-transform', 'ws', task.id, job.id, 'segment_render', 'declared-input', [],
+        ['video://artifact/declared-section'], 'metadata', {}, 'succeeded', now, now)
+    return SimpleNamespace(**vars(s), section_base=base, original_segments=rows, before=rows[0], replacement=replacement,
+        local=local, publication=publication, publication_transform=transform, job=job,
+        change=SectionTimelineChange(repo, s.store), actor=CreationExecutionActor('ws', s.member.member_id))
+
+
+def _publish_section_metadata(s, conn):
+    return s.repo.section_adoption.publish_segment_version(s.publication, [], s.publication_transform, [],
+        adopted=True, expected_version_id=s.section_base.id, expected_segment_version='section-original',
+        segment=s.replacement, timeline_change=s.change, connection=conn)
+
+
+def test_section_adoption_metadata_borrows_transaction_and_keeps_dynamic_late_guard(tmp_path, monkeypatch):
+    s = _section_adoption_metadata_state(tmp_path)
+    s.change.prepare_current('ws', s.task.id, 'section', s.local, s.replacement, s.job)
+    with s.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        with pytest.raises(ValueError, match='发布前'):
+            s.repo.section_adoption.publish_segment_version(s.publication, [], s.publication_transform, [],
+                adopted=True, expected_version_id=s.section_base.id, expected_segment_version='changed-target',
+                segment=s.replacement, timeline_change=s.change, connection=conn)
+        assert conn.in_transaction
+        conn.rollback()
+    with s.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert _publish_section_metadata(s, conn) == s.publication.id
+        assert conn.in_transaction
+        conn.rollback()
+    assert s.repo.task_records.get_creation_task('ws', s.task.id).current_timeline_version_id == s.section_base.id
+    assert s.repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
+    with pytest.raises(KeyError):
+        s.repo.execution_records.get_task_event('ws', s.publication.id)
+    with s.repo._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='ReviseScriptSection'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM transform_runs WHERE id='section-transform'").fetchone()[0] == 0
+    original = s.repo.replace_adopted_narration_segment
+    called = []
+    def revoked(*args, **kwargs):
+        original(*args, **kwargs)
+        called.append(kwargs['connection'].in_transaction)
+        raise PermissionError('metadata authorization revoked at the real replace port')
+    with monkeypatch.context() as guard:
+        guard.setattr(s.repo, 'replace_adopted_narration_segment', revoked)
+        with pytest.raises(PermissionError, match='real replace port'):
+            with s.repo._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                _publish_section_metadata(s, conn)
+    assert called == [True]
+    assert s.repo.task_records.get_creation_task('ws', s.task.id).current_timeline_version_id == s.section_base.id
+    assert s.repo.narration_records.get_narration_segment('ws', s.task.id, s.before.id) == s.before
+    with pytest.raises(KeyError):
+        s.repo.execution_records.get_task_event('ws', s.publication.id)
+
+
+def test_section_adoption_metadata_restore_tail_rollback_and_original_request_replay(tmp_path, monkeypatch):
+    from app.creation.contracts import JobRun
+    from app.creation.section_change_use_case import SectionTimelineChange
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase, TimelineRestoreCommand
+    from app.device_scheduler import RecoveryBlocked
+
+    s = _section_adoption_metadata_state(tmp_path)
+    repo = s.repo
+    s.change.prepare_current('ws', s.task.id, 'section', s.local, s.replacement, s.job)
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _publish_section_metadata(s, conn)
+    task = repo.task_records.get_creation_task('ws', s.task.id)
+    published = repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
+    operation = repo.edit_records.get_edit_operation('ws', published.created_by_operation_id)
+    assert len(published.snapshot['narration_segments']) == 2
+    assert repo.narration_records.get_narration_segment('ws', task.id, s.original_segments[1].id) == s.original_segments[1]
+    snapshot = json.loads(json.dumps(published.snapshot))
+    snapshot['montage']['clips'][-1]['crop_y'] = .31
+    later = TimelineVersion('section-later', 'ws', task.id, published.id, published.sequence+1, snapshot, None)
+    repo.timeline_records.create_timeline_version(later, expected_current_version_id=published.id)
+    for track in repo.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=published.id):
+        repo.subtitle_records.create_subtitle_track(replace(track, id=track.id+'_later', timeline_version_id=later.id))
+    job = repo.job_records.create_job_run(JobRun('metadata-tail-job', 'ws', task.id, 'section_timeline_restore',
+        'metadata-tail-job', 'declared-restore-input'))
+    repo.job_records.claim_job_run('ws', job.id)
+    change = SectionTimelineChange(repo, s.store)
+    change.prepare_current('ws', task.id, 'section', s.local, s.before, job, desired_version=s.section_base)
+    dependencies = repo.section_dependency_snapshot('ws', task.id, 'section')
+    with pytest.raises(ValueError, match='实际音画、字幕或来源依赖已变化'):
+        repo.section_adoption.restore_script_section('ws', task.id, history=operation.payload,
+            expected_dependencies={}, redo=False, changed_version_id=published.id,
+            restore_version_id=s.section_base.id, timeline_change=change, job=job)
+    assert repo.task_records.get_creation_task('ws', task.id).current_timeline_version_id == later.id
+    finish = repo.job_records.finish_job_run
+    reached = []
+    def tail_failure(*args, **kwargs):
+        finish(*args, **kwargs)
+        reached.append(kwargs['connection'].in_transaction)
+        raise RuntimeError('metadata restore failed after the real job success write')
+    with monkeypatch.context() as guard:
+        guard.setattr(repo.job_records, 'finish_job_run', tail_failure)
+        with pytest.raises(RuntimeError, match='real job success'):
+            repo.section_adoption.restore_script_section('ws', task.id, history=operation.payload,
+                expected_dependencies=dependencies, redo=False, changed_version_id=published.id,
+                restore_version_id=s.section_base.id, timeline_change=change, job=job)
+    assert reached == [True]
+    assert repo.task_records.get_creation_task('ws', task.id).current_timeline_version_id == later.id
+    assert repo.narration_records.get_narration_segment('ws', task.id, s.before.id) == s.replacement
+    assert repo.job_records.get_job_run('ws', job.id).status == 'running'
+    with repo._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='UndoTimelineVersion'").fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM task_events WHERE job_id=?', (job.id,)).fetchone()[0] == 0
+    restore = TimelineRestoreUseCase(repo, s.case)
+    for redo, expected in [(False, s.before), (True, s.replacement)]:
+        current_task = repo.task_records.get_creation_task('ws', task.id)
+        current = repo.timeline_records.get_timeline_version('ws', current_task.current_timeline_version_id)
+        request_id = 'metadata-redo' if redo else 'metadata-undo'
+        args = dict(actor=s.actor, request_id=request_id, target_operation_id=operation.id,
+            expected_timeline_version_id=current.id, expected_timeline_sequence=current.sequence)
+        command = TimelineRestoreCommand('ws', current_task, redo)
+        result = restore.execute(command, **args)
+        replay = restore.execute(command, **args)
+        assert result.operation.id == replay.operation.id
+        assert result.montage.clips[-1].crop_y == .31
+        assert repo.narration_records.get_narration_segment('ws', task.id, s.before.id).text == expected.text
+        assert repo.narration_records.get_narration_segment('ws', task.id, s.original_segments[1].id) == s.original_segments[1]
+        assert result.task.output_ready is False and result.task.narration_cache_key is None
+    current_task = repo.task_records.get_creation_task('ws', task.id)
+    inputs = {'action': 'undo', 'target_operation_id': None, 'expected_timeline_version_id': None,
+        'expected_timeline_sequence': None, 'source': None, 'actor_identity': s.actor.identity_payload()}
+    repo.restore_requests.claim(current_task, s.actor.member_id, 'metadata-unknown', inputs)
+    with repo._connect() as conn:
+        before_jobs = conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0]
+    with pytest.raises(RecoveryBlocked, match='未知'):
+        restore.execute(TimelineRestoreCommand('ws', current_task, False), actor=s.actor, request_id='metadata-unknown')
+    assert restore.read_request('ws', task.id, 'metadata-unknown', s.actor)['status'] == 'result_unknown'
+    with repo._connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM job_runs').fetchone()[0] == before_jobs

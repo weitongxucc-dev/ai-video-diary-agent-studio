@@ -6780,10 +6780,10 @@ def test_section_dependency_projection_borrows_transaction_and_preserves_cas(tmp
     arguments=dict(history=history,expected_dependencies=before,redo=False,
         changed_version_id='changed',restore_version_id='restored',timeline_change=None,job=case.job)
     with pytest.raises(KeyError,match='missing_history'):
-        repo.restore_script_section('local',case.task_id,**arguments)
+        repo.section_adoption.restore_script_section('local',case.task_id,**arguments)
     _section_projection_next_version(case,case.snapshot,subtitle_change=True)
     with pytest.raises(ValueError,match='实际音画、字幕或来源依赖已变化'):
-        repo.restore_script_section('local',case.task_id,**arguments)
+        repo.section_adoption.restore_script_section('local',case.task_id,**arguments)
 
 
 @pytest.mark.parametrize('conflict',['cue_order','overlap'])
@@ -6870,7 +6870,7 @@ def _publish_paid_section_change(case):
     case.change.prepare_current('local',case.task_id,'section_3',case.local,case.replacement,case.job)
     with case.repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        case.repo.publish_segment_version(case.publication,[],case.transform,[],adopted=True,
+        case.repo.section_adoption.publish_segment_version(case.publication,[],case.transform,[],adopted=True,
             expected_version_id='change_base',expected_segment_version='publication_3',segment=case.replacement,
             timeline_change=case.change,connection=conn)
         assert conn.in_transaction
@@ -6935,7 +6935,7 @@ def test_section_change_original_transaction_rolls_back_all_facts(tmp_path,monke
     with pytest.raises((ValueError,PermissionError),match='发布前|revoked'):
         with case.repo._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            case.repo.publish_segment_version(case.publication,[],case.transform,[],adopted=True,
+            case.repo.section_adoption.publish_segment_version(case.publication,[],case.transform,[],adopted=True,
                 expected_version_id='change_base',expected_segment_version='changed-target' if failure=='target_cas' else 'publication_3',
                 segment=case.replacement,timeline_change=case.change,connection=conn)
     assert case.repo.task_records.get_creation_task('local',case.task_id).current_timeline_version_id=='change_base'

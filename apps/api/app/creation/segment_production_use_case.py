@@ -1114,7 +1114,7 @@ class SegmentProductionUseCase:
             def commit_video(conn,current):
                 if command:
                     self.verify_revision(job.workspace_id,job.task_id,actor,command,connection=conn)
-                self.repository.publish_segment_version(publication,artifacts,transform,edges,adopted=adopted,
+                self.repository.section_adoption.publish_segment_version(publication,artifacts,transform,edges,adopted=adopted,
                     expected_version_id=current_context['base_version_id'],expected_segment_version=current_context['segment_version'],
                     segment=segment,timeline_change=timeline_change,connection=conn)
                 settle(conn,current)
