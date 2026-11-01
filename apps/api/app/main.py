@@ -2169,67 +2169,21 @@ def _submit_audio_ingress(task_id, request, operation, result_kind, *, audio=Non
         _creation_task_or_404(workspace_id, task_id)
     actor = _require_permit_actor(request, workspace_id)
     task = _creation_task_or_404(workspace_id, task_id)
-    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
-        raise HTTPException(status_code=403, detail='当前成员不能安排此任务的媒体处理')
-    if audio is not None and _device_operation_budget("cpu_audio") is None:
-        raise HTTPException(status_code=503, detail='CPU 音频处理预算尚未标定，未接收媒体作业')
-    values = {'_media_kind': 'upload' if audio is not None else 'audio_mix' if operation == 'audio_listen' else 'waveform', '_draft': request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'), **(arguments if arguments is not None else {})}
-    created_input = None
     try:
-        if audio is not None:
-            suffix = Path(audio.filename or '').suffix.lower()
-            allowed = {'.wav', '.mp3', '.m4a', '.aac', '.flac'} if operation == 'audio_import' else {'.webm', '.mp4', '.m4a', '.ogg', '.wav'}
-            if suffix not in allowed:
-                raise HTTPException(status_code=422, detail='当前上传音频格式不可用')
-            root = settings.effective_temporary_root_path / 'task-media-inputs' / media_digest([workspace_id, actor.identity_payload()])
-            root.mkdir(parents=True, exist_ok=True)
-            partial = root / (uuid4().hex + '.part')
-            limit = (512 if operation == 'audio_import' else 50) * 1024 * 1024
-            total, digest = (0, hashlib.sha256())
-            try:
-                with partial.open('xb') as target:
-                    while (chunk := audio.file.read(1024 * 1024)):
-                        total += len(chunk)
-                        if total > limit:
-                            raise HTTPException(status_code=422, detail='上传音频超过本次大小上限')
-                        target.write(chunk)
-                        digest.update(chunk)
-                if total == 0:
-                    raise HTTPException(status_code=422, detail='上传音频为空')
-                staged = root / (digest.hexdigest() + suffix)
-                if staged.is_symlink():
-                    raise HTTPException(status_code=422, detail='音频暂存位置不可用')
-                try:
-                    os.link(partial, staged)
-                except FileExistsError:
-                    if staged.stat().st_size != total:
-                        raise HTTPException(status_code=409, detail='已保存的固定音频输入发生变化，请检查本机存储')
-                else:
-                    created_input = staged
-            finally:
-                partial.unlink(missing_ok=True)
-            values['audio'] = {'staged_input': str(staged.relative_to(settings.effective_temporary_root_path)), 'filename': Path(audio.filename).name, 'size_bytes': total, 'sha256': digest.hexdigest()}
-        else:
-            _audio_ingress_use_case().check_public_input(workspace_id, task_id, operation, values, actor)
-        runtime = _creation_runtime()
-        media = runtime.registrations['creation_job'].owner.task_media
-        job = media.submit(runtime, actor, task_id, operation, values, result_kind)
-        receipt = _media_result_receipt(media, job, actor, runtime)
-        receipt['result'] = None
-        return JSONResponse(status_code=202, content=receipt)
-    except Exception as exc:
-        if created_input is not None:
-            relative = str(created_input.relative_to(settings.effective_temporary_root_path))
-            referenced = production_repo.execution_records.staged_audio_input_referenced(workspace_id, relative)
-            if not referenced:
-                created_input.unlink(missing_ok=True)
-        if isinstance(exc, AudioIngressRejected):
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        if isinstance(exc, PermissionError):
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        if isinstance(exc, (ValueError, KeyError)):
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        raise
+        with _audio_ingress_use_case().prepare_submission(task, actor, operation,
+                filename=audio.filename if audio is not None else None,
+                stream=audio.file if audio is not None else None,
+                draft=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'),
+                arguments=arguments, temporary_root=settings.effective_temporary_root_path,
+                cpu_budget=lambda: _device_operation_budget("cpu_audio")) as values:
+            runtime = _creation_runtime()
+            media = runtime.registrations['creation_job'].owner.task_media
+            job = media.submit(runtime, actor, task_id, operation, values, result_kind)
+            receipt = _media_result_receipt(media, job, actor, runtime)
+            receipt['result'] = None
+            return JSONResponse(status_code=202, content=receipt)
+    except AudioIngressRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 

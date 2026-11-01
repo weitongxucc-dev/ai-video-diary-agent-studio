@@ -1,5 +1,8 @@
 """Five sealed audio actions using the original source, grant and publication owners."""
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+import os
+from uuid import uuid4
 import hashlib
 from app.production import NarrationArtifactRecord
 from app.creation.contracts import NarrationSegment
@@ -34,6 +37,67 @@ class AudioIngressUseCase:
             raise ValueError('音频输入必须绑定同一仓储负责人')
         self.repository, self.task_audio = repository, task_audio
         self.waveform_cache_root = waveform_cache_root
+
+    @contextmanager
+    def prepare_submission(self, task, actor, operation, *, temporary_root, cpu_budget,
+                           filename=None, stream=None, draft=False, arguments=None):
+        workspace_id, task_id = task.workspace_id, task.id
+        if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+            raise AudioIngressRejected(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+        if stream is not None and cpu_budget() is None:
+            raise AudioIngressRejected(status_code=503, detail='CPU 音频处理预算尚未标定，未接收媒体作业')
+        values = {'_media_kind': 'upload' if stream is not None else 'audio_mix' if operation == 'audio_listen' else 'waveform', '_draft': draft, **(arguments if arguments is not None else {})}
+        created_input = None
+        try:
+            if stream is not None:
+                suffix = Path(filename or '').suffix.lower()
+                allowed = {'.wav', '.mp3', '.m4a', '.aac', '.flac'} if operation == 'audio_import' else {'.webm', '.mp4', '.m4a', '.ogg', '.wav'}
+                if suffix not in allowed:
+                    raise AudioIngressRejected(status_code=422, detail='当前上传音频格式不可用')
+                root = temporary_root / 'task-media-inputs' / media_digest([workspace_id, actor.identity_payload()])
+                root.mkdir(parents=True, exist_ok=True)
+                partial = root / (uuid4().hex + '.part')
+                limit = (512 if operation == 'audio_import' else 50) * 1024 * 1024
+                total, digest = (0, hashlib.sha256())
+                try:
+                    with partial.open('xb') as target:
+                        while (chunk := stream.read(1024 * 1024)):
+                            total += len(chunk)
+                            if total > limit:
+                                raise AudioIngressRejected(status_code=422, detail='上传音频超过本次大小上限')
+                            target.write(chunk)
+                            digest.update(chunk)
+                    if total == 0:
+                        raise AudioIngressRejected(status_code=422, detail='上传音频为空')
+                    staged = root / (digest.hexdigest() + suffix)
+                    if staged.is_symlink():
+                        raise AudioIngressRejected(status_code=422, detail='音频暂存位置不可用')
+                    try:
+                        os.link(partial, staged)
+                    except FileExistsError:
+                        if staged.stat().st_size != total:
+                            raise AudioIngressRejected(status_code=409, detail='已保存的固定音频输入发生变化，请检查本机存储')
+                    else:
+                        created_input = staged
+                finally:
+                    partial.unlink(missing_ok=True)
+                values['audio'] = {'staged_input': str(staged.relative_to(temporary_root)), 'filename': Path(filename).name, 'size_bytes': total, 'sha256': digest.hexdigest()}
+            else:
+                self.check_public_input(workspace_id, task_id, operation, values, actor)
+            yield values
+        except Exception as exc:
+            if created_input is not None:
+                relative = str(created_input.relative_to(temporary_root))
+                referenced = self.repository.execution_records.staged_audio_input_referenced(workspace_id, relative)
+                if not referenced:
+                    created_input.unlink(missing_ok=True)
+            if isinstance(exc, AudioIngressRejected):
+                raise
+            if isinstance(exc, PermissionError):
+                raise AudioIngressRejected(status_code=403, detail=str(exc)) from exc
+            if isinstance(exc, (ValueError, KeyError)):
+                raise AudioIngressRejected(status_code=422, detail=str(exc)) from exc
+            raise
 
     def list_recordings(self, task, *, outputs):
         workspace_id, task_id = task.workspace_id, task.id
