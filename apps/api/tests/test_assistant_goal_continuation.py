@@ -68,14 +68,14 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     production.execution_records.append_task_event(TaskEvent("located:one", "workspace", task.id, job.id,
         "assistant_execution_located", {"source": source, "job_id": job.id, "input_digest": job.input_digest}))
     owner = GoalResultProjection(production, conversations)
-    rows = production.assistant_execution_projection_rows()
+    rows = production.execution_records.assistant_execution_projection_rows()
     assert len(rows) == 1
     context = owner.execution_candidate(rows[0])
     actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.job_records.get_job_run("workspace", job.id)),
               "video_ready": production.task_records.get_creation_task("workspace", task.id).output_ready})
     event = owner.project_execution(context, actual)
     assert event["status"] == "stale" and event["actionable"] is False and event["result_version_id"] is None
-    assert not production.assistant_execution_projection_rows()
+    assert not production.execution_records.assistant_execution_projection_rows()
     assert conversations.project_business_result(turn["id"], "workspace", "member", event,
         response_patch={"execution_status": actual}, message="duplicate is ignored")
     stored = conversations.get_turn(turn["id"])

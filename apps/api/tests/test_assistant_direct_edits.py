@@ -604,7 +604,7 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     main._resolve_assistant_edit_request(s.task.id, request, turn['id'], {
         'request_id': payload['request_id'], 'phase': phase,
         'query_url': f"{s.url}/assistant/edit-requests/{payload['request_id']}?phase={phase}"})
-    candidate = next(item for item in s.repo.assistant_business_candidates()
+    candidate = next(item for item in s.repo.execution_records.assistant_business_candidates()
         if item['kind'] == 'request' and item['request']['locator']['request_id'] == payload['request_id'])
     original_result = s.repo.execution_records.get_task_event('ws', event_id + '_result')
     # Match the fixture's local namespace while retaining real member and owner checks.
@@ -644,7 +644,7 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     locator = published['result']['response']['edit_request']
     assert locator['request_id'] == payload['request_id'] and locator['phase'] == phase
     assert locator['status'] == 'recorded'
-    assert [main._assistant_business_projector()(item) for item in s.repo.assistant_business_candidates()
+    assert [main._assistant_business_projector()(item) for item in s.repo.execution_records.assistant_business_candidates()
         if item['kind'] == 'request' and item['id'] == candidate['id']] == []
     assert ConversationRepository(conversations.database_path).get_turn(turn['id']) == published
     assert publication_order == ['observe', 'wake']

@@ -365,3 +365,57 @@ class ExecutionRecordStore:
             "AND json_extract(payload_json,'$.receipt.status')='adopted' LIMIT 1",
             (workspace_id, task_id),
         ).fetchone() is not None
+
+    def assistant_execution_projection_rows(self):
+        with self._connect() as conn:
+            return conn.execute("""SELECT e.*,j.status FROM task_events e JOIN job_runs j
+                ON j.workspace_id=e.workspace_id AND j.id=e.job_id
+                WHERE e.event_type='assistant_execution_located' AND j.kind='creation_task_execution'
+                AND j.status IN ('succeeded','failed','cancelled')
+                AND NOT EXISTS(SELECT 1 FROM task_events done WHERE done.id='event_assistant_execution_'||e.id||'_'||j.status)
+                ORDER BY e.created_at LIMIT 16""").fetchall()
+
+
+    def assistant_business_candidates(self, *, limit: int = 32) -> list[dict]:
+        """Pending projections of existing jobs/proposals, never another queue."""
+        with self._connect() as conn:
+            jobs = conn.execute(
+                "SELECT j.id,j.workspace_id,j.task_id,j.status,j.created_at,e.payload_json "
+                "FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id AND e.job_id=j.id "
+                "WHERE e.event_type='task_media_submitted' AND j.status IN ('succeeded','failed','cancelled') "
+                "AND json_extract(e.payload_json,'$.arguments._typed_source.assistant_turn_id') IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM task_events done WHERE done.id='event_assistant_job_'||j.id||'_'||j.status) "
+                "ORDER BY j.created_at LIMIT ?", (limit,),
+            ).fetchall()
+            candidates = [{"kind": "job", "id": row["id"], "workspace_id": row["workspace_id"],
+                "task_id": row["task_id"], "status": row["status"], "created_at": row["created_at"],
+                "source": json.loads(row["payload_json"])["arguments"]["_typed_source"],
+                "event_id": f"event_assistant_job_{row['id']}_{row['status']}"} for row in jobs]
+            proposals = conn.execute(
+                "SELECT p.id,p.workspace_id,p.task_id,p.status,p.created_at,i.constraints_json "
+                "FROM edit_proposals p JOIN edit_intents i ON i.id=p.intent_id AND i.workspace_id=p.workspace_id "
+                "WHERE json_extract(i.constraints_json,'$.request_source.assistant_turn_id') IS NOT NULL "
+                "AND p.status IN ('proposed','confirmed','rejected','expired') "
+                "AND (p.status!='proposed' OR (json_extract(i.constraints_json,'$.request_source.media_job_id') IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM task_events submitted WHERE submitted.workspace_id=p.workspace_id "
+                "AND submitted.task_id=p.task_id AND submitted.event_type='task_media_submitted' "
+                "AND json_extract(submitted.payload_json,'$.arguments._typed_source.request_id')=json_extract(i.constraints_json,'$.request_source.request_id')))) "
+                "AND NOT EXISTS (SELECT 1 FROM task_events done WHERE done.id='event_assistant_proposal_'||p.id||'_'||p.status) "
+                "ORDER BY p.created_at LIMIT ?", (limit,),
+            ).fetchall()
+            candidates.extend({"kind": "proposal", "id": row["id"], "workspace_id": row["workspace_id"],
+                "task_id": row["task_id"], "status": row["status"], "created_at": row["created_at"],
+                "source": json.loads(row["constraints_json"])["request_source"],
+                "event_id": f"event_assistant_proposal_{row['id']}_{row['status']}"} for row in proposals)
+            requests = conn.execute(
+                "SELECT e.* FROM task_events e WHERE e.event_type='assistant_edit_request_located' "
+                "AND (json_extract(e.payload_json,'$.locator.status') IN ('rejected','not_submitted') "
+                "OR EXISTS (SELECT 1 FROM task_events receipt WHERE receipt.id=json_extract(e.payload_json,'$.request_event_id')||'_result')) "
+                "AND NOT EXISTS (SELECT 1 FROM task_events done WHERE done.id='event_assistant_request_'||e.id) "
+                "ORDER BY e.created_at LIMIT ?", (limit,),
+            ).fetchall()
+            candidates.extend({"kind": "request", "id": row["id"], "workspace_id": row["workspace_id"],
+                "task_id": row["task_id"], "created_at": row["created_at"], "status": "recorded",
+                "source": json.loads(row["payload_json"])["source"], "request": json.loads(row["payload_json"]),
+                "event_id": f"event_assistant_request_{row['id']}"} for row in requests)
+        return candidates

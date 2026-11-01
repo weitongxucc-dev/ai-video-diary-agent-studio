@@ -278,7 +278,7 @@ def test_terminal_conversation_uses_same_resource_history_without_changing_cance
         before = client.get(f'/api/creation-tasks/task/media-jobs/{job.id}').json()['resource_wait']
         conversations.finish_turn(turn['id'],'completed',result={'kind':'task_turn','response':{}})
         client.post(f'/api/creation-tasks/task/media-jobs/{job.id}/cancel')
-        candidate = next(item for item in repo.assistant_business_candidates() if item['id']==job.id)
+        candidate = next(item for item in repo.execution_records.assistant_business_candidates() if item['id']==job.id)
         assert main._assistant_business_projector()(candidate)
         saved = conversations.get_turn(turn['id'])
         assert saved['status'] == 'completed' and saved['result']['continuation']['status'] == 'cancelled'

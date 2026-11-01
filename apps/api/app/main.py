@@ -7675,7 +7675,7 @@ def _assistant_script_tool_projector():
 
 def _reconcile_assistant_business_results():
     projected = sum(_assistant_business_projector()(candidate)
-                    for candidate in production_repo.assistant_business_candidates())
+                    for candidate in production_repo.execution_records.assistant_business_candidates())
     return projected + sum(_assistant_script_tool_projector()(candidate)
                            for candidate in _assistant_script_tool_candidates()) + _assistant_execution_projector()()
 

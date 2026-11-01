@@ -970,7 +970,7 @@ class GoalResultProjection:
 
     def project_execution_results(self, *, read_authorized_execution, observe):
         projected = 0
-        for row in self.production.assistant_execution_projection_rows():
+        for row in self.production.execution_records.assistant_execution_projection_rows():
             context = self.execution_candidate(row)
             if context is None:
                 continue
