@@ -201,12 +201,12 @@ class StoryboardRegeneration:
                 stage_key=stage_facts(current, script, plan, connection=conn))
             if not request_current(self.repository, current, payload, connection=conn):
                 raise ValueError("时间线、已采用文案或配音已变化，请重新读取当前任务")
-        return self.repository.claim_storyboard_regeneration(run, payload, verify_inputs=verify)
+        return self.repository.creation_execution_jobs.claim_storyboard_regeneration(run, payload, verify_inputs=verify)
 
     def replay(self, workspace_id, task_id, inputs, actor):
         if actor.workspace_id != workspace_id:
             raise PermissionError("故事板请求不属于当前工作区")
-        job = self.repository.storyboard_regeneration_job(workspace_id, task_id, inputs["request_id"])
+        job = self.repository.creation_execution_jobs.storyboard_regeneration_job(workspace_id, task_id, inputs["request_id"])
         if job is None:
             return None
         event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start").payload
@@ -219,7 +219,7 @@ class StoryboardRegeneration:
     def read(self, workspace_id, task_id, request_id, actor):
         if actor.workspace_id != workspace_id:
             raise PermissionError("故事板请求不属于当前工作区")
-        job, event, result = self.repository.read_storyboard_regeneration_receipt(workspace_id, task_id, request_id)
+        job, event, result = self.repository.creation_execution_jobs.read_storyboard_regeneration_receipt(workspace_id, task_id, request_id)
         if any(event.get(key) != value for key, value in actor.identity_payload().items()):
             raise PermissionError("故事板原请求属于其他制作身份")
         inputs = event["request_inputs"]

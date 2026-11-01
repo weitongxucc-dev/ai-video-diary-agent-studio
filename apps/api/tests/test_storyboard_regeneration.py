@@ -479,7 +479,7 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
         assert grant.request_id == pending[0]['id'] and grant.owner_id == job.id
         state.scheduler.cancel(grant.request_id, state.actor)
     assert state.repo.execution_records.get_task_event('ws', start.id) == start
-    assert state.repo.read_storyboard_regeneration_receipt('ws', task.id, receipt['request_id'])[2] == completed['result']
+    assert state.repo.creation_execution_jobs.read_storyboard_regeneration_receipt('ws', task.id, receipt['request_id'])[2] == completed['result']
     assert state.repo.narration_units.creation_narration_usage('ws', job.id) == usage
     assert hashlib.sha256(Path(audio.audio_path).read_bytes()).hexdigest() == audio_sha
 
@@ -622,3 +622,106 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
                 if e.event_type == 'storyboard_regenerated']
     finally:
         case.scheduler.close()
+
+
+def test_storyboard_request_records_keep_replay_identity_atomic_claim_and_snapshot_receipt(tmp_path, monkeypatch):
+    import socket
+    import sqlite3
+    import subprocess
+    import threading
+    import wave
+    from PIL import Image
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask, JobRun, TaskEvent
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('storyboard request metadata forbids execution, media and networking')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn'):
+        monkeypatch.setattr(main, name, forbidden)
+    repo = ProductionRepository(tmp_path / 'requests.sqlite3', tmp_path / 'library',
+        duration_reader=forbidden, scene_reader=forbidden)
+    plan = CreationPlan('request-plan', 'metadata-ws', 'fixed goal', 'fixed plan', 1, 'zh-CN', '9:16', 4,
+        [], [], None, [], 0, 0, 'metadata', [], [], [], 'request-fixture')
+    task = CreationTask('request-task', 'metadata-ws', plan.id, 'fixed task', 'knowledge_explanation')
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='metadata-member')
+    records = repo.creation_execution_jobs
+    run = JobRun('storyboard-metadata-job', task.workspace_id, task.id, 'creation_task_execution',
+        f'storyboard-regeneration:{task.id}:request-one', 'a' * 64)
+    original = {'member_id': 'metadata-member', 'identity_kind': 'device', 'device_id': 'metadata-device',
+        'user_id': None, 'request_inputs': {'script_id': 'fixed-script'}}
+    payload = {**original}
+    verified = []
+    def verify(conn, current):
+        assert conn.in_transaction and current.id == task.id
+        assert repo.task_records.get_creation_task(task.workspace_id, task.id, connection=conn).id == task.id
+        verified.append(conn)
+        payload['verified_facts'] = {'source': 'metadata-declaration'}
+    assert records.storyboard_regeneration_job(task.workspace_id, task.id, 'request-one') is None
+    saved, fresh = records.claim_storyboard_regeneration(run, payload, verify_inputs=verify)
+    assert fresh and saved.id == run.id and len(verified) == 1
+    replay, fresh = records.claim_storyboard_regeneration(
+        replace(run, id='ignored-replay-id', task_id='missing-replay-task', input_digest='b' * 64),
+        original, verify_inputs=forbidden)
+    assert not fresh and replay.id == saved.id
+    with pytest.raises(PermissionError, match='其他制作身份'):
+        records.claim_storyboard_regeneration(run, {**original, 'member_id': 'other', 'request_inputs': {}}, verify_inputs=forbidden)
+    with pytest.raises(ValueError, match='不同输入'):
+        records.claim_storyboard_regeneration(run, {**original, 'request_inputs': {}}, verify_inputs=forbidden)
+    blocked = replace(run, id='blocked-metadata-job', idempotency_key=f'storyboard-regeneration:{task.id}:blocked')
+    with pytest.raises(ValueError, match='原制作安排尚未结束'):
+        records.claim_storyboard_regeneration(blocked, original, verify_inputs=forbidden)
+    claimed, start, result = records.read_storyboard_regeneration_receipt(task.workspace_id, task.id, 'request-one')
+    assert claimed.id == saved.id and start == payload and result is None
+    assert records.storyboard_regeneration_job(task.workspace_id, task.id, 'request-one').id == saved.id
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        repo.job_records.claim_job_run(task.workspace_id, saved.id, connection=conn)
+        repo.execution_records.append_task_event(TaskEvent(f'event_{saved.id}_storyboard_result',
+            task.workspace_id, task.id, saved.id, 'storyboard_regeneration_result', {'metadata_result': 'committed'}), connection=conn)
+        repo.job_records.finish_job_run(task.workspace_id, saved.id, status='succeeded', connection=conn)
+    observed = []
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            self.statements.append(sql)
+            return super().execute(sql, parameters)
+    def connect():
+        conn = sqlite3.connect(repo.database_path, factory=ObservedConnection)
+        conn.row_factory = sqlite3.Row
+        conn.statements = []
+        observed.append(conn)
+        return conn
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, '_connect', connect)
+        completed, persisted, result = records.read_storyboard_regeneration_receipt(task.workspace_id, task.id, 'request-one')
+    assert completed.status == 'succeeded' and persisted == payload and result == {'metadata_result': 'committed'}
+    assert len(observed) == 1 and observed[0].statements[0] == 'BEGIN'
+    assert len([sql for sql in observed[0].statements if sql.startswith('SELECT')]) == 3
+    append = repo.execution_records.append_task_event
+    def append_then_fail(*args, **kwargs):
+        append(*args, **kwargs)
+        raise RuntimeError('storyboard original-start tail')
+    tail = replace(run, id='tail-metadata-job', idempotency_key=f'storyboard-regeneration:{task.id}:tail')
+    with monkeypatch.context() as patch:
+        patch.setattr(repo.execution_records, 'append_task_event', append_then_fail)
+        with pytest.raises(RuntimeError, match='storyboard original-start tail'):
+            records.claim_storyboard_regeneration(tail, dict(original), verify_inputs=lambda conn, current: None)
+    with repo._connect() as conn:
+        assert conn.execute('SELECT id FROM job_runs WHERE id=?', (tail.id,)).fetchone() is None
+        assert conn.execute('SELECT id FROM task_events WHERE job_id=?', (tail.id,)).fetchone() is None
+    orphan = replace(run, id='missing-start-job', idempotency_key=f'storyboard-regeneration:{task.id}:missing-start')
+    repo.job_records.create_job_run(orphan)
+    with pytest.raises(ValueError, match='缺少持久输入记录'):
+        records.claim_storyboard_regeneration(orphan, original, verify_inputs=forbidden)
+    with pytest.raises(ValueError, match='缺少持久输入记录'):
+        records.read_storyboard_regeneration_receipt(task.workspace_id, task.id, 'missing-start')
+    with pytest.raises(KeyError):
+        records.read_storyboard_regeneration_receipt(task.workspace_id, task.id, 'missing-request')

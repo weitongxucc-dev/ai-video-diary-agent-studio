@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 
-from app.creation.contracts import TaskEvent as _TaskEvent
+from app.creation.contracts import JobRun as _JobRun, TaskEvent as _TaskEvent
+from app.creation.task_input_reads import require_creation_task
 from app.creation.execution_records import ExecutionRecordStore
 from app.creation.job_records import JobRunRecordStore
 
@@ -90,3 +92,63 @@ class CreationExecutionJobTransactions:
             "WHERE workspace_id=? AND id=?",(reason,impact,repair_action,now,now,workspace_id,job_id))
         return self.job_records.job_run_from_row(connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
             (workspace_id,job_id)).fetchone())
+
+    def storyboard_regeneration_job(self, workspace_id: str, task_id: str, request_id: str) -> _JobRun | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND task_id=? AND idempotency_key=?",
+                (workspace_id, task_id, f"storyboard-regeneration:{task_id}:{request_id}")).fetchone()
+        return self.job_records.job_run_from_row(row) if row is not None else None
+
+    def read_storyboard_regeneration_receipt(self, workspace_id: str, task_id: str, request_id: str):
+        """Read job status and its committed result from the same SQLite snapshot."""
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND task_id=? AND idempotency_key=?",
+                (workspace_id, task_id, f"storyboard-regeneration:{task_id}:{request_id}")).fetchone()
+            if row is None:
+                raise KeyError(request_id)
+            job = self.job_records.job_run_from_row(row)
+            start = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                (workspace_id, f"event_{job.id}_start")).fetchone()
+            if start is None:
+                raise ValueError("故事板原请求缺少持久输入记录")
+            result = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                (workspace_id, f"event_{job.id}_storyboard_result")).fetchone()
+            return job, json.loads(start["payload_json"]), json.loads(result["payload_json"]) if result else None
+
+    def claim_storyboard_regeneration(self, run: _JobRun, payload: dict, *, verify_inputs) -> tuple[_JobRun, bool]:
+        """Bind one explicit request, its original actor and JobRun atomically."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?",
+                (run.workspace_id, run.idempotency_key)).fetchone()
+            if row is not None:
+                saved = self.job_records.job_run_from_row(row)
+                event = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND id=?",
+                    (run.workspace_id, f"event_{saved.id}_start")).fetchone()
+                if event is None:
+                    raise ValueError("故事板原请求缺少持久输入记录")
+                original = json.loads(event["payload_json"])
+                if original.get("member_id") != payload.get("member_id") or any(
+                    original.get(key) != payload.get(key) for key in ("identity_kind", "device_id", "user_id")
+                ):
+                    raise PermissionError("故事板原请求属于其他制作身份")
+                if original.get("request_inputs") != payload.get("request_inputs"):
+                    raise ValueError("故事板请求身份已用于不同输入")
+                return saved, False
+            task = require_creation_task(conn, run.workspace_id, run.task_id)
+            if conn.execute("SELECT 1 FROM job_runs WHERE workspace_id=? AND task_id=? "
+                    "AND status IN ('queued','running','interrupted') LIMIT 1",
+                    (run.workspace_id, run.task_id)).fetchone():
+                raise ValueError("原制作安排尚未结束；先沿现有取消入口停止并回读终态，再重新生成故事板")
+            if conn.execute("SELECT 1 FROM device_work_requests r JOIN job_runs j ON j.id=r.owner_id "
+                    "AND j.workspace_id=r.workspace_id WHERE j.workspace_id=? AND j.task_id=? "
+                    "AND r.owner_type='creation_job' AND r.state IN ('waiting','blocked','granted','yield_requested') LIMIT 1",
+                    (run.workspace_id, run.task_id)).fetchone():
+                raise ValueError("原制作单元尚未释放，不能重新生成故事板")
+            verify_inputs(conn, task)
+            saved = self.job_records.create_job_run(run, connection=conn)
+            self.execution_records.append_task_event(_TaskEvent(id=f"event_{saved.id}_start", workspace_id=saved.workspace_id,
+                task_id=saved.task_id, job_id=saved.id, event_type="storyboard_regeneration_requested",
+                payload=payload, created_at=saved.created_at), connection=conn)
+        return saved, True
