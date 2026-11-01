@@ -599,6 +599,57 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==current.current_timeline_version_id
 
 
+    from fastapi import Request
+    request = Request({'type': 'http', 'headers': [(b'x-local-member-token', s.token.encode())]})
+    main._resolve_assistant_edit_request(s.task.id, request, turn['id'], {
+        'request_id': payload['request_id'], 'phase': phase,
+        'query_url': f"{s.url}/assistant/edit-requests/{payload['request_id']}?phase={phase}"})
+    candidate = next(item for item in s.repo.assistant_business_candidates()
+        if item['kind'] == 'request' and item['request']['locator']['request_id'] == payload['request_id'])
+    original_result = s.repo.execution_records.get_task_event('ws', event_id + '_result')
+    # Match the fixture's local namespace while retaining real member and owner checks.
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'ws')
+    monkeypatch.setattr(main, '_goal_continuation_service', None)
+    goal_service = main._goal_service()
+    real_observe = goal_service.observe_business_result
+    real_wake = main._wake_assistant_continuations
+    publication_order = []
+    def observe_committed(source_turn_id, event):
+        published = conversations.get_turn(source_turn_id)
+        assert any(item.get('event_id') == candidate['event_id'] for item in published['events'])
+        assert s.repo.execution_records.get_task_event('ws', candidate['event_id']).event_type == 'assistant_business_projected'
+        publication_order.append('observe')
+        return real_observe(source_turn_id, event)
+    def wake_after_observe():
+        assert publication_order == ['observe']
+        publication_order.append('wake')
+        real_wake()
+    monkeypatch.setattr(goal_service, 'observe_business_result', observe_committed)
+    monkeypatch.setattr(main, '_wake_assistant_continuations', wake_after_observe)
+    with s.repo._connect() as connection:
+        connection.execute('DELETE FROM task_events WHERE id=?', (event_id + '_result',))
+    before_unknown = conversations.get_turn(turn['id'])
+    assert main._assistant_business_projector()(candidate) is False
+    assert conversations.get_turn(turn['id']) == before_unknown
+    assert s.repo.execution_records.read_edit_request_result(s.task, event_id) is None
+    with pytest.raises(KeyError):
+        s.repo.execution_records.get_task_event('ws', candidate['event_id'])
+    assert publication_order == []
+    s.repo.execution_records.save_edit_request_result(current, event_id,
+        status_code=original_result.payload['status_code'], response=original_result.payload['response'])
+    assert main._assistant_business_projector()(candidate) is True
+    assert publication_order == ['observe', 'wake']
+    published = ConversationRepository(conversations.database_path).get_turn(turn['id'])
+    assert len([item for item in published['events'] if item.get('event_id') == candidate['event_id']]) == 1
+    locator = published['result']['response']['edit_request']
+    assert locator['request_id'] == payload['request_id'] and locator['phase'] == phase
+    assert locator['status'] == 'recorded'
+    assert [main._assistant_business_projector()(item) for item in s.repo.assistant_business_candidates()
+        if item['kind'] == 'request' and item['id'] == candidate['id']] == []
+    assert ConversationRepository(conversations.database_path).get_turn(turn['id']) == published
+    assert publication_order == ['observe', 'wake']
+
+
 def _bootstrap_input(s, bootstrap):
     from copy import deepcopy
     from app.creation.contracts import TimelineVersion

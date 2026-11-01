@@ -466,8 +466,8 @@ class GoalResultProjection:
     """Original-goal provenance and projection policy over existing owner facts.
 
     Identity verification and canonical media/request readers stay at their
-    boundaries. This owner accepts their finite facts, never Request objects,
-    HTTP responses, route handlers or a collection of application callbacks.
+    boundaries. Application projection uses explicit finite ports, never Request
+    objects, HTTP responses, route handlers or untyped callback collections.
     """
 
     def __init__(self, production, conversations: ConversationRepository):
@@ -894,6 +894,65 @@ class GoalResultProjection:
         return bool(turn and self.conversations.recoverable_business_failure(turn.get("result") or {})
                     and goal and goal["current_turn_id"] == turn_id
                     and goal["status"] in {"running", "waiting_result", "waiting_adoption", "waiting_unknown"})
+
+    def project_candidate(self, candidate, *, media_available, runtime_available, read_goal_actor,
+                          verify_actor, read_request, media_for, outputs_for, encode_preview,
+                          encode_media, encode_request_job, observe, wake):
+        if candidate['kind'] == 'request':
+            return self.project_request_candidate(candidate, runtime_available=runtime_available,
+                verify_actor=verify_actor, read_request=read_request, encode_preview=encode_preview,
+                encode_request_job=encode_request_job, observe=observe, wake=wake)
+        context = self.business_candidate(candidate, media_available=media_available())
+        if isinstance(context, bool):
+            return context
+        goal = self.conversations.get_task_goal(context.source.get('assistant_turn_id', ''))
+        if goal is not None and runtime_available():
+            try:
+                read_goal_actor(goal)
+                identity_status = 'ready'
+            except (KeyError, ValueError, PermissionError):
+                identity_status = 'unknown'
+        else:
+            identity_status = verify_actor(context.actor)
+        if not self.authorized(context, identity_status):
+            return True
+        media = media_for() if context.job is not None else None
+        projection = self.business_projection(context, media=media, outputs=outputs_for())
+        if isinstance(projection, bool):
+            return projection
+        if projection.preview is not None:
+            projection.response_patch['edit_preview'] = encode_preview(projection.preview)
+        if projection.media is not None:
+            projection.response_patch['media_job'] = encode_media(media, projection.media,
+                candidate['task_id'], projection.event['base_version_id'])
+        if self.commit(context, projection):
+            if observe(context.source['assistant_turn_id'], projection.event):
+                wake()
+            return True
+        return False
+
+    def project_request_candidate(self, candidate, *, runtime_available, verify_actor, read_request,
+                                  encode_preview, encode_request_job, observe, wake):
+        context = self.request_candidate(candidate)
+        if isinstance(context, bool):
+            return context
+        if not self.authorized(context, verify_actor(context.actor)):
+            return True
+        receipt = read_request(context.task, self.request_event_id(context))
+        result = self.request_result(context, receipt, runtime_available=runtime_available())
+        if isinstance(result, bool):
+            return result
+        patch = {'edit_request': result.locator}
+        if result.preview is not None:
+            patch['edit_preview'] = encode_preview(result.preview)
+        elif result.job is not None:
+            patch['media_job'] = encode_request_job(result.job, context.actor)
+        projection = self.request_projection(context, result, patch)
+        if self.commit(context, projection):
+            if observe(context.source['assistant_turn_id'], projection.event):
+                wake()
+            return True
+        return False
 
     def authorized(self, context, identity_status):
         from app.source_policy import knowledge_item_readable as content_readable

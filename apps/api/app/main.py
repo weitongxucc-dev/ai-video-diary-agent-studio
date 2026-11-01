@@ -7620,68 +7620,35 @@ def _assistant_business_turn_can_continue(binding, turn_id):
     return _goal_projection().can_continue(binding, turn_id)
 
 
-def _project_assistant_business_candidate(candidate):
-    if candidate["kind"] == "request":
-        return _project_assistant_request_candidate(candidate)
-    owner = _goal_projection()
-    context = owner.business_candidate(candidate,
-        media_available=device_runtime is not None and "creation_job" in device_runtime.registrations)
-    if isinstance(context, bool):
-        return context
-    goal=conversation_repo.get_task_goal(context.source.get('assistant_turn_id',''))
-    if goal is not None and device_runtime is not None:
-        try:
-            _task_business().original(goal)
-            identity_status='ready'
-        except (KeyError,ValueError,PermissionError):
-            identity_status='unknown'
-    else:
-        identity_status=_verify_creation_identity(context.actor)
-    if not owner.authorized(context,identity_status):
-        return True
-    media = device_runtime.registrations["creation_job"].owner.task_media if context.job is not None else None
-    projection = owner.business_projection(context, media=media, outputs=_output_observation_use_case())
-    if isinstance(projection, bool):
-        return projection
-    if projection.preview is not None:
-        projection.response_patch["edit_preview"] = _edit_preview_response(*projection.preview).model_dump(mode="json")
-    if projection.media is not None:
-        from app.schemas import TaskMediaJobResponse
-        data = projection.media
-        projection.response_patch["media_job"] = _media_results().terminal_receipt(
-            media, data, data['actor'], device_runtime.scheduler,
-            task_id=candidate['task_id'], base_version_id=projection.event['base_version_id'])
-    if owner.commit(context, projection):
-        if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
-            _wake_assistant_continuations()
-        return True
-    return False
 
 
-def _project_assistant_request_candidate(candidate):
-    owner = _goal_projection()
-    context = owner.request_candidate(candidate)
-    if isinstance(context, bool):
-        return context
-    if not owner.authorized(context, _verify_creation_identity(context.actor)):
-        return True
-    recorded = _read_edit_request_result(context.task, owner.request_event_id(context))
-    receipt = {"status_code": recorded.status_code, "response": json.loads(recorded.body)} if recorded is not None else None
-    result = owner.request_result(context, receipt, runtime_available=device_runtime is not None)
-    if isinstance(result, bool):
-        return result
-    patch = {"edit_request": result.locator}
-    if result.preview is not None:
-        patch["edit_preview"] = _edit_preview_response(*result.preview).model_dump(mode="json")
-    elif result.job is not None:
-        media = device_runtime.registrations["creation_job"].owner.task_media
-        patch["media_job"] = _media_result_receipt(media, result.job, context.actor, device_runtime)
-    projection = owner.request_projection(context, result, patch)
-    if owner.commit(context, projection):
-        if _goal_service().observe_business_result(context.source["assistant_turn_id"], projection.event):
-            _wake_assistant_continuations()
-        return True
-    return False
+
+
+def _assistant_request_projection_receipt(task, event_id):
+    recorded = _read_edit_request_result(task, event_id)
+    return {"status_code": recorded.status_code, "response": json.loads(recorded.body)} if recorded is not None else None
+
+
+def _assistant_business_media_receipt(media, data, task_id, base_version_id):
+    return _media_results().terminal_receipt(media, data, data['actor'], device_runtime.scheduler,
+        task_id=task_id, base_version_id=base_version_id)
+
+
+def _assistant_business_projector():
+    from functools import partial
+    return partial(_goal_projection().project_candidate,
+        media_available=lambda: device_runtime is not None and "creation_job" in device_runtime.registrations,
+        runtime_available=lambda: device_runtime is not None,
+        read_goal_actor=lambda goal: _task_business().original(goal), verify_actor=_verify_creation_identity,
+        read_request=_assistant_request_projection_receipt,
+        media_for=lambda: device_runtime.registrations["creation_job"].owner.task_media,
+        outputs_for=_output_observation_use_case,
+        encode_preview=lambda preview: _edit_preview_response(*preview).model_dump(mode="json"),
+        encode_media=_assistant_business_media_receipt,
+        encode_request_job=lambda job, actor: _media_result_receipt(
+            device_runtime.registrations["creation_job"].owner.task_media, job, actor, device_runtime),
+        observe=lambda turn_id, event: _goal_service().observe_business_result(turn_id, event),
+        wake=_wake_assistant_continuations)
 
 
 def _assistant_script_tool_candidates():
@@ -7716,7 +7683,7 @@ def _project_assistant_script_tool_candidate(candidate):
 
 
 def _reconcile_assistant_business_results():
-    projected = sum(_project_assistant_business_candidate(candidate)
+    projected = sum(_assistant_business_projector()(candidate)
                     for candidate in production_repo.assistant_business_candidates())
     return projected + sum(_project_assistant_script_tool_candidate(candidate)
                            for candidate in _assistant_script_tool_candidates()) + _project_assistant_execution_results()
