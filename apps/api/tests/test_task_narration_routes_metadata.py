@@ -20,6 +20,7 @@ from app.device_scheduler import DeviceScheduler
 from app.local_members import LocalMemberService
 from app.media.picture_preview import PicturePreviewRenderer
 from app.production import ProductionRepository
+from app.creation.narration_voice_selection import NarrationVoiceSelectionTransaction
 from app.source_repository import SourceRepository
 
 
@@ -34,7 +35,7 @@ def test_task_narration_rejections_and_missing_audio_do_not_write(tmp_path, monk
     monkeypatch.setattr(subprocess, 'Popen', forbidden)
     monkeypatch.setattr(wave, 'open', forbidden)
     monkeypatch.setattr(CreationExecutionControl, 'select_narration_voice', forbidden)
-    monkeypatch.setattr(ProductionRepository, 'select_creation_task_narration_voice', forbidden)
+    monkeypatch.setattr(NarrationVoiceSelectionTransaction, 'select_creation_task_narration_voice', forbidden)
     monkeypatch.setattr(ProductionRepository, 'resolve_authorized_narration_audio_reference', forbidden)
     monkeypatch.setattr(main, '_creation_execution_control', forbidden)
     monkeypatch.setattr(main, 'FileResponse', forbidden)

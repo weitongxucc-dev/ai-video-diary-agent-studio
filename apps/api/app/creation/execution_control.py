@@ -644,14 +644,14 @@ class CreationExecutionControl:
 
     def _select_narration_voice(self, *, runtime, runtime_for, stack, actor, write_guard=None, **inputs):
         try:
-            self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
+            self.repository.narration_voice_selection.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
                 inputs['request_id'], member_id=inputs['member_id'])
         except KeyError:
             pass
         else:
             # The repository verifies the original input fingerprint before
             # returning its receipt; replay never prepares/rebinds execution.
-            return self.repository.select_creation_task_narration_voice(**inputs)
+            return self.repository.narration_voice_selection.select_creation_task_narration_voice(**inputs)
 
         if runtime_for is not None:
             runtime = runtime_for()
@@ -718,7 +718,7 @@ class CreationExecutionControl:
 
             runtime.scheduler.replace_unstarted_narration_voice(job, connection=conn, replacement_write=replace_input)
 
-        receipt = self.repository.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind,
+        receipt = self.repository.narration_voice_selection.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind,
             voice_source_preparation=source_preparation, write_guard=write_guard)
         if runtime is not None:
             runtime.wake()

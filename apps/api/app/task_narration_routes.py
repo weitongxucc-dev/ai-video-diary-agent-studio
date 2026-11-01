@@ -15,7 +15,7 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
         try:
             actor = None
             try:
-                production_for().get_creation_task_narration_voice_selection(task.workspace_id, task.id, str(payload.request_id), member_id=member_id)
+                production_for().narration_voice_selection.get_creation_task_narration_voice_selection(task.workspace_id, task.id, str(payload.request_id), member_id=member_id)
             except KeyError:
                 job = execution_for().latest(task.workspace_id, task.id)
                 if job is not None and job.status == 'queued':
@@ -35,7 +35,7 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
     def get_creation_task_narration_voice_selection(task_id: str, request_id: UUID, request: Request):
         task, member_id = access_for()(task_id, request)
         try:
-            receipt = production_for().get_creation_task_narration_voice_selection(workspace_id=task.workspace_id, task_id=task.id, request_id=str(request_id), member_id=member_id)
+            receipt = production_for().narration_voice_selection.get_creation_task_narration_voice_selection(workspace_id=task.workspace_id, task_id=task.id, request_id=str(request_id), member_id=member_id)
         except KeyError as exc:
             raise http_error_for()(status_code=404, detail='没有找到当前成员的原声音采用请求。') from exc
         except PermissionError as exc:

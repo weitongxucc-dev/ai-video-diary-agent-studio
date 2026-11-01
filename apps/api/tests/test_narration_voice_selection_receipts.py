@@ -53,7 +53,7 @@ def snapshot(repo):
 
 def test_selection_replay_and_query_preserve_the_original_receipt_after_another_selection(state):
     body = command(state)
-    first = state.repo.select_creation_task_narration_voice(**body)
+    first = state.repo.narration_voice_selection.select_creation_task_narration_voice(**body)
     CreationTaskNarrationVoiceSelectionResponse.model_validate(first)
     assert first["selected_voice"]["profile_id"] == "voice-1" and first["previous_voice"] is None
     assert first["member_id"] == "owner" and first["confirmed_script_id"] == "confirmed-script"
@@ -61,12 +61,12 @@ def test_selection_replay_and_query_preserve_the_original_receipt_after_another_
     assert current.stage == "narration" and current.stage_status == "not_started"
     assert current.selected_topic_id == "original-topic" and current.confirmed_script_id == "confirmed-script"
     assert not state.repo.plan_records.get_creation_plan("workspace", "plan").blockers
-    second = state.repo.select_creation_task_narration_voice(**command(state, voice_profile_id="voice-2"))
+    second = state.repo.narration_voice_selection.select_creation_task_narration_voice(**command(state, voice_profile_id="voice-2"))
     assert second["previous_voice"] == first["selected_voice"]
     before = snapshot(state.repo)
     reloaded = ProductionRepository(database_path=state.repo.database_path, video_library_path=state.repo.video_library_path)
-    assert reloaded.select_creation_task_narration_voice(**body) == first
-    assert reloaded.get_creation_task_narration_voice_selection("workspace", "task", body["request_id"], member_id="owner") == first
+    assert reloaded.narration_voice_selection.select_creation_task_narration_voice(**body) == first
+    assert reloaded.narration_voice_selection.get_creation_task_narration_voice_selection("workspace", "task", body["request_id"], member_id="owner") == first
     assert snapshot(reloaded) == before
     assert reloaded.plan_records.get_creation_plan("workspace", "plan").selected_voice.profile_id == "voice-2"
 
@@ -75,10 +75,10 @@ def test_selection_replay_and_query_preserve_the_original_receipt_after_another_
     ("expected_plan_updated_at", "2020-01-01T00:00:00+00:00"), ("expected_task_updated_at", "2020-01-01T00:00:00+00:00")])
 def test_same_request_rejects_different_input_without_writes(state, field, value):
     body = command(state)
-    state.repo.select_creation_task_narration_voice(**body)
+    state.repo.narration_voice_selection.select_creation_task_narration_voice(**body)
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="不同输入"):
-        state.repo.select_creation_task_narration_voice(**(body | {field: value}))
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**(body | {field: value}))
     assert snapshot(state.repo) == before
 
 
@@ -86,19 +86,19 @@ def test_same_request_rejects_different_input_without_writes(state, field, value
 def test_stale_task_or_plan_rejects_without_a_receipt(state, field):
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="版本已变化"):
-        state.repo.select_creation_task_narration_voice(**command(state, **{field: "2020-01-01T00:00:00+00:00"}))
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**command(state, **{field: "2020-01-01T00:00:00+00:00"}))
     assert snapshot(state.repo) == before
 
 
 @pytest.mark.parametrize("member_id,workspace_id", [("other", "workspace"), ("", "workspace"), ("owner", "other")])
 def test_task_and_receipt_remain_bound_to_workspace_and_member(state, member_id, workspace_id):
     body = command(state)
-    state.repo.select_creation_task_narration_voice(**body)
+    state.repo.narration_voice_selection.select_creation_task_narration_voice(**body)
     before = snapshot(state.repo)
     with pytest.raises((KeyError, PermissionError)):
-        state.repo.select_creation_task_narration_voice(**command(state, member_id=member_id, workspace_id=workspace_id))
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**command(state, member_id=member_id, workspace_id=workspace_id))
     with pytest.raises((KeyError, PermissionError)):
-        state.repo.get_creation_task_narration_voice_selection(workspace_id, "task", body["request_id"], member_id=member_id)
+        state.repo.narration_voice_selection.get_creation_task_narration_voice_selection(workspace_id, "task", body["request_id"], member_id=member_id)
     assert snapshot(state.repo) == before
 
 
@@ -111,7 +111,7 @@ def test_selection_keeps_the_existing_stage_gate(state, stage, status):
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id='task'", (json.dumps(payload),))
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="不能选择"):
-        state.repo.select_creation_task_narration_voice(**command(state))
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**command(state))
     assert snapshot(state.repo) == before
 
 
@@ -119,7 +119,7 @@ def test_queued_production_cannot_race_a_voice_change(state):
     state.repo.job_records.create_job_run(JobRun("job", "workspace", "task", "creation_execution", "job-key", "f"*64))
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="未结束"):
-        state.repo.select_creation_task_narration_voice(**command(state))
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**command(state))
     assert snapshot(state.repo) == before
 
 
@@ -138,7 +138,7 @@ def test_resolves_the_actual_fixed_profile_and_current_permission(state, change)
         body.update(voice_profile_id=replacement.id, voice_version=replacement.version)
     before = snapshot(state.repo)
     with pytest.raises((MediaAuthorityError, KeyError, PermissionError)):
-        state.repo.select_creation_task_narration_voice(**body)
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**body)
     assert snapshot(state.repo) == before
 
 
@@ -148,14 +148,14 @@ def test_failure_to_record_receipt_rolls_back_both_task_and_plan(state):
             "WHEN NEW.event_type='task_narration_voice_selected' BEGIN SELECT RAISE(ABORT,'receipt failure'); END")
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="任务事件 ID 已存在"):
-        state.repo.select_creation_task_narration_voice(**command(state))
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**command(state))
     assert snapshot(state.repo) == before
 
 
 def test_concurrent_replay_writes_one_receipt(state):
     body = command(state)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _: state.repo.select_creation_task_narration_voice(**body), range(2)))
+        results = list(pool.map(lambda _: state.repo.narration_voice_selection.select_creation_task_narration_voice(**body), range(2)))
     assert results[0] == results[1]
     assert len([event for event in state.repo.execution_records.list_task_events("workspace", "task")
         if event.event_type == "task_narration_voice_selected"]) == 1
@@ -165,7 +165,7 @@ def test_concurrent_different_requests_cannot_both_adopt_from_one_revision(state
     body = command(state)
     def select(request_id):
         try:
-            return state.repo.select_creation_task_narration_voice(**(body | {"request_id": request_id}))
+            return state.repo.narration_voice_selection.select_creation_task_narration_voice(**(body | {"request_id": request_id}))
         except ValueError as exc:
             return str(exc)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -176,7 +176,7 @@ def test_concurrent_different_requests_cannot_both_adopt_from_one_revision(state
 
 def test_request_and_receipt_cannot_be_reused_for_another_owned_task(state):
     body = command(state)
-    state.repo.select_creation_task_narration_voice(**body)
+    state.repo.narration_voice_selection.select_creation_task_narration_voice(**body)
     plan = state.repo.plan_records.get_creation_plan("workspace", "plan")
     task = state.repo.task_records.get_creation_task("workspace", "task")
     second_plan, second_task = state.repo.plan_confirmation.confirm_creation_plan(
@@ -184,10 +184,10 @@ def test_request_and_receipt_cannot_be_reused_for_another_owned_task(state):
         verified_owner_user_id="owner")
     before = snapshot(state.repo)
     with pytest.raises(ValueError, match="不同输入"):
-        state.repo.select_creation_task_narration_voice(**(body | {"task_id":"task-2",
+        state.repo.narration_voice_selection.select_creation_task_narration_voice(**(body | {"task_id":"task-2",
             "expected_plan_updated_at":second_plan.updated_at, "expected_task_updated_at":second_task.updated_at}))
     with pytest.raises(KeyError):
-        state.repo.get_creation_task_narration_voice_selection("workspace", "task-2", body["request_id"], member_id="owner")
+        state.repo.narration_voice_selection.get_creation_task_narration_voice_selection("workspace", "task-2", body["request_id"], member_id="owner")
     assert snapshot(state.repo) == before
 
 

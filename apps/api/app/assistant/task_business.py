@@ -480,7 +480,7 @@ class TaskBusiness:
         if operation in {'select_narration_voice','read_narration_voice_request'}:
             member=actor.user_id or actor.member_id
             if operation=='read_narration_voice_request':
-                return self.production.get_creation_task_narration_voice_selection(ws,task_id,args['request_id'],member_id=member)
+                return self.production.narration_voice_selection.get_creation_task_narration_voice_selection(ws,task_id,args['request_id'],member_id=member)
             from app.schemas import CreationTaskNarrationVoiceSelectionRequest
             payload=CreationTaskNarrationVoiceSelectionRequest.model_validate(args['payload'])
             return self.execution.select_narration_voice(runtime_for=self.runtime,actor=actor,write_guard=guard,

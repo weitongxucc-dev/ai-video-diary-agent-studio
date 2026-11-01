@@ -3836,7 +3836,7 @@ def test_queued_voice_selection_refuses_races_or_unknown_and_rolls_back_all_writ
             return {table: [tuple(row) for row in conn.execute(f'SELECT * FROM {table} ORDER BY rowid')] for table in tables}
     before = snapshot()
     if blocked == 'authorization_changed':
-        select = case.repo.select_creation_task_narration_voice
+        select = case.repo.narration_voice_selection.select_creation_task_narration_voice
         def revoke_between_observation_and_commit(**kwargs):
             nonlocal before
             current = case.repo.get_task_authorization('local', case.task_id)
@@ -3844,7 +3844,7 @@ def test_queued_voice_selection_refuses_races_or_unknown_and_rolls_back_all_writ
                 revoked_at=datetime.now(timezone.utc), last_verdict='unauthorized'), expected_revision=current.revision)
             before = snapshot()  # This independent revocation must survive the failed selection.
             return select(**kwargs)
-        monkeypatch.setattr(case.repo, 'select_creation_task_narration_voice', revoke_between_observation_and_commit)
+        monkeypatch.setattr(case.repo.narration_voice_selection, 'select_creation_task_narration_voice', revoke_between_observation_and_commit)
     with pytest.raises((ValueError, RecoveryBlocked, sqlite3.IntegrityError)):
         case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
     assert snapshot() == before
@@ -4540,7 +4540,7 @@ def test_account_queued_voice_selection_rechecks_original_actor_in_writer(tmp_pa
     from uuid import uuid4
     from app.creation.task_authorization import TaskAuthorizationDenied
     case = _account_voice_selection_case(tmp_path, monkeypatch)
-    select = case.repo.select_creation_task_narration_voice
+    select = case.repo.narration_voice_selection.select_creation_task_narration_voice
     before = None
     def changed_original(**inputs):
         nonlocal before
@@ -4551,7 +4551,7 @@ def test_account_queued_voice_selection_rechecks_original_actor_in_writer(tmp_pa
                 (json.dumps({**start.payload,**other.identity_payload()}),start.id))
         before = _voice_selection_snapshot(case)
         return select(**inputs)
-    monkeypatch.setattr(case.repo,'select_creation_task_narration_voice',changed_original)
+    monkeypatch.setattr(case.repo.narration_voice_selection,'select_creation_task_narration_voice',changed_original)
     with pytest.raises(TaskAuthorizationDenied,match='声音选择不属于原作业成员'):
         case.control.select_narration_voice(runtime=case.runtime,actor=case.actor,**case.selection)
     assert _voice_selection_snapshot(case) == before

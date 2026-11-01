@@ -101,7 +101,7 @@ def test_original_voice_receipt_precedes_lazy_runtime_and_preserves_instance_cal
         'task_narration_voice_selected', {'fingerprint': fingerprint, 'member_id': member.member_id,
                                          'receipt': receipt}))
     reopened = ProductionRepository(repository.database_path, repository.video_library_path)
-    assert reopened.get_creation_task_narration_voice_selection('local', task.id, request_id,
+    assert reopened.narration_voice_selection.get_creation_task_narration_voice_selection('local', task.id, request_id,
         member_id=member.member_id) == receipt
     monkeypatch.setattr(main, 'production_repo', reopened)
     control = CreationExecutionControl(reopened, SimpleNamespace(latest=forbidden), None, forbidden)
