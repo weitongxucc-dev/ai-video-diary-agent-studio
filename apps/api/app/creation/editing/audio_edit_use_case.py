@@ -34,6 +34,18 @@ class AudioEditUseCase:
         self.repository, self.audio, self.montage_edits = repository, audio, montage_edits
         self.execution_mode = execution_mode
 
+    def prepare_queued_preview(self, task, actor, values, *, facts, verify_identity):
+        if task.montage_plan_id and task.current_timeline_version_id is None:
+            workspace_id, task_id = task.workspace_id, task.id
+            facts(workspace_id, task_id, 'audio_edit_preview', values, actor)
+            if verify_identity(actor) != 'ready':
+                raise PermissionError('媒体处理身份失效或无法复核')
+            plan = creation_task_montage_plan_from_payload(
+                self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            base = self.montage_edits.ensure_montage_base(workspace_id, task, plan)
+            values['payload']['base_version_id'] = base.id
+        return values
+
     @staticmethod
     def handles(operation, arguments):
         if operation == 'audio_edit_preview':

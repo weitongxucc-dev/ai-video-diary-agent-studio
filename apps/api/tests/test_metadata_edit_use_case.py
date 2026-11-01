@@ -520,3 +520,92 @@ def test_task_authorization_render_outputs_are_not_input_grants(state,reuse_outp
     assert service.status('ws',state.task.id,identity=service.identity(actor),operation='task_media')==(
         'outside_scope' if reuse_output else 'valid')
     assert state.repo.get_task_authorization('ws',state.task.id)==authorization
+
+
+def test_queued_audio_preview_prepares_sibling_base_after_identity(tmp_path, monkeypatch):
+    import threading
+    import wave
+    import httpx
+    from PIL import Image
+    from app.audio_timeline import AudioTimeline
+    from app.creation.editing.audio_edit_use_case import AudioEditUseCase
+    from app.creation_execution import CreationExecutionActor
+    from app.device_runtime import DeviceRuntime
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('queued preview metadata forbids audio, runtime, media and external transport')
+
+    for owner, name in ((subprocess, 'Popen'), (threading.Thread, 'start'), (wave, 'open'),
+            (Image, 'open'), (Image, 'new'), (Image.Image, 'save'),
+            (httpx.HTTPTransport, 'handle_request'), (httpx.AsyncHTTPTransport, 'handle_async_request'),
+            (DeviceRuntime, 'start'), (DeviceRuntime, 'run_once'), (DeviceRuntime, 'wake'),
+            (TaskAudio, 'source'), (TaskAudio, 'publish'), (TaskAudio, 'probe')):
+        monkeypatch.setattr(owner, name, forbidden)
+    s = metadata_state(tmp_path)
+    original_task = s.repo.task_records.get_creation_task('ws', s.task.id)
+    original_base = s.repo.timeline_records.get_timeline_version('ws', s.base.id)
+    original_montage = s.repo.get_creation_task_montage_plan('ws', s.task.id)
+    sibling_plan = replace(s.repo.plan_records.get_creation_plan('ws', s.task.plan_id), id='queued-audio-plan')
+    sibling = CreationTask('queued-audio-task', 'ws', sibling_plan.id, 'metadata', 'knowledge_explanation',
+        stage='montage', owner_user_id=s.member.member_id, visibility='private')
+    s.repo.plan_confirmation.confirm_creation_plan(sibling_plan, sibling,
+        verified_owner_user_id=s.member.member_id)
+    with s.repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
+            (json.dumps(asdict(sibling), default=str), sibling.id))
+    montage = replace(s.plan, id='queued-audio-montage', task_id=sibling.id,
+        cues=[replace(cue, narration_segment_id=None) for cue in s.plan.cues],
+        narration_audio_path=None, audio_timeline=AudioTimeline(tracks=[]))
+    s.repo.save_creation_task_montage_plan('ws', sibling.id, montage.id,
+        creation_task_montage_plan_to_payload(montage))
+    sibling = s.repo.task_records.get_creation_task('ws', sibling.id)
+    assert sibling.current_timeline_version_id is None and sibling.narration_cache_key is None
+    assert s.repo.timeline_records.list_timeline_versions('ws', sibling.id) == []
+    owner = AudioEditUseCase(s.repo, TaskAudio(s.repo, s.store, tmp_path / 'queued-temporary'), s.case, 'interactive')
+    actor = CreationExecutionActor('ws', s.member.member_id)
+    values = {'payload': {'declared': 'unchanged'}, '_media_kind': 'declared-required-kind', '_draft': True}
+    order = []
+    verdict = 'unauthorized'
+
+    def facts(workspace_id, task_id, operation, actual, identity):
+        assert (workspace_id, task_id, operation) == ('ws', sibling.id, 'audio_edit_preview')
+        assert actual is values and identity is actor
+        order.append('facts')
+
+    def verify_identity(identity):
+        assert identity is actor
+        order.append('identity')
+        return verdict
+
+    real_base = s.case.ensure_montage_base
+
+    def observe_base(*args, **kwargs):
+        order.append('base')
+        assert kwargs == {}
+        return real_base(*args, **kwargs)
+
+    monkeypatch.setattr(s.case, 'ensure_montage_base', observe_base)
+    before = s.repo.task_records.get_creation_task('ws', sibling.id)
+    with pytest.raises(PermissionError, match='媒体处理身份失效或无法复核'):
+        owner.prepare_queued_preview(sibling, actor, values, facts=facts, verify_identity=verify_identity)
+    assert order == ['facts', 'identity'] and values['payload'] == {'declared': 'unchanged'}
+    assert s.repo.task_records.get_creation_task('ws', sibling.id) == before
+    assert s.repo.timeline_records.list_timeline_versions('ws', sibling.id) == []
+    verdict = 'ready'
+    prepared = owner.prepare_queued_preview(sibling, actor, values, facts=facts, verify_identity=verify_identity)
+    assert prepared is values and order == ['facts', 'identity', 'facts', 'identity', 'base']
+    versions = s.repo.timeline_records.list_timeline_versions('ws', sibling.id)
+    assert len(versions) == 1
+    version = versions[0]
+    assert version.sequence == 1 and version.parent_version_id is None
+    assert s.repo.task_records.get_creation_task('ws', sibling.id).current_timeline_version_id == version.id
+    assert values['payload'] == {'declared': 'unchanged', 'base_version_id': version.id}
+    assert values['_media_kind'] == 'declared-required-kind' and values['_draft'] is True
+    assert version.snapshot['montage']['task_id'] == sibling.id
+    assert [clip['id'] for clip in version.snapshot['montage']['clips']] == ['clip']
+    assert version.snapshot['montage']['audio_timeline']['tracks'] == []
+    assert s.repo.task_records.get_creation_task('ws', s.task.id) == original_task
+    assert s.repo.timeline_records.get_timeline_version('ws', s.base.id) == original_base
+    assert s.repo.get_creation_task_montage_plan('ws', s.task.id) == original_montage
+    with s.repo._connect() as conn:
+        assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 0

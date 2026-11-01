@@ -2142,12 +2142,8 @@ def _preview_audio_edit_request(task_id, request, payload, *, original_clip=Fals
         values={'payload':payload.model_dump(mode='json',exclude_unset=True),'_media_kind':required.kind,'_draft':draft}
         runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
         try:
-            if task.montage_plan_id and task.current_timeline_version_id is None:
-                media.facts(workspace_id,task_id,'audio_edit_preview',values,actor)
-                if media.verify_identity(actor)!='ready':raise PermissionError('媒体处理身份失效或无法复核')
-                plan=creation_task_montage_plan_from_payload(production_repo.get_creation_task_montage_plan(workspace_id,task_id))
-                base=_ensure_montage_base_version(workspace_id,task,plan)
-                values['payload']['base_version_id']=base.id
+            values=case.prepare_queued_preview(task,actor,values,
+                facts=media.facts,verify_identity=media.verify_identity)
             job=media.submit(runtime,actor,task_id,'audio_edit_preview',values,'edit_preview')
             receipt=_media_result_receipt(media,job,actor,runtime);receipt['result']=None
             return JSONResponse(status_code=202,content=receipt)
