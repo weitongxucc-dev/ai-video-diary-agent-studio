@@ -4,17 +4,19 @@ import json
 import sqlite3
 from typing import Literal
 
-from app.creation.contracts import CreationTask as _CreationTask
+from app.creation.contracts import CreationTask as _CreationTask, TimelineVersion as _TimelineVersion
 from app.models import utc_now
 from app.persistence_json import _json_payload
 
 
 class MontagePlanAdoptionTransaction:
-    def __init__(self, connection_factory, *, decode_task, read_task, read_montage):
+    def __init__(self, connection_factory, *, decode_task, read_task, read_montage, require_task, create_version):
         self._connect = connection_factory
         self._decode_task = decode_task
         self._read_task = read_task
         self._read_montage = read_montage
+        self._require_task = require_task
+        self._create_version = create_version
 
     def save_creation_task_montage_plan(
         self,
@@ -102,3 +104,32 @@ class MontagePlanAdoptionTransaction:
             (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
         )
         return task, payload
+
+    def publish_creation_task_render(
+        self, workspace_id: str, task_id: str, plan_id: str, payload: dict[str, object],
+        version: _TimelineVersion, *,
+        expected_current_version_id: str | None | Literal[False] = False,
+    ) -> None:
+        with self._connect() as publish_conn:
+            publish_conn.execute("BEGIN IMMEDIATE")
+            self.save_creation_task_montage_plan(
+                workspace_id, task_id, plan_id, payload, connection=publish_conn,
+                expected_current_version_id=expected_current_version_id,
+            )
+            self._create_version(
+                version, connection=publish_conn,
+                expected_current_version_id=expected_current_version_id,
+            )
+
+    def save_failed_creation_task_render_if_current(
+        self, workspace_id: str, task_id: str, plan_id: str, payload: dict[str, object], *,
+        expected_current_version_id: str | None | Literal[False] = False,
+    ) -> None:
+        with self._connect() as failure_conn:
+            failure_conn.execute("BEGIN IMMEDIATE")
+            current_task = self._require_task(failure_conn, workspace_id, task_id)
+            # A failed old render must not replace a crop confirmed while it ran.
+            if expected_current_version_id is False or current_task.current_timeline_version_id == expected_current_version_id:
+                self.save_creation_task_montage_plan(
+                    workspace_id, task_id, plan_id, payload, connection=failure_conn,
+                )

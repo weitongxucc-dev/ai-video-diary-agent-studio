@@ -122,7 +122,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     from tests.host_memory_boundary import IsolatedMemoryMonitor
     resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget, memory_monitor=IsolatedMemoryMonitor())
     observations = {'renders': [], 'paired_publications': [], 'grant_validity': [], 'qc_triggers': []}
-    original_render, original_publish = PicturePreviewRenderer.render_montage, repo.publish_creation_task_render
+    original_render, original_publish = PicturePreviewRenderer.render_montage, repo.montage_plan_adoption.publish_creation_task_render
     from app.creation.quality_inspection_use_case import QualityInspectionUseCase
     original_valid, original_qc = RenderStageUseCase.valid_with_grant, QualityInspectionUseCase.start_for_render
 
@@ -145,7 +145,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
         return original_qc(service, runtime, workspace_id, target_id, job_id)
 
     monkeypatch.setattr(PicturePreviewRenderer, 'render_montage', observe_render)
-    monkeypatch.setattr(repo, 'publish_creation_task_render', observe_publish)
+    monkeypatch.setattr(repo.montage_plan_adoption, 'publish_creation_task_render', observe_publish)
     monkeypatch.setattr(RenderStageUseCase, 'valid_with_grant', observe_valid)
     monkeypatch.setattr(QualityInspectionUseCase, 'start_for_render', observe_qc)
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,

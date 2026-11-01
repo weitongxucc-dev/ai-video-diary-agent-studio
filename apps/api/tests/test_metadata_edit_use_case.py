@@ -695,3 +695,79 @@ def test_montage_plan_adoption_metadata_preserves_cas_and_transaction_ownership(
     assert s.repo.task_records.get_creation_task('ws', s.task.id) == initial_task
     assert s.repo.timeline_records.get_timeline_version('ws', s.base.id) == s.base
     assert violations == []
+
+
+def test_render_publication_metadata_is_atomic_and_preserves_head_guard(tmp_path, monkeypatch):
+    import sqlite3
+    import threading
+    import wave
+    import httpx
+    from PIL import Image
+    from app.device_runtime import DeviceRuntime
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('execution')
+        pytest.fail('render publication metadata forbids runtime, media and external transport')
+
+    for target, name in ((subprocess, 'Popen'), (threading.Thread, 'start'), (wave, 'open'),
+            (Image, 'open'), (Image, 'new'), (Image.Image, 'save'),
+            (httpx.HTTPTransport, 'handle_request'), (httpx.AsyncHTTPTransport, 'handle_async_request'),
+            (DeviceRuntime, 'start'), (DeviceRuntime, 'run_once'), (DeviceRuntime, 'wake'),
+            (TaskAudio, 'source'), (TaskAudio, 'publish'), (TaskAudio, 'probe')):
+        monkeypatch.setattr(target, name, forbidden)
+    s = metadata_state(tmp_path)
+    owner = s.repo.montage_plan_adoption
+    payload = {**s.repo.get_creation_task_montage_plan('ws', s.task.id),
+        'id': 'published-plan', 'status': 'rendered'}
+    version = TimelineVersion('published-version', 'ws', s.task.id, s.base.id, s.base.sequence + 1,
+        {'montage': payload, 'render_input_timeline_version_id': s.base.id}, None)
+    assert owner.publish_creation_task_render('ws', s.task.id, 'published-plan', payload, version,
+        expected_current_version_id=s.base.id) is None
+    saved = s.repo.get_creation_task_montage_plan('ws', s.task.id)
+    task = s.repo.task_records.get_creation_task('ws', s.task.id)
+    stored = s.repo.timeline_records.get_timeline_version('ws', version.id)
+    assert saved['id'] == task.montage_plan_id == stored.snapshot['montage']['id'] == 'published-plan'
+    assert saved['status'] == stored.snapshot['montage']['status'] == 'rendered'
+    assert task.current_timeline_version_id == stored.id and task.output_ready is True
+    assert task.stage == 'review' and task.stage_status == 'waiting_for_user'
+    assert stored.parent_version_id == s.base.id and stored.sequence == s.base.sequence + 1
+
+    def outside():
+        with sqlite3.connect(f'file:{s.repo.database_path}?mode=ro', uri=True) as conn:
+            return {table: sorted(conn.execute('SELECT * FROM ' + table).fetchall(), key=repr)
+                for table in ('creation_tasks', 'creation_task_montage_plans', 'timeline_versions')}
+
+    before = outside()
+    with s.repo._connect() as conn:
+        conn.executescript("""CREATE TRIGGER reject_render_version BEFORE INSERT ON timeline_versions
+            WHEN NEW.id='blocked-version'
+            AND EXISTS(SELECT 1 FROM creation_task_montage_plans p
+                WHERE p.workspace_id=NEW.workspace_id AND p.task_id=NEW.task_id AND p.id='blocked-plan'
+                AND json_extract(p.payload,'$.status')='rendered')
+            AND EXISTS(SELECT 1 FROM creation_tasks t WHERE t.workspace_id=NEW.workspace_id AND t.id=NEW.task_id
+                AND json_extract(t.payload,'$.montage_plan_id')='blocked-plan'
+                AND json_extract(t.payload,'$.output_ready')=1)
+            BEGIN SELECT RAISE(ABORT,'declared render version-insert failure'); END;""")
+    blocked_payload = {**payload, 'id': 'blocked-plan'}
+    blocked_version = TimelineVersion('blocked-version', 'ws', s.task.id, version.id, version.sequence + 1,
+        {'montage': blocked_payload, 'render_input_timeline_version_id': version.id}, None)
+    with pytest.raises(ValueError, match='时间线版本已存在，不能覆盖') as rejected:
+        owner.publish_creation_task_render('ws', s.task.id, 'blocked-plan', blocked_payload, blocked_version,
+            expected_current_version_id=version.id)
+    assert isinstance(rejected.value.__cause__, sqlite3.IntegrityError)
+    assert str(rejected.value.__cause__) == 'declared render version-insert failure'
+    assert outside() == before
+    assert owner.save_failed_creation_task_render_if_current('ws', s.task.id, 'ignored-plan',
+        {'status': 'declared-invalid'}, expected_current_version_id=s.base.id) is None
+    assert outside() == before
+    failed = {**payload, 'status': 'failed', 'message': 'declared current-head failure'}
+    assert owner.save_failed_creation_task_render_if_current('ws', s.task.id, 'published-plan', failed,
+        expected_current_version_id=version.id) is None
+    task = s.repo.task_records.get_creation_task('ws', s.task.id)
+    assert s.repo.get_creation_task_montage_plan('ws', s.task.id)['status'] == 'failed'
+    assert task.current_timeline_version_id == version.id and task.output_ready is False
+    assert task.stage == 'montage' and task.stage_status == 'failed' and task.stage_reason == 'render_failed'
+    assert len(s.repo.timeline_records.list_timeline_versions('ws', s.task.id)) == 2
+    assert violations == []

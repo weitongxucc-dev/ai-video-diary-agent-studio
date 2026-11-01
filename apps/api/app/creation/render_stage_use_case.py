@@ -505,7 +505,7 @@ class RenderStageUseCase:
                         },
                         created_by_operation_id=None,
                     )
-                self.repository.publish_creation_task_render(
+                self.repository.montage_plan_adoption.publish_creation_task_render(
                     workspace_id, task.id, rendered.id, rendered_payload, version,
                     **({"expected_current_version_id": plan_input["timeline_version_id"]}
                        if render_context is not None else {}),
@@ -609,7 +609,7 @@ class RenderStageUseCase:
             plan.output_path = None
             plan.subtitle_path = None
             plan.message = f"成片渲染失败：{result.failure_reason or '未知错误'}"
-            self.repository.save_failed_creation_task_render_if_current(
+            self.repository.montage_plan_adoption.save_failed_creation_task_render_if_current(
                 workspace_id, task.id, plan.id, creation_task_montage_plan_to_payload(plan),
                 **({"expected_current_version_id": plan_input["timeline_version_id"]}
                    if render_context is not None else {}),

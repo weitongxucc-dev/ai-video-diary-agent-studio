@@ -609,7 +609,8 @@ class ProductionRepository:
             confirmed_script_digest=self.script_records.confirmed_creation_task_script_digest)
         self.montage_plan_adoption = MontagePlanAdoptionTransaction(self._connect,
             decode_task=creation_task_from_payload, read_task=self.task_records.get_creation_task,
-            read_montage=self.get_creation_task_montage_plan)
+            read_montage=self.get_creation_task_montage_plan, require_task=require_creation_task,
+            create_version=self.timeline_records.create_timeline_version)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
             require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
             create_intent=self.edit_records.create_edit_intent, create_proposal=self.edit_records.create_edit_proposal,
@@ -4665,34 +4666,7 @@ class ProductionRepository:
 
 
 
-    def publish_creation_task_render(
-        self, workspace_id: str, task_id: str, plan_id: str, payload: dict[str, object],
-        version: _TimelineVersion, *,
-        expected_current_version_id: str | None | Literal[False] = False,
-    ) -> None:
-        with self._connect() as publish_conn:
-            publish_conn.execute("BEGIN IMMEDIATE")
-            self.montage_plan_adoption.save_creation_task_montage_plan(
-                workspace_id, task_id, plan_id, payload, connection=publish_conn,
-                expected_current_version_id=expected_current_version_id,
-            )
-            self.timeline_records.create_timeline_version(
-                version, connection=publish_conn,
-                expected_current_version_id=expected_current_version_id,
-            )
 
-    def save_failed_creation_task_render_if_current(
-        self, workspace_id: str, task_id: str, plan_id: str, payload: dict[str, object], *,
-        expected_current_version_id: str | None | Literal[False] = False,
-    ) -> None:
-        with self._connect() as failure_conn:
-            failure_conn.execute("BEGIN IMMEDIATE")
-            current_task = require_creation_task(failure_conn, workspace_id, task_id)
-            # A failed old render must not replace a crop confirmed while it ran.
-            if expected_current_version_id is False or current_task.current_timeline_version_id == expected_current_version_id:
-                self.montage_plan_adoption.save_creation_task_montage_plan(
-                    workspace_id, task_id, plan_id, payload, connection=failure_conn,
-                )
 
 
     def get_creation_task_montage_plan(
