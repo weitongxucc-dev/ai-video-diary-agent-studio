@@ -2266,7 +2266,7 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
     )
 
     assert [item.usage_role for item in reviewed.segments] == ["a_roll", "b_roll"]
-    assert production.readiness("workspace_a", local_diagnostic=True)["approved_segment_count"] == 1
+    assert production.foundation_readiness.readiness("workspace_a", local_diagnostic=True)["approved_segment_count"] == 1
 
 
 @pytest.fixture
@@ -4410,7 +4410,7 @@ def test_foundation_uses_current_member_for_private_material_and_voice(foundatio
 def test_foundation_invalid_identity_never_falls_back_to_diagnostic(foundation_state, monkeypatch):
     state = foundation_state
     calls = []
-    monkeypatch.setattr(state.repo, "readiness", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(state.repo.foundation_readiness, "readiness", lambda *args, **kwargs: calls.append(kwargs))
     response = state.client.get("/api/production/foundation", headers={"X-Local-Member-Token": "invalid"})
     assert response.status_code == 401
     assert calls == []

@@ -601,7 +601,7 @@ def test_editing_segment_text_preserves_recognition_and_brand_is_not_global_gate
         and actual.end_seconds == segment.end_seconds
     )
     assert "brand_profile_missing" not in {
-        item["code"] for item in repository.readiness("ws")["blockers"]
+        item["code"] for item in repository.foundation_readiness.readiness("ws")["blockers"]
     }
 
 
@@ -715,7 +715,7 @@ def test_readiness_does_not_count_a_lost_reference_as_usable(repository):
     repository.resolve_workspace_media_reference(
         "ws", saved.reference_audio_path
     ).unlink()
-    blockers = repository.readiness("ws", viewer_user_id="member")["blockers"]
+    blockers = repository.foundation_readiness.readiness("ws", viewer_user_id="member")["blockers"]
     assert any(
         item["code"] == "voice_reference_unavailable" and "失联" in item["message"]
         for item in blockers

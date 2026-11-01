@@ -107,6 +107,7 @@ from app.creation.editing.timeline_history_repository import TimelineHistoryRead
 from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
 from app.profiles.legacy_voice import LegacyVoiceProfileStore, VoiceProfile
 from app.profiles.workspace_profile import WorkspaceProductionProfileStore, ProductionProfile
+from app.creation.production_foundation_readiness import ProductionFoundationReadiness
 from app.profiles.input_resolution import ProfileInputResolver
 from app.profiles.records import (
     ProfileRecordStore, _person_profile_payload, _versioned_voice_profile_payload,
@@ -166,7 +167,6 @@ from app.materials.contracts import (
     material_allows_automation,
     material_usage_eligibility,
     effective_segment_usage_role as effective_segment_usage_role,
-    selectable_segment_usage_role,
 )
 from app.asr import SubtitleSegment as SpeechObservation
 from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis
@@ -430,6 +430,17 @@ class ProductionRepository:
             self._connect, self._profile_records, self._media_authorizations,
             self._workspace_profiles, self._legacy_voice_profiles, self._profile_references,
             self._workspace_media_references, self._material_assets)
+        self.foundation_readiness = ProductionFoundationReadiness(
+            get_profile=lambda workspace_id: self.get_profile(workspace_id),
+            list_assets=lambda workspace_id, *, include_private, viewer_user_id, local_diagnostic: self.list_assets(
+                workspace_id, include_private=include_private, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic),
+            list_versioned_voices=lambda workspace_id: self.list_versioned_voice_profiles(workspace_id),
+            profile_readable=lambda profile, viewer_user_id, local_diagnostic: self.profile_readable(
+                profile, viewer_user_id, local_diagnostic),
+            profile_reference_input=lambda profile, *, viewer_user_id, local_diagnostic: self.profile_reference_input(
+                profile, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic),
+            material_segment_eligible=lambda asset, segment, workspace_id: material_segment_eligible(asset, segment, workspace_id),
+        )
         self.person_renders = PersonRenderStore(
             self._connect, self._profile_records, self._workspace_media_references)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2046,91 +2057,6 @@ class ProductionRepository:
 
 
 
-    def readiness(
-        self,
-        workspace_id: str,
-        *,
-        profile: ProductionProfile | None = None,
-        viewer_user_id: str | None = None,
-        local_diagnostic: bool = False,
-        topic_sources_configured: bool = False,
-    ) -> dict[str, object]:
-        profile = profile or self.get_profile(workspace_id)
-        assets = self.list_assets(
-            workspace_id, include_private=viewer_user_id is not None or local_diagnostic,
-            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
-        )
-        qualified = [
-            (asset, [segment for segment in asset.segments
-                     if material_segment_eligible(asset, segment, workspace_id)])
-            for asset in assets
-        ]
-        usable_assets = [asset for asset, segments in qualified if segments]
-        usable_segments = [
-            segment
-            for asset, segments in qualified
-            for segment in segments
-            if selectable_segment_usage_role(asset, segment) == "b_roll"
-        ]
-        blockers: list[dict[str, str]] = []
-        versioned_voices = self.list_versioned_voice_profiles(workspace_id)
-        usable_voice = None
-        reference_issue = None
-        reference_issue_code = "voice_reference_unavailable"
-        for voice in versioned_voices:
-            if not self.profile_readable(voice, viewer_user_id, local_diagnostic):
-                continue
-            try:
-                self.profile_reference_input(voice, viewer_user_id=viewer_user_id,
-                                             local_diagnostic=local_diagnostic)
-            except (ValueError, PermissionError, KeyError) as exc:
-                reference_issue = str(exc)
-                reference_issue_code = "voice_reference_unavailable"
-            else:
-                if not voice.reference_audio_path or not voice.reference_text.strip():
-                    reference_issue = "声音档案缺少工作区参考音频或对应文字；仍可先讨论需求或编写文案。"
-                    reference_issue_code = "voice_reference_missing"
-                    continue
-                usable_voice = voice
-                break
-        if usable_voice is None:
-            blockers.append(
-                {
-                    "code": reference_issue_code if reference_issue else "versioned_voice_authorization_missing",
-                    "message": reference_issue or "尚未登记可用于配音的版本化声音；仍可先讨论需求或编写文案。",
-                }
-            )
-        if profile.voice_model_status != "ready":
-            blockers.append(
-                {
-                    "code": "voice_model_not_ready",
-                    "message": profile.voice_model_message,
-                }
-            )
-        if not topic_sources_configured:
-            blockers.append(
-                {
-                    "code": "source_pool_empty",
-                    "message": "尚未配置可尝试的选题来源；仍可先讨论需求或编写文案。",
-                }
-            )
-        if not usable_segments:
-            blockers.append(
-                {
-                    "code": "approved_materials_empty",
-                    "message": "可用素材库中还没有明确可作补充画面的镜头。",
-                }
-            )
-        return {
-            "ready": not blockers,
-            "blockers": blockers,
-            "asset_count": len(assets),
-            "approved_asset_count": len(usable_assets),
-            "approved_segment_count": len(usable_segments),
-            "total_duration_seconds": round(
-                sum(asset.duration_seconds or 0 for asset in assets), 3
-            ),
-        }
 
     def _upsert_discovered_asset(
         self,
