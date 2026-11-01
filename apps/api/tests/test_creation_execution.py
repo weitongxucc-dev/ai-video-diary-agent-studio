@@ -3000,7 +3000,7 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
     original_usage=case.repo.narration_units.creation_narration_usage('local',case.job.id)
     first=case.scheduler.pick_and_grant()
     assert first is not None, (case.repo.job_records.get_job_run('local',case.job.id).failure_reason,
-        [dict(row) for row in case.repo.list_creation_job_request_states('local',case.job.id)])
+        [dict(row) for row in case.repo.job_records.list_creation_job_request_states('local',case.job.id)])
     case.executor.execute(first,case.scheduler)
     partial=case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local',case.job.id)
     assert partial is not None,case.repo.job_records.get_job_run('local',case.job.id).failure_reason
@@ -3069,7 +3069,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     for _ in range(5):
         case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
-    for row in case.repo.list_creation_job_request_states('local',case.job.id):
+    for row in case.repo.job_records.list_creation_job_request_states('local',case.job.id):
         if row['state'] in {'waiting','blocked'}:
             case.scheduler.cancel(row['id'],case.actor)
     task=case.repo.task_records.get_creation_task('local',case.task_id)
@@ -3310,7 +3310,7 @@ def test_segment_rewrite_publishes_only_target_and_replays_original_request(tmp_
     assert audio.unit_key.startswith('segment_revision:')
     case.executor.execute(audio,case.scheduler)
     video = case.scheduler.pick_and_grant()
-    assert video is not None, (case.repo.job_records.get_job_run('local', request['job_id']).failure_reason, case.repo.list_creation_job_request_states('local',request['job_id']))
+    assert video is not None, (case.repo.job_records.get_job_run('local', request['job_id']).failure_reason, case.repo.job_records.list_creation_job_request_states('local',request['job_id']))
     assert video.unit_key.startswith('segment_video:section_1:')
     case.executor.execute(video,case.scheduler)
     receipt = case.segments.read_request('local',case.task_id,'revision_1',case.actor)
@@ -3414,7 +3414,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     case=_segment_units_case(tmp_path,monkeypatch)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     for _ in range(5): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
-    for row in case.repo.list_creation_job_request_states('local',case.job.id):
+    for row in case.repo.job_records.list_creation_job_request_states('local',case.job.id):
         if row['state'] in {'waiting','blocked'}: case.scheduler.cancel(row['id'],case.actor)
     edits=MetadataEditUseCase(case.repo,case.segments.artifact_store,output_root=tmp_path/'restore',audio_service=None)
     task=case.repo.task_records.get_creation_task('local',case.task_id)
@@ -3506,7 +3506,7 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     monkeypatch.setattr(Path,'rglob',checked_scan)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     for _ in range(5): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
-    for row in case.repo.list_creation_job_request_states('local',case.job.id):
+    for row in case.repo.job_records.list_creation_job_request_states('local',case.job.id):
         if row['state'] in {'waiting','blocked'}: case.scheduler.cancel(row['id'],case.actor)
     edits=MetadataEditUseCase(case.repo,case.segments.artifact_store,output_root=tmp_path/'restore',audio_service=None)
     task=case.repo.task_records.get_creation_task('local',case.task_id)
@@ -3592,7 +3592,7 @@ def test_segment_revision_checks_actual_target_dependencies_and_semantic_input(t
     _before,request,_runtime = _submit_section_revision(case)
     event = case.repo.execution_records.get_task_event('local',f'event_{request["job_id"]}_start')
     command = NarrationRevisionRequest.model_validate(event.payload['command'])
-    queued=case.repo.list_creation_job_request_states('local',request['job_id'])[0]
+    queued=case.repo.job_records.list_creation_job_request_states('local',request['job_id'])[0]
     with case.repo._connect() as conn:
         running_check=case.segments.capture_local(case.scheduler._get(queued['id']),conn,case.owner)
     if changed=='unrelated_timeline':
@@ -3946,7 +3946,7 @@ def test_narration_merge_checkpoint_rejects_changed_actual_dependency(tmp_path, 
     checkpoint = case.repo.narration_checkpoints.creation_narration_merge_checkpoint('local', case.job.id)
     if changed=='partial':
         Path(checkpoint['pcm']['work_path']).write_bytes(b'changed dependency')
-        request=case.scheduler._get(next(row['id'] for row in case.repo.list_creation_job_request_states('local',case.job.id) if row['state']=='waiting'))
+        request=case.scheduler._get(next(row['id'] for row in case.repo.job_records.list_creation_job_request_states('local',case.job.id) if row['state']=='waiting'))
         with case.repo._connect() as conn:
             watcher=case.owner.capture_local(request,conn)
             assert watcher(conn)=='stale'
@@ -4596,7 +4596,7 @@ def test_segment_visual_decision_keeps_audio_usage_and_resumes_original_job(tmp_
         job = case.job
     _require_section_visual_decision(case, monkeypatch)
     grant = case.scheduler.pick_and_grant()
-    assert grant.owner_id == job.id, (grant.unit_key,case.repo.list_creation_job_request_states('local',job.id))
+    assert grant.owner_id == job.id, (grant.unit_key,case.repo.job_records.list_creation_job_request_states('local',job.id))
     case.executor.execute(grant, case.scheduler)
     updated = case.repo.job_records.get_job_run('local', job.id)
     assert updated.status == 'queued', updated.failure_reason
@@ -4605,7 +4605,7 @@ def test_segment_visual_decision_keeps_audio_usage_and_resumes_original_job(tmp_
     assert view['status'] == 'waiting_for_user'
     assert view['audio']['persisted'] and view['usage']['settled']
     assert view['usage']['used_output_bytes'] > 0
-    assert all(row['state'] == 'done' for row in case.repo.list_creation_job_request_states('local',job.id))
+    assert all(row['state'] == 'done' for row in case.repo.job_records.list_creation_job_request_states('local',job.id))
     if revision:
         case.segments.resume_request('local',case.task_id,'revision_1',case.actor,runtime=runtime)
         assert case.segments.context('local',case.task_id,'section_1',case.actor)['text'] == before['text']
@@ -4912,7 +4912,7 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
     assert task.stage == 'montage' and task.stage_status == 'failed'
     assert case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key)
     before = case.repo.narration_units.creation_narration_usage('local', case.job.id)
-    rows = case.repo.list_creation_job_request_states('local', case.job.id)
+    rows = case.repo.job_records.list_creation_job_request_states('local', case.job.id)
     montage = next(row for row in rows if row['unit_key'].startswith('montage_plan:'))
     assert montage['state'] == 'failed'
     # Legacy audio recovery preserves its original failed request as audit history.
@@ -4994,18 +4994,18 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
             control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
         assert rejected.value.status_code == 403
         assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
-        assert len(repo.list_creation_job_request_states('local', job.id)) == 1
+        assert len(repo.job_records.list_creation_job_request_states('local', job.id)) == 1
         assert not any(event.payload.get('input_timeline_version_id') == edited.id
             for event in repo.execution_records.list_task_events('local', task_id))
     else:
         control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
-        requests = repo.list_creation_job_request_states('local', job.id)
+        requests = repo.job_records.list_creation_job_request_states('local', job.id)
         fresh = next(row for row in requests if row['id'] != original_request)
         assert fresh['unit_key'].startswith('render:') and fresh['state'] == 'waiting'
         assert scheduler._get(fresh['id']).resources['overlay_count'] == 2
         assert repo.job_records.get_job_run('local', job.id).status == 'queued'
         control.resume('local', task_id, actor, runtime, verify_media=False, write_guard=guard)
-        assert repo.list_creation_job_request_states('local', job.id) == requests
+        assert repo.job_records.list_creation_job_request_states('local', job.id) == requests
         grant = scheduler.pick_and_grant()
         assert grant.request_id == fresh['id']
         # The inner renderer is covered separately; publish metadata for the outer receipt contract.
@@ -5041,7 +5041,7 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
     if revision:
         for _ in range(2):
             case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
-        for row in case.repo.list_creation_job_request_states('local', case.job.id):
+        for row in case.repo.job_records.list_creation_job_request_states('local', case.job.id):
             if row['state'] in {'waiting', 'blocked'}:
                 case.scheduler.cancel(row['id'], case.actor)
         before, receipt, runtime = _submit_section_revision(case)
@@ -5102,7 +5102,7 @@ def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     for _ in range(2):
         case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
-    for row in case.repo.list_creation_job_request_states('local', case.job.id):
+    for row in case.repo.job_records.list_creation_job_request_states('local', case.job.id):
         if row['state'] in {'waiting', 'blocked'}:
             case.scheduler.cancel(row['id'], case.actor)
     _, receipt, runtime = _submit_section_revision(case)
@@ -5126,7 +5126,7 @@ def test_revision_planning_resume_preserves_cancellation_during_preparation(tmp_
     assert case.segments.visual_usage(current) == usage
     with pytest.raises(KeyError):
         case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(job, 'section_1'))
-    assert all(row['state'] == 'done' for row in case.repo.list_creation_job_request_states('local', job.id))
+    assert all(row['state'] == 'done' for row in case.repo.job_records.list_creation_job_request_states('local', job.id))
     case.scheduler.close()
 
 
@@ -5486,7 +5486,7 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
         assert len(case.generated) == 1 and case.merged == []
         assert (tmp_path / (hashlib.sha256(case.generated[0][1].encode()).hexdigest() + '.wav')).is_file()
         assert len(case.execution.jobs('local', case.task_id)) == 1
-        assert len(case.repo.list_creation_job_request_states('local', case.job.id)) == 1
+        assert len(case.repo.job_records.list_creation_job_request_states('local', case.job.id)) == 1
     finally:
         case.scheduler.close()
 
@@ -5655,13 +5655,13 @@ def test_bounded_narration_start_reenters_original_unit_and_checks_current(tmp_p
             case.actor, case.runtime, verify_media=False)
     first = start()
     job = case.repo.job_records.get_job_run('local', first['job']['id'])
-    states = case.repo.list_creation_job_request_states('local', job.id)
+    states = case.repo.job_records.list_creation_job_request_states('local', job.id)
     request = case.scheduler._get(states[0]['id'])
     assert request.unit_key.startswith('narration:segment:v1:section_1:')
     assert request.resources['section_count'] == 1 and request.resources['text_chars'] >= 260
     assert 'section_45' in seen
     assert start()['job']['id'] == job.id
-    assert [row['id'] for row in case.repo.list_creation_job_request_states('local', job.id)] == [request.id]
+    assert [row['id'] for row in case.repo.job_records.list_creation_job_request_states('local', job.id)] == [request.id]
     with case.repo.creation_execution_read() as conn:
         assert case.owner.check_current(request, conn) == 'ready'
         assert conn.in_transaction
@@ -5698,7 +5698,7 @@ def test_bounded_narration_start_unknown_and_other_member_keep_original(tmp_path
     result = case.control.start('local', case.task_id, case.script_id, case.digest,
         case.actor, case.runtime, verify_media=False)
     job = case.repo.job_records.get_job_run('local', result['job']['id'])
-    original_requests = case.repo.list_creation_job_request_states('local', job.id)
+    original_requests = case.repo.job_records.list_creation_job_request_states('local', job.id)
     with pytest.raises(ExecutionControlRejected) as refused:
         case.control.start('local', case.task_id, case.script_id, case.digest,
             CreationExecutionActor('local', 'other-member'), case.runtime, verify_media=False)
@@ -5721,7 +5721,7 @@ def test_bounded_narration_start_unknown_and_other_member_keep_original(tmp_path
     assert case.control.status('local', case.task_id, verify_media=False, actor=case.actor)['job']['id'] == job.id
     assert case.scheduler.pick_and_grant() is None
     assert case.scheduler._get(request.id).last_grant_generation is None
-    assert [row['id'] for row in case.repo.list_creation_job_request_states('local', job.id)] == [request.id]
+    assert [row['id'] for row in case.repo.job_records.list_creation_job_request_states('local', job.id)] == [request.id]
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.generated == [] and case.merged == []
 
@@ -5745,7 +5745,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
     result = case.control.start('local', case.task_id, case.script_id, case.digest,
         case.actor, case.runtime, verify_media=False)
     job = repo.job_records.get_job_run('local', result['job']['id'])
-    request = case.scheduler._get(repo.list_creation_job_request_states('local', job.id)[0]['id'])
+    request = case.scheduler._get(repo.job_records.list_creation_job_request_states('local', job.id)[0]['id'])
     inputs = repo.profile_inputs.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id,
         voice_profile_id=request.resources['voice_profile_id'], voice_version=request.resources['voice_version'])
     assert request.resources['text_chars'] == len('采用后的正文') + len(inputs.voice.reference_text)
@@ -5805,7 +5805,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
     monkeypatch.setattr(case.owner.segments, 'video_facts', video_facts)
     assert next_creation_intent(repo, case.scheduler, job).unit_key == 'segment_video:section_1:prepared'
     assert repo.read_creation_execution_snapshot('local', case.task_id).input_digest == case.digest
-    assert len(repo.list_creation_job_request_states('local', job.id)) == 1
+    assert len(repo.job_records.list_creation_job_request_states('local', job.id)) == 1
     assert case.generated == [] and case.merged == []
 
 
@@ -5891,7 +5891,7 @@ def test_owner_submission_rechecks_after_authorization_and_borrows_transaction(t
             assert writer.in_transaction
             writer.rollback()
         assert case.repo.job_records.get_job_run('local', case.job.id) == case.job
-    assert case.repo.list_creation_job_request_states('local', case.job.id) == []
+    assert case.repo.job_records.list_creation_job_request_states('local', case.job.id) == []
     assert case.generated == [] and case.merged == []
     case.scheduler.close()
 
@@ -6296,7 +6296,7 @@ def test_pcm_body_stream_commit_and_original_unknown_recovery(tmp_path, monkeypa
             patch.setattr(case.owner, 'prepare_pcm_sources', lambda *a, **k: pytest.fail('reentry must use sealed sources'))
             assert submit_creation_stage(case.execution, case.scheduler, case.job, case.actor) == submitted
         assert case.scheduler._get(submitted).resources == original.resources
-        assert len(case.repo.list_creation_job_request_states('local', case.job.id)) == 1
+        assert len(case.repo.job_records.list_creation_job_request_states('local', case.job.id)) == 1
     first = case.scheduler.pick_and_grant()
     assert first is not None
     sealed = case.scheduler._get(first.request_id).resources
@@ -6446,7 +6446,7 @@ def test_bounded_segment_video_plan_confirmation_and_original_reentry(tmp_path, 
     assert replay['replayed'] and result['device_request_id'] == replay['device_request_id']
     intent = next_creation_intent(case.repo, case.scheduler, case.job)
     assert case.scheduler.submit(intent, case.actor).id == result['device_request_id']
-    assert len(case.repo.list_creation_job_request_states('local', case.job.id)) == 1
+    assert len(case.repo.job_records.list_creation_job_request_states('local', case.job.id)) == 1
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.generated == [] and case.merged == []
     case.scheduler.close()
@@ -6482,7 +6482,7 @@ def test_bounded_segment_video_save_rechecks_original_transaction(tmp_path, monk
         case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     with pytest.raises(KeyError):
         case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
-    assert case.repo.list_creation_job_request_states('local', case.job.id) == []
+    assert case.repo.job_records.list_creation_job_request_states('local', case.job.id) == []
     assert len(case.execution.jobs('local', case.task_id)) == 1
     assert case.repo.narration_records.get_narration_segment('local', case.task_id, case.paid_rows[0].id) == case.paid_rows[0]
     assert case.generated == [] and case.merged == []
@@ -6529,7 +6529,7 @@ def test_bounded_segment_video_unknown_audio_keeps_original_request(tmp_path, mo
             case.repo.execution_records.get_task_event('local', case.segments.visual_decision_id(case.job, 'section_1'))
     else:
         assert case.repo.execution_records.get_task_event('local', waiting.id) == waiting
-    assert [row['id'] for row in case.repo.list_creation_job_request_states('local', case.job.id)] == [original.id]
+    assert [row['id'] for row in case.repo.job_records.list_creation_job_request_states('local', case.job.id)] == [original.id]
     assert case.scheduler._get(original.id) == original
     assert case.repo.narration_units.creation_narration_usage('local', case.job.id)['unsettled'][0]['request_id'] == original.id
     assert len(case.execution.jobs('local', case.task_id)) == 1
@@ -6622,7 +6622,7 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
     with pytest.raises(KeyError):
         case.repo.execution_records.get_task_event('local', case.segments.video_preparation_id(case.job, 'section_1'))
     assert case.repo.execution_records.get_task_event('local', waiting.id) == waiting
-    assert case.repo.list_creation_job_request_states('local', case.job.id) == []
+    assert case.repo.job_records.list_creation_job_request_states('local', case.job.id) == []
     assert not case.generated and not case.merged
     case.scheduler.close()
 

@@ -35,7 +35,7 @@ def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, rea
             raise HTTPException(status_code=404, detail='任务媒体作业不存在')
         if observed_job.status in {'succeeded', 'failed', 'cancelled'} and not any(
                 row['state'] in {'waiting', 'blocked', 'granted', 'yield_requested'}
-                for row in repository_for().list_creation_job_request_states(observed_job.workspace_id, observed_job.id)):
+                for row in repository_for().job_records.list_creation_job_request_states(observed_job.workspace_id, observed_job.id)):
             return read_for()(task_id, job_id, request)
         runtime = runtime_for()()
         media = runtime.registrations['creation_job'].owner.task_media

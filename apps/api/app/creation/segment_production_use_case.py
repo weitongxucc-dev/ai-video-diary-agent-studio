@@ -243,7 +243,7 @@ class SegmentProductionUseCase:
         if event is None:
             raise KeyError(request_id)
         job = self.repository.job_records.get_job_run(workspace_id, event.job_id)
-        requests = self.repository.list_creation_job_request_states(workspace_id, job.id)
+        requests = self.repository.job_records.list_creation_job_request_states(workspace_id, job.id)
         result = self.repository.segment_revision_result(workspace_id, job.id)
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if self.repository.unsettled_segment_units(workspace_id, job.id):
@@ -598,7 +598,7 @@ class SegmentProductionUseCase:
             self._validate_visual_decision(job,task,actor,None,payload)
         except (ValueError,KeyError,OSError):
             status = 'stale'
-        requests = self.repository.list_creation_job_request_states(workspace_id,job_id)
+        requests = self.repository.job_records.list_creation_job_request_states(workspace_id,job_id)
         video_requests = [row for row in requests if row['unit_key'] == payload['unit_key']]
         usage = self.visual_usage(job)
         clips=payload['montage']['clips']

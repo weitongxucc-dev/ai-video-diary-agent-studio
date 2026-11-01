@@ -415,7 +415,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         assert result.job.input_digest == hashlib.sha256(json.dumps(operation, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         assert len(repo.job_records.list_job_runs("workspace", task.id)) == 2
         assert len(repo.edit_records.list_edit_operations("workspace", task.id)) == 1
-        states = repo.list_creation_job_request_states("workspace", result.job.id)
+        states = repo.job_records.list_creation_job_request_states("workspace", result.job.id)
         assert len(states) == 1 and states[0]["id"] == calls[0] and states[0]["state"] == "done"
         runtime.scheduler.reconcile_released()
         assert hashes and all(label == "declared_worker" for _, label in hashes)

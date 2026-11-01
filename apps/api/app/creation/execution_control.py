@@ -223,7 +223,7 @@ class CreationExecutionControl:
             start_event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
             queued_member_id = start_event.payload.get("member_id")
             if queued_member_id:
-                row = self.repository.creation_execution_wait_row(workspace_id, queued_member_id, job.id, job.input_digest)
+                row = self.repository.job_records.creation_execution_wait_row(workspace_id, queued_member_id, job.id, job.input_digest)
                 if row is not None:
                     queued_stage = row["unit_key"].split(":", 1)[0]
                     if queued_stage in {"narration", "person_render", "montage_plan", "render"}:
@@ -333,7 +333,7 @@ class CreationExecutionControl:
         except ValueError as exc:
             raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
         if runtime is not None:
-            rows = self.repository.active_creation_request_ids(workspace_id, job.id)
+            rows = self.repository.job_records.active_creation_request_ids(workspace_id, job.id)
             for row in rows:
                 runtime.scheduler.cancel(row["id"], actor)
                 registration = runtime.registrations.get("creation_job")
@@ -391,7 +391,7 @@ class CreationExecutionControl:
         if runtime is None or "creation_job" not in runtime.registrations:
             # 没有整机许可通道就不派发。退回旧的本机线程等于绕开身份和主机门禁，
             # 那正是这张许可要挡住的事；作业停在待处理状态，等许可就绪或人明确处理。
-            pending = self.repository.list_pending_creation_executions()
+            pending = self.repository.job_records.list_pending_creation_executions()
             if pending:
                 logger.warning(
                     "整机许可通道尚未就绪，%s 件制作作业留在待处理状态等待人工处理",
@@ -426,7 +426,7 @@ class CreationExecutionControl:
         if media is not None:
             pending_media = self.repository.job_records.list_pending_task_media_jobs(TASK_MEDIA_KIND)
             for job in pending_media:
-                request_rows = self.repository.list_creation_job_request_states(job.workspace_id, job.id)
+                request_rows = self.repository.job_records.list_creation_job_request_states(job.workspace_id, job.id)
                 _, event = media.read(job.workspace_id, job.id)
                 original = CreationExecutionActor.from_event(job.workspace_id, event)
                 if job.status == "cancelled":
@@ -448,7 +448,7 @@ class CreationExecutionControl:
                 # Existing grants are reconciled by DeviceScheduler before any dispatch.
         # A crash may land after the JobRun cancellation commits but before
         # its device request is cancelled. Reconcile from both durable rows.
-        cancelled_requests = self.repository.list_cancelled_creation_execution_requests()
+        cancelled_requests = self.repository.job_records.list_cancelled_creation_execution_requests()
         for row in cancelled_requests:
             event = self.repository.execution_records.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
             # 撤销方向不需要重新核成员：即使成员已被移除，撤销也必须能落下去。
@@ -461,7 +461,7 @@ class CreationExecutionControl:
                     or (original.device_id is None and row["workspace_id"] != LEGACY_WORKSPACE_ID)):
                 raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
             runtime.scheduler.cancel(row["id"], original)
-        for job in self.repository.list_pending_creation_executions():
+        for job in self.repository.job_records.list_pending_creation_executions():
             event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
             try:
                 original = CreationExecutionActor.from_event(job.workspace_id, event.payload)
@@ -478,7 +478,7 @@ class CreationExecutionControl:
                     continue
             if job.status == "interrupted":
                 task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
-                request = self.repository.creation_execution_wait_row(
+                request = self.repository.job_records.creation_execution_wait_row(
                     job.workspace_id, original.member_id, job.id, job.input_digest)
                 stage = request["unit_key"].split(":", 1)[0] if request is not None else task.stage
                 self.repository.interrupt_creation_execution(TaskEvent(
@@ -763,7 +763,7 @@ class CreationExecutionControl:
 
     def job_for_request(self, workspace_id: str, request_id: str):
         """这条设备许可背后是不是一个制作作业；不是就返回 ``None``。"""
-        row = self.repository.creation_job_for_device_request_row(workspace_id, request_id)
+        row = self.repository.job_records.creation_job_for_device_request_row(workspace_id, request_id)
         if row is None:
             return None
         return self.repository.job_records.get_job_run(workspace_id, row["owner_id"])

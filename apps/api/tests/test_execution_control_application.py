@@ -233,22 +233,22 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         first_job=first.json()['job']['id']
         duplicate=client.post(url+'/execution/start',json=request)
         assert duplicate.status_code==202 and duplicate.json()['job']['id']==first_job,duplicate.text
-        rows=repo.list_creation_job_request_states('local',first_job)
+        rows=repo.job_records.list_creation_job_request_states('local',first_job)
         assert len(rows)==1 and isinstance(rows[0],sqlite3.Row) and set(rows[0].keys())=={'id','state','unit_key','wait_reason','last_failure_reason'}
         request_id=rows[0]['id']
         assert rows[0]['state']=='waiting'
-        assert repo.list_creation_job_request_states('other-workspace',first_job)==[]
-        wait=repo.creation_execution_wait_row('local',member.member_id,first_job,request['input_digest'])
+        assert repo.job_records.list_creation_job_request_states('other-workspace',first_job)==[]
+        wait=repo.job_records.creation_execution_wait_row('local',member.member_id,first_job,request['input_digest'])
         assert isinstance(wait,sqlite3.Row) and set(wait.keys())=={'unit_key','wait_reason','updated_at'}
         assert wait['unit_key'].startswith('narration:')
         for args in [('other-workspace',member.member_id,first_job,request['input_digest']),
                      ('local','other-member',first_job,request['input_digest']),('local',member.member_id,first_job,'other-digest')]:
-            assert repo.creation_execution_wait_row(*args) is None
-        assert [r['id'] for r in repo.active_creation_request_ids('local',first_job)]==[request_id]
-        owner_row=repo.creation_job_for_device_request_row('local',request_id)
+            assert repo.job_records.creation_execution_wait_row(*args) is None
+        assert [r['id'] for r in repo.job_records.active_creation_request_ids('local',first_job)]==[request_id]
+        owner_row=repo.job_records.creation_job_for_device_request_row('local',request_id)
         assert isinstance(owner_row,sqlite3.Row) and owner_row['owner_id']==first_job
-        assert repo.creation_job_for_device_request_row('other-workspace',request_id) is None
-        assert repo.creation_job_for_device_request_row('local','missing-request') is None
+        assert repo.job_records.creation_job_for_device_request_row('other-workspace',request_id) is None
+        assert repo.job_records.creation_job_for_device_request_row('local','missing-request') is None
         assert main._creation_execution_control().job_for_request('local',request_id).id==first_job
         bound=client.get(url+'/execution',params={'job_id':first_job})
         assert bound.status_code==200 and bound.json()['job']['id']==first_job,bound.text
@@ -279,7 +279,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         assert interrupted.status_code==200 and interrupted.json()['job']['status']=='interrupted',interrupted.text
         assert interrupted.json()['stages'][-1]['status']=='running'
         main._recover_creation_executions()
-        assert len(repo.list_creation_job_request_states('local',first_job))==1
+        assert len(repo.job_records.list_creation_job_request_states('local',first_job))==1
         local=repo.job_records.create_job_run(JobRun(id='declared-local-edit-job',workspace_id='local',task_id=task_id,
             kind=PERSON_EDIT_KIND,idempotency_key='declared-local-edit-job',input_digest=request['input_digest']))
         repo.execution_records.append_task_event(TaskEvent(id=f'event_{local.id}_start',workspace_id='local',task_id=task_id,job_id=local.id,
@@ -290,22 +290,22 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
             cancelling.setattr(main, '_creation_runtime', lambda: pytest.fail('cancel must not start runtime'))
             cancelled=client.post(url+'/execution/cancel')
         assert cancelled.status_code==200 and cancelled.json()['job']['status']=='cancelled',cancelled.text
-        assert repo.list_creation_job_request_states('local',first_job)[0]['state']=='cancelled'
-        assert not repo.active_creation_request_ids('local',first_job)
-        assert repo.list_cancelled_creation_execution_requests()==[]
+        assert repo.job_records.list_creation_job_request_states('local',first_job)[0]['state']=='cancelled'
+        assert not repo.job_records.active_creation_request_ids('local',first_job)
+        assert repo.job_records.list_cancelled_creation_execution_requests()==[]
         main._recover_creation_executions()
         resumed=client.post(url+'/execution/resume')
         assert resumed.status_code==202 and resumed.json()['job']['id']!=first_job,resumed.text
         second_job=resumed.json()['job']['id']
         assert client.post(url+'/execution/resume').json()['job']['id']==second_job
-        assert len(repo.list_creation_job_request_states('local',second_job))==1
+        assert len(repo.job_records.list_creation_job_request_states('local',second_job))==1
         assert client.get(url+'/execution',params={'job_id':second_job}).status_code==200
         assert client.get(url+'/execution',params={'job_id':first_job}).status_code==409
         main._recover_creation_executions()
-        assert len(repo.list_creation_job_request_states('local',second_job))==1
+        assert len(repo.job_records.list_creation_job_request_states('local',second_job))==1
         assert client.post(url+'/execution/cancel').status_code==200
         assert repo.job_records.get_job_run('local',second_job).status=='cancelled'
-        assert repo.list_creation_job_request_states('local',second_job)[0]['state']=='cancelled'
+        assert repo.job_records.list_creation_job_request_states('local',second_job)[0]['state']=='cancelled'
         # Finite read-port fixtures below are not submitted work or worker-success substitutes.
         kind='declared-control-read-probe'
         for index in range(2):
@@ -336,9 +336,9 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
                     'updated_at':f'2026-01-0{index+1}T00:00:00+00:00'}
                 columns=','.join(probe)
                 conn.execute(f'INSERT INTO device_work_requests ({columns}) VALUES ({",".join("?" for _ in probe)})',tuple(probe.values()))
-        latest=repo.creation_execution_wait_row('local',member.member_id,'declared-read-0','declared-read')
+        latest=repo.job_records.creation_execution_wait_row('local',member.member_id,'declared-read-0','declared-read')
         assert latest['unit_key']=='declared-read-1'
-        assert repo.list_cancelled_creation_execution_requests()==[]
+        assert repo.job_records.list_cancelled_creation_execution_requests()==[]
         with repo._connect() as conn:
             conn.execute("DELETE FROM device_work_requests WHERE id IN ('declared-read-request-0','declared-read-request-1')")
             request_rows=[dict(r) for r in conn.execute('SELECT id,owner_id,state FROM device_work_requests').fetchall()]
@@ -406,3 +406,121 @@ def test_bounded_narration_start_source_seal_rolls_back_preparation_race(tmp_pat
         assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type IN "
             "('creation_execution_started','creation_narration_source_bound')").fetchone()[0] == 0
         assert conn.execute('SELECT COUNT(*) FROM device_work_requests').fetchone()[0] == 0
+
+
+def test_job_request_reads_keep_distinct_state_filters_rows_and_materialized_pending(tmp_path, monkeypatch):
+    import socket
+    import subprocess
+    import threading
+    import wave
+    from datetime import datetime, timezone
+    from PIL import Image
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('job request metadata forbids execution, media and networking')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn'):
+        monkeypatch.setattr(main, name, forbidden)
+    repo = ProductionRepository(tmp_path / 'read-facts.sqlite3', tmp_path / 'library',
+        duration_reader=forbidden, scene_reader=forbidden)
+    def task(workspace):
+        plan = CreationPlan('plan-' + workspace, workspace, 'fixed goal', 'fixed plan', 1, 'zh-CN', '9:16', 4,
+            [], [], None, [], 0, 0, 'metadata', [], [], [], 'read-fixture')
+        value = CreationTask('task-' + workspace, workspace, plan.id, 'fixed task', 'knowledge_explanation')
+        repo.plan_confirmation.confirm_creation_plan(plan, value, verified_owner_user_id='metadata-member')
+        return value
+    local, foreign = task('metadata-ws'), task('foreign-ws')
+    stamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    def job(identity, current, status='queued'):
+        value = JobRun(identity, current.workspace_id, current.id, 'creation_task_execution', identity, 'a' * 64,
+            created_at=stamp, updated_at=stamp)
+        repo.job_records.create_job_run(value)
+        if status != 'queued':
+            repo.job_records.claim_job_run(current.workspace_id, identity)
+            repo.job_records.finish_job_run(current.workspace_id, identity, status=status,
+                failure_reason='metadata state', impact='no execution', repair_action='review declared state')
+        return value
+    queued = job('pending-b', local)
+    interrupted = job('pending-a', local, 'interrupted')
+    cancelled = job('cancelled-local', local, 'cancelled')
+    cancelled_foreign = job('cancelled-foreign', foreign, 'cancelled')
+    def request(conn, identity, owner, state, day, *, member='metadata-member', digest=None, owner_type='creation_job'):
+        time = f'2024-01-0{day}T00:00:00+00:00'
+        conn.execute('INSERT INTO device_work_requests(id,workspace_id,member_id,owner_type,owner_id,input_digest,'
+            'unit_key,source_refs_json,work_class,policy,first_ready_at_utc,state,resources_json,created_at,updated_at) '
+            'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (identity, owner.workspace_id, member, owner_type, owner.id,
+            digest or owner.input_digest, 'unit-' + identity, '[]', 'normal_make', 'asap', time, state, '{}', time, time))
+    with repo._connect() as conn:
+        request(conn, 'z-wait', queued, 'waiting', 1)
+        request(conn, 'a-wait', queued, 'waiting', 1)
+        request(conn, 'yield-current', queued, 'yield_requested', 2)
+        request(conn, 'different-member', queued, 'waiting', 3, member='other-member')
+        request(conn, 'different-digest', queued, 'waiting', 4, digest='b' * 64)
+        request(conn, 'different-owner-type', queued, 'waiting', 5, owner_type='task_media')
+        request(conn, 'cancel-granted', cancelled, 'granted', 1)
+        request(conn, 'cancel-yield', cancelled, 'yield_requested', 2)
+        request(conn, 'foreign-blocked', cancelled_foreign, 'blocked', 1)
+        request(conn, 'orphan-owner', JobRun('missing-job', local.workspace_id, local.id, 'metadata', 'orphan', 'c' * 64), 'waiting', 1)
+    connections, active = [], []
+    class ObservedConnection(sqlite3.Connection):
+        def __enter__(self):
+            active.append(self)
+            return super().__enter__()
+        def __exit__(self, *args):
+            try:
+                return super().__exit__(*args)
+            finally:
+                active.remove(self)
+        def execute(self, sql, parameters=()):
+            self.statements.append(sql)
+            return super().execute(sql, parameters)
+    def connect():
+        conn = sqlite3.connect(repo.database_path, factory=ObservedConnection)
+        conn.row_factory = sqlite3.Row
+        conn.statements = []
+        connections.append(conn)
+        return conn
+    monkeypatch.setattr(repo, '_connect', connect)
+    records = repo.job_records
+    rows = records.list_creation_job_request_states(local.workspace_id, queued.id)
+    assert all(isinstance(row, sqlite3.Row) for row in rows)
+    assert [row['id'] for row in rows] == ['a-wait', 'z-wait', 'yield-current', 'different-member', 'different-digest']
+    assert records.list_creation_job_request_states(foreign.workspace_id, queued.id) == []
+    wait = records.creation_execution_wait_row(local.workspace_id, 'metadata-member', queued.id, queued.input_digest)
+    assert isinstance(wait, sqlite3.Row) and wait['unit_key'] == 'unit-yield-current'
+    assert records.creation_execution_wait_row(local.workspace_id, 'missing-member', queued.id, queued.input_digest) is None
+    assert records.creation_execution_wait_row(local.workspace_id, 'metadata-member', queued.id, 'missing-digest') is None
+    assert records.creation_execution_wait_row(foreign.workspace_id, 'metadata-member', queued.id, queued.input_digest) is None
+    assert {row['id'] for row in records.active_creation_request_ids(local.workspace_id, queued.id)} == {
+        'a-wait', 'z-wait', 'different-member', 'different-digest'}
+    cancellations = records.list_cancelled_creation_execution_requests()
+    assert {(row['id'], row['workspace_id']) for row in cancellations} == {
+        ('cancel-granted', local.workspace_id), ('foreign-blocked', foreign.workspace_id)}
+    owner = records.creation_job_for_device_request_row(local.workspace_id, 'orphan-owner')
+    assert isinstance(owner, sqlite3.Row) and owner.keys() == ['owner_id'] and owner['owner_id'] == 'missing-job'
+    assert records.creation_job_for_device_request_row(foreign.workspace_id, 'orphan-owner') is None
+    assert records.creation_job_for_device_request_row(local.workspace_id, 'different-owner-type') is None
+    assert records.creation_job_for_device_request_row(local.workspace_id, 'missing-request') is None
+    decoded = []
+    decoder = records.job_run_from_row
+    def decode_after_reader(row):
+        assert active == []
+        decoded.append(row['id'])
+        return decoder(row)
+    with monkeypatch.context() as patch:
+        patch.setattr(records, 'job_run_from_row', decode_after_reader)
+        pending = records.list_pending_creation_executions()
+    assert isinstance(pending, list) and all(type(value) is JobRun for value in pending)
+    assert [value.id for value in pending] == decoded == [interrupted.id, queued.id]
+    assert len(connections) > 1 and active == []
+    assert not any(sql.strip().upper().startswith('BEGIN') for conn in connections for sql in conn.statements)

@@ -341,7 +341,7 @@ def test_concurrent_same_UUID_claims_one_job_and_device_request(state):
     with ThreadPoolExecutor(max_workers=3) as pool:
         receipts = list(pool.map(submit, range(3)))
     assert receipts[0] == receipts[1] == receipts[2]
-    assert len(state.repo.list_creation_job_request_states("ws", receipts[0]["job_id"])) == 1
+    assert len(state.repo.job_records.list_creation_job_request_states("ws", receipts[0]["job_id"])) == 1
     run(state)
     assert len(state.builds) == len(state.repo.edit_records.list_edit_operations("ws", state.task.id)) == 1
 
@@ -451,12 +451,12 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
         normalize_voice_sources=plan.narration_linkage_created_audio_timeline)
     state.control.render_stage.valid = lambda *args, **kwargs: False
     state.control.resume('ws', task.id, state.actor, state.runtime, verify_media=False)
-    requests = state.repo.list_creation_job_request_states('ws', job.id)
+    requests = state.repo.job_records.list_creation_job_request_states('ws', job.id)
     pending = [row for row in requests if row['state'] == 'waiting']
     assert len(pending) == 1 and pending[0]['unit_key'].startswith('render:')
     assert state.repo.job_records.get_job_run('ws', job.id).status == 'queued'
     state.control.resume('ws', task.id, state.actor, state.runtime, verify_media=False)
-    assert state.repo.list_creation_job_request_states('ws', job.id) == requests
+    assert state.repo.job_records.list_creation_job_request_states('ws', job.id) == requests
     from app.creation_execution import next_creation_intent
     from app.device_scheduler import SubmissionIntent, SchedulePolicy
     effective = state.repo.creation_execution_input('ws', job.id)

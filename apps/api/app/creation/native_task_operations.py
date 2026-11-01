@@ -343,7 +343,7 @@ class NativeTaskOperations:
         request_id = arguments['request_id']
         original = self.find_original(actor,origin,request_id,operation,arguments)
         if original is not None:
-            if original.status=='queued' and not self.repository.list_creation_job_request_states(actor.workspace_id,original.id):
+            if original.status=='queued' and not self.repository.job_records.list_creation_job_request_states(actor.workspace_id,original.id):
                 runtime.scheduler.submit(SubmissionIntent(actor.workspace_id,'creation_job',original.id,original.input_digest,
                     f'native_command:{original.input_digest}',SchedulePolicy()),actor)
                 runtime.wake()
@@ -416,7 +416,7 @@ class NativeTaskOperations:
                     messages.append(json.loads(line));next_offset=source.tell()
         job = self.repository.job_records.get_job_run(job.workspace_id,job.id)
         result = self.repository.native_execution_records.native_operation_result(job.workspace_id,job.id) or {}
-        requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
+        requests = self.repository.job_records.list_creation_job_request_states(job.workspace_id,job.id)
         return {'job_id':job.id,'request_id':self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload['request_id'],
             'task_id':job.task_id,'status':job.status,'stdout':''.join(item['text'] for item in messages if item['stream']=='stdout'),
             'stderr':''.join(item['text'] for item in messages if item['stream']=='stderr'),'output':''.join(item['text'] for item in messages),
@@ -474,7 +474,7 @@ class NativeTaskOperations:
             return 'unknown'
 
     def cancel_job(self,job,actor,runtime):
-        for row in self.repository.list_creation_job_request_states(job.workspace_id,job.id):
+        for row in self.repository.job_records.list_creation_job_request_states(job.workspace_id,job.id):
             if row['state'] in {'waiting','blocked','granted','yield_requested'}:
                 runtime.scheduler.cancel(row['id'],actor)
                 runtime.registrations['creation_job'].executor.request_cancel(row['id'])
@@ -722,7 +722,7 @@ class NativeTaskOperations:
         for job in jobs:
             event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
             result = self.repository.native_execution_records.native_operation_result(job.workspace_id,job.id) or {}
-            requests = self.repository.list_creation_job_request_states(job.workspace_id,job.id)
+            requests = self.repository.job_records.list_creation_job_request_states(job.workspace_id,job.id)
             values.append({'job_id':job.id,'request_id':event['request_id'],'operation':event['operation'],'status':job.status,
                 'process_state':result.get('process_state','not_started' if not job.attempt else 'unknown'),
                 'release_state':result.get('release_state','not_acquired' if not job.attempt else 'unknown'),

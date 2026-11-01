@@ -554,7 +554,7 @@ class CoverUseCase:
                 raise CoverUnresolved(current, current.failure_reason or current.status)
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining <= 0:
-                for row in self.repository.list_creation_job_request_states(command.workspace_id, job.id):
+                for row in self.repository.job_records.list_creation_job_request_states(command.workspace_id, job.id):
                     if row["state"] in {"waiting", "blocked", "granted", "yield_requested"}:
                         detail = runtime.scheduler.cancel(row["id"], actor)
                         runtime.registrations["creation_job"].executor.request_cancel(row["id"])

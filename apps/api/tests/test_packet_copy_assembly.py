@@ -32,7 +32,7 @@ def _packet_case(tmp_path, monkeypatch, *, before_prepare=None, montage_adjust=N
         submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
         for _ in range(3):
             grant = case.scheduler.pick_and_grant()
-            assert grant is not None, (case.repo.job_records.get_job_run('local', case.job.id).failure_reason, case.repo.list_creation_job_request_states('local', case.job.id))
+            assert grant is not None, (case.repo.job_records.get_job_run('local', case.job.id).failure_reason, case.repo.job_records.list_creation_job_request_states('local', case.job.id))
             case.executor.execute(grant, case.scheduler)
     case.job = case.repo.job_records.get_job_run('local', case.job.id)
     source = tmp_path / 'library' / 'source.mp4'

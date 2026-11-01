@@ -218,7 +218,7 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
         # Declared terminal Job with its original waiting request: it must retain the old ensure path.
         repo.job_records.finish_job_run('local', second.id, status='cancelled', failure_reason='declared-terminal',
             impact='Historical metadata; the original request still exists', repair_action='Read the original request')
-        active_rows = repo.list_creation_job_request_states('local', second.id)
+        active_rows = repo.job_records.list_creation_job_request_states('local', second.id)
         assert any(row['state'] == 'waiting' for row in active_rows)
         with repo._connect() as conn:
             before_active_terminal = list(conn.iterdump())
