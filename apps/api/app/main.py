@@ -287,7 +287,7 @@ from app.schemas import (MaterialDiscoveryStartRequest,
 from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
-from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
 from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
@@ -1087,7 +1087,7 @@ app.include_router(build_content_template_router(
 def _video_template_http_adapter():
     return VideoTemplateHTTPAdapter(
         case_for=lambda: VideoTemplateUseCase(production_repo),
-        records_for=lambda: production_repo,
+        records_for=lambda: production_repo.video_templates,
         workspace_for=current_workspace_id,
         reader_for=_content_reader,
         write_guard=_local_member_write_guard,
@@ -7050,7 +7050,7 @@ def _automation_runtime() -> AutomationRuntime:
         automation_runtime = AutomationRuntime(
             production_repo,source_repository,verify_identity=_verify_creation_identity,
             list_templates=lambda actor:[*VideoTemplateUseCase(production_repo).builtin_templates(actor.workspace_id),
-                *production_repo.list_video_templates(actor.workspace_id,
+                *production_repo.video_templates.list_video_templates(actor.workspace_id,
                     viewer_user_id=actor.user_id or actor.member_id,local_diagnostic=False)],
             preflight=_creation_plan_preflight,preview_response=_creation_plan_preview_response,
             plan_response=_creation_plan_response,execution_status=_creation_execution_status,

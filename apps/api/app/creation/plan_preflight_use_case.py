@@ -10,7 +10,8 @@ from typing import Literal
 from app.avatar_lipsync import AvatarAndLipSyncProvider
 from app.materials.contracts import effective_segment_usage_role
 from app.model_runtime import ModelCatalog
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository

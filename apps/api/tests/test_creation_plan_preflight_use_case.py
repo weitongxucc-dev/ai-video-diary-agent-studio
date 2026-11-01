@@ -14,7 +14,8 @@ from app.creation.video_template_routes import VideoTemplateHTTPAdapter
 from app.creation.plan_preflight_use_case import CreationPlanPreflightUseCase
 from app.source_types import source_item_identity
 from app.materials.contracts import MaterialSegmentMatch
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.schemas import CreationPlanConfirmRequest, CreationPlanPreviewRequest
 from app.source_repository import SourceRepository
 from app.source_types import KnowledgeItem, SourceConnector, SourceItem
@@ -44,7 +45,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     current = sources.edit_knowledge_item(workspace, "knowledge-fixed", expected_version="1",
         title="当前新版本", body="新版本正文", verified_user_id=reader)
     assert current.version != "1"
-    template = production.save_video_template(VideoTemplate(id="template-fixed", workspace_id=workspace,
+    template = production.video_templates.save_video_template(VideoTemplate(id="template-fixed", workspace_id=workspace,
         version=1, name="metadata template", origin="user", settings={"language": "zh-CN",
             "aspect_ratio": "16:9", "duration_target_seconds": 30, "presenter_share_target": 0}),
         verified_owner_user_id=reader)

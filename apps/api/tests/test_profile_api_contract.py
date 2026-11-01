@@ -1243,7 +1243,7 @@ def test_default_and_profile_usage_are_not_upgraded_on_reopen(client, repo):
 def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
     client, repo, monkeypatch
 ):
-    from app.production import VideoTemplate
+    from app.creation.video_template_records import VideoTemplate
     from app.schemas import CreationPlanPreviewRequest
     from starlette.requests import Request
 
@@ -1275,7 +1275,7 @@ def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
         raise AssertionError("0 percent must not inspect lipsync provider")
 
     monkeypatch.setattr(main, "_lipsync_provider", no_lipsync)
-    template = repo.save_video_template(
+    template = repo.video_templates.save_video_template(
         VideoTemplate(
             id="t",
             workspace_id="ws",

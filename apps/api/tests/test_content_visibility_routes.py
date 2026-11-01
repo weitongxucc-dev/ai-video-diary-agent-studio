@@ -156,9 +156,9 @@ def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
 def test_template_visibility_round_trips_and_a_new_version_inherits(tmp_path, monkeypatch):
     material_library_no_execution(monkeypatch)
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
-    from app.production import VideoTemplate
+    from app.creation.video_template_records import VideoTemplate
 
-    production.save_video_template(VideoTemplate(
+    production.video_templates.save_video_template(VideoTemplate(
         id="tpl-vis", workspace_id="ws", version=1, name="模板", origin="user",
         settings={"a": 1},
     ), verified_owner_user_id=owner_member_id)

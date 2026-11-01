@@ -6,7 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.source_repository import SourceRepository
 from app.sources import SourceConnector, SourceItem, KnowledgeItem
 from app.topics import OpenAICompatibleCreationTaskScriptGenerator, CreationTaskScriptGenerationError
@@ -67,25 +68,25 @@ def state(tmp_path, monkeypatch, plan_owner):
     )
     # 模板归属只认可信身份：这批用例测版本追加与持久化，因此用真实成员 id 创建，
     # 仓储内部读取时显式给出同一读取身份，而不是靠匿名或改可见范围绕过。
-    template = production.save_video_template(template, verified_owner_user_id=plan_owner[0].member_id)
+    template = production.video_templates.save_video_template(template, verified_owner_user_id=plan_owner[0].member_id)
     return production, template, TestClient(main.app, headers=plan_owner[1])
 
 
 def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
     production, template, client = state
     with pytest.raises(ValueError, match="版本已变化"):
-        production.save_video_template(template)
-    production.save_video_template(replace(template, version=2, name="新版"))
+        production.video_templates.save_video_template(template)
+    production.video_templates.save_video_template(replace(template, version=2, name="新版"))
     reopened = ProductionRepository(production.database_path, production.video_library_path)
-    assert reopened.get_video_template("workspace_a", template.id, 1).name == template.name
+    assert reopened.video_templates.get_video_template("workspace_a", template.id, 1).name == template.name
     # 仓库级读取按创建时的可信身份给出；跨工作区隔离仍要单独成立。
-    listed = reopened.list_video_templates(
+    listed = reopened.video_templates.list_video_templates(
         "workspace_a", viewer_user_id=template.owner_user_id
     )
     assert len(listed) == 2
     # 同一个创建者身份在另一个工作区读不到：空结果来自跨空间隔离，
     # 不是来自「没给身份所以按 owner 过滤掉了」。
-    assert reopened.list_video_templates(
+    assert reopened.video_templates.list_video_templates(
         "workspace_b", viewer_user_id=template.owner_user_id
     ) == []
     response = client.post("/api/creation-plans/preview", headers={"x-test-workspace": "workspace_b"}, json={"goal": "新主题", "template_id": template.id, "template_version": 1})
@@ -109,7 +110,7 @@ def test_preflight_preserves_exact_voice_version_and_new_plan_snapshot(state):
     assert result["creation_task"]["selected_topic_id"] is None
     assert result["creation_task"]["output_ready"] is False
     before = asdict(production.plan_records.get_creation_plan("workspace_a", result["id"]))
-    production.save_video_template(replace(template, version=2, settings={**template.settings, "duration_target_seconds": 45}))
+    production.video_templates.save_video_template(replace(template, version=2, settings={**template.settings, "duration_target_seconds": 45}))
     assert asdict(production.plan_records.get_creation_plan("workspace_a", result["id"])) == before
     changed = client.post("/api/creation-plans/confirm", json={**payload, "template_version": 2, "preflight_fingerprint": preview["preflight_fingerprint"]})
     assert changed.status_code == 409
@@ -117,7 +118,7 @@ def test_preflight_preserves_exact_voice_version_and_new_plan_snapshot(state):
 
 def test_missing_template_voice_blocks_without_substitution(state):
     production, template, client = state
-    production.save_video_template(replace(template, version=2, settings={**template.settings, "voice": {"profile_id": "missing", "version": "v9"}}))
+    production.video_templates.save_video_template(replace(template, version=2, settings={**template.settings, "voice": {"profile_id": "missing", "version": "v9"}}))
     preview = client.post("/api/creation-plans/preview", json={"goal": "新主题", "template_id": template.id, "template_version": 2}).json()
     assert preview["selected_voice"] is None
     assert not preview["confirmable"]
@@ -126,7 +127,7 @@ def test_missing_template_voice_blocks_without_substitution(state):
 
 def test_template_share_is_default_and_slider_choice_rechecks_plan(state):
     production, template, client = state
-    production.save_video_template(replace(template, version=2, settings={**template.settings, "presenter_share_target": 40}))
+    production.video_templates.save_video_template(replace(template, version=2, settings={**template.settings, "presenter_share_target": 40}))
     base = {"goal": "完全不同的新主题", "template_id": template.id, "template_version": 2}
     inherited = client.post("/api/creation-plans/preview", json=base)
     chosen = client.post("/api/creation-plans/preview", json={**base, "presenter_share_target": 20})
@@ -155,7 +156,7 @@ def test_lipsync_quality_defaults_and_stays_in_versioned_plan(state):
     assert confirmed.status_code == 201, confirmed.text
     assert production.plan_records.get_creation_plan("workspace_a", confirmed.json()["id"]).lipsync_quality == "fast"
 
-    production.save_video_template(replace(template, version=2, settings={**template.settings, "lipsync_quality": "high"}))
+    production.video_templates.save_video_template(replace(template, version=2, settings={**template.settings, "lipsync_quality": "high"}))
     inherited = client.post("/api/creation-plans/preview", json={**payload, "template_version": 2}).json()
     assert inherited["lipsync_quality"] == "high"
     assert inherited["preflight_fingerprint"] != legacy["preflight_fingerprint"]
@@ -223,7 +224,7 @@ def test_script_rejects_total_speech_duration_across_sections(language, text):
 @pytest.mark.parametrize('ratio',['16:9','1:1'])
 def test_template_canvas_survives_new_theme_preflight_and_plan_confirmation(state,ratio):
     production,template,client=state
-    production.save_video_template(replace(template,version=2,settings={**template.settings,'aspect_ratio':ratio}))
+    production.video_templates.save_video_template(replace(template,version=2,settings={**template.settings,'aspect_ratio':ratio}))
     payload={'goal':'完全不同的新主题','template_id':template.id,'template_version':2}
     preview=client.post('/api/creation-plans/preview',json=payload)
     assert preview.status_code==200,preview.text
@@ -238,7 +239,7 @@ def test_template_field_version_endpoint_is_append_only_and_preserves_real_setti
     production, template, client = state
     template = replace(template, source_task_id="fixture-source-task", source_timeline_version_id="fixture-timeline")
     # Establish immutable provenance before this endpoint is used.
-    template = production.save_video_template(replace(template, version=2))
+    template = production.video_templates.save_video_template(replace(template, version=2))
     payload = {"expected_version": 2, "name": " 新名称 ", "style_instruction": " 新风格 "}
     response = client.post(f"/api/video-templates/{template.id}/versions", json=payload)
     assert response.status_code == 200, response.text
@@ -251,8 +252,8 @@ def test_template_field_version_endpoint_is_append_only_and_preserves_real_setti
     assert saved["visibility"] == template.visibility
     assert client.post(f"/api/video-templates/{template.id}/versions", json=payload).status_code == 409
     reopened = ProductionRepository(production.database_path, production.video_library_path)
-    assert reopened.get_video_template("workspace_a", template.id, 2) == template
-    assert reopened.get_video_template("workspace_a", template.id, 3).settings == saved["settings"]
+    assert reopened.video_templates.get_video_template("workspace_a", template.id, 2) == template
+    assert reopened.video_templates.get_video_template("workspace_a", template.id, 3).settings == saved["settings"]
     listed = client.get("/api/video-templates").json()["items"]
     assert {item["version"] for item in listed if item["id"] == template.id} == {1, 2, 3}
     assert all(item["can_edit"] for item in listed if item["id"] == template.id)
@@ -267,7 +268,7 @@ def test_template_field_version_endpoint_requires_actual_owner_and_visible_works
     payload = {"expected_version": 1, "name": "尝试修改", "style_instruction": ""}
     path = f"/api/video-templates/{template.id}/versions"
     assert reader.post(path, json=payload).status_code == 404
-    production.set_video_template_visibility("workspace_a", template.id, "shared")
+    production.video_templates.set_video_template_visibility("workspace_a", template.id, "shared")
     assert reader.post(path, json=payload).status_code == 403
     shared = reader.get("/api/video-templates").json()["items"]
     assert next(item for item in shared if item["id"] == template.id)["can_edit"] is False
@@ -275,7 +276,7 @@ def test_template_field_version_endpoint_requires_actual_owner_and_visible_works
     builtin = next(item for item in client.get("/api/video-templates").json()["items"] if item["origin"] == "built_in")
     assert builtin["can_edit"] is False
     assert client.post(f"/api/video-templates/{builtin['id']}/versions", json={**payload, "expected_version": builtin["version"]}).status_code == 409
-    assert len(production.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+    assert len(production.video_templates.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
 
 
 @pytest.mark.parametrize("field,value", [("name", " "), ("name", "名" * 81), ("style_instruction", "字" * 501), ("expected_version", 0)])
@@ -283,14 +284,14 @@ def test_template_field_version_endpoint_rejects_invalid_fields_without_writing(
     production, template, client = state
     response = client.post(f"/api/video-templates/{template.id}/versions", json={"expected_version": 1, "name": "名称", "style_instruction": "", field: value})
     assert response.status_code == 422
-    assert len(production.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+    assert len(production.video_templates.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
 
 
 def test_shared_template_reader_cannot_append_through_existing_task_save(state, monkeypatch, tmp_path):
     from types import SimpleNamespace
     production, template, _client = state
     _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "任务模板只读成员")
-    production.set_video_template_visibility("workspace_a", template.id, "shared")
+    production.video_templates.set_video_template_visibility("workspace_a", template.id, "shared")
     reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
     # This focused permission test substitutes the rendered-task prerequisites only;
     # the template, trusted member, HTTP guard and immutable versions are real.
@@ -305,7 +306,7 @@ def test_shared_template_reader_cannot_append_through_existing_task_save(state, 
     response = reader.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "不能另增他人模板", "template_id": template.id, "expected_version": 1})
     assert response.status_code == 403, response.text
     assert "所有者" in response.json()["detail"]
-    assert len(production.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
+    assert len(production.video_templates.list_video_templates("workspace_a", viewer_user_id=template.owner_user_id)) == 1
 
 
 def test_template_private_preflight_and_visibility_changes_require_current_owner(state):
@@ -319,7 +320,7 @@ def test_template_private_preflight_and_visibility_changes_require_current_owner
     assert owner.put(path, json={"visibility": "shared"}).status_code == 200
     assert reader.post("/api/creation-plans/preview", json=payload).status_code == 200
     assert reader.put(path, json={"visibility": "private"}).status_code == 403
-    assert production.get_video_template("workspace_a", template.id, 1).visibility == "shared"
+    assert production.video_templates.get_video_template("workspace_a", template.id, 1).visibility == "shared"
     assert owner.put(path, json={"visibility": "private"}).status_code == 200
     assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
 

@@ -10,7 +10,7 @@ from typing import Callable, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
-from app.production import VideoTemplate
+from app.creation.video_template_records import VideoTemplate
 from app.schemas import ContentVisibilityRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest
 
 

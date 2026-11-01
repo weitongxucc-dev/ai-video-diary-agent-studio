@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.contracts import CreationTask
@@ -120,11 +121,11 @@ def test_template_owner_binds_and_survives_version_save(production: ProductionRe
     template = VideoTemplate(
         id="tpl-1", workspace_id=WORKSPACE, version=1, name="我的模板", origin="user", settings={}
     )
-    saved = production.save_video_template(template, verified_owner_user_id=ALICE)
+    saved = production.video_templates.save_video_template(template, verified_owner_user_id=ALICE)
     assert saved.owner_user_id == ALICE
-    assert production.get_video_template(WORKSPACE, "tpl-1", 1).owner_user_id == ALICE
+    assert production.video_templates.get_video_template(WORKSPACE, "tpl-1", 1).owner_user_id == ALICE
     # 后续版本不覆盖已有归属。
-    v2 = production.save_video_template(
+    v2 = production.video_templates.save_video_template(
         VideoTemplate(id="tpl-1", workspace_id=WORKSPACE, version=2, name="我的模板", origin="user", settings={}),
         verified_owner_user_id=BOB,
     )
@@ -201,7 +202,7 @@ def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
     assert unowned_task.owner_user_id is None
 
     # 新模板同样不继承输入里的 owner_user_id。
-    saved = production.save_video_template(
+    saved = production.video_templates.save_video_template(
         VideoTemplate(
             id="tpl-forged", workspace_id=WORKSPACE, version=1, name="伪造归属",
             origin="user", settings={}, owner_user_id=ALICE,
@@ -209,4 +210,4 @@ def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
         verified_owner_user_id=BOB,
     )
     assert saved.owner_user_id == BOB
-    assert production.get_video_template(WORKSPACE, "tpl-forged", 1).owner_user_id == BOB
+    assert production.video_templates.get_video_template(WORKSPACE, "tpl-forged", 1).owner_user_id == BOB

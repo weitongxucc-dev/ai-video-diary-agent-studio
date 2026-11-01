@@ -11,7 +11,8 @@ from app.content_templates import list_content_templates
 from app.creation.contracts import SubtitleTrack
 from app.creation.editing.metadata_use_case import default_subtitle_style
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.contracts import CreationTask
@@ -129,7 +130,7 @@ class VideoTemplateUseCase:
     def _save(self, template: VideoTemplate, *, verified_owner_user_id: str | None,
               local_diagnostic: bool) -> VideoTemplate:
         try:
-            return self.production.save_video_template(template,
+            return self.production.video_templates.save_video_template(template,
                 verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
         except ValueError as exc:
             raise VideoTemplateRejected("persist_conflict", str(exc)) from exc

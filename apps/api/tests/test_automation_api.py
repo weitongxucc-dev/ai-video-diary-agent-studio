@@ -3,7 +3,8 @@ from fastapi import HTTPException
 import pytest
 import app.main as main
 from app.creation_execution import CreationExecutionActor
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.source_repository import SourceRepository
 from fastapi.testclient import TestClient
 from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, plan_owner as plan_owner
@@ -15,7 +16,7 @@ def automation_state(tmp_path,monkeypatch,plan_owner):
     sources=SourceRepository(production.database_path)
     actor=CreationExecutionActor('local',plan_owner[0].member_id)
     _seed_creation_plan_facts(production,sources,workspace_id=actor.workspace_id,verified_owner_user_id=actor.member_id)
-    template=production.save_video_template(VideoTemplate(id='template-automation',workspace_id='local',version=1,name='真实测试模板',origin='user',settings={'voice':{'profile_id':'voice-local','version':'v1'},'presenter_share_target':0,'lipsync_quality':'fast'}),verified_owner_user_id=actor.member_id)
+    template=production.video_templates.save_video_template(VideoTemplate(id='template-automation',workspace_id='local',version=1,name='真实测试模板',origin='user',settings={'voice':{'profile_id':'voice-local','version':'v1'},'presenter_share_target':0,'lipsync_quality':'fast'}),verified_owner_user_id=actor.member_id)
     monkeypatch.setattr(main,'production_repo',production)
     monkeypatch.setattr(main,'source_repository',sources)
     monkeypatch.setattr(main,'model_catalog',_missing_model_catalog(tmp_path))
@@ -289,7 +290,7 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
     production = ProductionRepository(database, tmp_path / 'media')
     sources = SourceRepository(database)
     actor = CreationExecutionActor('metadata-workspace', 'metadata-member')
-    template = production.save_video_template(VideoTemplate(
+    template = production.video_templates.save_video_template(VideoTemplate(
         id='template-metadata-binding', workspace_id=actor.workspace_id, version=1,
         name='声明的元数据模板', origin='user', settings={'language': 'zh-CN'}),
         verified_owner_user_id=actor.member_id)
@@ -312,7 +313,7 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
     def runtime_for(repository, source_repository):
         return AutomationRuntime(repository, source_repository,
             verify_identity=lambda value: 'ready' if value == actor else 'forbidden',
-            list_templates=lambda value: repository.list_video_templates(
+            list_templates=lambda value: repository.video_templates.list_video_templates(
                 value.workspace_id, viewer_user_id=value.member_id),
             preflight=preflight, preview_response=asdict,
             plan_response=lambda plan, task: {'plan': asdict(plan), 'task': asdict(task)},

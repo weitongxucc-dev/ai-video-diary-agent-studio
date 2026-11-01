@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from app.production import MaterialAsset, ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import MaterialAsset, ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
 
@@ -242,15 +243,15 @@ def test_template_visibility_applies_to_new_versions(tmp_path):
         id="tpl-1", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
     )
-    production.save_video_template(template, verified_owner_user_id=TEMPLATE_OWNER)
-    production.set_video_template_visibility(WORKSPACE, "tpl-1", "shared")
+    production.video_templates.save_video_template(template, verified_owner_user_id=TEMPLATE_OWNER)
+    production.video_templates.set_video_template_visibility(WORKSPACE, "tpl-1", "shared")
 
-    production.save_video_template(VideoTemplate(
+    production.video_templates.save_video_template(VideoTemplate(
         id="tpl-1", workspace_id=WORKSPACE, version=2, name="模板", origin="user",
         settings={"a": 2},
     ))
 
-    latest = production.get_video_template(WORKSPACE, "tpl-1", 2)
+    latest = production.video_templates.get_video_template(WORKSPACE, "tpl-1", 2)
     assert latest.visibility == "shared"
     assert _stored_visibility(production, "video_templates", "tpl-1", WORKSPACE) == "shared"
 
@@ -265,13 +266,13 @@ def test_visibility_never_crosses_workspace(tmp_path):
 
 def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp_path):
     production = _repository(tmp_path)
-    production.save_video_template(VideoTemplate(
+    production.video_templates.save_video_template(VideoTemplate(
         id="tpl-2", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
     ), verified_owner_user_id=TEMPLATE_OWNER)
-    production.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
+    production.video_templates.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
 
-    saved = production.save_video_template(VideoTemplate(
+    saved = production.video_templates.save_video_template(VideoTemplate(
         id="tpl-2", workspace_id=WORKSPACE, version=2, name="模板", origin="user",
         settings={"a": 2},
     ))
@@ -282,14 +283,14 @@ def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp
     # 列出是带读取身份的读：这里用与创建同一条可信身份。
     listed = {
         item.version: item.visibility
-        for item in production.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
+        for item in production.video_templates.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
     }
     assert listed == {2: "shared", 1: "shared"}
 
     reopened = _repository(tmp_path)
     assert {
         item.version: item.visibility
-        for item in reopened.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
+        for item in reopened.video_templates.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
     } == {2: "shared", 1: "shared"}
 
 
