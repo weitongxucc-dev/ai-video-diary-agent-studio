@@ -718,7 +718,7 @@ def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo, tm
         # Service terminal receipts stay provisional until the sole device transaction.
         from app.profile_preview_execution import _PreviewCheckpointRecords
         port = _PreviewCheckpointRecords(repo.preview_records)
-        assert not hasattr(port, 'resolve_narration_inputs')
+        assert not hasattr(port, 'profile_inputs')
         declared = VoicePreviewService._finish(port, queued, status='failed', reason='declared_failure',
             impact='No provider execution in this evidence', repair_action='Explicit retry')
         assert repo.preview_records.get_media_preview_run('ws','voice',queued.identity)==queued
@@ -986,7 +986,7 @@ def test_preview_restriction_exact_blocked_reason_no_cache_reuse(
     with pytest.raises(ValueError, match="受限"):
         if kind == "voice":
             repo.profile_reference_input(
-                repo.resolve_narration_inputs(
+                repo.profile_inputs.resolve_narration_inputs(
                     workspace_id="ws",
                     episode_id="voice_preview",
                     voice_profile_id=f.voice.id,
@@ -995,7 +995,7 @@ def test_preview_restriction_exact_blocked_reason_no_cache_reuse(
                 viewer_user_id="member",
             )
         else:
-            repo.resolve_avatar_lipsync_request(
+            repo.profile_inputs.resolve_avatar_lipsync_request(
                 workspace_id="ws", viewer_user_id="member", **f.avatar_params
             )
 
@@ -1707,7 +1707,7 @@ def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeyp
     )
     captured = []
     monkeypatch.setattr(
-        repo,
+        repo.profile_inputs,
         "resolve_avatar_lipsync_request",
         lambda **kw: captured.append(kw) or SimpleNamespace(),
     )
@@ -1724,5 +1724,5 @@ def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeyp
     def denied(**kw):
         raise PermissionError("source sharing revoked")
 
-    monkeypatch.setattr(repo, "resolve_avatar_lipsync_request", denied)
+    monkeypatch.setattr(repo.profile_inputs, "resolve_avatar_lipsync_request", denied)
     assert not main._person_render_matches_narration(render, segment, [transform])

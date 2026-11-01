@@ -44,7 +44,7 @@ class ProfilePreviewOwner:
     def facts(self, run):
         actor = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
         reader = actor.user_id or actor.member_id
-        narration_inputs = self.repository.resolve_narration_inputs(workspace_id=run.workspace_id,
+        narration_inputs = self.repository.profile_inputs.resolve_narration_inputs(workspace_id=run.workspace_id,
             episode_id=run.preview_input.get("episode_id", "voice_preview"),
             voice_profile_id=run.voice_profile_id, voice_version=run.voice_version)
         voice = narration_inputs.voice
@@ -68,7 +68,7 @@ class ProfilePreviewOwner:
             if budget is None:
                 raise ValueError("独立人物预览同类资源预算尚未标定")
             avatar_inputs = {key: value for key, value in run.preview_input.items() if key != "retry"}
-            resolved = self.repository.resolve_avatar_lipsync_request(workspace_id=run.workspace_id,
+            resolved = self.repository.profile_inputs.resolve_avatar_lipsync_request(workspace_id=run.workspace_id,
                 viewer_user_id=reader, **avatar_inputs)
             person = resolved.person
             visual = self.repository.profile_reference_input(person, viewer_user_id=reader)

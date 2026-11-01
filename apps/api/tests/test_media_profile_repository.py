@@ -175,7 +175,7 @@ def test_versioned_media_profiles_survive_restart_and_resolve_task_inputs(tmp_pa
         scene_reader=lambda _path, _duration: [],
     )
     reloaded.fixture_owner_id = repository.fixture_owner_id
-    inputs = reloaded.resolve_narration_inputs(
+    inputs = reloaded.profile_inputs.resolve_narration_inputs(
         workspace_id="workspace_a",
         episode_id="episode_a",
         voice_profile_id=voice.id,
@@ -324,13 +324,13 @@ def test_version_changes_preserve_history_and_invalidate_narration_identity(tmp_
     generator = NarrationGenerator(tmp_path / "outputs", Provider())
     episode = _episode("workspace_a")
     profile = ProductionProfile(workspace_id="workspace_a")
-    old_inputs = repository.resolve_narration_inputs(
+    old_inputs = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="workspace_a",
         episode_id=episode.id,
         voice_profile_id=voice.id,
         voice_version=voice.version,
     )
-    new_inputs = repository.resolve_narration_inputs(
+    new_inputs = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="workspace_a",
         episode_id=episode.id,
         voice_profile_id=voice_v2.id,
@@ -388,7 +388,7 @@ def test_revoked_authorization_changes_cache_identity_and_blocks_persisted_narra
             raise AssertionError("revoked authorization must stop before synthesis")
 
     generator = NarrationGenerator(tmp_path / "outputs", Provider())
-    before_revocation = repository.resolve_narration_inputs(
+    before_revocation = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="workspace_a",
         episode_id=episode.id,
         voice_profile_id=voice.id,
@@ -405,7 +405,7 @@ def test_revoked_authorization_changes_cache_identity_and_blocks_persisted_narra
         status="revoked",
     )
     repository.save_authorization(revoked_authorization)
-    revoked_inputs = repository.resolve_narration_inputs(
+    revoked_inputs = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="workspace_a",
         episode_id=episode.id,
         voice_profile_id=voice.id,
@@ -444,7 +444,7 @@ def test_revoked_authorization_blocks_explicit_historical_avatar_request(tmp_pat
     audio = tmp_path / "narration.wav"
     audio.write_bytes(synthetic_wav_bytes())
 
-    request_before_revocation = repository.resolve_avatar_lipsync_request(
+    request_before_revocation = repository.profile_inputs.resolve_avatar_lipsync_request(
         workspace_id="workspace_a",
         person_id=person.id,
         person_version=person.version,
@@ -471,7 +471,7 @@ def test_revoked_authorization_blocks_explicit_historical_avatar_request(tmp_pat
     )
 
     with pytest.raises(ValueError, match="authorization_revoked"):
-        repository.resolve_avatar_lipsync_request(
+        repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id="workspace_a",
             person_id=person.id,
             person_version=person.version,
@@ -562,7 +562,7 @@ def test_narration_generator_resolves_persisted_voice_language_and_dictionary(tm
 
     assert artifact.language == "zh-en"
     assert captured["reference_audio_path"] == reference.resolve()
-    cache_inputs = repository.resolve_narration_inputs(
+    cache_inputs = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="workspace_a", episode_id="episode_a",
         voice_profile_id=voice.id, voice_version=voice.version,
     )
@@ -575,7 +575,7 @@ def test_narration_generator_resolves_persisted_voice_language_and_dictionary(tm
         episode=_episode("workspace_a"),
         profile=ProductionProfile(workspace_id="workspace_a"),
         voice_identity=voice,
-        pronunciation_entries=repository.resolve_narration_inputs(
+        pronunciation_entries=repository.profile_inputs.resolve_narration_inputs(
             workspace_id="workspace_a",
             episode_id="episode_a",
             voice_profile_id=voice.id,
@@ -688,7 +688,7 @@ def test_avatar_request_is_resolved_from_workspace_scoped_versions(tmp_path):
 
     assert result.status == "unavailable"
     with pytest.raises(KeyError):
-        repository.resolve_avatar_lipsync_request(
+        repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id="workspace_b",
             person_id=person.id,
             person_version=person.version,

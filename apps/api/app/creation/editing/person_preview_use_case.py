@@ -141,7 +141,7 @@ class PersonPreviewUseCase:
             person = self.repository.get_person_profile(render.workspace_id, render.person_profile_id, render.person_version)
             audio = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(render.workspace_id, segment.audio_reference)
             task = self.repository.task_records.get_creation_task(render.workspace_id, render.task_id)
-            request = self.repository.resolve_avatar_lipsync_request(workspace_id=render.workspace_id, person_id=person.id, person_version=person.version, voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version, audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language, motion=render.motion, expression=render.expression, authorization_id=person.authorization.id if person.authorization else None, authorization_version=person.authorization.version if person.authorization else None, model_id=render.model_id, viewer_user_id=task.owner_user_id)
+            request = self.repository.profile_inputs.resolve_avatar_lipsync_request(workspace_id=render.workspace_id, person_id=person.id, person_version=person.version, voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version, audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language, motion=render.motion, expression=render.expression, authorization_id=person.authorization.id if person.authorization else None, authorization_version=person.authorization.version if person.authorization else None, model_id=render.model_id, viewer_user_id=task.owner_user_id)
             if _authorization_failure(request) is not None:
                 return False
             input_facts = presenter_input_facts(request)

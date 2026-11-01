@@ -32,10 +32,10 @@ def build_legacy_voice_router(*, records_for, workspace_for, profiles_type_for, 
         raise capability_for()('voice_reference_mapping', message='声音参考仅保存为工作区逻辑引用，当前 API 未配置已授权媒体根映射。', impact='不能直接读取或返回声音参考媒体。', repair_action='配置工作区已授权媒体根映射后重试。')
 
     def _episode_voice_selection_response(workspace_id: str, episode_id: str) -> EpisodeVoiceSelectionResponse:
-        identity = records_for().selected_episode_versioned_voice_identity(workspace_id, episode_id)
+        identity = records_for().profile_inputs.selected_episode_versioned_voice_identity(workspace_id, episode_id)
         if identity is None:
             return selection_type_for()(episode_id=episode_id, voice_profile_id=None, voice_version=None, language=None, authorization_id=None, authorization_version=None, pronunciation_entry_ids=[], source='none')
-        inputs = records_for().resolve_episode_narration_inputs(workspace_id, episode_id)
+        inputs = records_for().profile_inputs.resolve_episode_narration_inputs(workspace_id, episode_id)
         voice = inputs.voice
         return selection_type_for()(episode_id=episode_id, voice_profile_id=voice.id, voice_version=voice.version, language=voice.language, authorization_id=voice.authorization.id, authorization_version=voice.authorization.version, pronunciation_entry_ids=[entry.id for entry in inputs.pronunciation_entries], source='episode')
 

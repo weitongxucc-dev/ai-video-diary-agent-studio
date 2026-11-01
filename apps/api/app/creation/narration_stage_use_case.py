@@ -89,7 +89,7 @@ class NarrationStageUseCase:
             raise PermissionError('局部改写配音许可与原作业不一致')
         plan = self.repository.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
         script = self.repository.section_inputs.effective_creation_script(task.workspace_id,task.id)
-        inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
+        inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,
             task_id=task.id,voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         previous = self.repository.narration_records.get_narration_segment(task.workspace_id,task.id,
             self.segment_id(task.id,script.id,command.section_id))
@@ -124,7 +124,7 @@ class NarrationStageUseCase:
             if plan.selected_voice is None:
                 raise MediaAuthorityError(reason='voice_identity_missing', impact='当前创作任务未生成配音，未调用声音模型。',
                     repair_action='重新预检并选择已授权且支持目标语言的声音版本。')
-            inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id,
+            inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id,
                 voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
             pronunciation_version = _pronunciation_version(_pronunciation_dictionary(
                 entries=inputs.pronunciation_entries, workspace_id=workspace_id,
@@ -249,7 +249,7 @@ class NarrationStageUseCase:
             selected = self.repository.section_inputs.read_creation_section_input(task, script, section_id, connection=conn)
         # Current voice/source authorization can inspect media; release the
         # Production reader before that work and before invoking the generator.
-        inputs = self.repository.resolve_creation_task_narration_inputs(
+        inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(
             workspace_id=workspace_id, task_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
         return task, plan, script, inputs, selected['section'], selected['audio']
@@ -287,7 +287,7 @@ class NarrationStageUseCase:
             raise ValueError('配音片段不属于当前确认文案')
         if plan.selected_voice is None:
             raise ValueError('当前任务没有可执行的声音版本')
-        inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id, voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
+        inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id, voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
         reference = self.repository.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
         maximum_duration = min(plan.duration_target_seconds, budget.max_duration_seconds)
         generated = self.generator.generate_for_creation_task(workspace_id=workspace_id, task_id=task.id, script_id=script.id, narration_text=target.text, language=target.language, max_duration_seconds=maximum_duration, voice_identity=inputs.voice, pronunciation_entries=inputs.pronunciation_entries, resolved_reference_audio_path=reference.source_path, repository=self.repository, viewer_user_id=task.owner_user_id, grant_context=context, segment_id=target.id, delivery_instruction=delivery_instruction, generation_identity=generation_identity)

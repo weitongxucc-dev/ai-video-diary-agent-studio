@@ -699,7 +699,7 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
     assert [segment.id for _asset, segment in repo.automatic_material_segments(
         workspace, viewer_user_id=user
     )] == [f"asset-segment-{index}" for index in range(3)]
-    monkeypatch.setattr(repo, "resolve_creation_task_narration_inputs",
+    monkeypatch.setattr(repo.profile_inputs, "resolve_creation_task_narration_inputs",
                         lambda **_kwargs: SimpleNamespace(voice=voice, pronunciation_entries=()))
     model = tmp_path / "model"
     model.mkdir()
@@ -4860,7 +4860,7 @@ def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_
         path = case.output['path']
         path.write_bytes(path.read_bytes() + b'not_original')
     elif mismatch == 'source':
-        inputs = case.repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id, voice_profile_id='voice_1', voice_version='v1')
+        inputs = case.repo.profile_inputs.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id, voice_profile_id='voice_1', voice_version='v1')
         source = case.repo.profile_reference_input(inputs.voice, viewer_user_id=case.actor.member_id)
         Path(source.source_path).write_bytes(Path(source.source_path).read_bytes() + b'not_original')
     def guard(conn):
@@ -5523,7 +5523,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
     snapshot_read = repo.read_creation_execution_snapshot
     selected_read = repo.section_inputs.read_creation_section_input
     iterate = repo.section_inputs.iter_creation_narration_sections
-    resolve = repo.resolve_creation_task_narration_inputs
+    resolve = repo.profile_inputs.resolve_creation_task_narration_inputs
 
     def snapshot(*args, connection):
         readers.append(connection)
@@ -5577,7 +5577,7 @@ def test_single_segment_preparation_uses_one_snapshot_and_releases_it_before_gen
     monkeypatch.setattr(repo, 'read_creation_execution_snapshot', snapshot)
     monkeypatch.setattr(repo.section_inputs, 'iter_creation_narration_sections', scan)
     monkeypatch.setattr(repo.section_inputs, 'read_creation_section_input', selected)
-    monkeypatch.setattr(repo, 'resolve_creation_task_narration_inputs', current_inputs)
+    monkeypatch.setattr(repo.profile_inputs, 'resolve_creation_task_narration_inputs', current_inputs)
     monkeypatch.setattr(case.stage, 'generator', SimpleNamespace(generate_for_creation_task=controlled_generator))
     try:
         artifact, segment, size = case.stage.prepare_segment('local', case.task_id, script_id=case.script_id,
@@ -5618,13 +5618,13 @@ def test_single_segment_preparation_refuses_changed_tail_or_current_voice_before
             text='不匹配的尾段音频文字', status='ready', audio_reference='narration://artifact/tail',
             duration_seconds=1., sample_rate=24000))
     else:
-        resolve = repo.resolve_creation_task_narration_inputs
+        resolve = repo.profile_inputs.resolve_creation_task_narration_inputs
         def revoked_inputs(**kwargs):
             with repo._connect() as conn:
                 conn.execute("UPDATE versioned_voice_profiles SET payload=json_set(payload,'$.use_state','blocked') "
                              "WHERE workspace_id='local' AND id=?", (pending.voice_profile_id,))
             return resolve(**kwargs)
-        monkeypatch.setattr(repo, 'resolve_creation_task_narration_inputs', revoked_inputs)
+        monkeypatch.setattr(repo.profile_inputs, 'resolve_creation_task_narration_inputs', revoked_inputs)
     calls = []
     def forbidden_generator(**kwargs):
         calls.append(kwargs)
@@ -5746,7 +5746,7 @@ def test_bounded_narration_start_effective_text_and_tail_audio_are_fully_checked
         case.actor, case.runtime, verify_media=False)
     job = repo.job_records.get_job_run('local', result['job']['id'])
     request = case.scheduler._get(repo.list_creation_job_request_states('local', job.id)[0]['id'])
-    inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id,
+    inputs = repo.profile_inputs.resolve_creation_task_narration_inputs(workspace_id='local', task_id=case.task_id,
         voice_profile_id=request.resources['voice_profile_id'], voice_version=request.resources['voice_version'])
     assert request.resources['text_chars'] == len('采用后的正文') + len(inputs.voice.reference_text)
     # Existing fixture reference bytes stand in for an already recorded artifact; no worker runs.
@@ -5906,7 +5906,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
     task = repo.task_records.get_creation_task('local', case.task_id)
     script = repo.script_records.get_creation_task_script('local', case.script_id)
     plan = repo.plan_records.get_creation_plan('local', task.plan_id)
-    inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
+    inputs = repo.profile_inputs.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
         voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
     pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
         workspace_id='local', person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
@@ -6371,7 +6371,7 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
     task = repo.task_records.get_creation_task('local', case.task_id)
     script = repo.script_records.get_creation_task_script('local', case.script_id)
     plan = repo.plan_records.get_creation_plan('local', task.plan_id)
-    inputs = repo.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
+    inputs = repo.profile_inputs.resolve_creation_task_narration_inputs(workspace_id='local', task_id=task.id,
         voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
     pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
         workspace_id='local', person_profile_id=inputs.voice.person_profile_id, task_id=task.id))

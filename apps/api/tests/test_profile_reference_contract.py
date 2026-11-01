@@ -144,7 +144,7 @@ def test_independent_wav_registration_restart_and_default_pins_version(repositor
     assert reopened.get_default_versioned_voice("ws") == saved
     assert reopened.get_versioned_voice_profile("ws", saved.id) == v2
     assert (
-        reopened.resolve_narration_inputs(
+        reopened.profile_inputs.resolve_narration_inputs(
             workspace_id="ws",
             episode_id="task",
             voice_profile_id=saved.id,
@@ -398,7 +398,7 @@ def test_expired_or_revoked_authorization_never_upgrades_historical_reference(
         verified_owner_user_id="member",
     )
     repository.save_authorization(replace(auth, version="v2", status="active"))
-    resolved = repository.resolve_narration_inputs(
+    resolved = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="ws",
         episode_id="task",
         voice_profile_id="voice",
@@ -964,13 +964,16 @@ def test_range_presenter_consumes_explicit_person_not_voice_relationship():
         narration_artifacts = SimpleNamespace(
             resolve_authorized_narration_audio_reference=lambda *args: Path("artifact.wav"))
 
-        def resolve_avatar_lipsync_request(self, **kwargs):
-            assert (
-                kwargs["person_id"] == "explicit-person"
-                and kwargs["person_version"] == "v7"
-            )
-            assert kwargs["viewer_user_id"] == "member"
-            return "controlled-request"
+        class ProfileInputs:
+            def resolve_avatar_lipsync_request(self, **kwargs):
+                assert (
+                    kwargs["person_id"] == "explicit-person"
+                    and kwargs["person_version"] == "v7"
+                )
+                assert kwargs["viewer_user_id"] == "member"
+                return "controlled-request"
+
+        profile_inputs = ProfileInputs()
 
     # The authorization boundary is tested by real profile tests; this case
     # isolates the plan's version forwarding, not a media/model success.
@@ -1348,7 +1351,7 @@ def test_range_video_audio_and_person_use_distinct_exact_derived_media(
         model_id=recorder.model_id,
         viewer_user_id="member",
     )
-    request = repository.resolve_avatar_lipsync_request(**request_args)
+    request = repository.profile_inputs.resolve_avatar_lipsync_request(**request_args)
     with pytest.raises(PermissionError, match="精确派生"):
         avatar.render(request, grant_context=context)
     assert not recorder.calls
@@ -1526,3 +1529,87 @@ def test_range_historical_invalid_bounds_are_not_executed(
             invalid, viewer_user_id="member", grant_context=context
         )
     assert not context.scheduler.children
+
+
+def test_profile_input_resolver_keeps_historical_facts_current_access_and_readonly_privacy(repository, monkeypatch):
+    import socket
+    from app.profiles.contracts import PronunciationEntry
+    from app.profiles.input_resolution import VersionedNarrationInputs
+    from app.materials.contracts import MediaAuthorityError
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('profile metadata forbids media, network and generation')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    now = datetime.now(timezone.utc)
+    authorization = Authorization(id='original-consent', workspace_id='ws', version='v1', rights_holder='metadata',
+        content_types=('voice', 'person'), usage_scopes=('narration', 'avatar_lipsync'),
+        effective_from=now - timedelta(days=1), expires_at=None, evidence_reference='metadata', status='active')
+    alternate = replace(authorization, id='different-current-consent')
+    historical_revoked = replace(authorization, id='historical-consent', status='revoked')
+    for value in (authorization, alternate, historical_revoked, replace(historical_revoked, version='v2', status='active')):
+        repository._media_authorizations.save_authorization(value)
+    old_voice = VoiceProfile('metadata-voice', 'ws', 'v1', 'zh', '', 'fixed old text',
+        authorization=authorization, owner_user_id='member', visibility='private')
+    current_voice = replace(old_voice, version='v2', reference_text='different current text',
+        authorization=alternate, use_state='excluded', visibility='shared')
+    old_person = PersonProfile('metadata-person', 'ws', 'fixed old person', 'v1', '', (), (),
+        authorization=authorization, owner_user_id='member', visibility='private')
+    current_person = replace(old_person, version='v2', display_name='different current person', visibility='shared')
+    protected_voice = replace(old_voice, id='historically-blocked', use_state='excluded', authorization=historical_revoked)
+    with repository._connect() as conn:
+        for value in (old_voice, current_voice, protected_voice,
+                      replace(protected_voice, version='v2', use_state='available', authorization=alternate)):
+            repository._profile_records._save_versioned_voice_profile(conn, value)
+        for value in (old_person, current_person):
+            repository._profile_records._save_person_profile(conn, value)
+        conn.execute('INSERT INTO episode_voice_selections VALUES(?,?,?,?,?)',
+            ('ws', 'metadata-episode', old_voice.id, 'v1', now.isoformat()))
+    entry = PronunciationEntry('metadata-pronunciation', 'ws', 'term', 'zh', 'fixed pronunciation', 'workspace', None, 'v1')
+    repository._profile_records.save_pronunciation_entry(entry)
+    inputs = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
+        voice_profile_id=old_voice.id, voice_version='v1')
+    assert isinstance(inputs, VersionedNarrationInputs)
+    assert inputs.voice.version == 'v1' and inputs.voice.reference_text == 'fixed old text'
+    assert inputs.voice.use_state == 'excluded' and inputs.voice.visibility == 'shared'
+    assert inputs.voice.authorization.id == authorization.id and inputs.pronunciation_entries == (entry,)
+    protected = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
+        voice_profile_id=protected_voice.id, voice_version='v1')
+    assert protected.voice.use_state == 'excluded' and protected.voice.authorization == historical_revoked
+    assert repository.profile_inputs.selected_episode_versioned_voice_identity('ws', 'metadata-episode') == (old_voice.id, 'v1')
+    with pytest.raises(MediaAuthorityError) as episode_refusal:
+        repository.profile_inputs.resolve_episode_narration_inputs('ws', 'metadata-episode')
+    assert episode_refusal.value.reason == 'voice_authorization_profile_excluded'
+    reference_calls = []
+    def reference_forbidden(profile, **kwargs):
+        reference_calls.append(profile.id)
+        return forbidden()
+    monkeypatch.setattr(repository, 'profile_reference_input', reference_forbidden)
+    command = dict(workspace_id='ws', person_id=old_person.id, person_version='v1',
+        voice_profile_id=old_voice.id, voice_version='v1', audio_path='metadata-only.wav', audio_cache_key='metadata',
+        language='zh', motion='none', expression='none', authorization_id=authorization.id,
+        authorization_version='v1', model_id='metadata', viewer_user_id='other-member')
+    readonly = repository.profile_inputs.resolve_avatar_lipsync_request(**command, for_generation=False)
+    assert readonly.person.version == 'v1' and readonly.person.display_name == 'fixed old person'
+    assert readonly.voice.version == 'v1' and readonly.visual_path == '' and readonly.visual_reference_input is None
+    assert reference_calls == []
+    with pytest.raises(AssertionError, match='profile metadata forbids'):
+        repository.profile_inputs.resolve_avatar_lipsync_request(**command)
+    assert reference_calls == [old_voice.id]
+    with repository._connect() as conn:
+        repository._profile_records._save_person_profile(conn, replace(current_person, version='v3', visibility='private'))
+        repository._profile_records._save_versioned_voice_profile(conn, replace(current_voice, version='v3', visibility='private'))
+    with pytest.raises(PermissionError, match='已取消共享'):
+        repository.profile_inputs.resolve_avatar_lipsync_request(**command, for_generation=False)
+    assert reference_calls == [old_voice.id]
+    revoked = replace(authorization, version='v2', status='revoked')
+    repository._media_authorizations.save_authorization(revoked)
+    still_fixed = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
+        voice_profile_id=old_voice.id, voice_version='v1')
+    assert still_fixed.voice.reference_text == 'fixed old text' and still_fixed.voice.authorization == revoked
+    assert still_fixed.voice.authorization.id != alternate.id

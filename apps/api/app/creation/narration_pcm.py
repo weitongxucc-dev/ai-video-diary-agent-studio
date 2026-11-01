@@ -221,18 +221,18 @@ def narration_reference_facts(repository,task,plan,prepared=None):
         return (hashlib.sha256(json.dumps(json_value(repository.get_asset(task.workspace_id,identity)),
             sort_keys=True).encode()).hexdigest() if identity else None)
     if prepared is None:
-        inputs=repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,task_id=task.id,
+        inputs=repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,task_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         reference=repository.profile_reference_input(inputs.voice,viewer_user_id=task.owner_user_id)
         prepared={'profile':json_value(inputs.voice),'reference':asdict(reference),'reader':task.owner_user_id,
             'source_asset_digest':asset_digest(reference.asset_id)}
     else:
-        inputs=repository.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
+        inputs=repository.profile_inputs.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         reference=ProfileReferenceInput(**prepared['reference'])
         from app.profiles.contracts import profile_use_failure
         from app.source_policy import knowledge_item_readable as content_readable
-        current=repository.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
+        current=repository.profile_inputs.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id).voice
         for profile in (inputs.voice,current):
             failure=profile_use_failure(profile,content_type='voice',usage_scope='narration')

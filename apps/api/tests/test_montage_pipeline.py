@@ -656,7 +656,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         )
 
     provider.render = fake_person_render
-    render_request = production.resolve_avatar_lipsync_request(
+    render_request = production.profile_inputs.resolve_avatar_lipsync_request(
         workspace_id=workspace_id,
         person_id=person.id,
         person_version=person.version,

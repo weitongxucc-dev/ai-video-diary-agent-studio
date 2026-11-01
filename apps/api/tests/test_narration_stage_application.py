@@ -86,7 +86,7 @@ def narration_preparation(tmp_path):
         creation_execution_input=lambda *_:start.payload,
         task_records=SimpleNamespace(get_creation_task=read_task),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),script_records=SimpleNamespace(get_creation_task_script=lambda *_:script),
         section_inputs=SimpleNamespace(effective_creation_script=lambda *_:script),
-        resolve_creation_task_narration_inputs=lambda **_:inputs,
+        profile_inputs=SimpleNamespace(resolve_creation_task_narration_inputs=lambda **_:inputs),
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
         narration_records=SimpleNamespace(get_narration_segment=lambda _ws,_task,identity:segments[identity], list_narration_segments=lambda *_:list(reversed(list(segments.values()))), save_narration_segments=no_write),
 

@@ -1,4 +1,5 @@
 """Historical voice metadata/refusals only; no voice reference or narration execution."""
+from app.profiles.input_resolution import ProfileInputResolver
 from copy import deepcopy
 from datetime import date
 import subprocess
@@ -28,7 +29,7 @@ def test_legacy_voice_metadata_and_retired_write_refusals(tmp_path, monkeypatch)
     monkeypatch.setattr(wave, 'open', forbidden)
     monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
     monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
-    monkeypatch.setattr(ProductionRepository, 'resolve_episode_narration_inputs', forbidden)
+    monkeypatch.setattr(ProfileInputResolver, 'resolve_episode_narration_inputs', forbidden)
     monkeypatch.setattr(main, '_creation_runtime', forbidden)
     monkeypatch.setattr(main, 'transcribe_audio_bytes', forbidden)
     monkeypatch.setattr(main.narration_generator, 'generate_for_creation_task', forbidden)

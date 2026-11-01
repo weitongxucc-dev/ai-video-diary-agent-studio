@@ -276,7 +276,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
         if (segment.voice_profile_id, segment.voice_version) != (plan.selected_voice.profile_id, plan.selected_voice.version):
             raise ValueError("人物配音版本与当前方案不一致")
         audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
-        request = repository.resolve_avatar_lipsync_request(
+        request = repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
             voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
             audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
@@ -531,7 +531,7 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
         raise ValueError("人物编辑对象或配音已变化，请重新预览")
     person = repository.get_person_profile(task.workspace_id, payload["person_profile_id"], payload["person_version"])
     audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
-    request = repository.resolve_avatar_lipsync_request(
+    request = repository.profile_inputs.resolve_avatar_lipsync_request(
         workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
         voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
         audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
@@ -2393,7 +2393,7 @@ class CreationJobUnitExecutor:
                     original_recovery=True)
             if key != request.unit_key or facts != resources:
                 raise RecoveryBlocked('原单段文案或固定来源已变化，不能恢复缓存')
-            inputs = self.repository.resolve_creation_task_narration_inputs(workspace_id=job.workspace_id,
+            inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=job.workspace_id,
                 task_id=job.task_id, voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'])
             reference_identity = ProfileReferenceInput(**resources['narration_reference']['reference']).identity
             # This is the original single-section cache recipe; no generator/cache lookup is entered.

@@ -222,7 +222,7 @@ class NarrationGenerator:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None,
     ) -> NarrationArtifact:
-        inputs = repository.resolve_narration_inputs(
+        inputs = repository.profile_inputs.resolve_narration_inputs(
             workspace_id=workspace_id,
             episode_id=episode.id,
             voice_profile_id=voice_profile_id,
@@ -593,7 +593,7 @@ class VoicePreviewService:
 
         records = repository.preview_records if preview_records is None else preview_records
 
-        inputs = repository.resolve_narration_inputs(
+        inputs = repository.profile_inputs.resolve_narration_inputs(
             workspace_id=workspace_id,
             episode_id=episode_id,
             voice_profile_id=voice_profile_id,

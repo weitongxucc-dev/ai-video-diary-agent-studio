@@ -492,7 +492,7 @@ class AvatarAndLipSyncService:
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None,
     ) -> AvatarAndLipSyncResult:
-        request = repository.resolve_avatar_lipsync_request(
+        request = repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
             person_id=person_id,
             person_version=person_version,
@@ -548,7 +548,7 @@ class AvatarPreviewService:
 
         records = repository.preview_records if preview_records is None else preview_records
 
-        request = repository.resolve_avatar_lipsync_request(
+        request = repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
             person_id=person_id,
             person_version=person_version,
