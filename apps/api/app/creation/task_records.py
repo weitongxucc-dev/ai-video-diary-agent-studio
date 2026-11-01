@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import replace
 import json
 import sqlite3
+from typing import Literal
 
 from app.creation.contracts import CreationTask
 from app.creation.task_input_reads import creation_task_from_payload
@@ -119,3 +120,108 @@ class TaskRecordStore:
             "UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
             (_json_payload(task), task.updated_at.isoformat(), workspace_id, task.id),
         )
+
+    def _script_task_transition(self, conn, task, transition, now, *, script_id=None,
+                                reason=None, impact=None, repair_action=None, retryable=None):
+        if not conn.in_transaction:
+            raise ValueError("文案引起的任务状态转换必须属于原事务")
+        if transition == "started":
+            task.stage = "script"
+            task.stage_status = task.status = "running"
+            task.stage_reason = task.stage_impact = task.stage_repair_action = task.stage_retryable = None
+        elif transition == "saved":
+            task.stage_status = task.status = "waiting_for_user"
+            task.progress = max(task.progress,35)
+        elif transition == "transferred":
+            if task.stage_status == "not_started":
+                task.stage_status = task.status = "waiting_for_user"
+                task.progress = max(task.progress,35)
+        elif transition == "failed":
+            task.stage_status = task.status = "failed"
+            task.recovery_point = "script"
+            task.stage_reason,task.stage_impact = reason,impact
+            task.stage_repair_action,task.stage_retryable = repair_action,retryable
+        elif transition == "adopted":
+            task.confirmed_script_id=script_id
+            task.stage,task.stage_status,task.status="narration","not_started","running"
+            task.progress=max(task.progress,40)
+            task.recovery_point="narration"
+            task.stage_reason=task.stage_impact=task.stage_repair_action=task.stage_retryable=None
+        else:
+            raise ValueError("未知文案任务转换")
+        task.updated_at=now
+        conn.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
+            (_json_payload(task),now.isoformat(),task.workspace_id,task.id))
+
+    def fail_creation_task_stage(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        stage: Literal["narration", "montage"],
+        reason: str,
+        impact: str,
+        repair_action: str,
+        retryable: bool,
+        connection: sqlite3.Connection | None = None,
+    ) -> CreationTask:
+        if not all(value.strip() for value in (reason, impact, repair_action)):
+            raise ValueError("阶段失败必须包含原因、影响和修复动作")
+        if connection is None:
+            with self._connect() as conn:
+                self.fail_creation_task_stage(
+                    workspace_id, task_id, stage=stage, reason=reason, impact=impact,
+                    repair_action=repair_action, retryable=retryable, connection=conn,
+                )
+            return self.get_creation_task(workspace_id, task_id)
+        row = connection.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+            (workspace_id, task_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        task = creation_task_from_payload(json.loads(str(row["payload"])))
+        if task.stage != stage:
+            raise ValueError("任务当前阶段与失败阶段不一致")
+        task.stage_status = "failed"
+        task.status = "failed"
+        task.recovery_point = stage
+        task.stage_reason = reason
+        task.stage_impact = impact
+        task.stage_repair_action = repair_action
+        task.stage_retryable = retryable
+        task.updated_at = utc_now()
+        connection.execute(
+            "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+            (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
+        )
+        return task
+
+    def _start_creation_task_stage(
+        self,
+        workspace_id: str,
+        task_id: str,
+        stage: Literal["narration", "montage"],
+    ) -> CreationTask:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
+                (workspace_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            task = creation_task_from_payload(json.loads(str(row["payload"])))
+            if task.stage != stage or task.stage_status not in {"not_started", "failed"}:
+                raise ValueError("当前创作任务不能开始该阶段")
+            task.stage_status = "running"
+            task.status = "running"
+            task.stage_reason = None
+            task.stage_impact = None
+            task.stage_repair_action = None
+            task.stage_retryable = None
+            task.updated_at = utc_now()
+            conn.execute(
+                "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
+                (_json_payload(task), task.updated_at.isoformat(), workspace_id, task_id),
+            )
+        return self.get_creation_task(workspace_id, task_id)

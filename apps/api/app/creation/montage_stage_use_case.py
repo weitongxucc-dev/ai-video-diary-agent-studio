@@ -190,7 +190,7 @@ class MontageStageUseCase:
             )
             self.metadata.ensure_montage_base(workspace_id, task, montage, verify_inputs=verify_inputs)
         except (KeyError, MediaAuthorityError, ValueError, MontageStageRejected) as exc:
-            task = self.repository.fail_creation_task_stage(
+            task = self.repository.task_records.fail_creation_task_stage(
                 workspace_id,
                 task.id,
                 stage="montage",

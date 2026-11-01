@@ -2286,7 +2286,7 @@ class CreationJobUnitExecutor:
             task_stage = "narration" if stage == "narration" else "montage"
             if payload["stage"] == task_stage:
                 if status == "failed" and payload["stage_status"] != "failed":
-                    self.repository.fail_creation_task_stage(
+                    self.repository.task_records.fail_creation_task_stage(
                         grant.workspace_id, row["task_id"], stage=task_stage,
                         reason=reason, impact="当前制作未完成，上游有效产物保留。",
                         repair_action="修复当前阶段后点击继续制作。", retryable=True, connection=conn,

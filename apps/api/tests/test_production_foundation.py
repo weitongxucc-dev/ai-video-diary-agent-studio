@@ -3474,7 +3474,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     assert saved_script.sections[0].content.endswith("这句话由用户确认。")
 
     reloaded.start_creation_task_narration("workspace_a", task_id)
-    reloaded.fail_creation_task_stage(
+    reloaded.task_records.fail_creation_task_stage(
         "workspace_a",
         task_id,
         stage="narration",
@@ -3516,7 +3516,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     assert len(script_calls) == 1
     assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
     reloaded.start_creation_task_narration("workspace_a", task_id)
-    reloaded.fail_creation_task_stage(
+    reloaded.task_records.fail_creation_task_stage(
         "workspace_a", task_id, stage="narration", reason="narration_generation_failed",
         impact="配音超时。", repair_action="请压缩并重新确认文案", retryable=True,
     )
@@ -4898,3 +4898,119 @@ def test_narration_completion_metadata_preserves_caller_transaction_and_rolls_ba
     assert outside() == before
     assert production.task_records.get_creation_task(workspace_id, task_id).stage == 'narration'
     assert path.read_bytes() == opaque and violations == []
+
+
+def test_task_record_stage_writes_keep_caller_clock_payload_and_transaction_boundaries(tmp_path, monkeypatch):
+    import socket
+    import subprocess
+    import threading
+    from PIL import Image
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('task stage metadata forbids execution, media and networking')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    repo = ProductionRepository(tmp_path / 'stages.sqlite3', tmp_path / 'library',
+        duration_reader=forbidden, scene_reader=forbidden)
+    member, _token = LocalMemberService(repo.database_path).whoami(None)
+    plan = CreationPlan('stage-plan', 'metadata-ws', 'fixed goal', 'fixed plan', 1, 'zh-CN', '9:16', 4,
+        [], [], None, [], 0, 0, 'fixed metadata', [], [], [], 'stage-fixture')
+    task = CreationTask('stage-task', 'metadata-ws', plan.id, 'fixed task', 'knowledge_explanation',
+        stage='narration', stage_status='not_started', progress=8, visibility='private')
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    with repo._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET visibility='shared' WHERE workspace_id=? AND id=?", (task.workspace_id, task.id))
+    records = repo.task_records
+    connections = []
+    active = []
+    class ObservedConnection(sqlite3.Connection):
+        def __enter__(self):
+            active.append(self)
+            return super().__enter__()
+        def __exit__(self, *args):
+            try:
+                return super().__exit__(*args)
+            finally:
+                active.remove(self)
+        def execute(self, sql, parameters=()):
+            self.statements.append(sql)
+            return super().execute(sql, parameters)
+    def connect():
+        conn = sqlite3.connect(repo.database_path, factory=ObservedConnection)
+        conn.row_factory = sqlite3.Row
+        conn.statements = []
+        connections.append(conn)
+        return conn
+    monkeypatch.setattr(repo, '_connect', connect)
+    stamp = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    original_get = records.get_creation_task
+    current = original_get(task.workspace_id, task.id)
+    with repo._connect() as conn:
+        with pytest.raises(ValueError, match='必须属于原事务'):
+            records._script_task_transition(conn, current, 'started', stamp)
+        conn.execute('BEGIN IMMEDIATE')
+        records._script_task_transition(conn, current, 'started', stamp)
+        records._script_task_transition(conn, current, 'failed', stamp,
+            reason='source failure', impact='original work retained', repair_action='review source', retryable=False)
+        assert current.stage_reason == 'source failure' and current.recovery_point == 'script'
+        records._script_task_transition(conn, current, 'adopted', stamp, script_id='declared-script')
+        assert conn.in_transaction and current.updated_at == stamp
+        assert current.stage == 'narration' and current.progress == 40 and current.confirmed_script_id == 'declared-script'
+        assert current.stage_reason is None and current.stage_retryable is None
+        row = conn.execute('SELECT payload,updated_at FROM creation_tasks WHERE id=?', (task.id,)).fetchone()
+        assert row['updated_at'] == stamp.isoformat()
+        assert json.loads(row['payload'])['recovery_point'] == 'narration'
+        assert original_get(task.workspace_id, task.id).confirmed_script_id is None
+        conn.rollback()
+    assert original_get(task.workspace_id, task.id).progress == 8
+    rereads = []
+    def get_after_writer(*args, **kwargs):
+        if kwargs.get('connection') is None:
+            assert active == []
+            rereads.append(args)
+        return original_get(*args, **kwargs)
+    before = len(connections)
+    with monkeypatch.context() as patch:
+        patch.setattr(records, 'get_creation_task', get_after_writer)
+        started = repo.start_creation_task_narration(task.workspace_id, task.id)
+    owned = connections[before:]
+    assert len(rereads) == 1 and started.stage_status == 'running' and started.visibility == 'shared'
+    assert not any(sql.strip().upper().startswith('BEGIN') for conn in owned for sql in conn.statements)
+    with repo._connect() as conn:
+        stored = json.loads(conn.execute('SELECT payload FROM creation_tasks WHERE id=?', (task.id,)).fetchone()[0])
+        assert stored['visibility'] == 'private' and stored['stage_status'] == 'running'
+    with pytest.raises(ValueError, match='不能开始该阶段'):
+        records._start_creation_task_stage(task.workspace_id, task.id, 'narration')
+    before = len(connections)
+    with pytest.raises(ValueError, match='必须包含原因'):
+        records.fail_creation_task_stage(task.workspace_id, task.id, stage='narration',
+            reason=' ', impact='retained', repair_action='review', retryable=True)
+    assert len(connections) == before
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        with pytest.raises(ValueError, match='阶段不一致'):
+            records.fail_creation_task_stage(task.workspace_id, task.id, stage='montage',
+                reason='reason', impact='retained', repair_action='review', retryable=True, connection=conn)
+        failed = records.fail_creation_task_stage(task.workspace_id, task.id, stage='narration',
+            reason=' original reason ', impact='retained', repair_action='review', retryable=False, connection=conn)
+        assert conn.in_transaction and failed.visibility == 'private'
+        assert failed.stage_reason == ' original reason ' and failed.recovery_point == 'narration'
+        assert original_get(task.workspace_id, task.id).stage_status == 'running'
+        conn.rollback()
+    assert original_get(task.workspace_id, task.id).stage_status == 'running'
+    before = len(connections)
+    with monkeypatch.context() as patch:
+        patch.setattr(records, 'get_creation_task', get_after_writer)
+        persisted = records.fail_creation_task_stage(task.workspace_id, task.id, stage='narration',
+            reason='final reason', impact='retained', repair_action='review', retryable=True)
+    assert persisted.stage_status == 'failed' and persisted.stage_retryable and persisted.visibility == 'shared'
+    assert len(rereads) == 2
+    assert not any(sql.strip().upper().startswith('BEGIN') for conn in connections[before:] for sql in conn.statements)
