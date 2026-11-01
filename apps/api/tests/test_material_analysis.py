@@ -53,12 +53,12 @@ def case(tmp_path, *, provider=None, speech=None):
         duration_reader=lambda _path: 8.0, scene_reader=lambda _path, _duration: [4.0],
         visual_provider=provider, speech_analyzer=speech,
     )
-    repo.bind_material_ingestion("workspace", expected_directory=str(library))
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.bind_material_ingestion("workspace", expected_directory=str(library))
+    repo.material_source_files.confirm_material_copy_complete(
         "workspace", relative_path=source.name,
-        expected_revision=repo.material_copy_revision(source.stat()), confirmation_source="manual",
+        expected_revision=repo.material_source_files.material_copy_revision(source.stat()), confirmation_source="manual",
     )
-    return repo, source, repo.scan_library("workspace")[0]
+    return repo, source, repo.material_intake.scan_library("workspace")[0]
 
 
 def asset_row(repo, asset_id):
@@ -148,8 +148,8 @@ def test_public_analysis_preserves_copy_and_final_digest_rejection_without_asset
         return 8.0
 
     repo.duration_reader = duration
-    assert repo.get_material_ingestion_binding() == ("workspace", str(source.parent))
-    assert ProductionRepository.material_copy_revision is MaterialSourceFileAccess.material_copy_revision
+    assert repo.material_source_files.get_material_ingestion_binding() == ("workspace", str(source.parent))
+    assert repo.material_source_files.material_copy_revision is MaterialSourceFileAccess.material_copy_revision
     with pytest.raises(ValueError, match="不在配置的素材库"):
         repo._validated_library_file(str(tmp_path / "outside.mp4"))
     source.write_bytes(b"a new unconfirmed synthetic revision")
@@ -157,9 +157,9 @@ def test_public_analysis_preserves_copy_and_final_digest_rejection_without_asset
     with pytest.raises(ValueError, match="先确认"):
         repo.analyze_asset("workspace", asset.id)
     assert calls == [] and asset_row(repo, asset.id) == before
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.confirm_material_copy_complete(
         "workspace", relative_path=source.name,
-        expected_revision=repo.material_copy_revision(source.stat()), confirmation_source="manual",
+        expected_revision=repo.material_source_files.material_copy_revision(source.stat()), confirmation_source="manual",
     )
     with pytest.raises(ValueError, match="原片内容发生变化"):
         repo.analyze_asset("workspace", asset.id, expected_source_digest="0" * 64)

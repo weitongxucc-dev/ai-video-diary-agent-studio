@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from app.materials.intake import MaterialIntakeUseCase
+
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -29,7 +31,7 @@ def material_library_no_execution(monkeypatch):
     monkeypatch.setattr(wave, "open", forbidden)
     for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
         monkeypatch.setattr(main_module, name, forbidden)
-    monkeypatch.setattr(ProductionRepository, "scan_library", forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, "scan_library", forbidden)
     monkeypatch.setattr(ProductionRepository, "analyze_asset", forbidden)
 
 

@@ -5,6 +5,9 @@ The host retains current service qualification and analysis-driver lifecycle.
 """
 from __future__ import annotations
 
+from app.materials.intake import MaterialIntakeUseCase
+from app.materials.source_files import MaterialSourceFileAccess
+
 from contextlib import contextmanager
 from typing import Callable, Protocol
 
@@ -21,14 +24,10 @@ from app.schemas import (
 
 
 class MaterialIntakeRecords(Protocol):
-    def material_ingestion_directory_state(self, workspace_id): ...
-    def get_material_ingestion_binding(self): ...
-    def material_ingestion_state_counts(self, workspace_id): ...
-    def pending_material_copies(self, workspace_id): ...
-    def bind_material_ingestion(self, workspace_id, *, expected_directory, verified_owner_user_id=None): ...
+    material_intake: MaterialIntakeUseCase
+    material_source_files: MaterialSourceFileAccess
     def list_assets_page(self, workspace_id, *, limit, offset, include_private,
                          viewer_user_id, local_diagnostic): ...
-    def retry_material_ingestion(self, workspace_id, asset_id): ...
     def get_asset(self, workspace_id, asset_id): ...
 
 
@@ -44,8 +43,8 @@ class MaterialDiscoveryActions(Protocol):
 
 
 def material_binding_status(workspace_id: str, repository: MaterialIntakeRecords) -> MaterialIntakeStatusResponse:
-    directory = repository.material_ingestion_directory_state(workspace_id)
-    binding = repository.get_material_ingestion_binding()
+    directory = repository.material_source_files.material_ingestion_directory_state(workspace_id)
+    binding = repository.material_source_files.get_material_ingestion_binding()
     foreign = bool(directory['bound_to_another_workspace']) or (binding is not None and binding[0] != workspace_id)
     bound = binding is not None and binding[0] == workspace_id
     if foreign:
@@ -59,7 +58,7 @@ def material_binding_status(workspace_id: str, repository: MaterialIntakeRecords
     else:
         state = str(directory['status'])
         message, repair = {'ready': ('素材目录可访问；确认复制完成后才接收并分析。' if bound else '素材目录可访问，等待关联到当前工作区。', None), 'missing': ('找不到当前设置的素材目录。', '连接存储盘或在设置中选择现有目录。'), 'unmounted': ('素材所在的外接盘没有挂载。', '连接原数据盘后重试。'), 'read_only': ('素材目录当前不可写，素材无法进入分析。', '检查磁盘是否以只读方式挂载或目录权限是否被改动，再重新检查。'), 'invalid': ('当前素材目录不可用于自动导入。', '在设置中选择可访问的素材目录。')}.get(state, ('尚未确认素材目录状态。', '检查目录设置后重试。'))
-    return MaterialIntakeStatusResponse(bound_to_current_workspace=bound, binding_available=not foreign, configured_directory=None if foreign else str(directory['directory']), bound_directory=binding[1] if bound else None, directory_state=state, directory_message=message, repair_action=repair, scan_interval_seconds=60, file_counts=repository.material_ingestion_state_counts(workspace_id) if bound else {'observing': 0, 'running': 0, 'ready': 0, 'failed': 0, 'blocked_disk': 0}, pending_files=repository.pending_material_copies(workspace_id) if bound else [])
+    return MaterialIntakeStatusResponse(bound_to_current_workspace=bound, binding_available=not foreign, configured_directory=None if foreign else str(directory['directory']), bound_directory=binding[1] if bound else None, directory_state=state, directory_message=message, repair_action=repair, scan_interval_seconds=60, file_counts=repository.material_source_files.material_ingestion_state_counts(workspace_id) if bound else {'observing': 0, 'running': 0, 'ready': 0, 'failed': 0, 'blocked_disk': 0}, pending_files=repository.material_source_files.pending_material_copies(workspace_id) if bound else [])
 
 
 @contextmanager
@@ -104,7 +103,7 @@ class MaterialIntakeHTTPAdapter:
         repository = self._records_for()
         service = self._ingestion_for(repository)
         try:
-            repository.bind_material_ingestion(workspace_id, expected_directory=payload.expected_directory, verified_owner_user_id=self._reader_for(request, workspace_id)[0])
+            repository.material_source_files.bind_material_ingestion(workspace_id, expected_directory=payload.expected_directory, verified_owner_user_id=self._reader_for(request, workspace_id)[0])
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         service.wake()
@@ -145,7 +144,7 @@ class MaterialIntakeHTTPAdapter:
         if status.directory_state != 'ready':
             raise HTTPException(status_code=409, detail=status.directory_message)
         try:
-            repository.retry_material_ingestion(workspace_id, asset_id)
+            repository.material_intake.retry_material_ingestion(workspace_id, asset_id)
             asset = repository.get_asset(workspace_id, asset_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail='素材不属于当前工作区') from exc

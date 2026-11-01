@@ -87,7 +87,7 @@ def test_external_pending_list_confirmation_and_readback(intake) -> None:
     assert scanned.status_code == 200 and scanned.json()["assets"] == []
     status = client.get("/api/production/materials/intake").json()
     pending = status["pending_files"][0]
-    assert pending == {"relative_path": "external.mp4", "expected_revision": repo.material_copy_revision(path.stat())}
+    assert pending == {"relative_path": "external.mp4", "expected_revision": repo.material_source_files.material_copy_revision(path.stat())}
     assert duration.call_count == 0
     service._wake.clear()
     response = client.post("/api/production/materials/intake/copy-complete", json={
@@ -117,7 +117,7 @@ def test_stale_revision_rejected_and_foreign_binding_not_exposed(metadata_intake
     assert "文件修订已变化" in response.json()["detail"]
     assert not service._wake.is_set()
     updated = client.get("/api/production/materials/intake").json()["pending_files"][0]
-    assert updated["expected_revision"] == repo.material_copy_revision(path.stat())
+    assert updated["expected_revision"] == repo.material_source_files.material_copy_revision(path.stat())
     assert duration.call_count == 0
     malformed = {**updated, "expected_revision": {**updated["expected_revision"], "mtime_ns": 9007199254740999}, "confirmation_source": "manual"}
     assert client.post("/api/production/materials/intake/copy-complete", json=malformed).status_code == 422
@@ -135,7 +135,7 @@ def test_committed_app_copy_confirms_before_discovery_and_scan_receives_it(intak
     payload = b"committed app copy"
     path.write_bytes(payload)
     response = client.post("/api/production/materials/intake/copy-complete", json={
-        "relative_path": "app.mp4", "expected_revision": repo.material_copy_revision(path.stat()),
+        "relative_path": "app.mp4", "expected_revision": repo.material_source_files.material_copy_revision(path.stat()),
         "confirmation_source": "app_import",
     })
     assert response.status_code == 200 and response.json()["confirmed"] is True
@@ -153,7 +153,7 @@ def test_confirmed_member_copy_is_not_readable_without_identity_outside_local(in
     source = repo.video_library_path / "member.mp4"
     source.write_bytes(b"complete member copy")
     confirmed = client.post("/api/production/materials/intake/copy-complete", json={
-        "relative_path": source.name, "expected_revision": repo.material_copy_revision(source.stat()),
+        "relative_path": source.name, "expected_revision": repo.material_source_files.material_copy_revision(source.stat()),
         "confirmation_source": "app_import",
     })
     assert confirmed.status_code == 200, confirmed.text

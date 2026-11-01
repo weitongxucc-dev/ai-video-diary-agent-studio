@@ -148,7 +148,7 @@ def test_old_probe_checkpoint_replays_only_a_v2_probe_for_same_source(tmp_path: 
     source = library / "clip.mp4"
     source.write_bytes(b"same material source")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=_CheckpointProbeOwner(repo),
         resources=_Resources(), processes=_Processes(),
@@ -235,7 +235,7 @@ def test_probe_checkpoint_preserves_manual_tags_and_restart_pending_marker(tmp_p
     source = library / "clip.mp4"
     source.write_bytes(b"source for checkpoint test")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=_CheckpointProbeOwner(repo),
         resources=_Resources(), processes=_Processes(),
@@ -286,7 +286,7 @@ def test_probe_terminal_failure_is_persisted_and_not_auto_retried(tmp_path: Path
     library.mkdir()
     (library / "clip.mp4").write_bytes(b"not a decodable video")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=_CheckpointProbeOwner(repo),
         resources=_Resources(), processes=_Processes(),
@@ -348,7 +348,7 @@ def test_real_short_video_ffprobe_uses_grant_and_leaves_scene_pending(tmp_path: 
         check=True, capture_output=True, timeout=10,
     )
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
         budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
@@ -404,7 +404,7 @@ def test_real_invalid_media_ffprobe_failure_is_terminal(tmp_path: Path) -> None:
     library.mkdir()
     (library / "broken.mp4").write_bytes(b"not a video")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
         budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
@@ -457,7 +457,7 @@ def test_probe_timeout_cleans_child_and_persists_failure(
     library.mkdir()
     (library / "clip.mp4").write_bytes(b"source for timeout")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
         budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
@@ -508,7 +508,7 @@ def test_probe_stop_cancels_registered_child_and_defers_without_result(
     library.mkdir()
     (library / "clip.mp4").write_bytes(b"source for cancellation")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
         budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
@@ -574,7 +574,7 @@ def test_probe_source_change_before_exec_defers_without_checkpoint(
     source = library / "clip.mp4"
     source.write_bytes(b"first version")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),
         resources=_Resources(), processes=_Processes(),
@@ -620,7 +620,7 @@ def test_legacy_probe_request_replaced_once_without_losing_wait_age(
     library.mkdir()
     (library / "clip.mp4").write_bytes(b"source for legacy queue")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),
         resources=_Resources(), processes=_Processes(),
@@ -716,7 +716,7 @@ def test_probe_checkpoint_sql_refusal_rolls_back_asset_and_keeps_original_permit
     (library / "clip.mp4").write_bytes(b"isolated checkpoint source")
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
     assert isinstance(repo.probe_records, MaterialProbeRecordStore)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock",
         owners=_CheckpointProbeOwner(repo), resources=_Resources(), processes=_Processes())
     service = MaterialIngestionService(repo, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0)

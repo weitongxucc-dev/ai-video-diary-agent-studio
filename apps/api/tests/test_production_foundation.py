@@ -99,16 +99,16 @@ def _repository(tmp_path: Path) -> ProductionRepository:
 
 def _confirm_library_copies(production: ProductionRepository, workspace_id: str) -> None:
     """Explicit completion declarations for this test's fully written material files."""
-    production.bind_material_ingestion(
+    production.material_source_files.bind_material_ingestion(
         workspace_id, expected_directory=str(production.video_library_path),
     )
     for path in production.video_library_path.rglob("*"):
         if (path.is_file() and not path.is_symlink()
                 and path.suffix.lower() in {".mp4", ".mov", ".m4v"}
                 and "_已处理" not in path.parts):
-            production.confirm_material_copy_complete(
+            production.material_source_files.confirm_material_copy_complete(
                 workspace_id, relative_path=str(path.relative_to(production.video_library_path)),
-                expected_revision=production.material_copy_revision(path.stat()),
+                expected_revision=production.material_source_files.material_copy_revision(path.stat()),
                 confirmation_source="manual",
             )
 
@@ -328,7 +328,7 @@ def _seed_creation_plan_facts(
     video = production.video_library_path / f"{workspace_id}.mp4"
     write_synthetic_video(video, seconds=25)
     _confirm_library_copies(production, workspace_id)
-    asset = production.scan_library(workspace_id)[0]
+    asset = production.material_intake.scan_library(workspace_id)[0]
     asset.owner_user_id = verified_owner_user_id
     production._save_asset(asset)
     video_reference = production.workspace_media_reference_for_asset(workspace_id, asset.id)
@@ -364,7 +364,7 @@ def test_materials_require_analysis_and_usage_review_but_default_user_content_is
     video.write_bytes(b"test video placeholder")
 
     _confirm_library_copies(production, "workspace_a")
-    assets = production.scan_library("workspace_a")
+    assets = production.material_intake.scan_library("workspace_a")
     assert len(assets) == 1
     assert assets[0].review_status == "raw"
 
@@ -411,7 +411,7 @@ def test_material_use_state_persists_and_controls_search_and_render(tmp_path,use
     member, _token = members.whoami(None)
     write_synthetic_video(production.video_library_path/'state.mp4', seconds=25)
     _confirm_library_copies(production, 'workspace_a')
-    asset=production.scan_library('workspace_a')[0]
+    asset=production.material_intake.scan_library('workspace_a')[0]
     asset.owner_user_id = member.member_id
     production._save_asset(asset)
     assert asset.use_state=='available'
@@ -456,7 +456,7 @@ def test_production_data_is_workspace_scoped_and_persistent(tmp_path):
     video = production.video_library_path / "shared.mov"
     video.write_bytes(b"test video placeholder")
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
 
     assert production.list_assets("workspace_b") == []
     with pytest.raises(KeyError):
@@ -480,7 +480,7 @@ def test_material_search_and_plan_matches_are_explainable_scoped_and_persistent(
     video = production.video_library_path / "office-demo.mp4"
     write_synthetic_video(video, seconds=25)
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
     asset.owner_user_id = member.member_id
     production._save_asset(asset)
     asset = production.analyze_asset("workspace_a", asset.id)
@@ -2159,7 +2159,7 @@ def test_scene_ranges_split_long_shots_into_twelve_second_chunks(tmp_path):
     video = tmp_path / "long.mp4"
     video.write_bytes(b"test video placeholder")
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
 
     analyzed = production.analyze_asset("workspace_a", asset.id)
 
@@ -2182,7 +2182,7 @@ def test_visual_semantics_are_cached_by_file_segment_and_model(tmp_path):
     video = tmp_path / "semantic.mp4"
     video.write_bytes(b"first version")
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
 
     first = production.analyze_asset("workspace_a", asset.id)
     second = production.analyze_asset("workspace_a", asset.id)
@@ -2202,7 +2202,7 @@ def test_visual_semantics_are_cached_by_file_segment_and_model(tmp_path):
 
     video.write_bytes(b"second version is different")
     _confirm_library_copies(production, "workspace_a")
-    production.scan_library("workspace_a")
+    production.material_intake.scan_library("workspace_a")
     production.analyze_asset("workspace_a", asset.id)
 
     assert len(provider.calls) == 2
@@ -2238,7 +2238,7 @@ def test_mixed_visual_suggestions_stay_segment_scoped_until_review(tmp_path):
     video = tmp_path / "mixed.mp4"
     video.write_bytes(b"mixed video")
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
 
     analyzed = production.analyze_asset("workspace_a", asset.id)
 
@@ -2445,7 +2445,7 @@ def test_person_render_is_task_bound_versioned_and_restart_safe(tmp_path):
     visual = production.video_library_path / "person.mp4"
     write_synthetic_video(visual, seconds=25)
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
     asset.owner_user_id = member.member_id
     production._save_asset(asset)
     visual_reference = production.workspace_media_reference_for_asset(
@@ -4242,7 +4242,7 @@ def test_material_tags_collections_usage_and_gap_insights(tmp_path):
     video = production.video_library_path / "office_laptop_typing.mp4"
     video.write_bytes(b"video")
     _confirm_library_copies(production, "workspace_a")
-    asset = production.scan_library("workspace_a")[0]
+    asset = production.material_intake.scan_library("workspace_a")[0]
     asset = production.analyze_asset("workspace_a", asset.id)
     segment = asset.segments[0]
     collection = production.save_collection(
@@ -4293,7 +4293,7 @@ def test_material_library_endpoint_is_paginated(tmp_path, monkeypatch):
     for index in range(3):
         (production.video_library_path / f"clip-{index}.mp4").write_bytes(b"video")
     _confirm_library_copies(production, LEGACY_WORKSPACE_ID)
-    production.scan_library(LEGACY_WORKSPACE_ID)
+    production.material_intake.scan_library(LEGACY_WORKSPACE_ID)
     monkeypatch.setattr(main_module, "production_repo", production)
     client = TestClient(main_module.app)
 
@@ -4317,7 +4317,7 @@ def test_visual_feature_read_rejects_stale_source_without_reanalysis(tmp_path,ch
     video=tmp_path/'source.mp4'
     video.write_bytes(b'original source')
     _confirm_library_copies(production, 'workspace_a')
-    asset=production.scan_library('workspace_a')[0]
+    asset=production.material_intake.scan_library('workspace_a')[0]
     analyzed=production.analyze_asset('workspace_a',asset.id)
     segment=analyzed.segments[0]
     assert production.get_visual_feature('workspace_a',segment.id,provider.model_id)==[.1,.2,.3]

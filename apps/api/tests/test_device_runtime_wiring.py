@@ -1,5 +1,7 @@
 """Scheduled material routes must never fall through to unscheduled heavy work."""
 
+from app.materials.intake import MaterialIntakeUseCase
+
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -75,7 +77,7 @@ def material_processing_metadata_guard(request, monkeypatch, tmp_path):
     for name in ("start", "run_once", "wake"):
         monkeypatch.setattr(DeviceRuntime, name, forbidden)
     monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
-    monkeypatch.setattr(ProductionRepository, "scan_library", forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, "scan_library", forbidden)
     settings = Settings(database_path=str(tmp_path / "studio.sqlite3"),
         video_inbox_path=str(tmp_path / "library"), video_output_path=str(tmp_path / "output"),
         model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
@@ -130,9 +132,9 @@ def test_scheduled_material_routes_reject_missing_driver_before_heavy_work(monke
             route()
         assert error.value.status_code == 503
 
-    repository.scan_library.assert_not_called()
+    repository.material_intake.scan_library.assert_not_called()
     repository.analyze_asset.assert_not_called()
-    repository.retry_material_ingestion.assert_not_called()
+    repository.material_intake.retry_material_ingestion.assert_not_called()
     assert violations == []
 
 
@@ -152,7 +154,7 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
     result = next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request())
     assert result.total_count == 0
     service.scan_once.assert_called_once_with()
-    repository.scan_library.assert_not_called()
+    repository.material_intake.scan_library.assert_not_called()
 
     for route in (
         lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
@@ -161,7 +163,7 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
         with pytest.raises(HTTPException) as error:
             route()
         assert error.value.status_code == 503
-    repository.retry_material_ingestion.assert_not_called()
+    repository.material_intake.retry_material_ingestion.assert_not_called()
     repository.analyze_asset.assert_not_called()
 
 
@@ -182,7 +184,7 @@ def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pyt
         next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request())
     assert error.value.status_code == 503
     service.scan_once.assert_not_called()
-    repository.scan_library.assert_not_called()
+    repository.material_intake.scan_library.assert_not_called()
     assert violations == []
 
 

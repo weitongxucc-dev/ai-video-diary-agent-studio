@@ -12,7 +12,7 @@ def build_material_processing_router(*, workspace_for, reader_for, mode_for, ing
         if mode_for() == 'scheduled':
             ingestion_for()(production_for()).scan_once()
         else:
-            production_for().scan_library(workspace_id)
+            production_for().material_intake.scan_library(workspace_id)
         assets, total = production_for().list_assets_page(workspace_id, limit=24, offset=0, include_private=local_diagnostic, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
         return library_response_for()(assets=[asset_response_for()(asset) for asset in assets], total_count=total, limit=24, offset=0, has_more=len(assets) < total)
 

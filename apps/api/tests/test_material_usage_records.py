@@ -49,16 +49,16 @@ def register(
     """
     path = library / name
     path.write_bytes(b"material-bytes")
-    repo.bind_material_ingestion(
+    repo.material_source_files.bind_material_ingestion(
         workspace_id, expected_directory=str(library),
     )
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.confirm_material_copy_complete(
         workspace_id, relative_path=name,
-        expected_revision=repo.material_copy_revision(path.stat()),
+        expected_revision=repo.material_source_files.material_copy_revision(path.stat()),
         confirmation_source="manual",
         verified_owner_user_id=uploader_user_id,
     )
-    asset_id = next(asset.id for asset in repo.scan_library(workspace_id) if asset.file_name == name)
+    asset_id = next(asset.id for asset in repo.material_intake.scan_library(workspace_id) if asset.file_name == name)
     repo.analyze_asset(workspace_id, asset_id)
     return asset_id
 

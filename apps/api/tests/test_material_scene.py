@@ -112,7 +112,7 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
         check=True, capture_output=True, timeout=20,
     )
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
 
     def make_runtime(current_repo):
         scheduler = _scene_test_scheduler(current_repo, tmp_path)
@@ -185,7 +185,7 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
             (0.0, 5.0), (5.0, 17.0), (17.0, 20.0), (20.0, 32.0),
         ]
         assert asset.segments[0].description == "人工匹配说明"
-        assert [item["description"] for item in restarted.list_unmatched_material_corrections(
+        assert [item["description"] for item in restarted.material_assets.list_unmatched_material_corrections(
             "one", asset.id,
         )] == ["人工未匹配说明"]
         assert restarted.scene_records.pending_material_scene_windows() == []
@@ -231,7 +231,7 @@ def test_scene_timeout_or_resource_stop_never_commits_a_checkpoint(
         check=True, capture_output=True, timeout=10,
     )
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
 
     scheduler = _scene_test_scheduler(repo, tmp_path)
     service = MaterialIngestionService(
@@ -542,7 +542,7 @@ def typed_scene_record_case(tmp_path, monkeypatch):
     library.mkdir()
     (library / "clip.mp4").write_bytes(b"typed scene checkpoint source")
     repo = ProductionRepository(tmp_path / "records.sqlite3", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
 
     def runtime(repository):
         scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock",
@@ -619,7 +619,7 @@ def test_typed_scene_records_resume_only_missing_windows_and_preserve_manual_cha
     assert [(item.start_seconds, item.end_seconds) for item in result.segments] == [(0.0, 5.0), (5.0, 17.0), (17.0, 20.0), (20.0, 32.0)]
     assert result.user_tags == ["人工标签"] and result.review_status == "approved"
     assert result.segments[0].description == "人工匹配说明"
-    assert [item["description"] for item in state.repo.list_unmatched_material_corrections("one", asset.id)] == ["人工未匹配说明"]
+    assert [item["description"] for item in state.repo.material_assets.list_unmatched_material_corrections("one", asset.id)] == ["人工未匹配说明"]
     assert state.repo.scene_records.pending_material_scene_windows() == []
     with sqlite3.connect(state.repo.database_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints WHERE unit_key LIKE 'scene-window:%'").fetchone() == (3,)

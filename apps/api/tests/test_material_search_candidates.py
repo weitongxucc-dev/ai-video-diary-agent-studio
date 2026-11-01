@@ -37,13 +37,13 @@ def _approved_asset(
 ) -> MaterialAsset:
     """建一条已分析的素材，并把每个片段写成给定的描述/标签/转录。"""
     (production.video_library_path / file_name).write_bytes(b"fixture")
-    production.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
-    production.confirm_material_copy_complete(
+    production.material_source_files.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
+    production.material_source_files.confirm_material_copy_complete(
         workspace_id, relative_path=file_name,
-        expected_revision=production.material_copy_revision((production.video_library_path / file_name).stat()),
+        expected_revision=production.material_source_files.material_copy_revision((production.video_library_path / file_name).stat()),
         confirmation_source="manual",
     )
-    production.scan_library(workspace_id)
+    production.material_intake.scan_library(workspace_id)
     asset = next(
         item
         for item in production.list_assets(workspace_id)
@@ -334,12 +334,12 @@ def test_unpersisted_material_is_never_returned(tmp_path):
 
     # 只扫描、未分析：正常流程下不会有片段，但手工塞一段进去也不该被搜到。
     (production.video_library_path / "pending.mp4").write_bytes(b"fixture")
-    production.confirm_material_copy_complete(
+    production.material_source_files.confirm_material_copy_complete(
         "workspace_a", relative_path="pending.mp4",
-        expected_revision=production.material_copy_revision((production.video_library_path / "pending.mp4").stat()),
+        expected_revision=production.material_source_files.material_copy_revision((production.video_library_path / "pending.mp4").stat()),
         confirmation_source="manual",
     )
-    production.scan_library("workspace_a")
+    production.material_intake.scan_library("workspace_a")
     pending = next(
         item
         for item in production.list_assets("workspace_a")

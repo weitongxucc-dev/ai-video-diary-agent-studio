@@ -142,7 +142,7 @@ def _storage(
     不递归、不读文件内容。目录断开、未绑定或读取失败时容量留空并说明原因，
     不用素材文件大小或任何估算顶替。
     """
-    state = repository.material_ingestion_directory_state(workspace_id)
+    state = repository.material_source_files.material_ingestion_directory_state(workspace_id)
     directory_state = str(state["status"])
     directory = state["directory"]
     unknown: list[HomeUnknownFact] = []

@@ -9,13 +9,13 @@ def test_copy_confirmation_never_commits_independently(tmp_path, commit):
     library = tmp_path / 'library'
     library.mkdir()
     repository = ProductionRepository(tmp_path / 'app.sqlite3', library)
-    repository.bind_material_ingestion('workspace', expected_directory=str(library))
+    repository.material_source_files.bind_material_ingestion('workspace', expected_directory=str(library))
     path = library / 'received.mp4'
     path.write_bytes(b'isolated file, no media processing')
     with repository._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        repository.confirm_material_copy_complete('workspace', relative_path=path.name,
-            expected_revision=repository.material_copy_revision(path.stat()), confirmation_source='app_import',
+        repository.material_source_files.confirm_material_copy_complete('workspace', relative_path=path.name,
+            expected_revision=repository.material_source_files.material_copy_revision(path.stat()), confirmation_source='app_import',
             verified_owner_user_id='member', connection=conn)
         assert conn.in_transaction
         assert conn.execute('SELECT copy_uploader_user_id FROM material_ingestion_files').fetchone()[0] == 'member'

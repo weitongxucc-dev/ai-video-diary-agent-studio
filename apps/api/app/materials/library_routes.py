@@ -5,6 +5,8 @@ The adapter resolves current finite owners and HTTP leaves at each original use.
 """
 from __future__ import annotations
 
+from app.materials.assets import MaterialAssetStore
+
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Literal, Protocol
@@ -38,7 +40,7 @@ class MaterialLibraryRecords(Protocol):
                        review_status, usage_role=None, user_tags=None, collection_ids=None,
                        expected_asset_updated_at=None, expected_segment_updated_at=None): ...
     def list_segment_usage_records(self, workspace_id, asset_id, segment_id): ...
-    def list_unmatched_material_corrections(self, workspace_id, asset_id): ...
+    material_assets: MaterialAssetStore
 
 
 class MaterialLibrarySearch(Protocol):
@@ -124,7 +126,7 @@ class MaterialLibraryHTTPAdapter:
         workspace_id = self._workspace_for(request)
         try:
             self._records_for().get_asset(workspace_id, asset_id)
-            items = self._records_for().list_unmatched_material_corrections(workspace_id, asset_id)
+            items = self._records_for().material_assets.list_unmatched_material_corrections(workspace_id, asset_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail='素材不属于当前工作区') from exc
         return {'asset_id': asset_id, 'items': items}

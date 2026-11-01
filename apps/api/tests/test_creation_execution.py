@@ -1755,14 +1755,14 @@ def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
         assert "不可写" in refused.directory_message
         assert refused.repair_action and "只读" in refused.repair_action
         with pytest.raises(ValueError, match="不可写"):
-            repo.bind_material_ingestion("local", expected_directory=str(library))
+            repo.material_source_files.bind_material_ingestion("local", expected_directory=str(library))
     finally:
         library.chmod(0o755)
 
     recovered = material_binding_status("local", repo)
     assert recovered.directory_state == "ready"
     assert recovered.repair_action is None
-    repo.bind_material_ingestion("local", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("local", expected_directory=str(library))
     assert material_binding_status("local", repo).bound_to_current_workspace is True
 
     library.chmod(0o500)
@@ -1847,14 +1847,14 @@ def test_material_asset_tag_routes_are_atomic_and_scoped(tmp_path, monkeypatch):
     library = tmp_path / "library"
     (library / "one.mp4").write_bytes(b"synthetic")
     (library / "two.mp4").write_bytes(b"synthetic two")
-    repo.bind_material_ingestion("local", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("local", expected_directory=str(library))
     for name in ("one.mp4", "two.mp4"):
-        repo.confirm_material_copy_complete(
+        repo.material_source_files.confirm_material_copy_complete(
             "local", relative_path=name,
-            expected_revision=repo.material_copy_revision((library / name).stat()),
+            expected_revision=repo.material_source_files.material_copy_revision((library / name).stat()),
             confirmation_source="manual",
         )
-    assets = repo.scan_library("local")
+    assets = repo.material_intake.scan_library("local")
     monkeypatch.setattr(main_module, "production_repo", repo)
     client = TestClient(main_module.app)
     first = client.put(f"/api/production/materials/{assets[0].id}/tags", json={"user_tags": [" 访谈 ", "访谈"]})

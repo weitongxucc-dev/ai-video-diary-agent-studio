@@ -48,7 +48,7 @@ class MaterialHashOwnerVerifier:
                 or intent.owner_type != "material_asset"
                 or actor.workspace_id != intent.workspace_id):
             raise PermissionError("素材后台归属未通过验证")
-        binding = self.repository.get_material_ingestion_binding()
+        binding = self.repository.material_source_files.get_material_ingestion_binding()
         if binding != (actor.workspace_id, actor.library_path):
             raise PermissionError("素材后台绑定已失效")
         candidate = None
@@ -285,7 +285,7 @@ class MaterialIngestionService:
         The repository checks the directory binding and current stat revision.
         A manual declaration confirms copy completion, not media validity.
         """
-        self.repository.confirm_material_copy_complete(
+        self.repository.material_source_files.confirm_material_copy_complete(
             workspace_id,
             relative_path=relative_path,
             expected_revision=expected_revision,
@@ -301,20 +301,20 @@ class MaterialIngestionService:
             return []
         analyzed: list[MaterialAsset] = []
         with self._scan_lock:
-            binding = self.repository.get_material_ingestion_binding()
+            binding = self.repository.material_source_files.get_material_ingestion_binding()
             if binding is None:
                 return analyzed
             workspace_id, _ = binding
-            for asset_id, digest in self.repository.scan_material_ingestion(stable_seconds=self.stable_seconds):
+            for asset_id, digest in self.repository.material_intake.scan_material_ingestion(stable_seconds=self.stable_seconds):
                 if self._stop.is_set():
                     break
                 try:
                     asset = self.repository.analyze_asset(workspace_id, asset_id, expected_source_digest=digest)
                 except Exception as exc:
                     logger.exception("Material analysis failed for asset %s", asset_id)
-                    self.repository.fail_material_ingestion(workspace_id, asset_id, digest, exc)
+                    self.repository.material_intake.fail_material_ingestion(workspace_id, asset_id, digest, exc)
                     continue
-                self.repository.finish_material_ingestion(
+                self.repository.material_intake.finish_material_ingestion(
                     workspace_id, asset_id, digest, failed=asset.analysis_status == "failed"
                 )
                 analyzed.append(asset)
@@ -331,7 +331,7 @@ class MaterialIngestionService:
             for candidate in self.repository.hash_intake.discover_material_hash_candidates(
                 stable_seconds=self.stable_seconds
             ):
-                binding = self.repository.get_material_ingestion_binding()
+                binding = self.repository.material_source_files.get_material_ingestion_binding()
                 if binding is None or binding[0] != candidate.workspace_id:
                     raise PermissionError("素材绑定在发现后已变化")
                 intent = SubmissionIntent(
@@ -347,7 +347,7 @@ class MaterialIngestionService:
         """Replay committed hashes into idempotent, blocked probe requests."""
         if self.execution_mode != "scheduled" or self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        binding = self.repository.get_material_ingestion_binding()
+        binding = self.repository.material_source_files.get_material_ingestion_binding()
         if binding is None:
             return []
         actor = MaterialHashServiceActor(*binding)
@@ -379,7 +379,7 @@ class MaterialIngestionService:
     def submit_pending_scene_windows(self) -> list[str]:
         if self.execution_mode != "scheduled" or self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        binding = self.repository.get_material_ingestion_binding()
+        binding = self.repository.material_source_files.get_material_ingestion_binding()
         if binding is None:
             return []
         actor = MaterialHashServiceActor(*binding)

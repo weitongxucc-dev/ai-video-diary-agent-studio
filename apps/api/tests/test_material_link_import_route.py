@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from app.materials.intake import MaterialIntakeUseCase
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -75,7 +77,7 @@ def link_metadata_no_execution(monkeypatch):
     monkeypatch.setattr(MediaLinkImportService, "_download", forbidden)
     for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
         monkeypatch.setattr(main_module, name, forbidden)
-    monkeypatch.setattr(ProductionRepository, "scan_library", forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, "scan_library", forbidden)
     monkeypatch.setattr(ProductionRepository, "analyze_asset", forbidden)
     return violations
 
@@ -97,7 +99,7 @@ def link_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         duration_reader=lambda _path: 1.0,
         scene_reader=lambda _path, _duration: [],
     )
-    repository.bind_material_ingestion("workspace-a", expected_directory=str(library))
+    repository.material_source_files.bind_material_ingestion("workspace-a", expected_directory=str(library))
     monkeypatch.setattr(main_module, "production_repo", repository)
     members = LocalMemberService(tmp_path / "members.sqlite3")
     monkeypatch.setattr(main_module, "local_members_service", members)
@@ -255,7 +257,7 @@ def test_directory_scan_leaves_non_video_assets_alone(link_client) -> None:
     link_client.state.handler = serve(tmp_png(), "image/png")
     link_client.client.post("/api/production/materials/link/import", json={"url": PNG_URL})
 
-    discovered = link_client.repository.scan_library("workspace-a")
+    discovered = link_client.repository.material_intake.scan_library("workspace-a")
 
     assert discovered == [], "视频白名单不得因本单被改写"
     assert link_client.repository.get_asset(

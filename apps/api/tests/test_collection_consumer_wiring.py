@@ -1,3 +1,5 @@
+
+from app.materials.intake import MaterialIntakeUseCase
 """Actual collection/API consumers share the neutral persistence helpers."""
 from fastapi.testclient import TestClient
 
@@ -22,7 +24,7 @@ def catalog_metadata_no_execution(monkeypatch):
     monkeypatch.setattr(wave, "open", forbidden)
     for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
         monkeypatch.setattr(main, name, forbidden)
-    monkeypatch.setattr(production.ProductionRepository, "scan_library", forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, "scan_library", forbidden)
     monkeypatch.setattr(production.ProductionRepository, "analyze_asset", forbidden)
     return violations
 

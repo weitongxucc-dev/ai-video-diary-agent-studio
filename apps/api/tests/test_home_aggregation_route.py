@@ -335,7 +335,7 @@ def test_home_entries_follow_task_identity_and_real_task_state(tmp_path, monkeyp
 
 def test_storage_capacity_is_unknown_when_the_directory_is_another_workspaces(tmp_path, monkeypatch):
     production, library, party = _setup(tmp_path, monkeypatch)
-    production.bind_material_ingestion("ws-别的工作区", expected_directory=str(library))
+    production.material_source_files.bind_material_ingestion("ws-别的工作区", expected_directory=str(library))
 
     body = _home(party["owner_token"]).json()
     storage = body["storage"]

@@ -115,13 +115,13 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
     excluded = source / "excluded"
     excluded.mkdir()
     (excluded / "private.png").write_bytes(b"excluded source")
-    repository.bind_material_ingestion("local", expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
+    repository.material_source_files.bind_material_ingestion("local", expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
     repository.material_discovery = MaterialDiscoveryService(
         DiscoveryStore(repository._connect), root_provider=lambda: [source],
         excluded_roots=lambda: [repository.video_library_path], target_for=repository.material_link_target,
         accept_copy=DiscoveryIntake(repository._connect, repository._material_assets,
             workspace_references=repository._workspace_media_references,
-            target_for=repository.material_link_target, confirm_copy=repository.confirm_material_copy_complete),
+            target_for=repository.material_link_target, confirm_copy=repository.material_source_files.confirm_material_copy_complete),
     )
     monkeypatch.setattr(main, "material_ingestion", None)
     base = "/api/production/materials/discovery"
@@ -306,9 +306,9 @@ def test_received_material_reference_is_atomic_and_restored_by_rescan(tmp_path, 
     assert repository.resolve_workspace_media_reference('local', reference, require_registered=True) == path
     with repository._connect() as conn:
         conn.execute('DELETE FROM workspace_media_references WHERE reference=?', (reference,))
-    repository.bind_material_ingestion('local', expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
-    repository.confirm_material_copy_complete('local', relative_path=path.name,
-        expected_revision=repository.material_copy_revision(path.stat()), confirmation_source='app_import',
+    repository.material_source_files.bind_material_ingestion('local', expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
+    repository.material_source_files.confirm_material_copy_complete('local', relative_path=path.name,
+        expected_revision=repository.material_source_files.material_copy_revision(path.stat()), confirmation_source='app_import',
         verified_owner_user_id=owner.member_id)
     response = client.post('/api/production/materials/scan', headers=headers)
     assert response.status_code == 200

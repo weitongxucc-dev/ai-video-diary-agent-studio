@@ -112,9 +112,10 @@ from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
 from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _scene_ranges, _segment_id
-from app.materials.analysis import MaterialAnalysisUseCase, _material_analysis_public_error
+from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
-from app.materials.source_files import MaterialSourceFileAccess
+from app.materials.source_files import MaterialSourceFileAccess, directory_accepts_writes as directory_accepts_writes
+from app.materials.intake import MaterialIntakeUseCase
 from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 from app.profiles.reference_access import ProfileReferenceAccess, _profile_wav_duration
 from app.profiles.registration import ProfileRegistrationUseCase
@@ -145,7 +146,7 @@ from app.materials.contracts import (
     MATERIAL_MEDIA_BY_SUFFIX,
     BUSINESS_OBJECT_KINDS,
     ContentUseState,
-    MaterialSegment,
+    MaterialSegment as MaterialSegment,
     MaterialAsset,
     MaterialAssetNote,
     MaterialBusinessObject,
@@ -161,9 +162,6 @@ from app.materials.contracts import (
 )
 from app.asr import SubtitleSegment as SpeechObservation
 from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis
-# Only direct-link import admits non-video media. The directory scan whitelist
-# (SUPPORTED_VIDEO_EXTENSIONS) is unchanged: nothing else starts watching these.
-from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import (
     UnavailableVisualSemanticProvider,
     VisualSemanticProvider,
@@ -208,23 +206,6 @@ BatchItemStatus = Literal[
 
 
 
-def directory_accepts_writes(root: Path) -> bool:
-    """Prove the directory accepts writes, because existence alone never promised that.
-
-    A read-only mount still lists as a normal directory, so binding to one
-    registers an intake that can never accept a file and hides the cause until
-    a later import fails, and a first-run preflight would report the local video
-    pipeline as ready. Creating and removing a hidden uniquely named file is the
-    same proof the desktop import path already relies on, and every scanner that
-    walks these directories skips anything without a supported media suffix.
-    """
-    probe = root / f".chatcut_write_probe_{uuid4().hex}"
-    try:
-        probe.touch(exist_ok=False)
-        probe.unlink()
-    except OSError:
-        return False
-    return True
 
 
 
@@ -445,10 +426,15 @@ class ProductionRepository:
         discovery_excluded_roots: tuple[Path, ...] = (),
     ) -> None:
         self.database_path = Path(database_path).expanduser()
-        self._material_source_files = MaterialSourceFileAccess(self._connect, Path(video_library_path).expanduser())
+        self._material_source_files = MaterialSourceFileAccess(lambda: self._connect(), Path(video_library_path).expanduser())
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
         self._material_collections = MaterialCollectionStore(self._connect)
-        self._material_assets = MaterialAssetStore(self._connect)
+        self._material_assets = MaterialAssetStore(lambda: self._connect())
+        self.material_intake = MaterialIntakeUseCase(
+            self._material_assets, self._material_source_files,
+            connection_factory=lambda: self._connect(),
+            upsert_discovered_asset=lambda workspace_id, path: self._upsert_discovered_asset(workspace_id, path),
+        )
         self.material_search = MaterialSegmentSearchUseCase(
             list_assets=self._material_assets.list_assets,
             segment_eligible=material_segment_eligible,
@@ -482,8 +468,16 @@ class ProductionRepository:
             target_for=self.material_link_target,
             accept_copy=DiscoveryIntake(self._connect, self._material_assets,
                 workspace_references=self._workspace_media_references,
-                target_for=self.material_link_target, confirm_copy=self.confirm_material_copy_complete),
+                target_for=self.material_link_target, confirm_copy=lambda workspace_id, **values: self.material_source_files.confirm_material_copy_complete(workspace_id, **values)),
         )
+
+    @property
+    def material_source_files(self) -> MaterialSourceFileAccess:
+        return self._material_source_files
+
+    @property
+    def material_assets(self) -> MaterialAssetStore:
+        return self._material_assets
 
     @property
     def video_library_path(self) -> Path:
@@ -534,24 +528,24 @@ class ProductionRepository:
         self.hash_records = MaterialHashRecordStore(self._connect)
         self.hash_intake = MaterialHashIntake(self._connect, records=self.hash_records,
             library_root=lambda: self.video_library_path,
-            library_available=self._material_library_available,
-            read_binding=self.get_material_ingestion_binding,
-            mark_disk_missing=self._mark_material_ingestion_disk_missing,
+            library_available=self.material_source_files.material_library_available,
+            read_binding=self.material_source_files.get_material_ingestion_binding,
+            mark_disk_missing=self.material_intake.mark_disk_missing,
             upsert_asset=self._upsert_discovered_asset,
             asset_by_path=self._material_assets.get_asset_by_path,
             mark_asset_blocked=self._material_assets.mark_hash_asset_blocked)
         self.probe_records = MaterialProbeRecordStore(self._connect,
             library_root=lambda: self.video_library_path,
-            library_available=self._material_library_available,
-            read_binding=self.get_material_ingestion_binding,
+            library_available=self.material_source_files.material_library_available,
+            read_binding=self.material_source_files.get_material_ingestion_binding,
             hash_candidate_from_stat=_material_hash_candidate,
             read_asset_source=self._material_assets._probe_asset_source_row,
             apply_probe_metadata=self._material_assets.apply_probe_metadata,
             mark_probe_failed=self._material_assets.mark_probe_failed)
         self.scene_records = MaterialSceneRecordStore(self._connect,
             library_root=lambda: self.video_library_path,
-            library_available=self._material_library_available,
-            read_binding=self.get_material_ingestion_binding,
+            library_available=self.material_source_files.material_library_available,
+            read_binding=self.material_source_files.get_material_ingestion_binding,
             preferred_probe_key=self.probe_records._preferred_material_probe_key,
             probe_source_verdict=self.probe_records.material_probe_source_verdict,
             decode_asset=self._asset_from_payload,
@@ -1435,383 +1429,7 @@ class ProductionRepository:
     def save_collection(self, collection: MaterialCollection) -> MaterialCollection:
         return self._material_collections.save_collection(collection)
 
-    def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
-        if (not self._material_library_available() or self.get_material_ingestion_binding()
-                != (workspace_id, str(self.video_library_path.resolve()))):
-            return []
-        if not self.video_library_path.exists() or not self.video_library_path.is_dir():
-            return []
-        discovered: list[MaterialAsset] = []
-        for path in sorted(self.video_library_path.rglob("*")):
-            if (
-                not path.is_file()
-                or path.is_symlink()
-                or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
-                or "_已处理" in path.parts
-            ):
-                continue
-            if not path.resolve().is_relative_to(self.video_library_path.resolve()):
-                continue
-            try:
-                self._require_material_copy_confirmation(workspace_id, path.resolve())
-            except ValueError:
-                continue
-            discovered.append(self._upsert_discovered_asset(workspace_id, path))
-        return discovered
 
-    def bind_material_ingestion(
-        self,
-        workspace_id: str,
-        *,
-        expected_directory: str,
-        verified_owner_user_id: str | None = None,
-    ) -> None:
-        """Bind the configured inbox to one authenticated workspace, never to the current login."""
-        if not workspace_id.strip():
-            raise ValueError("必须先选择已验证的工作区")
-        if not expected_directory.strip() or not Path(expected_directory).expanduser().is_absolute():
-            raise ValueError("请先确认当前素材目录")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            status = self._material_library_status()
-            if status == "read_only":
-                raise ValueError("素材目录当前不可写；请检查磁盘挂载方式或目录权限，或在设置中改选一个可写目录")
-            if status != "ready":
-                raise ValueError("素材目录不可用；请连接外接盘并重新选择目录")
-            root_path = str(self.video_library_path.resolve())
-            expected_path = str(Path(expected_directory).expanduser().resolve())
-            if expected_path != root_path:
-                raise ValueError("素材目录配置已变化，请刷新后重新确认")
-            row = conn.execute(
-                "SELECT workspace_id, library_path, intake_owner_user_id FROM material_ingestion_binding WHERE id = 1"
-            ).fetchone()
-            if row is not None and (row["workspace_id"], row["library_path"]) != (workspace_id, root_path):
-                raise ValueError("素材目录已绑定另一工作区或目录；请先明确解除原绑定")
-            # 已绑定同一目录时保留当时绑定者的身份，不因再次确认而改写归属。
-            intake_owner = (row["intake_owner_user_id"] if row is not None
-                            else str(verified_owner_user_id or "").strip() or None)
-            conn.execute(
-                "INSERT OR REPLACE INTO material_ingestion_binding "
-                "(id, workspace_id, library_path, intake_owner_user_id) VALUES (1, ?, ?, ?)",
-                (workspace_id, root_path, intake_owner),
-            )
-
-    def get_material_ingestion_owner(self) -> str | None:
-        """历史目录绑定者；不用于推断文件上传者。"""
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT intake_owner_user_id FROM material_ingestion_binding WHERE id = 1"
-            ).fetchone()
-        if row is None or "intake_owner_user_id" not in row.keys():
-            return None
-        return str(row["intake_owner_user_id"] or "").strip() or None
-
-    def get_material_ingestion_binding(self) -> tuple[str, str] | None:
-        return self._material_source_files.get_material_ingestion_binding()
-
-    material_copy_revision = staticmethod(MaterialSourceFileAccess.material_copy_revision)
-
-    def confirm_material_copy_complete(
-        self, workspace_id: str, *, relative_path: str,
-        expected_revision: dict[str, str], confirmation_source: Literal["manual", "app_import"],
-        verified_owner_user_id: str | None = None,
-        connection: sqlite3.Connection | None = None,
-    ) -> None:
-        """Persist a copy declaration for this bound file revision, not media validity."""
-        import time
-
-        relative = Path(relative_path)
-        if relative.is_absolute() or ".." in relative.parts or "_已处理" in relative.parts:
-            raise ValueError("请确认当前绑定目录内的素材文件")
-        raw_path = self.video_library_path / relative
-        if raw_path.is_symlink():
-            raise ValueError("不能确认符号链接素材")
-        if confirmation_source not in {"manual", "app_import"}:
-            raise ValueError("复制完成确认来源无效")
-        with (self._connect() if connection is None else nullcontext(connection)) as conn:
-            if connection is None:
-                conn.execute("BEGIN IMMEDIATE")
-            elif not conn.in_transaction:
-                raise ValueError("接收确认必须加入调用方已开始的事务")
-            binding = conn.execute("SELECT workspace_id, library_path FROM material_ingestion_binding WHERE id=1").fetchone()
-            if (binding is None or (binding["workspace_id"], binding["library_path"])
-                    != (workspace_id, str(self.video_library_path.resolve()))):
-                raise ValueError("当前工作区未绑定此素材目录")
-            if not self._material_library_available():
-                raise ValueError("素材目录当前不可用，请连接原目录后重试")
-            path = self._validated_library_file(str(raw_path))
-            stat = path.stat()
-            revision = self.material_copy_revision(stat)
-            if revision != expected_revision:
-                raise ValueError("文件修订已变化，请重新检查并确认复制完成")
-            conn.execute(
-                """INSERT INTO material_ingestion_files
-                   (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode,
-                    observed_at, state, confirmed_revision, confirmation_source, copy_confirmed_at,
-                    copy_uploader_user_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'observing', ?, ?, ?, ?)
-                   ON CONFLICT(workspace_id, file_path) DO UPDATE SET
-                     size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns,
-                     ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at,
-                     state=CASE WHEN confirmed_revision=excluded.confirmed_revision THEN state ELSE 'observing' END,
-                     copy_uploader_user_id=CASE WHEN confirmed_revision=excluded.confirmed_revision
-                       THEN copy_uploader_user_id ELSE excluded.copy_uploader_user_id END,
-                     confirmed_revision=excluded.confirmed_revision,
-                     confirmation_source=excluded.confirmation_source,
-                     copy_confirmed_at=excluded.copy_confirmed_at""",
-                (workspace_id, str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
-                 stat.st_ino, time.time(), json.dumps(revision, sort_keys=True),
-                 confirmation_source, utc_now().isoformat(),
-                 str(verified_owner_user_id or "").strip() or None),
-            )
-
-    def _require_material_copy_confirmation(self, workspace_id: str, path: Path) -> None:
-        return self._material_source_files.require_material_copy_confirmation(workspace_id, path)
-
-    def pending_material_copies(self, workspace_id: str) -> list[dict[str, object]]:
-        if (not self._material_library_available() or self.get_material_ingestion_binding()
-                != (workspace_id, str(self.video_library_path.resolve()))):
-            return []
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT file_path, confirmed_revision FROM material_ingestion_files WHERE workspace_id=? ORDER BY file_path",
-                (workspace_id,),
-            ).fetchall()
-        pending = []
-        for row in rows:
-            path = Path(row["file_path"])
-            if (not path.resolve().is_relative_to(self.video_library_path.resolve())
-                    or not path.is_file() or path.is_symlink()):
-                continue
-            revision = self.material_copy_revision(path.stat())
-            if row["confirmed_revision"] != json.dumps(revision, sort_keys=True):
-                pending.append({"relative_path": str(path.relative_to(self.video_library_path.resolve())),
-                                "expected_revision": revision})
-        return pending
-
-    def material_ingestion_directory_state(self, workspace_id: str) -> dict[str, object]:
-        """Describe the configured directory without revealing another workspace's binding."""
-        if not workspace_id.strip():
-            raise ValueError("必须先选择已验证的工作区")
-        binding = self.get_material_ingestion_binding()
-        current_path = str(self.video_library_path)
-        resolved_path = str(self.video_library_path.resolve())
-        foreign_binding = binding is not None and binding[0] != workspace_id
-        return {
-            "directory": None if foreign_binding else current_path,
-            "status": self._material_library_status(),
-            "bound_to_current_workspace": binding == (workspace_id, resolved_path),
-            "bound_to_another_workspace": foreign_binding,
-            "configured_path_changed": binding is not None and binding[1] != resolved_path,
-        }
-
-    def material_ingestion_state_counts(self, workspace_id: str) -> dict[str, int]:
-        """Return intake totals for one workspace without exposing file paths."""
-        counts = {state: 0 for state in ("observing", "running", "ready", "failed", "blocked_disk")}
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT state, COUNT(*) AS total FROM material_ingestion_files "
-                "WHERE workspace_id=? GROUP BY state",
-                (workspace_id,),
-            ).fetchall()
-        for row in rows:
-            state = str(row["state"])
-            if state in counts:
-                counts[state] = int(row["total"])
-        return counts
-
-    def _material_library_available(self) -> bool:
-        return self._material_library_status() == "ready"
-
-    def _material_library_status(self) -> Literal["missing", "unmounted", "invalid", "read_only", "ready"]:
-        root = self.video_library_path
-        if not root.is_absolute() or root.is_symlink():
-            return "invalid"
-        # A leftover /Volumes/<name> directory is not evidence that its disk is mounted.
-        if len(root.parts) >= 3 and root.parts[1] == "Volumes":
-            volume = Path(*root.parts[:3])
-            if not volume.is_mount():
-                return "unmounted"
-        if not root.exists():
-            return "missing"
-        if not root.is_dir():
-            return "invalid"
-        if not directory_accepts_writes(root):
-            return "read_only"
-        return "ready"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def scan_material_ingestion(self, *, stable_seconds: float = 10.0) -> list[tuple[str, str]]:
-        """Discover pending copies, then claim only explicitly confirmed revisions."""
-        import time
-
-        binding = self.get_material_ingestion_binding()
-        if binding is None:
-            return []
-        workspace_id, bound_path = binding
-        root = self.video_library_path
-        if not self._material_library_available() or str(root.resolve()) != bound_path:
-            self._mark_material_ingestion_disk_missing(workspace_id)
-            return []
-        now = time.time()
-        claimed: list[tuple[str, str]] = []
-        for path in sorted(root.rglob("*")):
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS or "_已处理" in path.parts:
-                continue
-            resolved = path.resolve()
-            if not resolved.is_relative_to(root.resolve()):
-                continue
-            try:
-                stat = resolved.stat()
-            except FileNotFoundError:
-                continue
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute(
-                    "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
-                    (workspace_id, str(resolved)),
-                ).fetchone()
-                changed = row is None or (
-                    row["size_bytes"], row["mtime_ns"], row["ctime_ns"], row["inode"]
-                ) != (
-                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
-                )
-                if changed:
-                    conn.execute(
-                        "INSERT INTO material_ingestion_files (workspace_id, file_path, size_bytes, mtime_ns, ctime_ns, inode, observed_at, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'observing') "
-                        "ON CONFLICT(workspace_id, file_path) DO UPDATE SET size_bytes=excluded.size_bytes, mtime_ns=excluded.mtime_ns, ctime_ns=excluded.ctime_ns, inode=excluded.inode, observed_at=excluded.observed_at, state='observing'",
-                        (workspace_id, str(resolved), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, now),
-                    )
-                elif row["state"] in {"ready", "failed"}:
-                    # Size, mtime, ctime and inode are the incremental boundary.
-                    # Full content is hashed only on change, recovery, or retry.
-                    continue
-                elif row["confirmed_revision"] != json.dumps(self.material_copy_revision(stat), sort_keys=True):
-                    continue
-            if changed:
-                try:
-                    asset = self._asset_by_path(workspace_id, str(resolved))
-                except KeyError:
-                    continue
-                asset.analysis_status = "blocked"
-                asset.analysis_message = "文件已变化；请确认复制完成后重新接收。"
-                self._save_asset(asset)
-                continue
-            try:
-                with resolved.open("rb") as source:
-                    digest = hashlib.file_digest(source, "sha256").hexdigest()
-                final_stat = resolved.stat()
-                if (final_stat.st_size, final_stat.st_mtime_ns, final_stat.st_ctime_ns, final_stat.st_ino) != (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino):
-                    continue
-            except OSError:
-                continue
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute(
-                    "SELECT * FROM material_ingestion_files WHERE workspace_id = ? AND file_path = ?",
-                    (workspace_id, str(resolved)),
-                ).fetchone()
-                if row is None or (
-                    row["size_bytes"], row["mtime_ns"], row["ctime_ns"], row["inode"]
-                ) != (
-                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
-                ):
-                    continue
-                if row["confirmed_revision"] != json.dumps(self.material_copy_revision(final_stat), sort_keys=True):
-                    continue
-                if row["completed_digest"] == digest:
-                    if row["state"] != "ready":
-                        conn.execute("UPDATE material_ingestion_files SET state='ready' WHERE workspace_id=? AND file_path=?", (workspace_id, str(resolved)))
-                    completed = True
-                    failed_before = False
-                elif row["state"] == "failed" and row["attempted_digest"] == digest:
-                    completed = False
-                    failed_before = True
-                else:
-                    completed = False
-                    failed_before = False
-                    # An interrupted process leaves 'running'; the next process can reclaim it.
-                    conn.execute(
-                        "UPDATE material_ingestion_files SET attempted_digest=?, state='running' WHERE workspace_id=? AND file_path=?",
-                        (digest, workspace_id, str(resolved)),
-                    )
-            if completed:
-                try:
-                    asset = self._asset_by_path(workspace_id, str(resolved))
-                except KeyError:
-                    continue
-                if asset.analysis_status == "blocked":
-                    asset.analysis_status = "ready"
-                    asset.analysis_message = "分析已完成；外接盘已恢复。"
-                    self._save_asset(asset)
-                continue
-            if failed_before:
-                continue
-            try:
-                asset = self._upsert_discovered_asset(workspace_id, resolved)
-            except FileNotFoundError:
-                continue
-            if asset.segments or asset.analysis_status in {"ready", "failed"}:
-                self._reset_changed_material_asset(asset)
-            else:
-                asset.analysis_status = "pending"
-                asset.analysis_message = "复制完成确认已保存，正在分析；确认不代表文件通过校验。"
-                self._save_asset(asset)
-            claimed.append((asset.id, digest))
-        return claimed
-
-    def finish_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, *, failed: bool) -> None:
-        asset = self.get_asset(workspace_id, asset_id)
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE material_ingestion_files SET state=?, completed_digest=CASE WHEN ? THEN completed_digest ELSE ? END "
-                "WHERE workspace_id=? AND file_path=? AND attempted_digest=?",
-                ("failed" if failed else "ready", int(failed), digest, workspace_id, asset.path, digest),
-            )
-
-    def fail_material_ingestion(self, workspace_id: str, asset_id: str, digest: str, reason: Exception) -> None:
-        asset = self.get_asset(workspace_id, asset_id)
-        asset.analysis_status = "failed"
-        asset.analysis_message = f"素材分析失败：{_material_analysis_public_error(reason)}。检查后可手动重试。"
-        self._save_asset(asset)
-        self.finish_material_ingestion(workspace_id, asset_id, digest, failed=True)
-
-    def retry_material_ingestion(self, workspace_id: str, asset_id: str) -> None:
-        asset = self.get_asset(workspace_id, asset_id)
-        binding = self.get_material_ingestion_binding()
-        if binding is None or binding[0] != workspace_id:
-            raise ValueError("当前工作区未绑定素材目录")
-        self._require_material_copy_confirmation(workspace_id, self._validated_library_file(asset.path))
-        with self._connect() as conn:
-            conn.execute("UPDATE material_ingestion_files SET state='observing', attempted_digest=NULL, completed_digest=NULL WHERE workspace_id=? AND file_path=?", (workspace_id, asset.path))
-        asset.analysis_status = "pending"
-        asset.analysis_message = "已请求重试，将按已确认的文件修订重新分析。"
-        self._save_asset(asset)
 
     def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str], *, expected_asset_updated_at: datetime | None = None) -> MaterialAsset:
         return self._material_assets.update_asset_tags(workspace_id, asset_id, user_tags, expected_asset_updated_at=expected_asset_updated_at)
@@ -1840,42 +1458,9 @@ class ProductionRepository:
     ) -> list[MaterialBusinessObject]:
         return self._material_business_objects.set_asset_business_objects(workspace_id, asset_id, business_object_ids)
 
-    def _mark_material_ingestion_disk_missing(self, workspace_id: str) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE material_ingestion_files SET state='blocked_disk' WHERE workspace_id=? AND state='ready'",
-                (workspace_id,),
-            )
-            rows = self._material_assets._disk_missing_asset_rows(conn, workspace_id)
-        self._material_assets.mark_disk_missing_assets(rows)
-
-    def _reset_changed_material_asset(self, asset: MaterialAsset) -> None:
-        self._preserve_unmatched_corrections(asset, asset.segments)
-        asset.segments = []
-        asset.speech_analysis = None
-        asset.duration_seconds = None
-        asset.analysis_status = "pending"
-        asset.analysis_message = "源文件已变化，正在重新分析；原有人工纠正已保留待核对。"
-        self._save_asset(asset)
-
-    def _preserve_unmatched_corrections(self, asset: MaterialAsset, segments: list[MaterialSegment]) -> int:
-        corrected = self._corrected_material_segments(segments)
-        if not corrected:
-            return 0
-        with self._connect() as conn:
-            for segment in corrected:
-                conn.execute(
-                    "INSERT OR IGNORE INTO material_unmatched_corrections (workspace_id, asset_id, segment_id, payload, preserved_at) VALUES (?, ?, ?, ?, ?)",
-                    (asset.workspace_id, asset.id, segment.id, _json_payload(segment), utc_now().isoformat()),
-                )
-        return len(corrected)
 
     _corrected_material_segments = staticmethod(MaterialAssetStore._corrected_material_segments)
 
-    def list_unmatched_material_corrections(self, workspace_id: str, asset_id: str) -> list[dict[str, object]]:
-        with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM material_unmatched_corrections WHERE workspace_id=? AND asset_id=? ORDER BY preserved_at", (workspace_id, asset_id)).fetchall()
-        return [json.loads(str(row["payload"])) for row in rows]
 
     def list_assets(
         self,
@@ -4533,7 +4118,7 @@ class ProductionRepository:
                 confirmation = conn.execute(
                     "SELECT copy_uploader_user_id FROM material_ingestion_files "
                     "WHERE workspace_id=? AND file_path=? AND confirmed_revision=?",
-                    (workspace_id, str(resolved), json.dumps(self.material_copy_revision(stat), sort_keys=True)),
+                    (workspace_id, str(resolved), json.dumps(self.material_source_files.material_copy_revision(stat), sort_keys=True)),
                 ).fetchone()
             copy_uploader_user_id = confirmation["copy_uploader_user_id"] if confirmation is not None else None
         with self._connect() as conn:
@@ -4551,7 +4136,7 @@ class ProductionRepository:
         from app.mobile_transfers import MobileTransfers
 
         def confirm(conn: sqlite3.Connection, workspace_id: str, **values) -> None:
-            self.confirm_material_copy_complete(workspace_id, connection=conn, **values)
+            self.material_source_files.confirm_material_copy_complete(workspace_id, connection=conn, **values)
 
         return MobileTransfers(self._connect, assets=self._material_assets,
             workspace_references=self._workspace_media_references,
@@ -4564,7 +4149,7 @@ class ProductionRepository:
         Direct-link import reuses the existing binding and workspace checks; it
         never creates its own directory or its own authorization path.
         """
-        state = self.material_ingestion_directory_state(workspace_id)
+        state = self.material_source_files.material_ingestion_directory_state(workspace_id)
         if state["bound_to_another_workspace"]:
             raise ValueError("素材目录已关联其他工作区；当前工作区不能写入。")
         if state["configured_path_changed"]:

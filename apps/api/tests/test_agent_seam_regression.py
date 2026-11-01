@@ -50,13 +50,13 @@ def _approved_asset(
     asset_tags: list[str] | None = None,
 ) -> MaterialAsset:
     (production.video_library_path / file_name).write_bytes(b"fixture")
-    production.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
-    production.confirm_material_copy_complete(
+    production.material_source_files.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
+    production.material_source_files.confirm_material_copy_complete(
         workspace_id, relative_path=file_name,
-        expected_revision=production.material_copy_revision((production.video_library_path / file_name).stat()),
+        expected_revision=production.material_source_files.material_copy_revision((production.video_library_path / file_name).stat()),
         confirmation_source="manual",
     )
-    production.scan_library(workspace_id)
+    production.material_intake.scan_library(workspace_id)
     asset = next(item for item in production.list_assets(workspace_id) if item.file_name == file_name)
     asset = production.analyze_asset(workspace_id, asset.id)
     asset = production.update_asset_review(workspace_id, asset.id, review_status="approved", usage_role="b_roll")
