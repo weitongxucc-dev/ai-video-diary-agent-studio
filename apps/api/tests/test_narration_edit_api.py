@@ -102,7 +102,7 @@ def generator_api(narration_api, tmp_path, monkeypatch):
                      (i-1)*8, (i-1)*8+2, (i-1)*2, i*2, 1, ["合成"], False) for i in (1, 2)],
         4, 0, narration_audio_path="narration://artifact/old")
     payload = creation_task_montage_plan_to_payload(montage)
-    state.repo.save_creation_task_montage_plan("local", state.task.id, montage.id, payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, montage.id, payload)
     state.base = state.repo.timeline_records.create_timeline_version(TimelineVersion("full-base", "local", state.task.id,
         "base", 2, {"montage": payload}, None))
     state.proposal = state.repo.edit_records.create_edit_proposal(replace(state.proposal, id="full-proposal",
@@ -193,7 +193,7 @@ def test_draft_narration_confirm_retimes_audio_without_confirming_low_confidence
     payload["status"] = "waiting_for_user"
     payload["clips"][0]["needs_confirmation"] = True
     payload["low_confidence_clip_count"] = 1
-    state.repo.save_creation_task_montage_plan("local", state.task.id, payload["id"], payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, payload["id"], payload)
     state.generated_duration = 3
     state.combined_duration = 5
     response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
@@ -252,7 +252,7 @@ def test_rendered_narration_preview_keeps_existing_comparison_contract(generator
     state = generator_api
     payload = state.repo.get_creation_task_montage_plan("local", state.task.id)
     payload["status"] = "rendered"
-    state.repo.save_creation_task_montage_plan("local", state.task.id, payload["id"], payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, payload["id"], payload)
     response = state.client.post(f"/api/creation-tasks/{state.task.id}/edits/preview", json={
         "raw_command": "这句重新配音", "context_stage": "review", "selected_object_refs": ["narration:n-1"],
     })
@@ -363,7 +363,7 @@ def test_queue_seals_all_audio_and_montage_consumed_by_combination(generator_api
     else:
         montage = state.repo.get_creation_task_montage_plan("local", state.task.id)
         montage["clips"][1]["crop_x"] = 0.4
-        state.repo.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
+        state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
     state.resources.allowed = True
     assert not state.runtime.run_once()
     assert not state.generated_calls

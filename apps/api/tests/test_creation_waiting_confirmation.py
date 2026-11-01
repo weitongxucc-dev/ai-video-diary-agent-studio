@@ -22,7 +22,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
     montage["status"] = "waiting_for_user"
     montage["clips"][0]["needs_confirmation"] = True
     montage["low_confidence_clip_count"] = 1
-    state.repo.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
     state.base = state.repo.timeline_records.create_timeline_version(TimelineVersion("waiting-base", "local", state.task.id,
         "full-base", 3, {"montage": montage}, None))
     with state.repo._connect() as connection:
@@ -45,7 +45,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
     state.montage_calls = []
     def produce_waiting(*args):
         state.montage_calls.append(args)
-        state.repo.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
+        state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
         state.produced_plan = state.repo.get_creation_task_montage_plan("local", state.task.id)
     state.executor.stage_actions["montage_plan"] = produce_waiting
     # Force the completed montage stage through the actual persisted Grant.

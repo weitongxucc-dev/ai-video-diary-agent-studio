@@ -758,7 +758,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
         output_path="artifacts/task-person-edit/rendered/preview.mp4",
         subtitle_path="artifacts/task-person-edit/rendered/subtitles.srt",
     )
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id,
         task.id,
         montage.id,
@@ -1100,7 +1100,7 @@ def prepare_current_presenter_media(state, monkeypatch):
     state.old_render = state.production.bind_person_render_artifact(state.workspace_id, task.id, render.id, published.logical_ref)
     state.montage = replace(state.montage, clips=[replace(clip, person_render_id=render.id,
         asset_id=f"person:{render.id}", source_path=f"person-render://{render.id}") if clip.person_render_id else clip for clip in state.montage.clips])
-    state.production.save_creation_task_montage_plan(state.workspace_id, task.id, state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     configure_synthetic_media_budgets(monkeypatch, main_module)
     return state
@@ -2134,7 +2134,7 @@ def test_legacy_rendered_task_cannot_bypass_typed_timeline_edits(tmp_path, monke
         output_path=str(tmp_path / "rendered.mp4"),
         subtitle_path=str(tmp_path / "rendered.srt"),
     )
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id,
         task.id,
         plan.id,
@@ -2310,7 +2310,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     )
     plan.clips[0].visual_effects = {"exposure": 0.5, "saturation": 0.8}
     plan.clips[1].visual_effects = {"exposure": 1 if mixed_color else 0.5, "saturation": 0.8}
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id,
         task.id,
         plan.id,
@@ -2428,7 +2428,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     rendered_narration_reference = saved_plan.narration_audio_path
     saved_plan.output_path = str(tmp_path / "legacy-preview.mp4")
     saved_plan.subtitle_path = str(tmp_path / "legacy-subtitles.srt")
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id,
         task.id,
         saved_plan.id,
@@ -2934,7 +2934,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         output_path="artifacts/task-subtitle-edit/rendered/preview.mp4",
         subtitle_path="artifacts/task-subtitle-edit/rendered/subtitles.srt",
     )
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage)
     )
     production.timeline_records.create_timeline_version(
@@ -3609,7 +3609,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
         low_confidence_clip_count=1,
         narration_audio_path="narration://artifact/route",
     )
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id,
         task.id,
         plan.id,
@@ -3625,7 +3625,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     # Old persisted versions may incorrectly say rendered; per-clip review remains authoritative.
     inconsistent = creation_task_montage_plan_to_payload(plan)
     inconsistent["status"] = "rendered"
-    production.save_creation_task_montage_plan(workspace_id, task.id, plan.id, inconsistent)
+    production.montage_plan_adoption.save_creation_task_montage_plan(workspace_id, task.id, plan.id, inconsistent)
     assert client.post(f"/api/creation-tasks/{task.id}/montage/render", json={}).status_code == 409
     request = {"operation_type": "ConfirmClip", "clip_id": "clip-route"}
     preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json=request)
@@ -4531,7 +4531,7 @@ def test_pure_arrow_nl_command_reaches_overlay_compiler(person_render_edit_state
     base=f'/api/creation-tasks/{state.task.id}'
     arrow=ArrowOverlay(x=.46,y=.35,name='进料口',start_seconds=.2,end_seconds=1.2).model_dump()
     state.montage.graphic_overlays.append(arrow)
-    state.production.save_creation_task_montage_plan(
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(
         state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage),
     )
@@ -5021,7 +5021,7 @@ def test_person_replacement_maps_narration_instead_of_broll_source(permitted_per
     if start:
         state.montage.clips.insert(0,replace(target,id='earlier-split',
             source_start_seconds=4,source_end_seconds=5,timeline_start_seconds=0,timeline_end_seconds=1))
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
     state.client.get(base).json()
@@ -5063,7 +5063,7 @@ def test_person_replacement_maps_narration_instead_of_broll_source(permitted_per
 def test_person_preview_respects_locked_clip_before_generation(person_render_edit_state):
     state=person_render_edit_state
     state.montage.clips[0].locked=True
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     response=state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview',json={
         'raw_command':'这里只重做口型','context_stage':'review',
@@ -5125,7 +5125,7 @@ def test_extract_original_audio_real_media_preview_confirm_undo(permitted_media_
     narration=state.production.resolve_authorized_narration_audio_reference(state.workspace_id,state.montage.narration_audio_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','anullsrc=r=48000:cl=mono','-t','8',str(narration)],check=True)
     _save_fixture_narration_duration(state, 8)
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
     command={'raw_command':'提取当前镜头原声','context_stage':'montage','selected_object_refs':[f'clip:{clip.id}']}
@@ -5166,7 +5166,7 @@ def test_extract_original_audio_rejects_silent_video_without_timeline_change(per
     source=state.production.resolve_clip_media_reference(state.workspace_id,clip.asset_id,clip.source_path)
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=black:size=32x32:rate=30:duration=8',
         '-an','-c:v','libx264',str(source)],check=True)
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
     before=state.client.get(base).json()
@@ -5187,7 +5187,7 @@ def test_extract_original_audio_rejects_generated_or_locked_clip(person_render_e
     if not person:
         clip.person_render_id=None
     clip.locked=locked
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     response=state.client.post(f'/api/creation-tasks/{state.task.id}/edits/preview',json={
         'raw_command':'保留这个镜头的原声','context_stage':'review','selected_object_refs':[f'clip:{clip.id}']})
@@ -5216,7 +5216,7 @@ def test_silence_edit_real_preview_confirm_and_undo(permitted_media_state, grant
     subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
         'aevalsrc=if(between(t\\,1\\,2)\\,0\\,0.2*sin(2*PI*440*t)):s=48000:d=8',str(narration)],check=True)
     _save_fixture_narration_duration(state, 8)
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     base=f'/api/creation-tasks/{state.task.id}'
     response=state.client.post(base+'/edits/preview',json={'raw_command':'剪掉当前镜头停顿',
@@ -5454,7 +5454,7 @@ def test_material_use_state_api_persists_and_rejects_obsolete_writer(person_rend
     assert 'rights_confirmed' not in response.json() and 'brand_safe' not in response.json()
     assert state.production.get_asset(state.workspace_id,asset.id).use_state=='reference_only'
     state.montage.clips[0].person_render_id=None
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     _assert_retired_montage_endpoint(state.client, state.production, state.workspace_id, state.task.id, "render")
     # The internal diagnostic still enforces the material's authoritative use state.

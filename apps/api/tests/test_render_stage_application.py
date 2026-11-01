@@ -97,7 +97,7 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     montage.audio_timeline = narration_audio_timeline(segment.audio_reference, 2)
     montage.audio_timeline.tracks[0].clips[0].timeline_start_ms = 500
     voice_hash = hashlib.sha256(audio.read_bytes()).hexdigest()
-    repo.save_creation_task_montage_plan('local', task_id, montage.id, creation_task_montage_plan_to_payload(montage))
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     base = case.metadata.ensure_montage_base('local', repo.task_records.get_creation_task('local', task_id), montage)
     caption_ref, caption_transform = case.metadata.publish_subtitle_text(workspace_id='local', task_id=task_id,
         proposal_id='declared-render-caption', kind='subtitle_fixture', input_refs=['timeline:' + base.id],

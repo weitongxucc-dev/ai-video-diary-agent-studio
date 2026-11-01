@@ -39,7 +39,7 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
         NarrationCue('scale-speech-1', 'section_2', '镜头22', 1, timeline_start_seconds=1)]
     montage.clips, montage.cues, montage.duration_seconds = clips, cues, 2
     payload = creation_task_montage_plan_to_payload(montage)
-    case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, payload)
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, payload)
     previous = case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id
     with case.repo._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')

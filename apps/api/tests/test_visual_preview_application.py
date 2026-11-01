@@ -57,7 +57,7 @@ def visual_application(permitted_media_state, monkeypatch):
         timeline_start_seconds=0, timeline_end_seconds=7, transition_in_seconds=0, visual_effects={}, locked=False)
     plan = replace(state.montage, clips=[clip], duration_seconds=7, status='ready',
         audio_timeline=None, graphic_overlays=[], output_path=None, subtitle_path=None)
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     base = main._ensure_montage_base_version(state.workspace_id, task, plan)
@@ -71,7 +71,7 @@ def visual_application(permitted_media_state, monkeypatch):
         'source_ref':imported.json()['source_ref'],'start_seconds':0,'end_seconds':2,
         'x':.5,'y':.5,'width':.15}
     plan = replace(plan, graphic_overlays=[overlay])
-    state.production.save_creation_task_montage_plan(state.workspace_id, task.id, plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
     caption_ref, caption_transform = state.media.visual_preview.metadata.publish_subtitle_text(
         workspace_id=state.workspace_id, task_id=task.id, proposal_id='visual-fixture-caption',

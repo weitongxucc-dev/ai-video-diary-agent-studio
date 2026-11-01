@@ -94,7 +94,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         duration_seconds=1, low_confidence_clip_count=0,
         narration_audio_path="narration://artifact/voice-trim",
     )
-    repository.save_creation_task_montage_plan(
+    repository.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id, task_id, montage.id, creation_task_montage_plan_to_payload(montage),
     )
     monkeypatch.setattr(main_module, "production_repo", repository)
@@ -194,7 +194,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     )
     changed_montage.clips[0].fit_mode = "fit"
     changed_payload = creation_task_montage_plan_to_payload(changed_montage)
-    repository.save_creation_task_montage_plan(workspace_id, task_id, montage.id, changed_payload)
+    repository.montage_plan_adoption.save_creation_task_montage_plan(workspace_id, task_id, montage.id, changed_payload)
     saved_payload = repository.get_creation_task_montage_plan(workspace_id, task_id)
     with repository._connect() as conn:
         row = conn.execute("SELECT payload FROM creation_tasks WHERE id = ?", (task_id,)).fetchone()

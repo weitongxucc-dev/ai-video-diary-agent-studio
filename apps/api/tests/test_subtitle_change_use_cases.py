@@ -143,7 +143,7 @@ def test_narration_audio_candidate_key_survives_sqlite_reopen_and_changes_with_g
     graph = narration_audio_timeline(state.montage.narration_audio_path, state.montage.duration_seconds)
     plan = replace(state.montage, audio_timeline=graph)
     sealed_key = media_digest([graph.model_dump(), plan.duration_seconds, plan.narration_linkage_created_audio_timeline])
-    state.production.save_creation_task_montage_plan(
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(
         state.workspace_id, state.task.id, plan.id, creation_task_montage_plan_to_payload(plan),
     )
     reopened = ProductionRepository(state.production.database_path, state.production.video_library_path)

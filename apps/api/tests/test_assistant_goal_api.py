@@ -131,7 +131,7 @@ def material_execution_input(state):
         asset_id=state.asset.id,segment_id=state.asset.segments[0].id,source_path=reference) if clip.person_render_id else clip
         for clip in state.montage.clips])
     payload=creation_task_montage_plan_to_payload(montage)
-    state.production.save_creation_task_montage_plan(state.workspace_id,state.task.id,montage.id,payload)
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id,state.task.id,montage.id,payload)
     state.version=replace(state.version,id="material-execution-input",parent_version_id=state.version.id,
         sequence=state.version.sequence+1,snapshot={**state.version.snapshot,"montage":payload})
     state.production.timeline_records.create_timeline_version(state.version)
@@ -153,7 +153,7 @@ def test_assistant_scope_reads_registered_image_overlay_from_persisted_montage(s
     overlay = ImageOverlay(source_ref=imported.json()["source_ref"], name="已登记测试图片",
         start_seconds=0, end_seconds=min(1, montage.duration_seconds)).model_dump()
     montage.graphic_overlays.append(overlay)
-    task, saved = state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id,
+    task, saved = state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id,
         montage.id, creation_task_montage_plan_to_payload(montage))
     stored = creation_task_montage_plan_from_payload(
         state.production.get_creation_task_montage_plan(state.workspace_id, task.id))

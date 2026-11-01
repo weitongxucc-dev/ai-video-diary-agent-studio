@@ -89,7 +89,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         clip.asset_id,clip.segment_id = 'neighbor','neighbor-segment'
         clip.source_path = repo.workspace_media_reference_for_asset('local','neighbor')
         seed = creation_task_montage_plan_to_payload(plan)
-        repo.save_creation_task_montage_plan('local','task','montage',seed)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local','task','montage',seed)
         copied = clone_subtitle_track(track,timeline_version_id='neighbor-base')
         repo.timeline_records.create_timeline_version(TimelineVersion('neighbor-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
@@ -151,7 +151,7 @@ def test_unaffected_distant_private_source_is_not_part_of_a_reorder(tmp_path,mon
         from app.creation.contracts import TimelineVersion
         from app.creation.transactions import clone_subtitle_track
         seed=creation_task_montage_plan_to_payload(plan)
-        repo.save_creation_task_montage_plan('local','task','montage',seed)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local','task','montage',seed)
         copied=clone_subtitle_track(track,timeline_version_id='distant-base')
         repo.timeline_records.create_timeline_version(TimelineVersion('distant-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
@@ -185,7 +185,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         plan.clips[1].asset_id,plan.clips[1].segment_id='predecessor','predecessor-segment'
         plan.clips[1].source_path=repo.workspace_media_reference_for_asset('local','predecessor')
         seed=creation_task_montage_plan_to_payload(plan)
-        repo.save_creation_task_montage_plan('local','task','montage',seed)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local','task','montage',seed)
         copied=clone_subtitle_track(track,timeline_version_id='transition-base')
         repo.timeline_records.create_timeline_version(TimelineVersion('transition-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))

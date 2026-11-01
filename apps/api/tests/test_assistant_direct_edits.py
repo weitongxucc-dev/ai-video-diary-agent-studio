@@ -661,7 +661,7 @@ def _bootstrap_input(s, bootstrap):
     montage=deepcopy(s.plan)
     montage.id='bootstrap-montage'
     montage.task_id=seeded_task.id
-    s.repo.save_creation_task_montage_plan('ws',seeded_task.id,montage.id,creation_task_montage_plan_to_payload(montage))
+    s.repo.montage_plan_adoption.save_creation_task_montage_plan('ws',seeded_task.id,montage.id,creation_task_montage_plan_to_payload(montage))
     if bootstrap=='missing_montage':
         s.repo.timeline_records.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
             parent_version_id=None,created_by_operation_id=None,snapshot={}),

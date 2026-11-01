@@ -220,7 +220,7 @@ def _render_version_fixture(tmp_path):
                            0, 1, 0, 1, 1, ["confirmed fixture"], False)],
         duration_seconds=1, low_confidence_clip_count=0, narration_audio_path="narration://artifact/cache_1",
     )
-    repo.save_creation_task_montage_plan("local", task_id, montage.id, creation_task_montage_plan_to_payload(montage))
+    repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     version = repo.timeline_records.create_timeline_version(TimelineVersion(
         "timeline_base", "local", task_id, None, 1,
         {"montage": repo.get_creation_task_montage_plan("local", task_id)}, None))
@@ -247,7 +247,7 @@ def test_cpu_render_counts_repeated_source_once_and_preserves_all_clips(tmp_path
             for index in range(21)
         ]
         montage["duration_seconds"] = 21
-        repo.save_creation_task_montage_plan("local", task_id, "montage_1", montage)
+        repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, "montage_1", montage)
         repo.timeline_records.create_timeline_version(replace(
             base, id="timeline_repeated_source", parent_version_id=base.id, sequence=2,
             snapshot={"montage": montage}))
@@ -292,7 +292,7 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
         repo.job_records.finish_job_run("local", job.id, status="succeeded")
         original = repo.get_creation_task_montage_plan("local", task_id)
         original.update(status="rendered", output_path="artifacts/fixture-old.mp4")
-        repo.save_creation_task_montage_plan("local", task_id, "montage_1", original)
+        repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, "montage_1", original)
         assert execution.retry("local", task_id, member_id=actor.member_id).id == job.id
         edited = json.loads(json.dumps(original))
         edited.update(status="ready", output_path=None, subtitle_path=None)
@@ -348,7 +348,7 @@ def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_cro
         with pytest.raises(ValueError, match="连续递增"):
             with repo._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                repo.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
+                repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
                     connection=conn, expected_current_version_id=base.id)
                 repo.timeline_records.create_timeline_version(conflict, connection=conn, expected_current_version_id=base.id)
         assert repo.get_creation_task_montage_plan("local", task_id) == original
@@ -356,7 +356,7 @@ def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_cro
         repo.timeline_records.create_timeline_version(concurrent)
         for status in ("rendered", "failed"):
             with pytest.raises(ValueError, match="不能覆盖"):
-                repo.save_creation_task_montage_plan("local", task_id, "montage_1", {**old_output, "status": status},
+                repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, "montage_1", {**old_output, "status": status},
                     expected_current_version_id=base.id)
         with pytest.raises(ValueError, match="不能发布"):
             repo.timeline_records.create_timeline_version(replace(conflict, parent_version_id=base.id), expected_current_version_id=base.id)
@@ -366,7 +366,7 @@ def test_render_version_plan_publication_rolls_back_and_preserves_concurrent_cro
         output = replace(conflict, parent_version_id=concurrent.id)
         with repo._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            repo.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
+            repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, "montage_1", old_output,
                 connection=conn, expected_current_version_id=concurrent.id)
             repo.timeline_records.create_timeline_version(output, connection=conn, expected_current_version_id=concurrent.id)
         assert repo.task_records.get_creation_task("local", task_id).current_timeline_version_id == output.id
@@ -410,7 +410,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
              "render_input_timeline_version_id": base.id}, None)
         with repo._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            repo.save_creation_task_montage_plan("local", task_id, "montage_1", rendered,
+            repo.montage_plan_adoption.save_creation_task_montage_plan("local", task_id, "montage_1", rendered,
                 connection=conn, expected_current_version_id=base.id)
             repo.timeline_records.create_timeline_version(published, connection=conn, expected_current_version_id=base.id)
         scheduler.assert_grant(grant)
@@ -1885,7 +1885,7 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
         [NarrationCue('cue','section_1','original',1)],
         [MontageClip('clip','cue','asset','segment','workspace://original.mp4',0,1,0,1,1,[],False)],1,0)
     payload=creation_task_montage_plan_to_payload(plan)
-    repo.save_creation_task_montage_plan('local',task_id,plan.id,payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local',task_id,plan.id,payload)
     base=repo.timeline_records.create_timeline_version(TimelineVersion('base','local',task_id,None,1,{'montage':payload},None))
     edits=MetadataEditUseCase(repo,ArtifactStore(tmp_path/'artifacts'),output_root=tmp_path/'restore',audio_service=None)
     intent=repo.edit_records.create_edit_intent(EditIntent('crop-intent','local',task_id,'crop','montage',[],None,'crop',{}, {},1,'interpreted'))
@@ -1920,7 +1920,7 @@ def test_legacy_crop_undo_refuses_to_overwrite_later_production(tmp_path):
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(value),clean_task))
     clean_plan=replace(plan,task_id=clean_task,script_id=clean_script)
     clean_payload=creation_task_montage_plan_to_payload(clean_plan)
-    clean_repo.save_creation_task_montage_plan('local',clean_task,clean_plan.id,clean_payload)
+    clean_repo.montage_plan_adoption.save_creation_task_montage_plan('local',clean_task,clean_plan.id,clean_payload)
     clean_base=clean_repo.timeline_records.create_timeline_version(TimelineVersion('clean-base','local',clean_task,None,1,{'montage':clean_payload},None))
     clean_edits=MetadataEditUseCase(clean_repo,ArtifactStore(clean_root/'artifacts'),output_root=clean_root/'restore',audio_service=None)
     for name,position in [('A',.2),('B',.3)]:
@@ -3087,7 +3087,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
     montage=CreationTaskMontagePlan('edit-montage','local',task.id,case.script_id,'fixture','ready',cues,clips,3,0,
         narration_audio_path=case.repo.narration_artifact_reference(task.narration_cache_key))
     payload=creation_task_montage_plan_to_payload(montage)
-    case.repo.save_creation_task_montage_plan('local',task.id,montage.id,payload)
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',task.id,montage.id,payload)
     base=case.repo.timeline_records.create_timeline_version(TimelineVersion('edit-base','local',task.id,None,1,
         {'montage':payload,'narration_cache_key':task.narration_cache_key,'subtitle_track_ids':[]},None))
     task=case.repo.task_records.get_creation_task('local',task.id)
@@ -3382,7 +3382,7 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
         full = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
             replace(template,id='full_montage',narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
         assert {cue.source_section_id for cue in full.cues}=={'section_1','section_2'}
-        case.repo.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
+        case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
         edits.ensure_montage_base('local',case.repo.task_records.get_creation_task('local',case.task_id),full)
     restore = TimelineRestoreUseCase(case.repo,edits)
     for redo,text in [(False,'原文'*130),(True,'原文更紧凑')]:
@@ -3420,7 +3420,7 @@ def test_named_section_restore_keeps_later_user_edit_and_replays_original_reques
     template=creation_task_montage_plan_from_payload(case.repo.stage_segment_state('local',case.task_id,'section_1')['montage'])
     full=MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
         replace(template,id='full_before',narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
-    case.repo.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
     edits.ensure_montage_base('local',task,full)
     _before,request,_runtime=_submit_section_revision(case)
     for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
@@ -3513,7 +3513,7 @@ def test_section_restore_uses_actual_before_crop_and_subtitles_without_write_loc
     full=MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo),task,
         replace(template,id='full_before',narration_audio_path=case.repo.narration_artifact_reference(case.repo.task_records.get_creation_task('local',case.task_id).narration_cache_key)))
     full.clips[0].crop_x=.23
-    case.repo.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
     base=edits.ensure_montage_base('local',case.repo.task_records.get_creation_task('local',case.task_id),full)
     track=SubtitleTrack('before_source','local',case.task_id,base.id,'zh-CN',None,default_subtitle_style(),
         [SubtitleCue(full.cues[0].id,None,'尚未修改字幕',.1,.85),SubtitleCue(full.cues[1].id,None,'第二段原字幕',1,2)],
@@ -4971,7 +4971,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
     montage = repo.get_creation_task_montage_plan('local', task_id)
     montage['graphic_overlays'] = [TextOverlay(id='opening', text='Opening title', start_seconds=0, end_seconds=.4).model_dump(),
         TextOverlay(id='credit', text='Closing credit', start_seconds=.5, end_seconds=1).model_dump()]
-    repo.save_creation_task_montage_plan('local', task_id, montage['id'], montage)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, montage['id'], montage)
     edited = repo.timeline_records.create_timeline_version(TimelineVersion('timeline_two_titles', 'local', task_id,
         base.id, 2, {'montage': repo.get_creation_task_montage_plan('local', task_id)}, 'two-title-edit'))
     audio = repo.get_narration_artifact('local', 'cache_1')
@@ -5010,7 +5010,7 @@ def test_succeeded_job_rerenders_current_titles_without_reopening_narration(tmp_
         # The inner renderer is covered separately; publish metadata for the outer receipt contract.
         rendered = repo.get_creation_task_montage_plan('local', task_id)
         rendered.update(status='rendered', output_path='artifact://new-render/preview.mp4')
-        repo.save_creation_task_montage_plan('local', task_id, rendered['id'], rendered)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, rendered['id'], rendered)
         published = repo.timeline_records.create_timeline_version(TimelineVersion('timeline_new_render', 'local', task_id,
             edited.id, 3, {'montage': rendered, 'output_refs': [rendered['output_path']]}, None))
         with repo._connect() as conn:
@@ -6045,7 +6045,7 @@ def _paid_narration_edit_stream_case(tmp_path, monkeypatch):
     montage = CreationTaskMontagePlan('paid-montage', 'local', task.id, script.id, 'fixture', 'ready',
         cues, clips, 3, 0, narration_audio_path=repo.narration_artifact_reference('paid-0'))
     payload = creation_task_montage_plan_to_payload(montage)
-    repo.save_creation_task_montage_plan('local', task.id, montage.id, payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task.id, montage.id, payload)
     base = repo.timeline_records.create_timeline_version(TimelineVersion('paid-base', 'local', task.id, None, 1,
         {'montage': payload, 'narration_cache_key': 'paid-0', 'subtitle_track_ids': []}, None))
     task = repo.task_records.get_creation_task('local', task.id)
@@ -6823,7 +6823,7 @@ def _section_change_paid_case(tmp_path, monkeypatch):
         expected_current_version_id='projection_v1')
     with repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=json_set(payload,'$.stage','montage') WHERE id=?", (case.task_id,))
-    repo.save_creation_task_montage_plan('local',case.task_id,full.id,case.montage)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,case.montage)
     track = SubtitleTrack('source_before','local',case.task_id,'change_base','zh-CN',None,default_subtitle_style(),
         [SubtitleCue(cue.id,None,cue.text,clip.timeline_start_seconds,clip.timeline_end_seconds) for cue,clip in zip(cues,clips)],
         'timeline',None,None,None,'unavailable','not_built','no_file','build_text')

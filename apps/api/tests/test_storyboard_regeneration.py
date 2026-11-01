@@ -46,7 +46,7 @@ def state(tmp_path, monkeypatch):
     old.audio_timeline.tracks[0].gain_db = -3
     old.audio_timeline.tracks[0].clips[0].fade_out_ms = 200
     old_payload = creation_task_montage_plan_to_payload(old)
-    state.repo.save_creation_task_montage_plan("ws", state.task.id, old.id, old_payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("ws", state.task.id, old.id, old_payload)
     tracks = [clone_subtitle_track(state.repo.subtitle_records.get_subtitle_track("ws", state.task.id, track_id),
         timeline_version_id="regeneration-base") for track_id in state.base.snapshot["subtitle_track_ids"]]
     cover = clone_cover_asset(state.cover, timeline_version_id="regeneration-base")

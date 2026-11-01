@@ -293,7 +293,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
         duration_seconds=1, low_confidence_clip_count=0,
         narration_audio_path=body["audio_reference"],
     )
-    restarted.save_creation_task_montage_plan(
+    restarted.montage_plan_adoption.save_creation_task_montage_plan(
         "local", task_id, montage.id, creation_task_montage_plan_to_payload(montage),
     )
     with restarted._connect() as conn:
@@ -756,7 +756,7 @@ def test_recording_metadata_adoption_persists_applied_and_continuation_identity(
     montage = CreationTaskMontagePlan('declared-montage','local',task.id,task.confirmed_script_id,'metadata','ready',
         [],[],1,0,narration_audio_path=state.source.logical_ref,
         audio_timeline=narration_audio_timeline(state.source.logical_ref,1))
-    repo.save_creation_task_montage_plan('local',task.id,montage.id,creation_task_montage_plan_to_payload(montage))
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local',task.id,montage.id,creation_task_montage_plan_to_payload(montage))
     assert client.get(state.route).json()['items'][0]['applied'] is True
     with repo._connect() as conn:
         current = repo.task_records.get_creation_task('local',task.id)

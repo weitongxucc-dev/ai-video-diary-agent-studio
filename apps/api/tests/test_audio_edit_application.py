@@ -29,7 +29,7 @@ def edit_state(tmp_path,monkeypatch):
     graph=graph.model_copy(update={'tracks':[track.model_copy(update={'locked':False,
         'clips':[clip.model_copy(update={'locked':False}) for clip in track.clips]}) for track in graph.tracks]})
     payload=repo.get_creation_task_montage_plan('local','task');payload['audio_timeline']=graph.model_dump()
-    repo.save_creation_task_montage_plan('local','task','montage',payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local','task','montage',payload)
     version=repo.timeline_records.create_timeline_version(replace(version,id='editable-base',parent_version_id=version.id,sequence=2,
         snapshot={**version.snapshot,'montage':payload}))
     calls=[];execute=media.audio_edit.execute
@@ -109,7 +109,7 @@ def test_exact_command_and_original_audio_share_original_job_and_recording_block
     assert len([track for track in graph.tracks if track.role=='original'])==1
     plan['audio_timeline']=graph.model_dump();plan['clips']=[asdict(MontageClip('video-clip','cue',asset.id,'source-segment',ref,
         0,.2,0,.2,1,[],False))]
-    repo.save_creation_task_montage_plan('local','task','montage',plan)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local','task','montage',plan)
     next_base=repo.timeline_records.create_timeline_version(replace(base,id='original-base',parent_version_id=base.id,sequence=3,
         snapshot={**base.snapshot,'montage':plan}))
     raw=client.post('/api/creation-tasks/task/edits/preview',json={'raw_command':'提取原声','context_stage':'montage',

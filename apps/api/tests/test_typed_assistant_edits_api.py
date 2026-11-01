@@ -309,7 +309,7 @@ def test_task_turn_scope_uses_current_metadata_refs_and_original_stage_gates(sco
     state.repo.narration_records.save_narration_segments("ws", task.id, script.id, [ready, pending])
     montage = creation_task_montage_plan_from_payload(state.repo.get_creation_task_montage_plan("ws", task.id))
     montage.graphic_overlays = [TextOverlay(id="declared-overlay", text="声明标题", start_seconds=0, end_seconds=4).model_dump()]
-    state.repo.save_creation_task_montage_plan("ws", task.id, montage.id, creation_task_montage_plan_to_payload(montage))
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("ws", task.id, montage.id, creation_task_montage_plan_to_payload(montage))
     unavailable = CoverAsset("unavailable-cover", "ws", task.id, state.base.id,
         "artifacts/task/declared-output.mp4", 0, "声明的不可用封面", {}, {}, "video_frame", "declared-engine",
         None, None, "unavailable", failure_reason="未执行", impact="没有生成封面", repair_action="先处理原条件")
@@ -345,7 +345,7 @@ def test_task_turn_scope_uses_current_metadata_refs_and_original_stage_gates(sco
     assert scope("subtitle_cover", subtitles, 4000) == ("subtitle_cover", subtitles)
     # This policy observes the stored rendered/path flags; it does not qualify an actual output file.
     montage.status, montage.output_path = "rendered", "artifacts/task/declared-output.mp4"
-    state.repo.save_creation_task_montage_plan("ws", task.id, montage.id, creation_task_montage_plan_to_payload(montage))
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan("ws", task.id, montage.id, creation_task_montage_plan_to_payload(montage))
     assert scope("review", selected, 4000) == ("review", selected)
     assert scope("subtitle_cover", ["cover:" + task.id]) == ("subtitle_cover", ["cover:" + task.id])
 

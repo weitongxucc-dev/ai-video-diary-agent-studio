@@ -86,7 +86,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     def finish_render():
         rendered_montage = state.repo.get_creation_task_montage_plan("ws", state.task.id)
         rendered_montage.update(status="rendered", output_path=str(tmp_path/"declared-output.mp4"), subtitle_path=state.track.artifact_ref)
-        state.repo.save_creation_task_montage_plan("ws", state.task.id, rendered_montage["id"], rendered_montage)
+        state.repo.montage_plan_adoption.save_creation_task_montage_plan("ws", state.task.id, rendered_montage["id"], rendered_montage)
         snapshot = {key: value for key, value in edit_version.snapshot.items() if key != "subtitle_track_ids"}
         state.repo.timeline_records.create_timeline_version(replace(edit_version, id="render-version", parent_version_id=edit_version.id, sequence=edit_version.sequence+1,
             snapshot={**snapshot, "montage": rendered_montage, "transform_run_id": "declared-render", "creation_render_request_id": "published-render", "render_input_timeline_version_id": edit_version.id}))

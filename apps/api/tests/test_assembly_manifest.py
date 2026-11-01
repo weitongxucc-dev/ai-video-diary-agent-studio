@@ -141,7 +141,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
         narration_audio_path=case.repo.narration_artifact_reference(task.narration_cache_key), audio_timeline=graph)
     if preflight_attack in {'normalization_failure', 'normalization_unknown'}:
         montage.narration_linkage_created_audio_timeline = True
-    case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     from app.creation.contracts import TimelineVersion
     case.repo.timeline_records.create_timeline_version(TimelineVersion(id='adopted-input', workspace_id='local', task_id=case.task_id,
         parent_version_id=None, sequence=1, snapshot={'montage': creation_task_montage_plan_to_payload(montage)},

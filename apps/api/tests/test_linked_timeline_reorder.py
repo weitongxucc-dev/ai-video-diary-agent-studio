@@ -92,7 +92,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
         linked = replace(linked, clips=[clips["b"], clips["a"]])
     a_start = 0 if not swapped else 4
     order = sorted(("a", "b"), key=lambda key: a_start if key == "a" else 4 - a_start)
-    state.production.save_creation_task_montage_plan(
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(
         state.workspace_id, state.task.id, linked.id, creation_task_montage_plan_to_payload(linked))
     version = main_module._ensure_montage_base_version(
         state.workspace_id, state.production.task_records.get_creation_task(state.workspace_id, state.task.id), linked)

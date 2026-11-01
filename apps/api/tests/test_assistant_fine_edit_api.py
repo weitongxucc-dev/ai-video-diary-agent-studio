@@ -32,7 +32,7 @@ def fine_state(material_edit_state, monkeypatch):
     plan.audio_timeline = graph
     plan.clips[0].visual_effects = VisualEffects(zoom=1.2, exposure=.4, fade_out_seconds=.2).model_dump()
     plan.clips[1].visual_effects = VisualEffects(zoom=1.4, exposure=.6, fade_out_seconds=.3).model_dump()
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     original = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
@@ -139,7 +139,7 @@ def test_fine_edits_reject_invalid_request_without_version_or_media_effect(fine_
         payload["audio_edit"]["values"] = {"playback_rate": 2}
     else:
         state.plan.audio_timeline.tracks[-1].locked = True
-        state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
+        state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
             creation_task_montage_plan_to_payload(state.plan))
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=payload)
     assert response.status_code in {409, 422}, response.text
@@ -153,7 +153,7 @@ def test_visual_lock_and_full_default_omission_boundaries(fine_state):
     state = fine_state
     selected = state.plan.clips[1]
     selected.locked = True
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
         creation_task_montage_plan_to_payload(state.plan))
     payload = bound(state, operation_type="AdjustVisualEffects", clip_ids=[selected.id], effects={"exposure": .8})
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=payload)

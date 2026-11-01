@@ -238,7 +238,7 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
         person_render_id=original.id,role='a_roll') for i in range(2)]
     montage=CreationTaskMontagePlan('normal-person-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
         narration_audio_path=repo.narration_artifact_reference(s.combined.cache_key))
-    payload=creation_task_montage_plan_to_payload(montage);repo.save_creation_task_montage_plan('local',s.task_id,montage.id,payload)
+    payload=creation_task_montage_plan_to_payload(montage);repo.montage_plan_adoption.save_creation_task_montage_plan('local',s.task_id,montage.id,payload)
     base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     # Actual queued render is the existing rendered-only preview prerequisite, not a fixture status rewrite.
     render_queued=s.client.post(url+'/execution/resume');assert render_queued.status_code==202,render_queued.text

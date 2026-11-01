@@ -239,7 +239,7 @@ class RenderStageUseCase:
                     plan.subtitle_path = reusable_subtitles.logical_ref
                     plan.message = "已复用输入一致且通过校验的成片，等待检查。"
                     rendered_payload = creation_task_montage_plan_to_payload(plan)
-                    self.repository.save_creation_task_montage_plan(
+                    self.repository.montage_plan_adoption.save_creation_task_montage_plan(
                         workspace_id, task.id, plan.id, rendered_payload
                     )
                     versions = self.repository.timeline_records.list_timeline_versions(workspace_id, task.id)
@@ -351,7 +351,7 @@ class RenderStageUseCase:
                     )
                     rendering_payload = creation_task_montage_plan_to_payload(plan)
                     rendering_payload["status"] = "rendering"
-                    self.repository.save_creation_task_montage_plan(
+                    self.repository.montage_plan_adoption.save_creation_task_montage_plan(
                         workspace_id, task.id, plan.id, rendering_payload,
                         **({"expected_current_version_id": plan_input["timeline_version_id"]}
                            if render_context is not None else {}),

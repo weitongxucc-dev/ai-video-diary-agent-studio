@@ -550,7 +550,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
         task.owner_user_id = actor.member_id
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
             (json.dumps(asdict(task), default=str),))
-    repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', 'task', plan.id, payload)
     payload = repo.get_creation_task_montage_plan('local', 'task')
     repo.timeline_records.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
     selected_budget = main._device_host_budget()

@@ -59,7 +59,7 @@ def speed_state(tmp_path):
     for clip in state.plan.audio_timeline.tracks[0].clips:
         clip.locked = False
     payload = creation_task_montage_plan_to_payload(state.plan)
-    repo.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
     state.track = clone_subtitle_track(state.track, timeline_version_id='linked-base', track_id='linked-zh',
         cues=[replace(state.track.cues[0], end_seconds=2), replace(state.track.cues[0], id='neighbour-cue', text='后续字幕', start_seconds=2, end_seconds=4)])
     state.base = TimelineVersion('linked-base', 'ws', state.task.id, state.base.id, 2,

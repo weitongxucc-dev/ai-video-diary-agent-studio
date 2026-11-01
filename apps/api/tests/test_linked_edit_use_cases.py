@@ -37,7 +37,7 @@ def linked_state(tmp_path, monkeypatch):
     plan.clips[2].segment_id = neighbour.segments[0].id
     plan.clips[2].source_path = repo.workspace_media_reference_for_asset("local", neighbour.id)
     seeded = creation_task_montage_plan_to_payload(plan)
-    repo.save_creation_task_montage_plan("local", "task", plan.id, seeded)
+    repo.montage_plan_adoption.save_creation_task_montage_plan("local", "task", plan.id, seeded)
     captions = clone_subtitle_track(track, timeline_version_id="linked-base")
     repo.timeline_records.create_timeline_version(TimelineVersion(
         "linked-base", "local", "task", "timeline", 2,
@@ -251,7 +251,7 @@ def test_fixed_silence_ranges_adopt_once_without_detection(tmp_path):
     # A declared silent editorial graph keeps this node metadata-only.
     state.plan.audio_timeline = AudioTimeline(tracks=[])
     payload = creation_task_montage_plan_to_payload(state.plan)
-    state.repo.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
     base = TimelineVersion('silence-base', 'ws', state.task.id, state.base.id, 2,
         {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['silence-zh']}, None)
     state.repo.timeline_records.create_timeline_version(base)

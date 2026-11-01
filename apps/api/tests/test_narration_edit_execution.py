@@ -262,7 +262,7 @@ def fixture(tmp_path):
             }
         ],
     }
-    repo.save_creation_task_montage_plan("local", task.id, "montage", montage)
+    repo.montage_plan_adoption.save_creation_task_montage_plan("local", task.id, "montage", montage)
     base = repo.timeline_records.create_timeline_version(
         TimelineVersion("base", "local", task.id, None, 1, {"montage": montage}, None)
     )

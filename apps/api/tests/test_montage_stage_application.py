@@ -87,7 +87,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     assert case.repository is case.metadata.repository is case.person_stage.repository is repo
     assert case.metadata is case.person_stage.metadata and case.montage_planner is main.montage_planner
     calls = []
-    original_build, original_save, original_base = MontagePlanner.build_for_creation_inputs, repo.save_creation_task_montage_plan, case.metadata.ensure_montage_base
+    original_build, original_save, original_base = MontagePlanner.build_for_creation_inputs, repo.montage_plan_adoption.save_creation_task_montage_plan, case.metadata.ensure_montage_base
 
     def observe_build(planner, *args, **kwargs):
         result = original_build(planner, *args, **kwargs)
@@ -105,7 +105,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         return result
 
     monkeypatch.setattr(MontagePlanner, 'build_for_creation_inputs', observe_build)
-    monkeypatch.setattr(repo, 'save_creation_task_montage_plan', observe_save)
+    monkeypatch.setattr(repo.montage_plan_adoption, 'save_creation_task_montage_plan', observe_save)
     monkeypatch.setattr(case.metadata, 'ensure_montage_base', observe_base)
     registration = creation_job_registration(repo, render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant, verify_identity=main._verify_creation_identity,
@@ -290,7 +290,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
                     assert case.owner.check_current(case.scheduler._get(grant.request_id), conn) == 'ready'
         elif outcome in {'tail', 'revoked'}:
             injected = []
-            original = case.repo.save_creation_task_montage_plan
+            original = case.repo.montage_plan_adoption.save_creation_task_montage_plan
             def changed(*args, **kwargs):
                 verify = kwargs['verify_inputs']
                 def inject(conn, task):
@@ -302,7 +302,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
                     verify(conn, task)
                 kwargs['verify_inputs'] = inject
                 return original(*args, **kwargs)
-            monkeypatch.setattr(case.repo, 'save_creation_task_montage_plan', changed)
+            monkeypatch.setattr(case.repo.montage_plan_adoption, 'save_creation_task_montage_plan', changed)
         if outcome == 'checkpoint_revoked':
             released = case.scheduler._released_for_commit
             def revoked(conn, current):

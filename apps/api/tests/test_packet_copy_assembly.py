@@ -58,7 +58,7 @@ def _packet_case(tmp_path, monkeypatch, *, before_prepare=None, montage_adjust=N
         low_confidence_clip_count=0, created_at=now, updated_at=now, aspect_ratio='16:9')
     if montage_adjust is not None:
         montage_adjust(case, montage)
-    case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     budget = PacketCopyBudget('a'*64, 1024**3, 1024**3, 32, 1, .1, 16384, 32768, 65536, 30)
     store = ArtifactStore(tmp_path / 'artifacts')
     service = PacketCopyAssembly(case.repo, store, tmp_path / 'work', budget=budget, reserve_bytes=1024)

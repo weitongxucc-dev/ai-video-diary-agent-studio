@@ -46,7 +46,7 @@ def test_direct_control_never_calls_http_preview_or_confirm_and_undo_redo_is_com
             # The fixture deliberately locks its narrator; only this control's test input unlocks it.
             original['audio_timeline']['tracks'][0]['locked'] = False
             original['audio_timeline']['tracks'][0]['clips'][0]['locked'] = False
-            repo.save_creation_task_montage_plan('local', 'task', 'montage', original)
+            repo.montage_plan_adoption.save_creation_task_montage_plan('local', 'task', 'montage', original)
             original = repo.get_creation_task_montage_plan('local', 'task')
             from app.creation.contracts import TimelineVersion
             from app.creation.transactions import clone_subtitle_track

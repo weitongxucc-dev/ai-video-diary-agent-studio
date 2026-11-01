@@ -153,7 +153,7 @@ def instantiate_adoption_candidate(plan, grant):
 def apply_delivery_adoption(repo, conn, job, candidate):
     version, transform = candidate['version'], candidate['transform']
     repo.lineage_records.create_transform_run(transform, connection=conn)
-    repo.save_creation_task_montage_plan(job.workspace_id, job.task_id, candidate['plan_id'], candidate['montage'],
+    repo.montage_plan_adoption.save_creation_task_montage_plan(job.workspace_id, job.task_id, candidate['plan_id'], candidate['montage'],
         connection=conn, expected_current_version_id=candidate['head'])
     repo.timeline_records.create_timeline_version(version, connection=conn, expected_current_version_id=candidate['head'])
     for track in candidate['tracks']:

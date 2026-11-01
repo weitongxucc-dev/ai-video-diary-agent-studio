@@ -182,7 +182,7 @@ class MontageStageUseCase:
                         'dependency': dependency,
                         'output_digest': montage_output_digest(creation_task_montage_plan_to_payload(montage)),
                     }), connection=conn)
-            task, _ = self.repository.save_creation_task_montage_plan(
+            task, _ = self.repository.montage_plan_adoption.save_creation_task_montage_plan(
                 workspace_id,
                 task.id,
                 montage.id,

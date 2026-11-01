@@ -106,7 +106,7 @@ def seed_render(system, content=b"fake video", *, register=True, ref="artifacts/
                                                    ref, publication.sha256, publication.size_bytes,
                                                    "fixture-job-" + version, []))
     payload = creation_task_montage_plan_to_payload(montage(ref))
-    repo.save_creation_task_montage_plan("local", "task", "montage", payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan("local", "task", "montage", payload)
     current = repo.task_records.get_creation_task("local", "task").current_timeline_version_id
     repo.timeline_records.create_timeline_version(TimelineVersion(id=version, workspace_id="local", task_id="task",
                                                  parent_version_id=current, sequence=1 if current is None else 2,
@@ -254,7 +254,7 @@ def test_persisted_clean_never_survives_output_changes(system, change):
     elif change == "invalidate":
         payload = creation_task_montage_plan_to_payload(montage(None))
         payload["status"] = "ready"
-        repo.save_creation_task_montage_plan("local", "task", "montage", payload)
+        repo.montage_plan_adoption.save_creation_task_montage_plan("local", "task", "montage", payload)
     else:
         seed_render(system, b"new render", ref="artifacts/new.mp4", version="v2")
     result = client.get(url, headers=headers).json()

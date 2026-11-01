@@ -431,7 +431,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
         for i,cue in enumerate(cues)]
     montage=CreationTaskMontagePlan('normal-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
         narration_audio_path=repo.narration_artifact_reference(combined.cache_key))
-    repo.save_creation_task_montage_plan('local',s.task_id,montage.id,creation_task_montage_plan_to_payload(montage))
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local',s.task_id,montage.id,creation_task_montage_plan_to_payload(montage))
     base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     caption_ref,caption_transform=s.case.metadata.publish_subtitle_text(workspace_id='local',task_id=s.task_id,
         proposal_id='normal-fixture-caption',kind='subtitle_fixture',input_refs=['timeline:'+base.id],

@@ -1783,7 +1783,7 @@ def test_segmented_narration_typed_edits_and_undo_are_atomic_and_restart_safe(
         "clips": [{"id": "clip-1"}],
         "cues": initial_cues,
     }
-    production.save_creation_task_montage_plan(
+    production.montage_plan_adoption.save_creation_task_montage_plan(
         "workspace_a", "task-narration", montage_plan_id, initial_montage
     )
 

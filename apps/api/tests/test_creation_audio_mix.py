@@ -48,7 +48,7 @@ def case(tmp_path, *, normalize=False, budget=True):
             id='music-clip', name='music', source_ref=reference, source_start_ms=0, timeline_start_ms=0, source_end_ms=1000, gain_db=-6)])])
     payload = repo.get_creation_task_montage_plan('local', task_id)
     payload.update(audio_timeline=graph.model_dump(), narration_linkage_created_audio_timeline=normalize)
-    repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
     repo.timeline_records.create_timeline_version(replace(base, id='timeline_audio', parent_version_id=base.id, sequence=2,
                                         snapshot={'montage': payload}))
     service = TaskAudio(repo, ArtifactStore(tmp_path/'artifacts'), tmp_path/'temp')
@@ -278,7 +278,7 @@ def test_long_fade_preview_seals_scoped_audio_and_whole_source_linkage(tmp_path,
             track['locked'] = True
             track['clips'][0].update(source_end_ms=2000, playback_rate=.25, locked=True)
         payload['audio_timeline'] = graph
-        repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
         payload = repo.get_creation_task_montage_plan('local', task_id)
         task = repo.task_records.get_creation_task('local', task_id)
         facts, resources = main._task_media_facts('local', task_id, 'exact_edit_preview',
@@ -364,7 +364,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         # A single audible voice splits into two uses. Music remains muted.
         payload = repo.get_creation_task_montage_plan('local', task_id)
         payload['audio_timeline']['tracks'][1]['muted'] = True
-        repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
         current = repo.timeline_records.get_timeline_version('local', 'timeline_audio')
         repo.timeline_records.create_timeline_version(replace(current, id='timeline_silence', parent_version_id=current.id, sequence=3, snapshot={'montage':payload}))
         monkeypatch.setattr(main, 'production_repo', repo)

@@ -39,7 +39,7 @@ def state(tmp_path):
     montage = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan(task.workspace_id, task.id))
     montage.graphic_overlays = [ImageOverlay(id=f'image-{index}', name='qa.png', source_ref=source['source_ref'],
         start_seconds=0, end_seconds=1).model_dump() for index in (1, 2)]
-    repo.save_creation_task_montage_plan(task.workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage))
+    repo.montage_plan_adoption.save_creation_task_montage_plan(task.workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage))
     return SimpleNamespace(repo=repo, task=repo.task_records.get_creation_task(task.workspace_id, task.id), plan=plan, limits=limits,
         store=store, source=source, actor=actor, resolver=resolver, montage=montage)
 
@@ -99,13 +99,13 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
 
 def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, tmp_path):
     state.montage.graphic_overlays = [TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()]
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     before, resources = facts(state, graphic_source_facts=None)
     assert resources['overlay_count'] == 1 and resources['input_bytes'] == 512 + 4096
     assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
     state.montage.graphic_overlays[0]['text'] = '不同的画面文字'
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     after, changed = facts(state, graphic_source_facts=None)
     assert after != before and changed == resources
@@ -113,7 +113,7 @@ def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, t
 
 def test_text_does_not_weaken_mixed_png_source_authority(state):
     state.montage.graphic_overlays[1] = TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     _, resources = facts(state)
     png = state.resolver(state.task.workspace_id, state.task.id, state.source['source_ref'], actor=state.actor)
@@ -132,7 +132,7 @@ def test_normal_render_keeps_unsupported_paths_blocked(state, unsupported):
         state.montage.graphic_overlays = [ArrowOverlay(name='unsupported', x=.5, y=.5, start_seconds=0, end_seconds=1).model_dump()]
     else:
         state.montage.audio_timeline = main.narration_audio_timeline(state.montage.narration_audio_path, state.montage.duration_seconds)
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     with pytest.raises(ValueError, match='仅支持|音轨组合'):
         facts(state)

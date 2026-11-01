@@ -20,7 +20,7 @@ def storyboard(person_render_edit_state):
         clips=[replace(source, id=f"clip-{index + 1}", timeline_start_seconds=start,
             timeline_end_seconds=end, source_start_seconds=4, source_end_seconds=4 + end - start)
             for index, (start, end) in enumerate(((0, 2), (2, 5), (5, 8)))])
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     main._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
     state.base_url = f"/api/creation-tasks/{state.task.id}"
@@ -111,7 +111,7 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
                middle,
                replace(material, id="clip-last", source_start_seconds=4, source_end_seconds=8,
                     timeline_start_seconds=5, timeline_end_seconds=9)])
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
     main._ensure_montage_base_version(state.workspace_id, state.task, plan)
     state.base_url = f"/api/creation-tasks/{state.task.id}"
@@ -122,7 +122,7 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
         # Recheck fresh person facts as well as version/order: attachment facts
         # can change while the proposal still carries the same timeline pointer.
         middle.person_render_id = person.person_render_id
-        state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+        state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
             creation_task_montage_plan_to_payload(plan))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     versions = state.production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id)
@@ -153,7 +153,7 @@ def test_generic_replacement_selects_real_candidate_in_unrendered_draft(material
     state = material_edit_state
     monkeypatch.setattr(state.production.material_search, "search_material_segments", lambda *_a, **_kw: pytest.fail("typed candidate must not re-search the raw sentence"))
     montage = replace(state.montage, status="ready", output_path=None, subtitle_path=None)
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, montage.id,
         creation_task_montage_plan_to_payload(montage))
     before = current(state)
     response = preview(state, command, selected_object_refs=[f"clip:{state.clip.id}"],
@@ -263,7 +263,7 @@ def test_candidate_source_span_and_role_follow_existing_exact_speed_invariant(ma
     original = state.production.get_asset(state.workspace_id, clip.asset_id)
     original.segments = [replace(item, start_seconds=0, end_seconds=8) if item.id == clip.segment_id else item for item in original.segments]
     state.production._save_asset(original)
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     asset = replace(state.asset, segments=[replace(state.asset.segments[0], usage_role=usage_role, start_seconds=0, end_seconds=length)])
     monkeypatch.setattr(state.production, "list_assets", lambda *_a, **_kw: [asset])

@@ -146,7 +146,7 @@ def seed_source(repository, store, version="v1"):
     repository.execution_records.create_artifact_record(ArtifactRecord(f"artifact-{version}", "local", "task", "rendered_video", ref,
         publication.sha256, publication.size_bytes, producer, []))
     payload = creation_task_montage_plan_to_payload(fixture_montage(ref))
-    repository.save_creation_task_montage_plan("local", "task", "montage", payload)
+    repository.montage_plan_adoption.save_creation_task_montage_plan("local", "task", "montage", payload)
     parent = repository.task_records.get_creation_task("local", "task").current_timeline_version_id
     sequence = repository.timeline_records.get_timeline_version("local", parent).sequence + 1 if parent else 1
     repository.timeline_records.create_timeline_version(TimelineVersion(id=version, workspace_id="local", task_id="task",

@@ -65,7 +65,7 @@ def metadata_state(tmp_path):
         [MontageClip('clip', 'cue', asset.id, 'segment', reference, 0, 4, 0, 4, 1, [], False)],
         4, 0, narration_audio_path='artifacts/task/fixed-narration.wav')
     payload = creation_task_montage_plan_to_payload(montage)
-    repo.save_creation_task_montage_plan('ws', task.id, montage.id, payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('ws', task.id, montage.id, payload)
     narration = NarrationArtifactRecord('narration', 'ws', 'fixed-script', None, 'fixed-narration',
         montage.narration_audio_path, 4, 16000, 'fixture-input', task_id=task.id)
     repo.save_narration_artifact(narration)
@@ -170,7 +170,7 @@ def test_restore_material_uses_current_adoption_baseline_before_historical_subti
     from app.creation_execution import CreationExecutionActor
     removed=deepcopy(state.plan);removed.clips=[]
     payload=creation_task_montage_plan_to_payload(removed)
-    state.repo.save_creation_task_montage_plan('ws',state.task.id,removed.id,payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan('ws',state.task.id,removed.id,payload)
     base=TimelineVersion('without-material','ws',state.task.id,state.base.id,2,
         {**state.base.snapshot,'montage':payload,'subtitle_track_ids':[]},None)
     state.repo.timeline_records.create_timeline_version(base)
@@ -453,7 +453,7 @@ def test_public_reorder_proposal_confirms_once_through_metadata_owner(tmp_path):
         timeline_start_seconds=2)
     state.plan.clips = [first, second]
     payload = creation_task_montage_plan_to_payload(state.plan)
-    state.repo.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
     base = TimelineVersion('two-clips-base', 'ws', state.task.id, state.base.id, 2,
         {**state.base.snapshot, 'montage': payload, 'subtitle_track_ids': ['two-clips-zh']}, None)
     state.repo.timeline_records.create_timeline_version(base)
@@ -513,7 +513,7 @@ def test_task_authorization_render_outputs_are_not_input_grants(state,reuse_outp
         montage['audio_timeline']=AudioTimeline(tracks=[TimelineAudioTrack(id='reused-output',name='原声',role='original',
             clips=[TimelineAudioClip(id='reused-output-audio',name='产物原声',source_ref=output,
                 source_start_ms=0,source_end_ms=1000,timeline_start_ms=0)])]).model_dump(mode='json')
-    state.repo.save_creation_task_montage_plan('ws',state.task.id,montage['id'],montage)
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan('ws',state.task.id,montage['id'],montage)
     _,required=service._requirements('ws',state.task.id)
     assert (output in required['references']) is reuse_output
     assert sidecar not in required['references']
@@ -556,7 +556,7 @@ def test_queued_audio_preview_prepares_sibling_base_after_identity(tmp_path, mon
     montage = replace(s.plan, id='queued-audio-montage', task_id=sibling.id,
         cues=[replace(cue, narration_segment_id=None) for cue in s.plan.cues],
         narration_audio_path=None, audio_timeline=AudioTimeline(tracks=[]))
-    s.repo.save_creation_task_montage_plan('ws', sibling.id, montage.id,
+    s.repo.montage_plan_adoption.save_creation_task_montage_plan('ws', sibling.id, montage.id,
         creation_task_montage_plan_to_payload(montage))
     sibling = s.repo.task_records.get_creation_task('ws', sibling.id)
     assert sibling.current_timeline_version_id is None and sibling.narration_cache_key is None
@@ -609,3 +609,89 @@ def test_queued_audio_preview_prepares_sibling_base_after_identity(tmp_path, mon
     assert s.repo.get_creation_task_montage_plan('ws', s.task.id) == original_montage
     with s.repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 0
+
+
+def test_montage_plan_adoption_metadata_preserves_cas_and_transaction_ownership(tmp_path, monkeypatch):
+    import sqlite3
+    import threading
+    import wave
+    import httpx
+    from PIL import Image
+    from app.device_runtime import DeviceRuntime
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('execution')
+        pytest.fail('montage adoption metadata forbids runtime, media and external transport')
+
+    for owner, name in ((subprocess, 'Popen'), (threading.Thread, 'start'), (wave, 'open'),
+            (Image, 'open'), (Image, 'new'), (Image.Image, 'save'),
+            (httpx.HTTPTransport, 'handle_request'), (httpx.AsyncHTTPTransport, 'handle_async_request'),
+            (DeviceRuntime, 'start'), (DeviceRuntime, 'run_once'), (DeviceRuntime, 'wake'),
+            (TaskAudio, 'source'), (TaskAudio, 'publish'), (TaskAudio, 'probe')):
+        monkeypatch.setattr(owner, name, forbidden)
+    s = metadata_state(tmp_path)
+    owner = s.repo.montage_plan_adoption
+    initial_task = s.repo.task_records.get_creation_task('ws', s.task.id)
+    assert initial_task.current_timeline_version_id == s.base.id
+    payload = {**s.repo.get_creation_task_montage_plan('ws', s.task.id),
+        'id': 'transaction-plan', 'status': 'rendering'}
+
+    def snapshot(conn):
+        return {table: sorted([tuple(row) for row in conn.execute('SELECT * FROM ' + table)], key=repr)
+            for table in ('creation_tasks', 'creation_task_montage_plans')}
+
+    def outside():
+        with sqlite3.connect(f'file:{s.repo.database_path}?mode=ro', uri=True) as conn:
+            return snapshot(conn)
+
+    before = outside()
+    verified = []
+    verifier_error = PermissionError('declared verifier rejection')
+
+    def verify_inputs(conn, task):
+        verified.append((conn, task.id, task.current_timeline_version_id))
+        raise verifier_error
+
+    with monkeypatch.context() as provided:
+        provided.setattr(owner, '_connect', forbidden)
+        provided.setattr(owner, '_read_task', forbidden)
+        provided.setattr(owner, '_read_montage', forbidden)
+        with pytest.raises(ValueError, match='混剪计划状态无效'):
+            owner.save_creation_task_montage_plan('ws', s.task.id, 'transaction-plan',
+                {**payload, 'status': 'declared-invalid'})
+        with s.repo._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            with pytest.raises(PermissionError) as rejected:
+                owner.save_creation_task_montage_plan('ws', s.task.id, 'transaction-plan', payload,
+                    connection=conn, expected_current_version_id=None, verify_inputs=verify_inputs)
+            assert rejected.value is verifier_error
+            assert verified == [(conn, s.task.id, s.base.id)]
+            assert conn.in_transaction and snapshot(conn) == before
+            with pytest.raises(ValueError, match='当前时间线已变化'):
+                owner.save_creation_task_montage_plan('ws', s.task.id, 'transaction-plan', payload,
+                    connection=conn, expected_current_version_id=None)
+            assert snapshot(conn) == before
+            task, adopted = owner.save_creation_task_montage_plan('ws', s.task.id, 'transaction-plan',
+                payload, connection=conn, expected_current_version_id=False)
+            assert task.montage_plan_id == 'transaction-plan' and task.stage == 'montage'
+            assert task.stage_status == 'running' and task.status == 'running' and task.output_ready is False
+            assert adopted['status'] == 'rendering' and conn.in_transaction
+            assert snapshot(conn) != before and outside() == before
+            conn.rollback()
+            assert snapshot(conn) == before
+    assert outside() == before
+    with s.repo._connect() as conn:
+        conn.executescript("""CREATE TRIGGER reject_montage_adoption_tail BEFORE UPDATE OF payload ON creation_tasks
+            WHEN NEW.id='task' AND json_extract(NEW.payload,'$.montage_plan_id')='transaction-plan'
+            AND EXISTS(SELECT 1 FROM creation_task_montage_plans p
+                WHERE p.workspace_id=NEW.workspace_id AND p.task_id=NEW.id AND p.id='transaction-plan'
+                AND json_extract(p.payload,'$.status')='rendering')
+            BEGIN SELECT RAISE(ABORT,'declared montage task-update failure'); END;""")
+    with pytest.raises(sqlite3.IntegrityError, match='declared montage task-update failure'):
+        owner.save_creation_task_montage_plan('ws', s.task.id, 'transaction-plan', payload)
+    assert outside() == before
+    assert s.repo.task_records.get_creation_task('ws', s.task.id) == initial_task
+    assert s.repo.timeline_records.get_timeline_version('ws', s.base.id) == s.base
+    assert violations == []
