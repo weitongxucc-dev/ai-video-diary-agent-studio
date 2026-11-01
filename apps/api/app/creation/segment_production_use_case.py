@@ -175,7 +175,7 @@ class SegmentProductionUseCase:
             script, _ = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
             ids = self.repository.section_inputs.creation_section_ids(task,script,offset=offset,limit=limit,connection=conn)
             values = [self.context(workspace_id,task_id,item,actor,connection=conn) for item in ids]
-            receipts = self.repository.list_segment_revision_requests(workspace_id, task_id, actor.member_id, limit=limit, connection=conn)
+            receipts = self.repository.segment_revisions.list_segment_revision_requests(workspace_id, task_id, actor.member_id, limit=limit, connection=conn)
             return {'task_id': task_id, 'total_count': script.sections_total_count, 'offset': offset,
                 'truncated': offset+len(values)<script.sections_total_count, 'revision_requests': receipts,
                 'available_video_count': sum(item['video'] is not None for item in values), 'segments': values}
@@ -216,7 +216,7 @@ class SegmentProductionUseCase:
 
     def submit_revision(self, workspace_id, task_id, actor, command, *, runtime, write_guard=None):
         self.require_actor(workspace_id, task_id, actor)
-        original = self.repository.find_segment_revision_request(workspace_id, task_id, actor.member_id, command.request_id)
+        original = self.repository.segment_revisions.find_segment_revision_request(workspace_id, task_id, actor.member_id, command.request_id)
         encoded = command.model_dump(mode='json')
         if original is not None:
             if original.payload['command'] != encoded:
@@ -231,7 +231,11 @@ class SegmentProductionUseCase:
         revision_digest = hashlib.sha256(json.dumps(encoded, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
         policy = (self.budget_policy_for(workspace_id, task_id, actor, revision_digest, operation='segment_revision')
             if self.budget_policy_for is not None else None)
-        job = self.repository.create_segment_revision_job(task, actor, encoded, rules, write_guard=submit_guard, budget_policy=policy)
+        from app.creation.narration_pcm import prepare_narration_source
+        plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
+        with prepare_narration_source(self.repository, task, plan, actor) as prepared:
+            job = self.repository.segment_revisions.create_segment_revision_job(
+                task, actor, encoded, rules, prepared, write_guard=submit_guard, budget_policy=policy)
         runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id, job.input_digest,
             self.revision_key(job), SchedulePolicy()), actor)
         runtime.wake()
@@ -239,12 +243,12 @@ class SegmentProductionUseCase:
 
     def read_request(self, workspace_id, task_id, request_id, actor):
         self.require_actor(workspace_id, task_id, actor)
-        event = self.repository.find_segment_revision_request(workspace_id, task_id, actor.member_id, request_id)
+        event = self.repository.segment_revisions.find_segment_revision_request(workspace_id, task_id, actor.member_id, request_id)
         if event is None:
             raise KeyError(request_id)
         job = self.repository.job_records.get_job_run(workspace_id, event.job_id)
         requests = self.repository.job_records.list_creation_job_request_states(workspace_id, job.id)
-        result = self.repository.segment_revision_result(workspace_id, job.id)
+        result = self.repository.segment_revisions.segment_revision_result(workspace_id, job.id)
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if self.repository.segment_units.unsettled_segment_units(workspace_id, job.id):
             action, reason = 'query_original', 'original_unit_usage_unknown'

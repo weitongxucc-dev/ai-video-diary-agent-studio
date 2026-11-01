@@ -1597,3 +1597,90 @@ def test_task_authorization_records_keep_cas_atomicity_and_fixed_goal_facts(tmp_
     assert records.list_task_authorizations(due_before=now) == [active]
     with pytest.raises(KeyError):
         records.task_authorization_goal_revision('ws', 'missing-task')
+
+
+def test_segment_revision_request_records_keep_claim_replay_and_declared_source_atomicity(tmp_path, monkeypatch):
+    import hashlib
+    import socket
+    import threading
+    import wave
+    from PIL import Image
+    from app.creation.contracts import TaskEvent
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('revision request metadata forbids media, preparation and execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    s = _section_adoption_metadata_state(tmp_path)
+    repo, task, actor = s.repo, s.task, s.actor
+    records = repo.segment_revisions
+    script = repo.section_inputs.effective_creation_script('ws', task.id)
+    section = next(value for value in script.sections if value.id == 'section')
+    command = {'request_id': 'metadata-revision', 'input_id': 'metadata-input', 'script_id': script.id,
+        'section_id': section.id, 'expected_segment_version': 'section-original',
+        'source_text_sha256': hashlib.sha256(section.content.encode()).hexdigest()}
+    prepared = object()
+    guards, versions, sources = [], [], []
+    stage_version = repo.section_inputs.stage_section_version
+    def current_version(workspace_id, task_id, section_id, *, connection):
+        versions.append(connection)
+        return stage_version(workspace_id, task_id, section_id, connection=connection)
+    monkeypatch.setattr(repo.section_inputs, 'stage_section_version', current_version)
+    def guard(conn):
+        assert conn.in_transaction
+        guards.append(conn)
+    def declared_source(job, value, *, input_digest, origin_event_id, connection):
+        assert value is prepared and connection.in_transaction
+        assert input_digest == job.input_digest and origin_event_id == f'event_{job.id}_start'
+        assert repo.job_records.get_job_run('ws', job.id, connection=connection).id == job.id
+        event = TaskEvent(f'event_{job.id}_metadata_source', 'ws', task.id, job.id,
+            'metadata_source_declared', {'source_kind': 'metadata_only', 'origin_event_id': origin_event_id})
+        repo.execution_records.append_task_event(event, connection=connection)
+        sources.append((job.id, event.id, connection))
+        return event.id
+    monkeypatch.setattr(repo, 'seal_creation_narration_source', declared_source)
+    job = records.create_segment_revision_job(task, actor, command, {'metadata_only': True}, prepared,
+        write_guard=guard, budget_policy=None)
+    assert len(sources) == len(guards) == len(versions) == 1
+    assert sources[0][2] is guards[0] is versions[0]
+    event = records.find_segment_revision_request('ws', task.id, actor.member_id, command['request_id'])
+    assert event.job_id == job.id and event.payload['source_binding_event_id'] == sources[0][1]
+    listed = records.list_segment_revision_requests('ws', task.id, actor.member_id)
+    assert listed['total_count'] == 1 and listed['items'][0]['job_id'] == job.id
+    assert listed['items'][0]['waiting_reason'] == 'queue_submission_pending'
+    assert records.segment_revision_result('ws', job.id) is None
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, 'seal_creation_narration_source', forbidden)
+        replay = records.create_segment_revision_job(task, actor, command, {'metadata_only': True}, prepared,
+            write_guard=guard, budget_policy=None)
+    assert replay.id == job.id and len(guards) == len(versions) == 2 and len(sources) == 1
+    append = repo.execution_records.append_task_event
+    def append_start_then_fail(event, **kwargs):
+        value = append(event, **kwargs)
+        if event.event_type == 'segment_revision_requested':
+            raise RuntimeError('revision original-start tail')
+        return value
+    with monkeypatch.context() as patch:
+        patch.setattr(repo.execution_records, 'append_task_event', append_start_then_fail)
+        with pytest.raises(RuntimeError, match='revision original-start tail'):
+            records.create_segment_revision_job(task, actor, {**command, 'request_id': 'metadata-tail'},
+                {'metadata_only': True}, prepared, write_guard=guard, budget_policy=None)
+    assert len(sources) == 2
+    failed_job, _failed_source, _ = sources[-1]
+    with repo._connect() as conn:
+        assert conn.execute('SELECT id FROM job_runs WHERE id=?', (failed_job,)).fetchone() is None
+        assert conn.execute('SELECT id FROM task_events WHERE job_id=?', (failed_job,)).fetchone() is None
+    assert records.find_segment_revision_request('ws', task.id, actor.member_id, 'metadata-tail') is None
+    assert repo.execution_records.get_task_event('ws', sources[0][1]).payload['source_kind'] == 'metadata_only'
+    result = {'segment_id': 'declared-result', 'adopted': False, 'metadata_only': True}
+    repo.execution_records.append_task_event(TaskEvent('metadata-revision-result', 'ws', task.id, job.id,
+        'segment_publication', result))
+    assert records.segment_revision_result('ws', job.id) == result
+    listed = records.list_segment_revision_requests('ws', task.id, actor.member_id)
+    assert listed['total_count'] == 1 and listed['items'][0]['result'] == result

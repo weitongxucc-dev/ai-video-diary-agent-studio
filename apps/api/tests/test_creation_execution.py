@@ -3686,7 +3686,7 @@ def test_segment_revision_http_adapter_checks_trusted_source_before_atomic_effec
     with pytest.raises(main_module.HTTPException) as stale:
         next(route.endpoint for route in main_module.app.routes if route.name == "revise_creation_task_segment")(case.task_id,'section_1',{**payload,'request_id':'stale_input'},request)
     assert stale.value.status_code==409 and effects==['http_revision']
-    assert case.repo.find_segment_revision_request('local',case.task_id,case.actor.member_id,'stale_input') is None
+    assert case.repo.segment_revisions.find_segment_revision_request('local',case.task_id,case.actor.member_id,'stale_input') is None
 
 
 def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_path):
