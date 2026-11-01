@@ -771,3 +771,76 @@ def test_render_publication_metadata_is_atomic_and_preserves_head_guard(tmp_path
     assert task.stage == 'montage' and task.stage_status == 'failed' and task.stage_reason == 'render_failed'
     assert len(s.repo.timeline_records.list_timeline_versions('ws', s.task.id)) == 2
     assert violations == []
+
+
+def test_workspace_response_http_read_and_agent_port_share_real_metadata(tmp_path, monkeypatch):
+    import sqlite3
+    import threading
+    import wave
+    import httpx
+    from PIL import Image
+    from starlette.requests import Request
+    import app.main as main
+    from app.assistant.task_business import TaskBusiness
+    from app.device_runtime import DeviceRuntime
+    from app.schemas import CreationTaskWorkspaceResponse
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('execution')
+        pytest.fail('workspace metadata forbids runtime, media and external transport')
+
+    for target, name in ((subprocess, 'Popen'), (threading.Thread, 'start'), (wave, 'open'),
+            (Image, 'open'), (Image, 'new'), (Image.Image, 'save'),
+            (httpx.HTTPTransport, 'handle_request'), (httpx.AsyncHTTPTransport, 'handle_async_request'),
+            (DeviceRuntime, 'start'), (DeviceRuntime, 'run_once'), (DeviceRuntime, 'wake'),
+            (TaskAudio, 'source'), (TaskAudio, 'publish'), (TaskAudio, 'probe')):
+        monkeypatch.setattr(target, name, forbidden)
+    s = metadata_state(tmp_path)
+    monkeypatch.setattr(main, 'production_repo', s.repo)
+    monkeypatch.setattr(main, 'artifact_store', s.store)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda _: 'ws')
+    monkeypatch.setattr(main, '_content_reader', lambda *_: (s.member.member_id, False))
+    monkeypatch.setattr(main, '_metadata_edit_use_case', lambda: s.case)
+    monkeypatch.setattr(main, '_lipsync_provider', lambda *_: None)
+    monkeypatch.setattr(main, 'subtitle_translation_provider_from_settings', lambda _: None)
+    monkeypatch.setattr(main, '_portrait_processor', lambda _: SimpleNamespace(available=False))
+    for name in ('_creation_runtime', '_start_device_runtime', '_creation_execution_control',
+                 '_segment_production_use_case', '_native_task_operations_case', '_timeline_restore_use_case'):
+        monkeypatch.setattr(main, name, forbidden)
+    business = main._task_business(generation_case=SimpleNamespace())
+    assert isinstance(business, TaskBusiness)
+    real_reader = main._task_workspace_read_use_case
+    readers = []
+
+    def current_reader():
+        reader = real_reader()
+        readers.append(reader)
+        return reader
+
+    monkeypatch.setattr(main, '_task_workspace_read_use_case', current_reader)
+    route = next(route for route in main._task_workspace_http_router(('get_creation_task_workspace',)).routes
+        if route.name == 'get_creation_task_workspace')
+    request = Request({'type': 'http', 'method': 'GET', 'path': f'/api/creation-tasks/{s.task.id}',
+        'headers': [], 'query_string': b'', 'state': {}})
+
+    def snapshot():
+        with sqlite3.connect(f'file:{s.repo.database_path}?mode=ro', uri=True) as conn:
+            tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {table: sorted(conn.execute('SELECT * FROM "' + table.replace('"', '""') + '"').fetchall(), key=repr)
+                for table in tables}
+
+    before = snapshot()
+    http_response = route.endpoint(s.task.id, request)
+    task = s.repo.task_records.get_creation_task('ws', s.task.id)
+    agent_response = business.workspace_facts('ws', task)
+    assert isinstance(http_response, CreationTaskWorkspaceResponse)
+    assert isinstance(agent_response, CreationTaskWorkspaceResponse)
+    http_values = http_response.model_dump(mode='json')
+    assert CreationTaskWorkspaceResponse.model_validate(http_values).model_dump(mode='json') == agent_response.model_dump(mode='json')
+    assert http_values['task']['id'] == s.task.id and http_values['montage']['id'] == s.plan.id
+    assert http_values['subtitle_tracks'][0]['id'] == s.track.id
+    assert http_values['portrait_available'] is False
+    assert len(readers) == 2 and readers[0] is not readers[1]
+    assert snapshot() == before and violations == []

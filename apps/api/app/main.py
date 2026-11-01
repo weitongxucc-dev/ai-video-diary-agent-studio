@@ -285,7 +285,7 @@ from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
 from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, VideoTemplate, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, MaterialLinkProvenanceSink, NarrationArtifactRecord, PersonRender, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
-from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase, TaskWorkspaceNotFound, TaskWorkspaceSubtitleInvalid
+from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.topic_contracts import (
@@ -354,7 +354,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTaskWorkspaceResponse, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationPlanResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRenderResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -3104,137 +3104,13 @@ def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
     )
 
 
-def _creation_task_workspace_response(
-    workspace_id: str,
-    task: CreationTask,
-) -> CreationTaskWorkspaceResponse:
-    reader = _task_workspace_read_use_case()
-    try:
-        facts = reader.read(workspace_id, task)
-    except TaskWorkspaceNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except TaskWorkspaceSubtitleInvalid as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    plan = facts.plan
-    selected_topic = facts.selected_topic
-    topic_evidence = facts.topic_evidence
-    artifact = facts.artifact
-    montage = facts.montage
-    task_read = facts.task_read
-    person_provider = facts.person_provider
-    person_render_available = facts.person_render_available
-    subtitle_tracks = facts.subtitle_tracks
-    cover_assets = facts.cover_assets
-    translation_provider = facts.translation_provider
-    translation_failure = facts.translation_failure
-    cover_frame_available = facts.cover_frame_available
-    image_capability = facts.image_capability
-    return CreationTaskWorkspaceResponse.model_validate(
-        {
-            "task": task_read.summary,
-            "plan": _creation_plan_preview_response(plan).model_dump(),
-            "selected_topic": (
-                {
-                    "id": selected_topic.id,
-                    "run_id": selected_topic.run_id,
-                    "title": selected_topic.title,
-                    "angle": selected_topic.angle,
-                    "audience": selected_topic.audience,
-                    "outline": selected_topic.outline,
-                    "score": selected_topic.score,
-                    "selection_status": selected_topic.selection_status,
-                    "created_at": selected_topic.created_at,
-                }
-                if selected_topic is not None
-                else None
-            ),
-            "topic_evidence": [
-                {
-                    "id": reference.id,
-                    "candidate_id": reference.candidate_id,
-                    "kind": reference.kind,
-                    "reference_id": reference.reference_id,
-                    "version_or_identity": reference.version_or_identity,
-                    "title": reference.title,
-                    "authorization_or_license": reference.authorization_or_license,
-                    "source_url": reference.source_url,
-                    "created_at": reference.created_at,
-                }
-                for reference in topic_evidence
-            ],
-            "scripts": reader.read_script_headers(workspace_id, task.id),
-            "scripts_scope": "active",
-            "available_voices": reader.voice_options(workspace_id, task, plan),
-            "narration": (
-                _creation_task_narration_response(task, artifact).model_dump()
-                if artifact is not None
-                else None
-            ),
-            "portrait_available": reader.portrait_available(workspace_id),
-            "person_render_capability": {
-                "available": person_render_available,
-                "model_id": person_provider.model_id if person_provider else "",
-                "message": person_provider.message if person_provider else "0%人物，本任务不需要口型能力。",
-                "repair_action": (
-                    None
-                    if person_render_available or person_provider is None
-                    else "配置本地人物口型运行环境后重试。"
-                ),
-            },
-            "person_renders": [
-                _person_render_response(render).model_dump()
-                for render in reader.read_person_renders(workspace_id, task.id)
-            ],
-            "montage": (
-                _creation_task_montage_response(montage).model_dump()
-                if montage is not None
-                else None
-            ),
-            "subtitle_tracks": [asdict(track) for track in subtitle_tracks],
-            "cover_asset": asdict(cover_assets[-1]) if cover_assets else None,
-            "subtitle_translation_capability": {
-                "available": bool(translation_provider and translation_provider.ready),
-                "model_id": translation_provider.model_id if translation_provider else None,
-                "message": (
-                    f"上次翻译未完成：{translation_failure['failure_reason']}"
-                    if translation_failure
-                    else
-                    translation_provider.message
-                    if translation_provider
-                    else "当前测试运行时未配置文字模型翻译能力。"
-                ),
-                "repair_action": (
-                    translation_failure.get("repair_action")
-                    if translation_failure
-                    else
-                    None
-                    if translation_provider and translation_provider.ready
-                    else translation_provider.message
-                    if translation_provider
-                    else "配置完整运行时设置后重试。"
-                ),
-            },
-            "cover_frame_capability": {
-                "available": cover_frame_available,
-                "model_id": "ffmpeg+Pillow" if cover_frame_available else None,
-                "message": (
-                    "可以从当前成片选择真实画面生成封面。"
-                    if cover_frame_available
-                    else "先生成可播放成片，并确认本机 FFmpeg 可用。"
-                ),
-                "repair_action": (
-                    None
-                    if cover_frame_available
-                    else "先完成成片渲染或修复 FFmpeg/FFprobe 环境。"
-                ),
-            },
-            "image_generation_capability": {
-                "available": False,
-                "model_id": None,
-                "message": image_capability.impact,
-                "repair_action": image_capability.remediation,
-            },
-        }
+def _task_workspace_response_adapter():
+    return TaskWorkspaceResponseAdapter(
+        reader_for=lambda: _task_workspace_read_use_case(),
+        encode_plan=lambda plan: _creation_plan_preview_response(plan),
+        encode_narration=lambda task, artifact: _creation_task_narration_response(task, artifact),
+        encode_person_render=lambda render: _person_render_response(render),
+        encode_montage=lambda montage: _creation_task_montage_response(montage),
     )
 def _assistant_profile_snapshot(request: Request, kind: str, profile_id: str, version: str) -> dict:
     workspace_id = current_workspace_id(request)
@@ -3693,7 +3569,7 @@ app.include_router(build_script_library_router(
     use_case=_script_library_use_case, workspace_id=lambda request: current_workspace_id(request)))
 
 
-from app.task_workspace_routes import build_task_workspace_router
+from app.task_workspace_routes import TaskWorkspaceResponseAdapter, build_task_workspace_router
 
 
 def _task_workspace_http_router(route_names):
@@ -3706,7 +3582,7 @@ def _task_workspace_http_router(route_names):
         summary_for=lambda: project_task_summary,
         write_guard_for=lambda: _local_member_write_guard,
         http_error_for=lambda: HTTPException,
-        workspace_response_for=lambda: _creation_task_workspace_response,
+        workspace_response_for=lambda: _task_workspace_response_adapter().response,
         task_for=lambda: _creation_task_or_404,
         readable_for=lambda: _readable_creation_task,
         route_names=route_names,
@@ -7255,7 +7131,7 @@ def _creator_memory_facts(workspace_id, member_id):
 
 def _task_business(*, generation_case=None):
     return TaskBusiness(production_repo,conversation_repo,_task_authorizations_for_goal(),runtime=_creation_runtime,
-        execution=None if generation_case is not None else _creation_execution_control(),workspace_facts=_creation_task_workspace_response,
+        execution=None if generation_case is not None else _creation_execution_control(),workspace_facts=_task_workspace_response_adapter().response,
         script_context=lambda ws, task_id, reader_id: _script_context_use_case().read_context(
             ws, task_id, reader_id, local_diagnostic=False),
         script_facts=lambda ws, task: _creation_task_scripts_response(ws, task, include_body=False),
