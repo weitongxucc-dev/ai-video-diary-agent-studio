@@ -910,7 +910,7 @@ class CreationJobOwnerVerifier:
             'reason_code':decision.reason,'reason':reason,'failed_limits':failed,'retryable':False,'context':'history','admitted':False,
             'checked_at':checked_at.astimezone(timezone.utc).isoformat(),'repair_action':repair}
         event=TaskEvent(event_id,job.workspace_id,task.id,job.id,'creation_execution_stage',payload,created_at=checked_at)
-        self.repository.reject_creation_execution_admission(job.workspace_id,job.id,request.id,job.input_digest,
+        self.repository.creation_execution_jobs.reject_creation_execution_admission(job.workspace_id,job.id,request.id,job.input_digest,
             event=event,reason=reason,impact='本次执行单元未获设备许可；原作业、上游产物和已采用版本保留。',
             repair_action=repair,connection=conn)
         return 'input_rejected'
@@ -3621,7 +3621,7 @@ class CreationExecution:
                 write_guard(conn)
             self.validate_input_snapshot(workspace_id, task_id, script_id, digest, connection=conn)
         with source_context as source_preparation:
-            run = self.repository.create_creation_execution_job(
+            run = self.repository.creation_execution_jobs.create_creation_execution_job(
                 JobRun(
                     id=f"job_{uuid4().hex}",
                     workspace_id=workspace_id,
@@ -3728,7 +3728,7 @@ class CreationExecution:
             if write_guard is not None:
                 write_guard(conn)
             self.validate_input_snapshot(workspace_id, task_id, script_id, latest.input_digest, connection=conn)
-        run = self.repository.create_creation_execution_job(
+        run = self.repository.creation_execution_jobs.create_creation_execution_job(
             JobRun(
                 id=f"job_{uuid4().hex}",
                 workspace_id=workspace_id,

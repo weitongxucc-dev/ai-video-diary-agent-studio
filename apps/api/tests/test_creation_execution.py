@@ -2352,7 +2352,7 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     job=repo.job_records.create_job_run(JobRun('original-job','local',task_id,'creation_task_execution','original-job','a'*64))
     repo.execution_records.append_task_event(TaskEvent('event_original-job_start','local',task_id,job.id,'creation_execution_started',
         {'member_id':member,'script_id':'script_local','plan_id':'plan_local','input_digest':'a'*64}))
-    repo.bind_creation_execution_source(job,{'assistant_turn_id':claim['turn_id'],'conversation_id':chat['id'],
+    repo.creation_execution_jobs.bind_creation_execution_source(job,{'assistant_turn_id':claim['turn_id'],'conversation_id':chat['id'],
         'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')})
     def revoke_before_owner_write():
         current=repo.task_authorization_records.get_task_authorization('local',task_id)
@@ -2586,7 +2586,7 @@ def test_execution_projection_failure_reports_original_committed_job(tmp_path,mo
         # Declare the control result through the actual atomic job/source owner;
         # this case tests failed projection, independent of media prerequisites.
         from app.creation.contracts import JobRun
-        job=business.production.create_creation_execution_job(JobRun('persisted-job',ws,task_id,
+        job=business.production.creation_execution_jobs.create_creation_execution_job(JobRun('persisted-job',ws,task_id,
             'creation_task_execution','persisted-job',digest),
             start_payload={'script_id':script_id,'plan_id':'plan_local','input_digest':digest,**actor.identity_payload()},
             write_guard=kwargs['write_guard'],execution_source=kwargs['execution_source'])
@@ -2666,7 +2666,7 @@ def test_adopted_input_and_original_job_survive_turn_interruption(tmp_path,inter
     current={**binding,**consumed['_business_binding']}
     source={**{key:binding[key] for key in ('workspace_id','member_id','task_id','conversation_id')},
         'assistant_turn_id':claim['turn_id'],'action':'start','input_id':item['input_id'],'input_turn_id':claim['turn_id']}
-    job=production.create_creation_execution_job(JobRun('job_adopted_input','local',binding['task_id'],
+    job=production.creation_execution_jobs.create_creation_execution_job(JobRun('job_adopted_input','local',binding['task_id'],
         'creation_task_execution','adopted-input-job',digest),start_payload={'script_id':'script_local','plan_id':'plan_local',
         'input_digest':digest,**CreationExecutionActor('local',binding['member_id']).identity_payload()},
         write_guard=lambda conn:business.check(current,Event(),time.monotonic()+10,connection=conn),execution_source=source)
@@ -7231,3 +7231,93 @@ def test_native_execution_records_keep_requests_transactions_and_receipt_facts(t
     records.mark_native_released(job)
     assert records.native_operation_result(actor.workspace_id, job.id)['release_state'] == 'released'
     assert records.list_native_jobs(actor.workspace_id, task_id, unreleased_only=True) == ([], 0)
+
+
+def test_creation_job_transactions_keep_original_guard_sources_and_ungranted_rejection(tmp_path, monkeypatch):
+    from app.creation.contracts import JobRun, TaskEvent
+
+    repo, task_id, _script_id, digest = _seed(tmp_path, voice=False)
+    transactions = repo.creation_execution_jobs
+    guards = []
+    def guard(conn):
+        assert conn.in_transaction
+        guards.append(conn)
+    run = JobRun('metadata-creation-job', 'workspace_a', task_id, 'creation_task_execution',
+        'metadata-creation-request', digest)
+    payload = {'input_digest': digest, 'actor': 'metadata-member'}
+    source = {'assistant_turn_id': 'metadata-turn', 'input_id': 'metadata-input'}
+    created = transactions.create_creation_execution_job(run, start_payload=payload, write_guard=guard,
+        execution_source=source)
+    replay = transactions.create_creation_execution_job(replace(run, id='unused-replay-id'),
+        start_payload=payload, write_guard=guard, execution_source=source)
+    assert replay.id == created.id == run.id and len(guards) == 2
+    with pytest.raises(PermissionError, match='原输入与身份不同'):
+        transactions.create_creation_execution_job(run, start_payload={**payload, 'actor': 'different'}, write_guard=guard)
+    assert len(guards) == 3
+    located = transactions.bind_creation_execution_source(created, source, write_guard=guard)
+    assert located.job_id == created.id and len(guards) == 4
+    with pytest.raises(ValueError, match='绑定不同制作作业'):
+        transactions.bind_creation_execution_source(created, {**source, 'extra': 'changed'}, write_guard=guard)
+    assert len(guards) == 5
+    borrowed_source = {'assistant_turn_id': 'borrowed-turn', 'input_id': 'borrowed-input'}
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        borrowed = transactions.bind_creation_execution_source(created, borrowed_source, connection=conn, write_guard=guard)
+        assert conn.in_transaction
+        assert repo.execution_records.get_task_event(run.workspace_id, borrowed.id, connection=conn) == borrowed
+        with pytest.raises(KeyError):
+            repo.execution_records.get_task_event(run.workspace_id, borrowed.id)
+        conn.rollback()
+    with pytest.raises(KeyError):
+        repo.execution_records.get_task_event(run.workspace_id, borrowed.id)
+    append = repo.execution_records.append_task_event
+    failed = replace(run, id='metadata-tail-job', idempotency_key='metadata-tail-request')
+    def append_locator_then_fail(event, **kwargs):
+        value = append(event, **kwargs)
+        if event.event_type == 'assistant_execution_located':
+            raise RuntimeError('metadata locator tail')
+        return value
+    with monkeypatch.context() as patch:
+        patch.setattr(repo.execution_records, 'append_task_event', append_locator_then_fail)
+        with pytest.raises(RuntimeError, match='metadata locator tail'):
+            transactions.create_creation_execution_job(failed, start_payload=payload,
+                execution_source={'assistant_turn_id': 'failed-tail-turn'})
+    with repo._connect() as conn:
+        assert conn.execute('SELECT id FROM job_runs WHERE id=?', (failed.id,)).fetchone() is None
+        assert conn.execute('SELECT id FROM task_events WHERE job_id=?', (failed.id,)).fetchone() is None
+    now = datetime.now(timezone.utc)
+    def request(conn, identity, unit, state):
+        conn.execute('INSERT INTO device_work_requests(id,workspace_id,member_id,owner_type,owner_id,input_digest,'
+            'unit_key,source_refs_json,work_class,policy,first_ready_at_utc,state,resources_json,created_at,updated_at) '
+            'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (identity, run.workspace_id, 'metadata-member', 'creation_job',
+            run.id, digest, unit, '[]', 'normal_make', 'asap', now.isoformat(), state, '{}', now.isoformat(), now.isoformat()))
+    with repo._connect() as conn:
+        request(conn, 'metadata-waiting', 'metadata-unit', 'waiting')
+    refusal = TaskEvent('metadata-admission-refused', run.workspace_id, task_id, run.id,
+        'creation_execution_admission_refused', {'device_request_id': 'metadata-waiting',
+            'input_digest': digest, 'unit_key': 'metadata-unit'})
+    def reject(conn):
+        return transactions.reject_creation_execution_admission(run.workspace_id, run.id, 'metadata-waiting', digest,
+            event=refusal, reason='metadata refusal', impact='no execution', repair_action='review original input', connection=conn)
+    with repo._connect() as conn:
+        with pytest.raises(ValueError, match='同一事务'):
+            reject(conn)
+        conn.execute('BEGIN IMMEDIATE')
+        request(conn, 'metadata-peer', 'metadata-other-unit', 'granted')
+        with pytest.raises(PermissionError, match='仍有执行许可'):
+            reject(conn)
+        assert repo.job_records.get_job_run(run.workspace_id, run.id, connection=conn).status == 'queued'
+        with pytest.raises(KeyError):
+            repo.execution_records.get_task_event(run.workspace_id, refusal.id, connection=conn)
+        conn.rollback()
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        rejected = reject(conn)
+        assert rejected.status == 'failed' and conn.in_transaction
+        assert repo.execution_records.get_task_event(run.workspace_id, refusal.id, connection=conn) == refusal
+        assert repo.job_records.get_job_run(run.workspace_id, run.id).status == 'queued'
+        assert conn.execute('SELECT state FROM device_work_requests WHERE id=?', ('metadata-waiting',)).fetchone()[0] == 'waiting'
+        conn.rollback()
+    assert repo.job_records.get_job_run(run.workspace_id, run.id).status == 'queued'
+    with pytest.raises(KeyError):
+        repo.execution_records.get_task_event(run.workspace_id, refusal.id)

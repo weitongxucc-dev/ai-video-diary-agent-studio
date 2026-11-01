@@ -295,7 +295,7 @@ class CreationExecutionControl:
                 owner=owner, write_guard=write_guard) if latest is not None and delivery is not None else None)
             if recovered is not None:
                 if execution_source is not None:
-                    self.repository.bind_creation_execution_source(
+                    self.repository.creation_execution_jobs.bind_creation_execution_source(
                         self.repository.job_records.get_job_run(workspace_id, latest.id), execution_source, write_guard=write_guard)
                 runtime.wake()
                 return self.status(workspace_id, task_id, verify_media=verify_media)
@@ -311,7 +311,7 @@ class CreationExecutionControl:
                     self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
                         admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection)))
             if execution_source is not None:
-                self.repository.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
+                self.repository.creation_execution_jobs.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
         except CreationInputRejected as exc:
             raise ExecutionControlRejected(status_code=409,detail=exc.detail) from exc

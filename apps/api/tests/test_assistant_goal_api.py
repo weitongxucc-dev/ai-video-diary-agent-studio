@@ -1182,7 +1182,7 @@ def execution_binding_state(execution_http_state, monkeypatch):
     plan = repo.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
     digest = revision_digest(script, plan)
-    job = repo.create_creation_execution_job(JobRun(
+    job = repo.creation_execution_jobs.create_creation_execution_job(JobRun(
         id='declared-binding-job', workspace_id=state.workspace_id, task_id=state.task.id,
         kind='creation_task_execution', idempotency_key='declared-binding-job', input_digest=digest),
         start_payload={'script_id':script.id, 'plan_id':plan.id, 'input_digest':digest,
@@ -1274,7 +1274,7 @@ def test_execution_projection_rechecks_persisted_authority_and_keeps_stale_histo
             'kind': 'task', 'task_id': state.task.id, 'stage': 'review',
             'target_snapshot': {'timeline_version_id': state.version.id, 'timeline_sequence': state.version.sequence}})
     plan = repo.plan_records.get_creation_plan(state.workspace_id, state.task.plan_id)
-    second = repo.create_creation_execution_job(JobRun('declared-stale-projection', state.workspace_id,
+    second = repo.creation_execution_jobs.create_creation_execution_job(JobRun('declared-stale-projection', state.workspace_id,
         state.task.id, 'creation_task_execution', 'declared-stale-projection', state.job.input_digest),
         start_payload={'script_id': state.script_id, 'plan_id': plan.id, 'input_digest': state.job.input_digest,
             **state.actor.identity_payload()})

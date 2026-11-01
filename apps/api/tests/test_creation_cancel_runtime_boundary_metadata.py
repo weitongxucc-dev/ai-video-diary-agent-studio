@@ -153,7 +153,7 @@ def test_cancel_checks_original_goal_and_latest_job_before_runtime(tmp_path, mon
     # This declares a persisted locator, not a successful Agent execution.
     source = {'assistant_turn_id': turn['id'], 'conversation_id': chat['id'],
         'input_id': goal.get('source_input_id'), 'input_turn_id': goal.get('source_input_turn_id')}
-    repository.bind_creation_execution_source(first, source)
+    repository.creation_execution_jobs.bind_creation_execution_source(first, source)
     reopened, execution, business, current_goal = reopen()
     assert [event.job_id for event in business.execution_sources(current_goal)] == [first.id]
     assert execution.latest('local', task.id).id == first.id
