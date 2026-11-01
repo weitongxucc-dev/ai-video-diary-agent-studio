@@ -82,10 +82,10 @@ class ScriptGenerationIntent:
             "requirements": {key: requirements[key] for key in fields if key in requirements},
             "topic": asdict(topic), "input_references": references,
             "sources_digest": _digest(_canonical([asdict(source) for source in sources])),
-            "source_revisions": self.repository.task_source_revisions(
+            "source_revisions": self.repository.task_authorization_records.task_source_revisions(
                 task.workspace_id, [item.id for item in plan.knowledge_references],
                 [item.id for item in plan.source_references], connection=conn),
-            "goal_revision": self.repository.task_authorization_goal_revision(
+            "goal_revision": self.repository.task_authorization_records.task_authorization_goal_revision(
                 task.workspace_id, task.id, connection=conn),
         })
         return frozen

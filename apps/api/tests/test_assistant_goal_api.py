@@ -1247,8 +1247,8 @@ def test_execution_projection_rechecks_persisted_authority_and_keeps_stale_histo
         failure_reason='declared metadata failure', impact='declared job stopped without media work',
         repair_action='read original job metadata')
     if authorization_revoked:
-        authorization = repo.get_task_authorization(state.workspace_id, state.task.id)
-        repo.save_task_authorization(replace(authorization, revision=authorization.revision + 1,
+        authorization = repo.task_authorization_records.get_task_authorization(state.workspace_id, state.task.id)
+        repo.task_authorization_records.save_task_authorization(replace(authorization, revision=authorization.revision + 1,
             revoked_at=datetime.now(timezone.utc)), expected_revision=authorization.revision)
         assert authority.verdict(state.actor, state.task.id, 'task_goal', check_scope=False) == 'unauthorized'
         before_turn = conversations.get_turn(state.turn_id)
@@ -1569,7 +1569,7 @@ def edit_result_state(tmp_path, monkeypatch):
         assert goal is not None
         authorization = authority.ensure(state.repo.task_records.get_creation_task('ws', state.task.id), actor, interactive=True)
         required = authority._requirements('ws', state.task.id)[1]
-        state.repo.save_task_authorization(replace(authorization, revision=authorization.revision+1,
+        state.repo.task_authorization_records.save_task_authorization(replace(authorization, revision=authorization.revision+1,
             resource_scope={**authorization.resource_scope, 'references':required['references']}),
             expected_revision=authorization.revision)
         authority.bind_business_context(state.repo.task_records.get_creation_task('ws', state.task.id), actor, goal, memory={})

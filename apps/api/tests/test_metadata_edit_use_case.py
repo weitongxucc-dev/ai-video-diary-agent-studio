@@ -117,18 +117,18 @@ def test_replace_material_adoption_keeps_original_authority_or_reports_not_ready
     actor = CreationExecutionActor('ws',s.member.member_id)
     def verify(_identity):
         if authorization_state=='revoked_during_prepare':
-            current = s.repo.get_task_authorization('ws',s.task.id)
-            s.repo.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=now),
+            current = s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
+            s.repo.task_authorization_records.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=now),
                 expected_revision=current.revision)
         return 'ready'
     service = TaskAuthorizationUseCase(s.repo,verify,clock=lambda:now)
     _,required = service._requirements('ws',s.task.id)
     original = TaskAuthorization('original','ws',s.task.id,service.identity(actor),
-        s.repo.task_authorization_goal_revision('ws',s.task.id),('render','narration'),
+        s.repo.task_authorization_records.task_authorization_goal_revision('ws',s.task.id),('render','narration'),
         {**required,'voices':['keep:voice'],'persons':['keep:person']},now-timedelta(hours=1),
         now-timedelta(hours=1),now+timedelta(hours=1) if authorization_state!='expired' else now-timedelta(seconds=1))
     if authorization_state!='missing':
-        s.repo.save_task_authorization(original,expected_revision=None)
+        s.repo.task_authorization_records.save_task_authorization(original,expected_revision=None)
     s.case.task_authorizations = service
     command = metadata_edit_command(s.task,s.identity,'ReplaceClip',{'base_version_id':s.base.id,
         'clip_id':'clip','asset_id':asset.id,'segment_id':'replacement-segment'})
@@ -137,11 +137,11 @@ def test_replace_material_adoption_keeps_original_authority_or_reports_not_ready
             s.case.save(s.task,command)
         assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
         assert s.repo.edit_records.list_edit_operations('ws',s.task.id)==[]
-        assert reference not in s.repo.get_task_authorization('ws',s.task.id).resource_scope['references']
+        assert reference not in s.repo.task_authorization_records.get_task_authorization('ws',s.task.id).resource_scope['references']
         return
     result = s.case.save(s.task,command)
     assert result.montage.clips[0].asset_id==asset.id
-    saved = s.repo.get_task_authorization('ws',s.task.id)
+    saved = s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
     assert result.execution_readiness['device_admission']=='not_checked'
     if authorization_state=='valid':
         assert result.execution_readiness['status']=='authorization_ready'
@@ -182,8 +182,8 @@ def test_restore_material_uses_current_adoption_baseline_before_historical_subti
     _,required=service._requirements('ws',task.id)
     assert required['assets']==[]
     original=TaskAuthorization('narrow-current','ws',task.id,service.identity(actor),
-        state.repo.task_authorization_goal_revision('ws',task.id),('render',),required,now,now,now+timedelta(hours=1))
-    state.repo.save_task_authorization(original,expected_revision=None)
+        state.repo.task_authorization_records.task_authorization_goal_revision('ws',task.id),('render',),required,now,now,now+timedelta(hours=1))
+    state.repo.task_authorization_records.save_task_authorization(original,expected_revision=None)
     state.case.task_authorizations=service
     intent=state.repo.edit_records.create_edit_intent(EditIntent('restore-intent','ws',task.id,'撤销删除','montage',[],None,
         'undo_timeline',{}, {},1,'interpreted'))
@@ -192,7 +192,7 @@ def test_restore_material_uses_current_adoption_baseline_before_historical_subti
     result=state.case.persist_montage_edit(workspace_id='ws',task=task,proposal=proposal,base_version=base,
         updated_plan=deepcopy(state.plan),operation_type='UndoTimelineVersion',operation_payload=proposal.operation['payload'],
         subtitle_source_version=state.base,actor_identity=state.identity)
-    saved=state.repo.get_task_authorization('ws',task.id)
+    saved=state.repo.task_authorization_records.get_task_authorization('ws',task.id)
     assert result.montage.clips[0].asset_id==state.asset.id
     assert result.execution_readiness['status']=='authorization_ready'
     assert saved.resource_scope['assets']==[state.asset.id]
@@ -248,8 +248,8 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     service=TaskAuthorizationUseCase(s.repo,lambda _:'ready',clock=lambda:now)
     _,scope=service._requirements('ws',s.task.id)
     original=TaskAuthorization('insert-authority','ws',s.task.id,service.identity(actor),
-        s.repo.task_authorization_goal_revision('ws',s.task.id),('render',),scope,now,now,now+timedelta(hours=1))
-    s.repo.save_task_authorization(original,expected_revision=None)
+        s.repo.task_authorization_records.task_authorization_goal_revision('ws',s.task.id),('render',),scope,now,now,now+timedelta(hours=1))
+    s.repo.task_authorization_records.save_task_authorization(original,expected_revision=None)
     s.case.task_authorizations=service
     identity={**s.identity,'material_reader_identity':s.identity}
     inserted=LinkedTimelineEditUseCase(s.repo,s.case).apply(metadata_edit_command(s.task,identity,'InsertClip',
@@ -258,10 +258,10 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     seen=s.repo.timeline_records.get_timeline_version('ws',inserted.task.current_timeline_version_id)
     undone=restore.execute(TimelineRestoreCommand('ws',inserted.task,False),actor=actor,request_id='undo-insert',
         target_operation_id=inserted.operation.id,expected_timeline_version_id=seen.id,expected_timeline_sequence=seen.sequence)
-    current=s.repo.get_task_authorization('ws',s.task.id)
+    current=s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
     _,remaining=service._requirements('ws',s.task.id)
     assert asset.id not in remaining['assets']
-    s.repo.save_task_authorization(replace(current,revision=current.revision+1,resource_scope=remaining),expected_revision=current.revision)
+    s.repo.task_authorization_records.save_task_authorization(replace(current,revision=current.revision+1,resource_scope=remaining),expected_revision=current.revision)
     assert service.status('ws',s.task.id,operation='render')=='valid'
     monkeypatch.setattr(main,'current_workspace_id',lambda _:'ws')
     monkeypatch.setattr(main,'production_repo',s.repo)
@@ -279,7 +279,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     assert posted.execution_readiness['status']=='authorization_ready'
     assert posted.execution_readiness['device_admission']=='not_checked'
     assert posted.operation.id==replayed.operation.id
-    assert asset.id in s.repo.get_task_authorization('ws',s.task.id).resource_scope['assets']
+    assert asset.id in s.repo.task_authorization_records.get_task_authorization('ws',s.task.id).resource_scope['assets']
     assert service.status('ws',s.task.id,operation='render')=='valid'
 
 
@@ -504,8 +504,8 @@ def test_task_authorization_render_outputs_are_not_input_grants(state,reuse_outp
     service=TaskAuthorizationUseCase(state.repo,lambda _:'ready',clock=lambda:now)
     _,scope=service._requirements('ws',state.task.id)
     authorization=TaskAuthorization('render-input-authority','ws',state.task.id,service.identity(actor),
-        state.repo.task_authorization_goal_revision('ws',state.task.id),('task_media',),scope,now,now,now+timedelta(hours=1))
-    state.repo.save_task_authorization(authorization,expected_revision=None)
+        state.repo.task_authorization_records.task_authorization_goal_revision('ws',state.task.id),('task_media',),scope,now,now,now+timedelta(hours=1))
+    state.repo.task_authorization_records.save_task_authorization(authorization,expected_revision=None)
     montage=dict(state.repo.get_creation_task_montage_plan('ws',state.task.id))
     output='artifacts/task/final-render/preview.mp4'
     sidecar='artifacts/task/final-render/subtitles.srt'
@@ -520,7 +520,7 @@ def test_task_authorization_render_outputs_are_not_input_grants(state,reuse_outp
     assert sidecar not in required['references']
     assert service.status('ws',state.task.id,identity=service.identity(actor),operation='task_media')==(
         'outside_scope' if reuse_output else 'valid')
-    assert state.repo.get_task_authorization('ws',state.task.id)==authorization
+    assert state.repo.task_authorization_records.get_task_authorization('ws',state.task.id)==authorization
 
 
 def test_queued_audio_preview_prepares_sibling_base_after_identity(tmp_path, monkeypatch):
@@ -1427,3 +1427,98 @@ def test_narration_checkpoints_keep_caller_atomicity_candidates_and_intermediate
         source_script_digest='1'*64)
     repo.narration_artifacts.save_narration_artifact(recorded)
     assert repo.narration_artifacts.get_narration_artifact('ws', recorded.cache_key) is None
+
+
+def test_task_authorization_records_keep_cas_atomicity_and_fixed_goal_facts(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from app.creation.contracts import TaskAuthorization, TaskAuthorizationConflict, JobRun
+
+    s = metadata_state(tmp_path)
+    records = s.repo.task_authorization_records
+    now = datetime.now(timezone.utc)
+    goal = records.task_authorization_goal_revision('ws', s.task.id)
+    authorization = TaskAuthorization('metadata-authorization', 'ws', s.task.id,
+        {'member_id': s.member.member_id}, goal, ('task_media',), {'assets': [s.asset.id]},
+        now, now, now + timedelta(hours=1), last_verdict='ready')
+    with s.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        assert records.save_task_authorization(authorization, expected_revision=None, connection=conn) is authorization
+        assert records.get_task_authorization('ws', s.task.id, connection=conn) == authorization
+        assert records.get_task_authorization('ws', s.task.id) is None
+        assert conn.in_transaction
+        conn.rollback()
+    assert records.get_task_authorization('ws', s.task.id) is None
+    append = s.repo.execution_records.append_task_event
+    def append_then_fail(*args, **kwargs):
+        append(*args, **kwargs)
+        raise RuntimeError('authorization event tail')
+    with monkeypatch.context() as patch:
+        patch.setattr(s.repo.execution_records, 'append_task_event', append_then_fail)
+        with pytest.raises(RuntimeError, match='authorization event tail'):
+            records.save_task_authorization(authorization, expected_revision=None)
+    assert records.get_task_authorization('ws', s.task.id) is None
+    with s.repo._connect() as conn:
+        assert conn.execute('SELECT id FROM task_events WHERE id=?',
+            ('event_metadata-authorization_1',)).fetchone() is None
+    records.save_task_authorization(authorization, expected_revision=None)
+    assert records.get_task_authorization('ws', s.task.id, metadata_only=True).resource_scope == {}
+    with pytest.raises(TaskAuthorizationConflict):
+        records.save_task_authorization(replace(authorization, revision=2), expected_revision=None)
+    revoked = replace(authorization, revision=2, revoked_at=now, last_verdict='unauthorized')
+    records.save_task_authorization(revoked, expected_revision=1)
+    with pytest.raises(PermissionError, match='不能由迟到核验恢复'):
+        records.save_task_authorization(replace(authorization, revision=3), expected_revision=2)
+    assert records.get_task_authorization('ws', s.task.id) == revoked
+    with s.repo._connect() as conn:
+        event = json.loads(conn.execute('SELECT payload_json FROM task_events WHERE id=?',
+            ('event_metadata-authorization_2',)).fetchone()[0])
+        assert event['revoked'] and 'resource_scope' not in event and 'identity' not in event
+    from app.source_repository import SourceRepository
+    from app.source_types import KnowledgeItem
+    sources = SourceRepository(s.repo.database_path)
+    knowledge = sources.create_knowledge_item_owned(KnowledgeItem(
+        'fixed-knowledge', 'ws', 'text', 'metadata fact', 'fixed content', None,
+        'owned', 'original', None, 'v1', content_hash='f' * 64), verified_user_id=s.member.member_id)
+    with s.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute("UPDATE knowledge_items SET use_state='excluded' WHERE id='fixed-knowledge'")
+        facts = records.task_source_revisions('ws', ['fixed-knowledge', 'fixed-knowledge'], [], connection=conn)
+        assert facts['knowledge'] == [['fixed-knowledge', 'v1', knowledge.content_hash, 'excluded', 'private', s.member.member_id]]
+        assert records.task_source_revisions('ws', ['fixed-knowledge'], [])['knowledge'][0][3] == 'available'
+        assert conn.in_transaction
+        conn.rollback()
+    with pytest.raises(PermissionError, match='固定资料已不可用'):
+        records.task_source_revisions('other-workspace', ['fixed-knowledge'], [])
+    with pytest.raises(PermissionError, match='固定资料已不可用'):
+        records.task_source_revisions('ws', [], ['missing-source'])
+    request = s.repo.creation_requests.create_creation_request('ws', request_key='fixed-goal-request',
+        input_fingerprint='request-facts', goal='fixed goal', target_count=2, output_relation='series',
+        requirements={}, material_scope={'assets': [s.asset.id]}, clarification_questions=[],
+        verified_owner_user_id=s.member.member_id)
+    plan = replace(s.repo.plan_records.get_creation_plan('ws', s.task.plan_id), id='origin-plan')
+    task = CreationTask('origin-task', 'ws', plan.id, 'fixed facts', 'knowledge_explanation')
+    window = s.repo.creation_requests.save_creation_request_window('ws', request['id'],
+        expected_revision=request['revision'], input_fingerprint='window-facts', entries=[(plan, task)],
+        verified_owner_user_id=s.member.member_id)
+    s.repo.creation_request_adoption.confirm_creation_request_window('ws', request['id'],
+        window['current_window']['id'], expected_revision=window['revision'], input_fingerprint='window-facts',
+        verified_owner_user_id=s.member.member_id)
+    fixed = records.task_authorization_goal_revision('ws', task.id)
+    assert records.task_authorization_material_scope('ws', task.id) == {'assets': [s.asset.id]}
+    assert records.task_authorization_material_scope('ws', s.task.id) is None
+    with s.repo._connect() as conn:
+        conn.execute('UPDATE creation_requests SET revision=revision+1 WHERE id=?', (request['id'],))
+    assert records.task_authorization_goal_revision('ws', task.id) == fixed
+    with s.repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('UPDATE creation_requests SET goal=? WHERE id=?', ('changed fixed goal', request['id']))
+        assert records.task_authorization_goal_revision('ws', task.id, connection=conn) != fixed
+        assert records.task_authorization_goal_revision('ws', task.id) == fixed
+        conn.rollback()
+    s.repo.job_records.create_job_run(JobRun('authorization-due-job', 'ws', task.id,
+        'creation_task_execution', 'authorization-due', 'a' * 64))
+    active = replace(authorization, id='active-authorization', task_id=task.id, goal_revision=fixed)
+    records.save_task_authorization(active, expected_revision=None)
+    assert records.list_task_authorizations(due_before=now) == [active]
+    with pytest.raises(KeyError):
+        records.task_authorization_goal_revision('ws', 'missing-task')

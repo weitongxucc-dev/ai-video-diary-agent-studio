@@ -413,8 +413,8 @@ def test_common_exact_rechecks_guard_in_real_commit(metadata_http_state,monkeypa
     name='persist_subtitle_edit' if operation=='ChangeCanvas' else 'persist_montage_edit'
     persist=getattr(case.metadata,name)
     def revoke_before_commit(**values):
-        current=s.repo.get_task_authorization('ws',s.task.id)
-        s.repo.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=datetime.now(timezone.utc)),
+        current=s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
+        s.repo.task_authorization_records.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=datetime.now(timezone.utc)),
             expected_revision=current.revision)
         return persist(**values)
     monkeypatch.setattr(case.metadata,name,revoke_before_commit)
@@ -449,7 +449,7 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
     authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
     granted=authority.ensure(s.task,actor,interactive=True)
     required=authority._requirements('ws',s.task.id)[1]
-    s.repo.save_task_authorization(replace(granted,revision=granted.revision+1,
+    s.repo.task_authorization_records.save_task_authorization(replace(granted,revision=granted.revision+1,
         resource_scope={**granted.resource_scope,'references':required['references']}),expected_revision=granted.revision)
     authority.bind_business_context(s.task,actor,goal,memory={})
     business=main._task_business()
@@ -473,8 +473,8 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
     s.repo.execution_records.claim_edit_request(s.task,s.member.member_id,foreign_id,'apply',{'_business_source':{
         'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id'],'input_id':'another-input','input_turn_id':turn['id']}})
     assert not call('read_task_edit_request',{'request_id':foreign_id,'phase':'apply'})['ok']
-    authorization=s.repo.get_task_authorization('ws',s.task.id)
-    s.repo.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
+    authorization=s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
+    s.repo.task_authorization_records.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
         expected_revision=authorization.revision)
     assert not call('read_task_edit_request',{'request_id':request_id,'phase':'apply'})['ok']
 
@@ -528,7 +528,7 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
     granted=authority.ensure(s.task,actor,interactive=True)
     required=authority._requirements('ws',s.task.id)[1]
-    s.repo.save_task_authorization(replace(granted,revision=granted.revision+1,
+    s.repo.task_authorization_records.save_task_authorization(replace(granted,revision=granted.revision+1,
         resource_scope={**granted.resource_scope,'references':required['references']}),expected_revision=granted.revision)
     authority.bind_business_context(s.task,actor,goal,memory={})
     payload={'operation_type':'ChangeCanvas','aspect_ratio':'1:1','assistant_turn_id':turn['id'],
@@ -701,7 +701,7 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
         request_id=uuid4(),expected_timeline_version_id=task.current_timeline_version_id,expected_timeline_sequence=expected_sequence)
     _,source=case._source(task,payload,s.identity,actor,None)
     if invalidation=='revoked':
-        s.repo.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
+        s.repo.task_authorization_records.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
             expected_revision=authorization.revision)
     elif invalidation=='stopped':
         goal={'workspace_id':'ws','task_id':task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
@@ -749,7 +749,7 @@ def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_h
         elif authorization_state=='expired': changes['expires_at']=now-timedelta(seconds=1)
         elif authorization_state=='unverified': changes['expires_at']=None
         else: changes['identity']={**authorization.identity,'member_id':'another-member'}
-        s.repo.save_task_authorization(replace(authorization,**changes),expected_revision=authorization.revision)
+        s.repo.task_authorization_records.save_task_authorization(replace(authorization,**changes),expected_revision=authorization.revision)
     case=main._exact_preview_use_case()
     assert case.metadata.write_guard is None
     original_status=case.metadata.task_authorizations.status
@@ -770,7 +770,7 @@ def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_h
     if authorization_state=='manual':
         assert response.status_code==200,response.text
         assert current.current_timeline_version_id is not None
-        assert s.repo.get_task_authorization('ws',task.id) is None
+        assert s.repo.task_authorization_records.get_task_authorization('ws',task.id) is None
     else:
         assert response.status_code==403,response.text
         with s.repo._connect() as conn:

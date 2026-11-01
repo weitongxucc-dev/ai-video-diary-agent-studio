@@ -2192,7 +2192,7 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
     issued = service.ensure(task, actor)
     verdict[0] = "unknown"
     service.refresh(issued)
-    unchanged = repo.get_task_authorization("local", task_id)
+    unchanged = repo.task_authorization_records.get_task_authorization("local", task_id)
     assert unchanged.expires_at == issued.expires_at
     service.last_error = RuntimeError("observation unavailable")
     assert service.status("local", task_id) == "valid"
@@ -2206,14 +2206,14 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
     assert restarted.status("local", task_id) == "expired"
     verdict[0] = "ready"
     restarted.refresh(unchanged)
-    renewed = repo.get_task_authorization("local", task_id)
+    renewed = repo.task_authorization_records.get_task_authorization("local", task_id)
     assert renewed.expires_at > now[0]
     verdict[0] = "unauthorized"
     restarted.refresh(renewed)
-    revoked = repo.get_task_authorization("local", task_id)
+    revoked = repo.task_authorization_records.get_task_authorization("local", task_id)
     verdict[0] = "ready"
     restarted.refresh(renewed)  # Late ready cannot overwrite the authoritative revocation.
-    assert repo.get_task_authorization("local", task_id) == revoked
+    assert repo.task_authorization_records.get_task_authorization("local", task_id) == revoked
     assert restarted.status("local", task_id) == "revoked"
 
 
@@ -2269,7 +2269,7 @@ def test_restart_keeps_revoked_task_paused_and_recovers_other_valid_task(tmp_pat
     valid_job = execution.start("local", valid_task, valid_script, valid_digest, actor=actor)
     revoked = service.ensure(repo.task_records.get_creation_task("local", revoked_task), actor)
     service.ensure(repo.task_records.get_creation_task("local", valid_task), actor)
-    repo.save_task_authorization(replace(revoked,revision=revoked.revision+1,
+    repo.task_authorization_records.save_task_authorization(replace(revoked,revision=revoked.revision+1,
         revoked_at=datetime.now(timezone.utc),last_verdict="unauthorized"),expected_revision=revoked.revision)
     runtime = SimpleNamespace(scheduler=scheduler,
         registrations={"creation_job":SimpleNamespace(owner=scheduler.owners)},wake=lambda:None)
@@ -2305,11 +2305,11 @@ def test_scope_refusal_does_not_stop_other_task_authorization_observation(tmp_pa
     service.start()
     try:
         for _ in range(100):
-            if repo.get_task_authorization("local",valid_task).issued_at is not None:
+            if repo.task_authorization_records.get_task_authorization("local",valid_task).issued_at is not None:
                 break
             time.sleep(.01)
-        refused = repo.get_task_authorization("local",denied_task)
-        valid = repo.get_task_authorization("local",valid_task)
+        refused = repo.task_authorization_records.get_task_authorization("local",denied_task)
+        valid = repo.task_authorization_records.get_task_authorization("local",valid_task)
         assert refused.expires_at == denied.expires_at and refused.issued_at is None
         assert refused.last_verdict.startswith("scope_refused: 原任务声音参考不可用")
         assert refused.last_checked_at == now[0]
@@ -2355,8 +2355,8 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     repo.bind_creation_execution_source(job,{'assistant_turn_id':claim['turn_id'],'conversation_id':chat['id'],
         'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')})
     def revoke_before_owner_write():
-        current=repo.get_task_authorization('local',task_id)
-        repo.save_task_authorization(replace(current,revision=current.revision+1,
+        current=repo.task_authorization_records.get_task_authorization('local',task_id)
+        repo.task_authorization_records.save_task_authorization(replace(current,revision=current.revision+1,
             revoked_at=datetime.now(timezone.utc),last_verdict='unauthorized'),expected_revision=current.revision)
         return None
     ports={key:(lambda *args,**kwargs:None) for key in ('workspace_facts','script_context','script_case','script_facts','generate_topics',
@@ -2697,8 +2697,8 @@ def test_adopted_input_and_original_job_survive_turn_interruption(tmp_path,inter
     assert resumed is not None and resumed['goal']['source_input_id']==item['input_id']
     resumed_binding={**current,'turn_id':resumed['turn_id']}
     assert call(resumed_binding)['value']['job']['id']==job.id
-    authorization=production.get_task_authorization('local',binding['task_id'])
-    production.save_task_authorization(replace(authorization,revision=authorization.revision+1,
+    authorization=production.task_authorization_records.get_task_authorization('local',binding['task_id'])
+    production.task_authorization_records.save_task_authorization(replace(authorization,revision=authorization.revision+1,
         revoked_at=datetime.now(timezone.utc),last_verdict='unauthorized'),expected_revision=authorization.revision)
     denied=call(resumed_binding)
     assert denied['ok'] is False and denied['failure']['status_code']==403
@@ -3764,7 +3764,7 @@ def test_queued_voice_selection_rebinds_original_job_and_request_once_without_bu
     usage = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     old = case.scheduler._get(case.request_id)
     receipt = case.control.select_narration_voice(runtime=case.runtime, actor=case.actor, **case.selection)
-    authorization = case.repo.get_task_authorization('local', case.task_id)
+    authorization = case.repo.task_authorization_records.get_task_authorization('local', case.task_id)
     assert authorization.resource_scope == {**case.original_authorization.resource_scope, 'voices': ['voice_2:v1']}
     assert replace(authorization, resource_scope=case.original_authorization.resource_scope,
         revision=case.original_authorization.revision, last_checked_at=case.original_authorization.last_checked_at,
@@ -3840,8 +3840,8 @@ def test_queued_voice_selection_refuses_races_or_unknown_and_rolls_back_all_writ
         select = case.repo.narration_voice_selection.select_creation_task_narration_voice
         def revoke_between_observation_and_commit(**kwargs):
             nonlocal before
-            current = case.repo.get_task_authorization('local', case.task_id)
-            case.repo.save_task_authorization(replace(current, revision=current.revision + 1,
+            current = case.repo.task_authorization_records.get_task_authorization('local', case.task_id)
+            case.repo.task_authorization_records.save_task_authorization(replace(current, revision=current.revision + 1,
                 revoked_at=datetime.now(timezone.utc), last_verdict='unauthorized'), expected_revision=current.revision)
             before = snapshot()  # This independent revocation must survive the failed selection.
             return select(**kwargs)
@@ -4343,8 +4343,8 @@ def test_unstarted_source_revalidation_revocation_during_prepare_keeps_original_
     @contextmanager
     def revoke(*args, **kwargs):
         with original(*args, **kwargs) as prepared:
-            current = case.repo.get_task_authorization('local', case.task_id)
-            case.repo.save_task_authorization(replace(current, revision=current.revision+1,
+            current = case.repo.task_authorization_records.get_task_authorization('local', case.task_id)
+            case.repo.task_authorization_records.save_task_authorization(replace(current, revision=current.revision+1,
                 revoked_at=datetime.now(timezone.utc)), expected_revision=current.revision)
             yield prepared
     monkeypatch.setattr(sources, 'prepare_narration_source', revoke)
@@ -5446,8 +5446,8 @@ def test_single_segment_no_next_commit_rechecks_after_release_before_settlement(
                 conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','commit后变动尾段') "
                              "WHERE script_id=? AND section_id='section_45'", (case.script_id,))
             else:
-                authorization = case.repo.get_task_authorization('local', case.task_id, connection=conn)
-                case.repo.save_task_authorization(replace(authorization, revision=authorization.revision + 1,
+                authorization = case.repo.task_authorization_records.get_task_authorization('local', case.task_id, connection=conn)
+                case.repo.task_authorization_records.save_task_authorization(replace(authorization, revision=authorization.revision + 1,
                     revoked_at=datetime.now(timezone.utc), last_verdict='unauthorized'),
                     expected_revision=authorization.revision, connection=conn)
             injected.append(changed)
@@ -5840,16 +5840,16 @@ def test_owner_first_authorization_precedes_submission_snapshot(tmp_path):
     with case.repo._connect() as conn:
         conn.execute('PRAGMA journal_mode=WAL')
     case.owner.task_authorizations = TaskAuthorizationUseCase(case.repo, lambda identity: 'ready')
-    assert case.repo.get_task_authorization('local', case.task_id) is None
+    assert case.repo.task_authorization_records.get_task_authorization('local', case.task_id) is None
     intent = next_creation_intent(case.repo, case.scheduler, case.job)
     with pytest.raises(PermissionError, match='输入摘要'):
         case.owner.verify_submission(replace(intent, input_digest='different-input'), case.actor)
     with pytest.raises(PermissionError, match='原身份'):
         case.owner.verify_submission(intent, CreationExecutionActor('local', 'other-member'))
-    assert case.repo.get_task_authorization('local', case.task_id) is None
+    assert case.repo.task_authorization_records.get_task_authorization('local', case.task_id) is None
     verified = case.owner.verify_submission(intent, case.actor)
     assert verified.owner_id == case.job.id and verified.input_digest == case.job.input_digest
-    assert case.repo.get_task_authorization('local', case.task_id) is not None
+    assert case.repo.task_authorization_records.get_task_authorization('local', case.task_id) is not None
     assert case.generated == [] and case.merged == []
     case.scheduler.close()
 
@@ -6471,8 +6471,8 @@ def test_bounded_segment_video_save_rechecks_original_transaction(tmp_path, monk
                 conn.execute("UPDATE narration_segments SET duration_seconds=48 WHERE task_id=? AND source_section_id='section_23'",
                     (case.task_id,))
             else:
-                current = case.repo.get_task_authorization('local', case.task_id, connection=conn)
-                case.repo.save_task_authorization(replace(current, revision=current.revision+1,
+                current = case.repo.task_authorization_records.get_task_authorization('local', case.task_id, connection=conn)
+                case.repo.task_authorization_records.save_task_authorization(replace(current, revision=current.revision+1,
                     revoked_at=datetime.now(timezone.utc)), expected_revision=current.revision, connection=conn)
         return prepared
     monkeypatch.setattr(case.segments, 'prepare_video', change_after_plan)

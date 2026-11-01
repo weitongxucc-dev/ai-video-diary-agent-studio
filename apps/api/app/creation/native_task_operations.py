@@ -182,7 +182,7 @@ class NativeTaskOperations:
                 path = self.store.resolve_file(record.logical_ref)
                 sha = record.sha256
             else:
-                authorization = self.repository.get_task_authorization(actor.workspace_id,origin['task_id'])
+                authorization = self.repository.task_authorization_records.get_task_authorization(actor.workspace_id,origin['task_id'])
                 if authorization is None:
                     raise PermissionError('原任务尚未核实素材读取范围')
                 path = self.repository.resolve_workspace_media_reference(actor.workspace_id,reference,require_registered=True)

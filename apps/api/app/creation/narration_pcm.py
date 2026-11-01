@@ -130,8 +130,8 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None, sel
                 conn, task.workspace_id, task.confirmed_script_id)
             revision = execution_input_digest(fields, plan,
                 repository.script_records.iter_execution_script_sections(conn, task.workspace_id, task.confirmed_script_id))
-        authorization = repository.get_task_authorization(task.workspace_id, task.id, connection=conn)
-        goal_revision = repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=conn)
+        authorization = repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=conn)
+        goal_revision = repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id, connection=conn)
     if task.owner_user_id is not None and task.owner_user_id != (actor.user_id or actor.member_id):
         raise PermissionError('配音来源采用不属于原任务成员')
     inputs, reference, qualified = narration_reference_facts(repository, task, plan)
@@ -198,9 +198,9 @@ def verify_narration_source(repository, task, plan, prepared, *, connection):
     if _source_stat(os.fstat(prepared['fd'])) != tuple(reference[key] for key in (
             'device', 'inode', 'size_bytes', 'mtime_ns', 'ctime_ns')):
         raise RecoveryBlocked('配音来源在封存提交前变化')
-    if (repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection)
+    if (repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection)
             != prepared['content']['goal_revision']
-            or repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+            or repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=connection)
             != prepared['authorization']):
         raise RecoveryBlocked('配音目标或任务授权在来源准备后变化')
 

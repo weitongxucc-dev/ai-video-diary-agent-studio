@@ -1520,7 +1520,7 @@ class CreationJobOwnerVerifier:
                     and connection is None and stage == "person_edit"):
                 proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
                 target = proposal.operation["payload"]
-                authorization = self.repository.get_task_authorization(task.workspace_id, task.id, connection=conn)
+                authorization = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=conn)
                 if f"{target['person_profile_id']}:{target['person_version']}" not in authorization.resource_scope.get("persons", []):
                     raise PermissionError("新人物不在原任务授权范围内，需要实时核实新的资源授权")
             if self.authorization_verdict(task, original, stage, connection=conn) != "ready":
@@ -1756,7 +1756,7 @@ class CreationJobOwnerVerifier:
             pronunciation_scope=pronunciation_scope)
         assets, persons = set(), set()
         if stage == "montage_plan" and self.task_authorizations is not None:
-            authorization = self.repository.get_task_authorization(task.workspace_id, task.id, connection=conn)
+            authorization = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=conn)
             assets.update(authorization.resource_scope.get("assets", []) if authorization is not None else [])
         if stage == "render" and task.montage_plan_id:
             try:

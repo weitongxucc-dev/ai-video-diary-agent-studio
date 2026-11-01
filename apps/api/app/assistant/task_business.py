@@ -94,7 +94,7 @@ class TaskBusiness:
 
     def original(self, goal):
         ws,task_id=goal['workspace_id'],goal['task_id']
-        authorization=self.production.get_task_authorization(ws,task_id)
+        authorization=self.production.task_authorization_records.get_task_authorization(ws,task_id)
         if authorization is None:
             raise TaskBusinessRejected('原目标没有持久任务授权；须从可信采用入口核实')
         actor=CreationExecutionActor.from_event(ws,authorization.identity)
@@ -123,7 +123,7 @@ class TaskBusiness:
                     or origin['conversation_id']!=binding['conversation_id']
                     or not self.conversations._goal_origin_current(conn,root)):
                 raise TaskBusinessRejected('原目标修订或已消费输入已变化',kind='conflict')
-            authorization=self.production.get_task_authorization(ws,task_id,connection=conn,metadata_only=True)
+            authorization=self.production.task_authorization_records.get_task_authorization(ws,task_id,connection=conn,metadata_only=True)
             if authorization is None:
                 raise TaskBusinessRejected('原任务授权不存在')
             actor=CreationExecutionActor.from_event(ws,authorization.identity)
@@ -143,7 +143,7 @@ class TaskBusiness:
             plan=json.loads(row[0])
             if (sealed['knowledge']!=plan['knowledge_references'] or sealed['sources']!=plan['source_references']):
                 raise TaskBusinessRejected('原目标引用范围已变化，未读取新增私人资料',kind='conflict')
-            if self.production.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
+            if self.production.task_authorization_records.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
                     [item['id'] for item in sealed['sources']],connection=conn)!=sealed['source_revisions']:
                 raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',kind='conflict')
         return actor,task,root['goal'],origin,sealed
@@ -331,7 +331,7 @@ class TaskBusiness:
         reference=normalize_selection(frozen.get('selected_reference'))
         items=reference['items'] if reference and reference['kind']=='selection' else [reference] if reference else []
         tracks=self.production.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,connection=conn)
-        authorization=self.production.get_task_authorization(task.workspace_id,task.id,connection=conn)
+        authorization=self.production.task_authorization_records.get_task_authorization(task.workspace_id,task.id,connection=conn)
         if self.authorizations.status(task.workspace_id,task.id,identity=authorization.identity,
                 operation='task_goal',connection=conn)!='valid':
             raise TaskBusinessRejected('原任务有限资源范围已变化，追加输入需要重新授权')

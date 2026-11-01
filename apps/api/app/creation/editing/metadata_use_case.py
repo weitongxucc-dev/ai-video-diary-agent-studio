@@ -383,7 +383,7 @@ class MetadataEditUseCase:
                 actor=CreationExecutionActor.from_event(workspace_id,source['actor_identity'])
                 if self.validate_origin is not None:
                     self.validate_origin(source,actor,connection=conn)
-                authorization=self.repository.get_task_authorization(workspace_id,task.id,connection=conn,metadata_only=True)
+                authorization=self.repository.task_authorization_records.get_task_authorization(workspace_id,task.id,connection=conn,metadata_only=True)
                 if source.get('assistant_turn_id') or authorization is not None:
                     if self.task_authorizations is None:
                         raise PermissionError('基础版本缺少可复验的原任务授权')

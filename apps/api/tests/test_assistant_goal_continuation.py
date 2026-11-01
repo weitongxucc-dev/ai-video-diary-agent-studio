@@ -886,7 +886,7 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
     case=_adopted_groups_for_resume(tmp_path)
     saved,roots=case.adopted[0]
     original=[case.conversations.get_task_goal(root) for root in roots]
-    expires={goal['task_id']:case.production.get_task_authorization('workspace',goal['task_id']).expires_at for goal in original}
+    expires={goal['task_id']:case.production.task_authorization_records.get_task_authorization('workspace',goal['task_id']).expires_at for goal in original}
     turn=case.human('继续刚才已经采用的中英文两条')
     input_id=None
     if additional_input:
@@ -925,7 +925,7 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
             claims.append(claim)
             case.conversations.finish_turn(claim['turn_id'],'completed','已读取当前任务')
     assert {claim['goal']['task_id'] for claim in claims}=={goal['task_id'] for goal in original}
-    assert all(case.production.get_task_authorization('workspace',task).expires_at==expiry for task,expiry in expires.items())
+    assert all(case.production.task_authorization_records.get_task_authorization('workspace',task).expires_at==expiry for task,expiry in expires.items())
     assert len(case.production.task_records.list_creation_tasks('workspace',viewer_user_id='member'))==2
 
 
@@ -945,8 +945,8 @@ def test_home_resume_selection_and_original_authorization_are_required(tmp_path)
     saved,roots=case.adopted[0]
     for root in roots:
         goal=case.conversations.get_task_goal(root)
-        authority=case.production.get_task_authorization('workspace',goal['task_id'])
-        case.production.save_task_authorization(replace(authority,revision=authority.revision+1,
+        authority=case.production.task_authorization_records.get_task_authorization('workspace',goal['task_id'])
+        case.production.task_authorization_records.save_task_authorization(replace(authority,revision=authority.revision+1,
             revoked_at=datetime.now(timezone.utc)),expected_revision=authority.revision)
     denied=case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
     assert denied['status']=='blocked' and all(item['status']=='blocked' for item in denied['tasks'])
@@ -1013,12 +1013,12 @@ def test_home_resume_explicit_stop_does_not_change_goals_events_or_authority(tmp
     turn=case.human('不要继续，先停下')
     before=[case.conversations.get_turn(root) for root in roots]
     before_turn=case.conversations.get_turn(turn['id'])
-    authorities=[case.production.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]
+    authorities=[case.production.task_authorization_records.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]
     with pytest.raises(ValueError,match='停止'):
         case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
     assert [case.conversations.get_turn(root) for root in roots]==before
     assert case.conversations.get_turn(turn['id'])==before_turn
-    assert [case.production.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]==authorities
+    assert [case.production.task_authorization_records.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]==authorities
     case.conversations.finish_turn(turn['id'],'completed','已保留停止要求')
     continued=case.human('继续刚才暂停的任务')
     resumed=case.service.resume_creation_request('workspace','member',continued['id'],None,saved['id'],case.authorizations)

@@ -72,7 +72,7 @@ class TaskAuthorizationUseCase:
         allowed_assets = {asset.id for asset in assets}
         if not set(required["assets"]) <= allowed_assets:
             raise TaskAuthorizationDenied("目标素材不在原成员有权使用的范围内")
-        scope = self.repository.task_authorization_material_scope(workspace_id, task_id)
+        scope = self.repository.task_authorization_records.task_authorization_material_scope(workspace_id, task_id)
         # A concrete approved selection is a boundary, not a suggestion to expand.
         if required["assets"]:
             allowed_assets = set(required["assets"])
@@ -145,8 +145,8 @@ class TaskAuthorizationUseCase:
 
     def ensure(self, task, actor, *, interactive=False):
         identity = self.identity(actor)
-        current = self.repository.get_task_authorization(task.workspace_id, task.id)
-        goal = self.repository.task_authorization_goal_revision(task.workspace_id, task.id)
+        current = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id)
+        goal = self.repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id)
         if current is not None:
             if current.identity != identity:
                 raise TaskAuthorizationDenied("任务授权不能切换原设备或账号")
@@ -176,9 +176,9 @@ class TaskAuthorizationUseCase:
             (current.revision + 1) if current else 1,
             now if verdict == "unauthorized" else None, now, str(verdict))
         try:
-            result = self.repository.save_task_authorization(authorization, expected_revision=current.revision if current else None)
+            result = self.repository.task_authorization_records.save_task_authorization(authorization, expected_revision=current.revision if current else None)
         except TaskAuthorizationConflict:
-            result = self.repository.get_task_authorization(task.workspace_id, task.id)
+            result = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id)
         self._wake.set()
         if refusal is not None:
             raise refusal
@@ -187,7 +187,7 @@ class TaskAuthorizationUseCase:
     def prepare_voice_selection(self, task, actor, voice_profile_id, voice_version):
         """Verify one fixed replacement before the caller opens its writer transaction."""
         identity = self.identity(actor)
-        current = self.repository.get_task_authorization(task.workspace_id, task.id)
+        current = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id)
         if self.status(task.workspace_id, task.id, identity=identity, operation='narration') != 'valid':
             raise TaskAuthorizationDenied('原任务授权无效，不能扩大声音范围')
         if self.verify_identity(identity) != 'ready':
@@ -201,11 +201,11 @@ class TaskAuthorizationUseCase:
             voice_version, viewer_user_id=identity.get('user_id') or identity['member_id'], local_diagnostic=False)
 
         def commit(connection, selected_voice):
-            latest = self.repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+            latest = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=connection)
             if latest != current:
                 raise TaskAuthorizationConflict('声音核验期间原任务授权已变化，选择未提交')
             if (self.clock() >= current.expires_at
-                    or self.repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection) != current.goal_revision
+                    or self.repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection) != current.goal_revision
                     or selected_voice != candidate or candidate_current(connection) != 'ready'):
                 raise TaskAuthorizationDenied('原目标、有效期或候选声音权限已变化，选择未提交')
             voices = set(current.resource_scope.get('voices', []))
@@ -215,7 +215,7 @@ class TaskAuthorizationUseCase:
             updated = replace(current, revision=current.revision + 1,
                 resource_scope={**current.resource_scope, 'voices': sorted(voices)},
                 last_checked_at=self.clock(), last_verdict='ready')
-            self.repository.save_task_authorization(updated, expected_revision=current.revision, connection=connection)
+            self.repository.task_authorization_records.save_task_authorization(updated, expected_revision=current.revision, connection=connection)
             if self.status(task.workspace_id, task.id, identity=identity, operation='narration', connection=connection) != 'valid':
                 raise TaskAuthorizationDenied('声音选择后的原任务授权不可用，未提交')
 
@@ -224,7 +224,7 @@ class TaskAuthorizationUseCase:
     def prepare_material_edit(self, task, editor_identity, asset_ids):
         """Prepare only newly used fixed materials; ordinary editing does not issue a task grant."""
         from app.source_policy import knowledge_item_readable as content_readable
-        current = self.repository.get_task_authorization(task.workspace_id, task.id)
+        current = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id)
         reader = editor_identity.get('user_id') or editor_identity['member_id']
         status = self.status(task.workspace_id, task.id, operation='render')
         additions = set(asset_ids) - set(current.resource_scope.get('assets', [])) if current else set(asset_ids)
@@ -259,16 +259,16 @@ class TaskAuthorizationUseCase:
             if reason is not None:
                 return {'status': 'not_ready', 'reason_code': reason, 'device_admission': 'not_checked'}
             if additions:
-                latest = self.repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+                latest = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=connection)
                 if latest != current:
                     raise TaskAuthorizationConflict('素材核验期间原任务授权已变化')
                 if (self.clock() >= current.expires_at
-                        or self.repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection) != current.goal_revision):
+                        or self.repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection) != current.goal_revision):
                     raise TaskAuthorizationDenied('原任务授权已到期或目标变化，素材选择未提交')
                 scope = {**current.resource_scope,
                     'assets': sorted(set(current.resource_scope.get('assets', [])) | additions),
                     'references': sorted(set(current.resource_scope.get('references', [])) | set(references))}
-                self.repository.save_task_authorization(replace(current, resource_scope=scope,
+                self.repository.task_authorization_records.save_task_authorization(replace(current, resource_scope=scope,
                     revision=current.revision+1,last_checked_at=self.clock(),last_verdict='ready'),
                     expected_revision=current.revision,connection=connection)
             verdict = self.status(task.workspace_id, task.id, operation='render', connection=connection)
@@ -278,7 +278,7 @@ class TaskAuthorizationUseCase:
         return commit
 
     def status(self, workspace_id, task_id, *, identity=None, operation=None, connection=None, check_scope=True):
-        authorization = self.repository.get_task_authorization(workspace_id, task_id, connection=connection, metadata_only=not check_scope)
+        authorization = self.repository.task_authorization_records.get_task_authorization(workspace_id, task_id, connection=connection, metadata_only=not check_scope)
         if authorization is None:
             return "unverified"
         if identity is not None and authorization.identity != identity:
@@ -289,7 +289,7 @@ class TaskAuthorizationUseCase:
             return "unverified"
         if self.clock() >= authorization.expires_at:
             return "expired"
-        if self.repository.task_authorization_goal_revision(workspace_id, task_id, connection=connection) != authorization.goal_revision:
+        if self.repository.task_authorization_records.task_authorization_goal_revision(workspace_id, task_id, connection=connection) != authorization.goal_revision:
             return "outside_scope"
         if operation is not None and operation not in authorization.allowed_operations:
             return "outside_scope"
@@ -312,7 +312,7 @@ class TaskAuthorizationUseCase:
     def material_asset_ids(self, workspace_id, task_id):
         if self.status(workspace_id, task_id, operation="montage_plan") != "valid":
             raise PermissionError("原任务的选材授权未就绪")
-        return frozenset(self.repository.get_task_authorization(workspace_id, task_id).resource_scope["assets"])
+        return frozenset(self.repository.task_authorization_records.get_task_authorization(workspace_id, task_id).resource_scope["assets"])
 
     @staticmethod
     def business_context_id(goal):
@@ -327,7 +327,7 @@ class TaskAuthorizationUseCase:
         if self.status(task.workspace_id,task.id,identity=self.identity(actor)) != "valid":
             raise TaskAuthorizationDenied("原目标授权尚未核实，未封存后台读取范围")
         plan = self.repository.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
-        source_revisions=self.repository.task_source_revisions(task.workspace_id,
+        source_revisions=self.repository.task_authorization_records.task_source_revisions(task.workspace_id,
             [item.id for item in plan.knowledge_references],[item.id for item in plan.source_references])
         payload = {"authorization_id":authorization.id,"identity":authorization.identity,
             "goal_revision":goal.get("revision",0),"original_turn_id":goal["original_turn_id"],
@@ -341,13 +341,13 @@ class TaskAuthorizationUseCase:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
-            if self.repository.task_source_revisions(task.workspace_id,
+            if self.repository.task_authorization_records.task_source_revisions(task.workspace_id,
                     [item.id for item in plan.knowledge_references],[item.id for item in plan.source_references],connection=conn)!=source_revisions:
                 raise TaskAuthorizationDenied("原目标资料在签发期间已变化")
             if self.status(task.workspace_id,task.id,identity=authorization.identity,connection=conn,check_scope=False) != "valid":
                 raise TaskAuthorizationDenied("任务采用期间原授权已失效")
             if "task_goal" not in authorization.allowed_operations:
-                authorization=self.repository.save_task_authorization(replace(authorization,
+                authorization=self.repository.task_authorization_records.save_task_authorization(replace(authorization,
                     revision=authorization.revision+1,allowed_operations=TASK_OPERATIONS),
                     expected_revision=authorization.revision,connection=conn)
             try:
@@ -361,12 +361,12 @@ class TaskAuthorizationUseCase:
         from app.creation.contracts import TaskEvent
         ws,task_id=goal['workspace_id'],goal['task_id']
         previous=self.repository.execution_records.get_task_event(ws,self.business_context_id(old_goal),connection=connection).payload
-        authorization=self.repository.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
+        authorization=self.repository.task_authorization_records.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
         if (authorization is None or authorization.id!=previous['authorization_id']
                 or authorization.identity!=previous['identity']
                 or self.status(ws,task_id,identity=previous['identity'],operation='task_goal',connection=connection,check_scope=False)!='valid'):
             raise TaskAuthorizationDenied('原任务授权已到期或撤销；追加输入未获新的授权')
-        if self.repository.task_source_revisions(ws,[item['id'] for item in previous['knowledge']],
+        if self.repository.task_authorization_records.task_source_revisions(ws,[item['id'] for item in previous['knowledge']],
                 [item['id'] for item in previous['sources']],connection=connection)!=previous['source_revisions']:
             raise TaskAuthorizationDenied('原任务固定资料已变化；需要重新授权')
         payload={**previous,'goal_revision':goal['revision'],'source_input_id':goal.get('source_input_id'),
@@ -378,7 +378,7 @@ class TaskAuthorizationUseCase:
     def adopted_goal_input_valid(self, goal, *, connection):
         """Local owner check used when a turn ends before its adopted goal does."""
         ws,task_id=goal['workspace_id'],goal['task_id']
-        authorization=self.repository.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
+        authorization=self.repository.task_authorization_records.get_task_authorization(ws,task_id,connection=connection,metadata_only=True)
         if (authorization is None or (authorization.identity.get('user_id') or authorization.identity['member_id'])!=goal['member_id']
                 or self.status(ws,task_id,identity=authorization.identity,operation='task_goal',connection=connection)!='valid'):
             return False
@@ -396,7 +396,7 @@ class TaskAuthorizationUseCase:
             "(SELECT json_extract(payload,'$.plan_id') FROM creation_tasks WHERE workspace_id=? AND id=?)",
             (ws,ws,task_id)).fetchone()[0])
         return (sealed['knowledge']==plan['knowledge_references'] and sealed['sources']==plan['source_references']
-            and self.repository.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
+            and self.repository.task_authorization_records.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
                 [item['id'] for item in sealed['sources']],connection=connection)==sealed['source_revisions'])
 
     def verdict(self, actor, task_id, operation, *, references=(), connection=None, check_scope=True):
@@ -406,7 +406,7 @@ class TaskAuthorizationUseCase:
             return "unknown" if status in {"unverified", "expired"} else "unauthorized"
         if not references:
             return "ready"
-        authorization = self.repository.get_task_authorization(actor.workspace_id, task_id, connection=connection)
+        authorization = self.repository.task_authorization_records.get_task_authorization(actor.workspace_id, task_id, connection=connection)
         task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id, connection=connection)
         with (self.repository._connect() if connection is None else nullcontext(connection)) as conn:
             return "ready" if all(self._derived_reference(conn, authorization, task, ref, set()) for ref in references) else "unauthorized"
@@ -416,7 +416,7 @@ class TaskAuthorizationUseCase:
             return
         verdict = self.verify_identity(authorization.identity)
         now = self.clock()
-        ready = (verdict == "ready" and self.repository.task_authorization_goal_revision(
+        ready = (verdict == "ready" and self.repository.task_authorization_records.task_authorization_goal_revision(
             authorization.workspace_id, authorization.task_id) == authorization.goal_revision)
         scope = authorization.resource_scope
         if ready and authorization.issued_at is None:
@@ -432,7 +432,7 @@ class TaskAuthorizationUseCase:
             revoked_at=now if verdict == "unauthorized" else None,
             resource_scope=scope, last_checked_at=now, last_verdict=str(verdict))
         try:
-            self.repository.save_task_authorization(updated, expected_revision=authorization.revision)
+            self.repository.task_authorization_records.save_task_authorization(updated, expected_revision=authorization.revision)
         except TaskAuthorizationConflict:
             pass  # A newer/revoked record owns the result; this observation cannot restore it.
 
@@ -440,7 +440,7 @@ class TaskAuthorizationUseCase:
         while not self._stop.is_set():
             try:
                 now = self.clock()
-                for authorization in self.repository.list_task_authorizations(due_before=now-AUTHORIZATION_OBSERVATION_INTERVAL):
+                for authorization in self.repository.task_authorization_records.list_task_authorizations(due_before=now-AUTHORIZATION_OBSERVATION_INTERVAL):
                     if self._stop.is_set(): break
                     if (authorization.revoked_at is None and (authorization.last_checked_at is None
                             or now - authorization.last_checked_at >= AUTHORIZATION_OBSERVATION_INTERVAL)):

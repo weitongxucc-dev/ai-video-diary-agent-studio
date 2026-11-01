@@ -393,8 +393,8 @@ def test_bounded_narration_start_source_seal_rolls_back_preparation_race(tmp_pat
                 writer.execute('UPDATE creation_task_script_sections SET section_json=? WHERE section_id=?',
                     (json.dumps(value), 'section_45'))
             else:
-                authorization = repo.get_task_authorization('local', case.task_id, connection=writer)
-                repo.save_task_authorization(replace(authorization, revision=authorization.revision+1,
+                authorization = repo.task_authorization_records.get_task_authorization('local', case.task_id, connection=writer)
+                repo.task_authorization_records.save_task_authorization(replace(authorization, revision=authorization.revision+1,
                     revoked_at=datetime.now(timezone.utc)), expected_revision=authorization.revision, connection=writer)
         with pytest.raises((ValueError, RecoveryBlocked), match='变化'):
             repo.create_creation_execution_job(JobRun('race-job', 'local', case.task_id, 'creation_task_execution',
