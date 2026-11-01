@@ -13,7 +13,7 @@ from app.persistence_json import _json_object, _json_payload
 if TYPE_CHECKING:
     from app.production import NarrationArtifactRecord
 
-from app.creation.contracts import CreationTask, CoverAsset, EditOperation, EditProposal, NarrationSegment, SubtitleTrack, TimelineVersion
+from app.creation.contracts import CreationTask, CoverAsset, EditIntent, EditOperation, EditProposal, NarrationSegment, SubtitleTrack, TimelineVersion
 from app.models import utc_now
 
 
@@ -158,14 +158,14 @@ def commit_change_set(repository, change: EditChangeSet, *, connection=None, ver
 
 
 def commit_direct_change(repository, command, intent, proposal, change, *, verify_sources, connection=None):
-    return repository.confirm_direct_edit(command, intent, proposal, change,
+    return repository.edit_adoption.confirm_direct(command, intent, proposal, change,
         verify_sources=verify_sources, connection=connection)
 
 
 class EditAdoptionTransaction:
     """One CAS and one connection for every fact in a prepared edit adoption."""
     def __init__(self, connection_factory, *,
-                 require_task, decode_proposal, read_task,
+                 require_task, decode_proposal, create_intent, create_proposal, version_conflict, read_task,
                  read_proposal, read_operation, read_version,
                  read_narration_segment, iter_narration_edit_segments, replace_adopted_narration_segment,
                  upsert_narration_segments, validate_operation, validate_version,
@@ -173,6 +173,9 @@ class EditAdoptionTransaction:
         self._connect = connection_factory
         self.require_task = require_task
         self.decode_proposal = decode_proposal
+        self.create_intent = create_intent
+        self.create_proposal = create_proposal
+        self.version_conflict = version_conflict
         self.read_task = read_task
         self.read_proposal = read_proposal
         self.read_operation = read_operation
@@ -185,6 +188,28 @@ class EditAdoptionTransaction:
         self.validate_version = validate_version
         self.validate_track = validate_track
         self.validate_cover = validate_cover
+
+    def confirm_direct(self, command, intent: EditIntent, proposal: EditProposal, change, *, verify_sources, connection=None):
+        """Save lineage and full change in the caller transaction or one owned CAS."""
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                return self.confirm_direct(command, intent, proposal, change,
+                    verify_sources=verify_sources, connection=conn)
+        conn = connection
+        task = self.require_task(conn, command.workspace_id, command.task_id)
+        if task.current_timeline_version_id != command.base_version_id:
+            raise self.version_conflict('当前时间线已变化，未保存这项修改')
+        member = command.actor_identity.get('user_id') or command.actor_identity['member_id']
+        if task.owner_user_id and task.owner_user_id != member and (not command.actor_identity.get('local_diagnostic')):
+            raise PermissionError('当前成员不能修改此任务')
+        if (intent.workspace_id, intent.task_id, proposal.intent_id, change.operation.proposal_id) != (command.workspace_id, command.task_id, intent.id, proposal.id):
+            raise ValueError('直接编辑命令与变更谱系不一致')
+        verify_sources(command, conn)
+        self.create_intent(intent, connection=conn, source=None)
+        self.create_proposal(proposal, connection=conn)
+        result = self.confirm(command.workspace_id, command.task_id, proposal.id, operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id, montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks, cover_asset=change.cover_asset, narration_segments=change.narration_segments, narration_replacement=change.narration_replacement, narration_artifact=change.narration_artifact, connection=conn)
+        return result
 
     def confirm(
         self,

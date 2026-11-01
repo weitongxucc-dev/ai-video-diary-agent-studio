@@ -96,7 +96,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         repo.subtitle_records.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
         monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
-        commit = repo.confirm_direct_edit
+        commit = repo.edit_adoption.confirm_direct
         def revise(command,*args,**kwargs):
             assert f'clip_{source_index}' in command.affected_clip_ids
             assert 'clip_10' not in command.affected_clip_ids
@@ -107,7 +107,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
                 repo._save_asset(replace(repo.get_asset('local','neighbor'),
                     **({'owner_user_id':'other-member','visibility':'private'} if change=='private' else {'use_state':'excluded'})))
             return commit(command,*args,**kwargs)
-        monkeypatch.setattr(repo,'confirm_direct_edit',revise)
+        monkeypatch.setattr(repo.edit_adoption,'confirm_direct',revise)
         values = {'operation_type':operation,'clip_id':'clip_1','position':2} if operation=='ReorderClip' else {
             'operation_type':operation,'clip_id':'clip_2','transition_seconds':.1}
         response = client.post('/api/creation-tasks/task/edits/exact',json=values)

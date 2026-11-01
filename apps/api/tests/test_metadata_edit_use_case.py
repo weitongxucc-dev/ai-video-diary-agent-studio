@@ -379,7 +379,7 @@ def test_metadata_command_refuses_foreign_identity_without_any_writes(state, fie
 
 @pytest.mark.parametrize('mutation', ['source', 'version'])
 def test_metadata_commit_rechecks_real_source_and_version(state, monkeypatch, mutation):
-    original = state.repo.confirm_direct_edit
+    original = state.repo.edit_adoption.confirm_direct
     def mutate(command, intent, proposal, change, **kwargs):
         if kwargs.get('connection') is None:
             if mutation == 'source':
@@ -388,7 +388,7 @@ def test_metadata_commit_rechecks_real_source_and_version(state, monkeypatch, mu
                 state.repo.timeline_records.create_timeline_version(replace(state.base, id='concurrent', sequence=2,
                     parent_version_id=state.base.id))
         return original(command, intent, proposal, change, **kwargs)
-    monkeypatch.setattr(state.repo, 'confirm_direct_edit', mutate)
+    monkeypatch.setattr(state.repo.edit_adoption, 'confirm_direct', mutate)
     with pytest.raises(ValueError):
         state.case.save(state.task, crop_command(state))
     assert state.repo.edit_records.list_edit_operations('ws', state.task.id) == []

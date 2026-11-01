@@ -595,6 +595,8 @@ class ProductionRepository:
             stage_segment_state=self.stage_segment_state)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
             require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
+            create_intent=self.edit_records.create_edit_intent, create_proposal=self.edit_records.create_edit_proposal,
+            version_conflict=TimelineVersionConflict,
             read_task=self.task_records.get_creation_task, read_proposal=self.edit_records.get_edit_proposal,
             read_operation=self.edit_records.get_edit_operation, read_version=self.timeline_records.get_timeline_version,
             read_narration_segment=self.narration_records.get_narration_segment,
@@ -4782,27 +4784,6 @@ class ProductionRepository:
             return None
         return event.payload
 
-    def confirm_direct_edit(self, command, intent: _EditIntent, proposal: _EditProposal, change, *, verify_sources, connection=None):
-        """Save lineage and full change in the caller transaction or one owned CAS."""
-        if connection is None:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                return self.confirm_direct_edit(command, intent, proposal, change,
-                    verify_sources=verify_sources, connection=conn)
-        conn = connection
-        task = require_creation_task(conn, command.workspace_id, command.task_id)
-        if task.current_timeline_version_id != command.base_version_id:
-            raise TimelineVersionConflict('当前时间线已变化，未保存这项修改')
-        member = command.actor_identity.get('user_id') or command.actor_identity['member_id']
-        if task.owner_user_id and task.owner_user_id != member and (not command.actor_identity.get('local_diagnostic')):
-            raise PermissionError('当前成员不能修改此任务')
-        if (intent.workspace_id, intent.task_id, proposal.intent_id, change.operation.proposal_id) != (command.workspace_id, command.task_id, intent.id, proposal.id):
-            raise ValueError('直接编辑命令与变更谱系不一致')
-        verify_sources(command, conn)
-        self.edit_records.create_edit_intent(intent, connection=conn, source=None)
-        self.edit_records.create_edit_proposal(proposal, connection=conn)
-        result = self.edit_adoption.confirm(command.workspace_id, command.task_id, proposal.id, operation=change.operation, result_version=change.version, montage_plan_id=change.montage_plan_id, montage_payload=change.montage_payload, subtitle_tracks=change.subtitle_tracks, cover_asset=change.cover_asset, narration_segments=change.narration_segments, narration_replacement=change.narration_replacement, narration_artifact=change.narration_artifact, connection=conn)
-        return result
 
 
 
