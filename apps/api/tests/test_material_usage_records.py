@@ -123,9 +123,9 @@ def test_a_record_names_the_task_clip_and_current_version(tmp_path: Path) -> Non
             clip("clip_usage_2", other_asset_id, theirs.id),
         ],
     )
-    repo.record_segment_usage(WORKSPACE, asset_id, mine.id, plan_id="plan_usage_1", clip_id="clip_usage_1")
+    repo.material_assets.record_segment_usage(WORKSPACE, asset_id, mine.id, plan_id="plan_usage_1", clip_id="clip_usage_1")
 
-    records = repo.list_segment_usage_records(WORKSPACE, asset_id, mine.id)
+    records = repo.material_usage_records.list_segment_usage_records(WORKSPACE, asset_id, mine.id)
 
     assert len(records) == 1
     record = records[0]
@@ -163,15 +163,15 @@ def test_another_segment_and_another_workspace_are_not_mixed_in(tmp_path: Path) 
     write_plan(repo, "plan_usage_foreign", "task_usage_foreign",
                [clip("clip_usage_foreign", foreign, foreign_segment.id)],
                workspace_id=OTHER_WORKSPACE)
-    repo.record_segment_usage(WORKSPACE, asset_id, theirs.id, plan_id="plan_usage_2", clip_id="clip_usage_3")
-    repo.record_segment_usage(OTHER_WORKSPACE, foreign, foreign_segment.id,
+    repo.material_assets.record_segment_usage(WORKSPACE, asset_id, theirs.id, plan_id="plan_usage_2", clip_id="clip_usage_3")
+    repo.material_assets.record_segment_usage(OTHER_WORKSPACE, foreign, foreign_segment.id,
                               plan_id="plan_usage_foreign", clip_id="clip_usage_foreign")
 
-    assert repo.list_segment_usage_records(WORKSPACE, asset_id, mine.id) == []
-    other_workspace = repo.list_segment_usage_records(OTHER_WORKSPACE, foreign, foreign_segment.id)
+    assert repo.material_usage_records.list_segment_usage_records(WORKSPACE, asset_id, mine.id) == []
+    other_workspace = repo.material_usage_records.list_segment_usage_records(OTHER_WORKSPACE, foreign, foreign_segment.id)
     assert [record["task"]["id"] for record in other_workspace] == ["task_usage_foreign"]
     with pytest.raises(KeyError):
-        repo.list_segment_usage_records(OTHER_WORKSPACE, foreign, mine.id)
+        repo.material_usage_records.list_segment_usage_records(OTHER_WORKSPACE, foreign, mine.id)
 
 
 def test_reading_again_changes_no_counter_and_writes_nothing(tmp_path: Path) -> None:
@@ -180,11 +180,11 @@ def test_reading_again_changes_no_counter_and_writes_nothing(tmp_path: Path) -> 
     segment = repo.get_asset(WORKSPACE, asset_id).segments[0]
     write_task(repo, "task_usage_3", current_version_id=None)
     write_plan(repo, "plan_usage_3", "task_usage_3", [clip("clip_usage_4", asset_id, segment.id)])
-    repo.record_segment_usage(WORKSPACE, asset_id, segment.id, plan_id="plan_usage_3", clip_id="clip_usage_4")
+    repo.material_assets.record_segment_usage(WORKSPACE, asset_id, segment.id, plan_id="plan_usage_3", clip_id="clip_usage_4")
     before = repo.get_asset(WORKSPACE, asset_id)
 
-    first = repo.list_segment_usage_records(WORKSPACE, asset_id, segment.id)
-    second = repo.list_segment_usage_records(WORKSPACE, asset_id, segment.id)
+    first = repo.material_usage_records.list_segment_usage_records(WORKSPACE, asset_id, segment.id)
+    second = repo.material_usage_records.list_segment_usage_records(WORKSPACE, asset_id, segment.id)
 
     assert first == second
     # 任务没有当前版本时不猜任何版本。
@@ -234,8 +234,8 @@ def test_route_returns_the_records_for_the_named_segment_only(usage_client) -> N
         clip("clip_usage_5", asset_id, mine.id),
         clip("clip_usage_6", asset_id, theirs.id),
     ])
-    repo.record_segment_usage(WORKSPACE, asset_id, mine.id, plan_id="plan_usage_4", clip_id="clip_usage_5")
-    repo.record_segment_usage(WORKSPACE, asset_id, theirs.id,
+    repo.material_assets.record_segment_usage(WORKSPACE, asset_id, mine.id, plan_id="plan_usage_4", clip_id="clip_usage_5")
+    repo.material_assets.record_segment_usage(WORKSPACE, asset_id, theirs.id,
                               plan_id="plan_usage_4", clip_id="clip_usage_6")
 
     response = usage_client.client.get(
@@ -258,3 +258,90 @@ def test_route_returns_the_records_for_the_named_segment_only(usage_client) -> N
         headers=_uploader_headers(usage_client),
     )
     assert missing.status_code == 404
+
+
+def test_metadata_usage_writer_and_task_traceback_without_analysis(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from app.creation.render_stage_use_case import RenderStageUseCase
+    from app.materials import assets as asset_storage
+    from app.materials.contracts import MaterialAsset, MaterialSegment
+
+    repo, library = make_repo(tmp_path)
+    when = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    source = library / "declared.mp4"
+    source.write_bytes(b"opaque metadata declaration, never decoded")
+    asset = MaterialAsset("declared-asset", WORKSPACE, source.name, str(source), source.stat().st_size,
+        when, duration_seconds=4, analysis_status="ready", segments=[
+            MaterialSegment("used-segment", "declared-asset", 0, 2),
+            MaterialSegment("unused-segment", "declared-asset", 2, 4),
+        ])
+    repo.material_assets.save_asset(asset)
+    write_task(repo, "metadata-task", current_version_id="current-head")
+    entry = clip("render-clip", asset.id, "used-segment", role="a_roll")
+    write_plan(repo, "metadata-plan", "metadata-task", [entry])
+    monkeypatch.setattr(asset_storage, "utc_now", lambda: when)
+    def no_media(*args, **kwargs):
+        pytest.fail("usage metadata must not execute media")
+    render = RenderStageUseCase(repo, None, None, no_media, None)
+    plan = SimpleNamespace(id="metadata-plan", clips=[
+        SimpleNamespace(**entry, person_render_id=None),
+        SimpleNamespace(person_render_id="excluded-person-render"),
+    ])
+    render.record_usage(WORKSPACE, plan)
+    render.record_usage(WORKSPACE, plan)
+    assert repo.material_assets.get_asset(WORKSPACE, asset.id).segments[0].usage_count == 1
+
+    write_plan(repo, "orphan-task-plan", "missing-task", [])
+    monkeypatch.setattr(asset_storage, "utc_now", lambda: when + timedelta(seconds=1))
+    repo.material_assets.record_segment_usage(WORKSPACE, asset.id, "used-segment",
+        plan_id="orphan-task-plan", clip_id="missing-clip")
+    monkeypatch.setattr(asset_storage, "utc_now", lambda: when + timedelta(seconds=2))
+    repo.material_assets.record_segment_usage(WORKSPACE, asset.id, "used-segment",
+        plan_id="missing-plan", clip_id="orphan-clip")
+    foreign = MaterialAsset("foreign-asset", OTHER_WORKSPACE, "foreign.mp4", str(library / "foreign.mp4"),
+        1, when, segments=[MaterialSegment("foreign-segment", "foreign-asset", 0, 1)])
+    repo.material_assets.save_asset(foreign)
+    repo.material_assets.record_segment_usage(OTHER_WORKSPACE, foreign.id, "foreign-segment",
+        plan_id="metadata-plan", clip_id="render-clip")
+    before = repo.material_assets.get_asset(WORKSPACE, asset.id)
+    assert before.segments[0].usage_count == 3
+
+    original_connect = repo._connect
+    traces = []
+    connections = []
+    def read_only_connect():
+        conn = original_connect()
+        number = len(connections)
+        connections.append(number)
+        conn.execute("PRAGMA query_only=ON")
+        conn.set_trace_callback(lambda sql: traces.append((number, " ".join(sql.split()))))
+        return conn
+    monkeypatch.setattr(repo, "_connect", read_only_connect)
+    reader = repo.material_usage_records
+    records = reader.list_segment_usage_records(WORKSPACE, asset.id, "used-segment")
+    joined_reads = [(number, sql) for number, sql in traces
+        if any("FROM " + table in sql for table in (
+            "material_segment_usage", "creation_task_montage_plans", "creation_tasks"))]
+    assert len(joined_reads) == 3 and len({number for number, _sql in joined_reads}) == 1
+    assert [item["plan_id"] for item in records] == ["missing-plan", "orphan-task-plan", "metadata-plan"]
+    assert [item["used_at"] for item in records] == [when + timedelta(seconds=2), when + timedelta(seconds=1), when]
+    assert records[0]["task"] is None and records[0]["role"] is None
+    assert records[0]["resolution"] == "unknown" and records[0]["timeline_version_id"] is None
+    assert records[1]["task"] == {"id": "missing-task", "name": None, "stage": None,
+        "status": None, "current_timeline_version_id": None}
+    assert records[1]["role"] is None and records[1]["manually_selected"] is None
+    current = records[2]
+    assert current["task"] == {"id": "metadata-task", "name": "使用记录测试任务", "stage": "review",
+        "status": "waiting_for_user", "current_timeline_version_id": "current-head"}
+    assert current["timeline_version_id"] == "current-head" and current["resolution"] == "current"
+    assert current["role"] == "a_roll" and current["manually_selected"] is True
+    assert reader.list_segment_usage_records(WORKSPACE, asset.id, "unused-segment") == []
+    assert reader.list_segment_usage_records(OTHER_WORKSPACE, foreign.id, "foreign-segment")[0]["task"] is None
+    with pytest.raises(KeyError):
+        reader.list_segment_usage_records(OTHER_WORKSPACE, asset.id, "used-segment")
+    with pytest.raises(KeyError):
+        reader.list_segment_usage_records(WORKSPACE, asset.id, "not-a-segment")
+    assert reader.list_segment_usage_records(WORKSPACE, asset.id, "used-segment") == records
+    after = repo.material_assets.get_asset(WORKSPACE, asset.id)
+    assert (after.segments[0].usage_count, after.segments[0].last_used_at, after.updated_at) == (
+        before.segments[0].usage_count, before.segments[0].last_used_at, before.updated_at)

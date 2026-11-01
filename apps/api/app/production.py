@@ -114,6 +114,7 @@ from app.materials.collections import MaterialCollectionStore
 from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _scene_ranges, _segment_id
 from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
+from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.source_files import MaterialSourceFileAccess, directory_accepts_writes as directory_accepts_writes
 from app.materials.intake import MaterialIntakeUseCase
 from app.materials.workspace_references import WorkspaceMediaReferenceAccess
@@ -430,6 +431,10 @@ class ProductionRepository:
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
         self._material_collections = MaterialCollectionStore(self._connect)
         self._material_assets = MaterialAssetStore(lambda: self._connect())
+        self.material_usage_records = MaterialUsageRecordReader(
+            connection_factory=lambda: self._connect(),
+            read_asset=lambda workspace_id, asset_id: self._material_assets.get_asset(workspace_id, asset_id),
+        )
         self.material_intake = MaterialIntakeUseCase(
             self._material_assets, self._material_source_files,
             connection_factory=lambda: self._connect(),
@@ -1587,105 +1592,7 @@ class ProductionRepository:
     ) -> MaterialAsset:
         return self._material_assets.update_segment(workspace_id, asset_id, segment_id, description=description, transcript=transcript, review_status=review_status, usage_role=usage_role, user_tags=user_tags, collection_ids=collection_ids, expected_asset_updated_at=expected_asset_updated_at, expected_segment_updated_at=expected_segment_updated_at)
 
-    def record_segment_usage(
-        self,
-        workspace_id: str,
-        asset_id: str,
-        segment_id: str,
-        *,
-        plan_id: str | None = None,
-        clip_id: str | None = None,
-    ) -> MaterialAsset:
-        return self._material_assets.record_segment_usage(
-            workspace_id, asset_id, segment_id, plan_id=plan_id, clip_id=clip_id,
-        )
 
-    def list_segment_usage_records(
-        self, workspace_id: str, asset_id: str, segment_id: str
-    ) -> list[dict[str, object]]:
-        """Read back what used one segment, naming the task it went into.
-
-        Only rows already written by a real render are read, and only for the
-        material and segment asked for inside the caller's workspace. Each row
-        names the montage plan, its clip and the creation task behind it, so a
-        material detail page can show a real traceback instead of a bare count.
-
-        The usage table carries no timeline version, and a task keeps several
-        snapshots that may all contain the same clip. Nearest time or highest
-        sequence would therefore be a guess, so no version is claimed here: the
-        task's current version is reported separately and flagged as current,
-        and a task without one reports the version as unrecorded.
-        """
-        asset = self.get_asset(workspace_id, asset_id)
-        if all(segment.id != segment_id for segment in asset.segments):
-            raise KeyError(segment_id)
-        with self._connect() as conn:
-            usage_rows = conn.execute(
-                """
-                SELECT plan_id, clip_id, used_at
-                FROM material_segment_usage
-                WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
-                ORDER BY used_at DESC
-                """,
-                (workspace_id, asset_id, segment_id),
-            ).fetchall()
-            plan_rows = conn.execute(
-                """
-                SELECT id, task_id, payload
-                FROM creation_task_montage_plans
-                WHERE workspace_id = ?
-                """,
-                (workspace_id,),
-            ).fetchall()
-            task_rows = conn.execute(
-                """
-                SELECT id, payload
-                FROM creation_tasks
-                WHERE workspace_id = ?
-                """,
-                (workspace_id,),
-            ).fetchall()
-
-        plans: dict[str, dict[str, object]] = {}
-        for row in plan_rows:
-            payload = json.loads(str(row["payload"]))
-            clips = {
-                str(clip.get("id")): clip
-                for clip in payload.get("clips", [])
-                if isinstance(clip, dict)
-            }
-            plans[str(row["id"])] = {"task_id": str(row["task_id"]), "clips": clips}
-        tasks = {str(row["id"]): json.loads(str(row["payload"])) for row in task_rows}
-
-        records: list[dict[str, object]] = []
-        for row in usage_rows:
-            plan = plans.get(str(row["plan_id"]))
-            clip = plan["clips"].get(str(row["clip_id"])) if plan else None
-            task = tasks.get(str(plan["task_id"])) if plan else None
-            current_version_id = task.get("current_timeline_version_id") if task else None
-            records.append(
-                {
-                    "plan_id": str(row["plan_id"]),
-                    "clip_id": str(row["clip_id"]),
-                    "used_at": datetime.fromisoformat(str(row["used_at"])),
-                    "task": {
-                        "id": str(plan["task_id"]) if plan else None,
-                        "name": str(task.get("name") or "") if task else None,
-                        "stage": str(task.get("stage") or "") if task else None,
-                        "status": str(task.get("status") or "") if task else None,
-                        "current_timeline_version_id": str(current_version_id)
-                        if current_version_id
-                        else None,
-                    }
-                    if plan
-                    else None,
-                    "role": str(clip.get("role")) if clip else None,
-                    "manually_selected": bool(clip.get("manually_selected")) if clip else None,
-                    "timeline_version_id": str(current_version_id) if current_version_id else None,
-                    "resolution": "current" if current_version_id else "unknown",
-                }
-            )
-        return records
 
     def library_insights(
         self,

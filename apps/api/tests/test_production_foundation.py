@@ -4262,14 +4262,14 @@ def test_material_tags_collections_usage_and_gap_insights(tmp_path):
         user_tags=["创业", "  创业  "],
         collection_ids=[collection.id],
     )
-    production.record_segment_usage(
+    production.material_assets.record_segment_usage(
         "workspace_a",
         asset.id,
         segment.id,
         plan_id="plan_1",
         clip_id="clip_1",
     )
-    production.record_segment_usage(
+    production.material_assets.record_segment_usage(
         "workspace_a",
         asset.id,
         segment.id,

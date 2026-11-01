@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.materials.assets import MaterialVersionConflict
+from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.contracts import MaterialAssetNote
 from app.schemas import (
     ContentVisibilityRequest, MaterialAssetResponse, MaterialAssetTagsRequest,
@@ -39,7 +40,7 @@ class MaterialLibraryRecords(Protocol):
     def update_segment(self, workspace_id, asset_id, segment_id, *, description, transcript,
                        review_status, usage_role=None, user_tags=None, collection_ids=None,
                        expected_asset_updated_at=None, expected_segment_updated_at=None): ...
-    def list_segment_usage_records(self, workspace_id, asset_id, segment_id): ...
+    material_usage_records: MaterialUsageRecordReader
     material_assets: MaterialAssetStore
 
 
@@ -117,7 +118,7 @@ class MaterialLibraryHTTPAdapter:
         if not self._visible(request, workspace_id, asset.visibility, asset.owner_user_id):
             raise HTTPException(status_code=404, detail='素材或片段不存在或不属于当前工作区')
         try:
-            records = self._records_for().list_segment_usage_records(workspace_id, asset_id, segment_id)
+            records = self._records_for().material_usage_records.list_segment_usage_records(workspace_id, asset_id, segment_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail='素材或片段不存在或不属于当前工作区') from exc
         return MaterialUsageRecordsResponse(items=records, total_count=len(records))

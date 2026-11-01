@@ -784,7 +784,7 @@ class RenderStageUseCase:
         for clip in plan.clips:
             if clip.person_render_id:
                 continue
-            self.repository.record_segment_usage(
+            self.repository.material_assets.record_segment_usage(
                 workspace_id,
                 clip.asset_id,
                 clip.segment_id,
