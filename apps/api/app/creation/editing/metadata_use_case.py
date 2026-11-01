@@ -456,7 +456,7 @@ class MetadataEditUseCase:
             (intent, proposal), changed, edited_tracks = prepare_subtitle_display_command(task, plan, tracks, command)
         elif command.operation_type in CLIP_METADATA_OPERATIONS:
             (intent, proposal), changed, edited_tracks, _linkage = prepare_clip_command(task, plan, command,
-                resolve_source=lambda clip, values: self.repository.resolve_edit_clip_source(task.workspace_id, task.id, clip, values,
+                resolve_source=lambda clip, values: self.repository.clip_sources.resolve(task.workspace_id, task.id, clip, values,
                     user_id=command.actor_identity['member_id'], local_diagnostic=command.actor_identity['local_diagnostic']),
                 link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
         elif command.operation_type in PICTURE_METADATA_OPERATIONS:
@@ -945,7 +945,7 @@ class MetadataEditUseCase:
         identity, diagnostic = (reader_identity['member_id'], reader_identity['local_diagnostic'])
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         try:
-            edited, tracks, linkage = apply_clip_patch(plan, clip_id, payload.model_dump(exclude_unset=True), resolve_source=lambda clip, values: self.repository.resolve_edit_clip_source(workspace_id, task_id, clip, values, user_id=identity, local_diagnostic=diagnostic), link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
+            edited, tracks, linkage = apply_clip_patch(plan, clip_id, payload.model_dump(exclude_unset=True), resolve_source=lambda clip, values: self.repository.clip_sources.resolve(workspace_id, task_id, clip, values, user_id=identity, local_diagnostic=diagnostic), link_reordered=lambda candidate: self.link_reordered_edit(task, candidate))
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except KeyError as exc:
@@ -1009,7 +1009,7 @@ class MetadataEditUseCase:
 
     def resolve_edit_clip_source(self, task, reader_identity, clip, values):
         identity, diagnostic = (reader_identity['member_id'], reader_identity['local_diagnostic'])
-        return self.repository.resolve_edit_clip_source(task.workspace_id, task.id, clip, values, user_id=identity, local_diagnostic=diagnostic)
+        return self.repository.clip_sources.resolve(task.workspace_id, task.id, clip, values, user_id=identity, local_diagnostic=diagnostic)
 
 
     def graphic_overlay_candidate(self, plan, payload):

@@ -380,7 +380,7 @@ class TimelineRestoreUseCase:
         for clip_id in affected_clips:
             desired_clip = next(item for item in desired['clips'] if item['id']==clip_id)
             replacement = (desired_clip['asset_id'], desired_clip['segment_id'])
-            facts = self.repository.clip_edit_source_facts(ws, task.id, clip_ids=[clip_id], replacement=replacement,
+            facts = self.repository.clip_sources.facts(ws, task.id, clip_ids=[clip_id], replacement=replacement,
                 user_id=command.restore_member_id, local_diagnostic=False)
             sources.append((clip_id, replacement, facts))
         still_changed = changed_stage_sections(desired_version.snapshot, restored, tracks[2], merged_tracks)
@@ -642,7 +642,7 @@ class TimelineRestoreUseCase:
             if command.write_guard is not None:
                 command.write_guard(connection)
             for clip_id,replacement,facts in prepared.local_sources['sources']:
-                current = self.repository.clip_edit_source_facts(ws,task.id,clip_ids=[clip_id],replacement=replacement,
+                current = self.repository.clip_sources.facts(ws,task.id,clip_ids=[clip_id],replacement=replacement,
                     user_id=command.restore_member_id,local_diagnostic=False,connection=connection)
                 if current != facts:
                     raise EditConflict('局部恢复的实际来源或权限已变化')

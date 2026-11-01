@@ -4900,7 +4900,7 @@ def _bind_affected_source_command(verifier,command,before,after):
 
 def _edit_clip_source_bounds(task, request, clip):
     identity, diagnostic = _content_reader(request, task.workspace_id)
-    selection = production_repo.resolve_edit_clip_source(task.workspace_id, task.id, clip, {},
+    selection = production_repo.clip_sources.resolve(task.workspace_id, task.id, clip, {},
         user_id=identity, local_diagnostic=diagnostic)
     return selection.start_seconds, selection.end_seconds, selection.is_speech
 

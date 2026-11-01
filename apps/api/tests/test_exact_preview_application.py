@@ -66,7 +66,7 @@ def test_source_facts_distinguishes_missing_target_from_source_failures(failure,
         calls.append((workspace_id, task_id, kwargs))
         raise failure
     use_case = ExactPreviewUseCase(
-        repository=SimpleNamespace(clip_edit_source_facts=read_source), metadata=None,
+        repository=SimpleNamespace(clip_sources=SimpleNamespace(facts=read_source)), metadata=None,
         subtitles=None, linked=None, audio_edit=None, visual=None, clip_preview=None,
         conversations=None, settings=None,
     )

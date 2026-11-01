@@ -1954,7 +1954,7 @@ def test_raw_material_qualification_agrees_for_search_preflight_and_edit(tmp_pat
     assert matches() and repo.automatic_material_segments('local',viewer_user_id='owner')
     assert material_segment_eligible(asset,segment,'local')
     clip=MontageClip('manual','cue',asset.id,segment.id,reference,0,1,0,1,1,[],False)
-    assert repo.resolve_edit_clip_source('local',task_id,clip,{},user_id='owner',local_diagnostic=False).asset_id==asset.id
+    assert repo.clip_sources.resolve('local',task_id,clip,{},user_id='owner',local_diagnostic=False).asset_id==asset.id
     assert repo.get_asset('local',asset.id).review_status=='raw'
     repo.update_asset_use_state('local',asset.id,'not_for_automation')
     assert matches() and not repo.automatic_material_segments('local',viewer_user_id='owner')
@@ -1968,9 +1968,9 @@ def test_raw_material_qualification_agrees_for_search_preflight_and_edit(tmp_pat
     assert receipt['matches']==[] and receipt['qualification_message'] and receipt['total_count']==0 and not receipt['truncated']
     manual=client.get('/api/production/materials/search')
     assert manual.status_code==200 and isinstance(manual.json(),list) and manual.json()[0]['asset_ref']==f'asset:{asset.id}'
-    assert repo.resolve_edit_clip_source('local',task_id,clip,{},user_id='owner',local_diagnostic=False).asset_id==asset.id
+    assert repo.clip_sources.resolve('local',task_id,clip,{},user_id='owner',local_diagnostic=False).asset_id==asset.id
     with pytest.raises(PermissionError):
-        repo.resolve_edit_clip_source('local',task_id,clip,{},user_id='stranger',local_diagnostic=False)
+        repo.clip_sources.resolve('local',task_id,clip,{},user_id='stranger',local_diagnostic=False)
     Path(asset.path).unlink()
     assert not matches() and not repo.automatic_material_segments('local',viewer_user_id='owner')
 

@@ -651,7 +651,7 @@ class SegmentProductionUseCase:
                 plan = creation_task_montage_plan_from_payload(payload['montage'])
                 for clip_id in required:
                     plan,_,_ = apply_clip_patch(plan,clip_id,{'confirmed':True},
-                        resolve_source=lambda clip, values:self.repository.resolve_edit_clip_source(
+                        resolve_source=lambda clip, values:self.repository.clip_sources.resolve(
                             workspace_id,task_id,clip,{**values,'automation_only':True},
                             user_id=actor.user_id,local_diagnostic=actor.device_id is None),link_reordered=None)
                 from app.creation.editing.metadata_use_case import refresh_montage_review_state

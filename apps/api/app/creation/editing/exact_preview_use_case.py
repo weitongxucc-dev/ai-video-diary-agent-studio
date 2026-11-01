@@ -254,7 +254,7 @@ class ExactPreviewUseCase:
             return []
         replacement = (payload.asset_id, payload.segment_id) if payload.asset_id is not None and payload.segment_id is not None else None
         try:
-            return self.repository.clip_edit_source_facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement, user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'])
+            return self.repository.clip_sources.facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement, user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'])
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:
