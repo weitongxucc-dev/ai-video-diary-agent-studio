@@ -335,7 +335,7 @@ class SubtitleEditUseCase:
                 cues=[candidate if item.id == cue.id else item for item in track.cues])], montage.duration_seconds)
             changed_tracks = synchronize_linked_subtitle_cue(tracks, track, candidate_track, cue.id, montage.duration_seconds,
                                             invalidate_all_english_on_text_change=True)
-        except ValueError as exc:
+        except ValueError:
             raise
         changed = (
             start != cue.start_seconds or end != cue.end_seconds
@@ -513,7 +513,7 @@ class SubtitleEditUseCase:
 
 
     def command_cue(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         if payload.context_stage not in {'montage', 'review', 'subtitle_cover'}:
             raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改字幕。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片后选择一条字幕。', retryable=True)
         shift = re.fullmatch('(?:把)?(?:这条|这句|当前)?字幕(?:整体)?(?:向前|往前|提前|向后|往后|延后|推迟)\\s*(\\d+(?:\\.\\d+)?)\\s*(毫秒|秒)[。！]?', command)
@@ -564,7 +564,7 @@ class SubtitleEditUseCase:
 
 
     def command_batch_or_structure(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         batch_match = re.fullmatch('全文把[“"](.+?)[”"](?:替换成|替换为|改成|改为)[“"](.*)[”"][。！]?', command)
         if batch_match and payload.context_stage == 'subtitle_cover':
             montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))

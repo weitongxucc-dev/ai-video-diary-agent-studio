@@ -220,7 +220,6 @@ class CommandPreviewUseCase:
 
 
     def facts(self, workspace_id, task_id, arguments, actor):
-        operation = 'command_edit_preview'
         from app.canvas import canvas_size
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':

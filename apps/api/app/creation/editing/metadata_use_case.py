@@ -1109,7 +1109,7 @@ class MetadataEditUseCase:
 
 
     def preview_reorder(self, task, payload, change, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         try:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
         except KeyError as exc:
@@ -1186,7 +1186,7 @@ class MetadataEditUseCase:
 
 
     def command_cover(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         if payload.context_stage != 'subtitle_cover':
             raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改封面。', impact='任务内容没有发生变化。', repair_action='进入字幕与封面步骤后选择封面。', retryable=True)
         try:

@@ -186,7 +186,7 @@ class LinkedTimelineEditUseCase:
         return LinkedEditSavedResult(proposal, self.input_digest(task, proposal, source), self._saved_result(task, proposal))
 
     def confirm_remove_silence(self, task, proposal):
-        workspace_id, task_id = task.workspace_id, task.id
+        workspace_id, _unused_task_id = task.workspace_id, task.id
         operation_type = proposal.operation.get('operation_type')
         operation_payload = proposal.operation.get('payload')
         if task.current_timeline_version_id != operation_payload.get('base_version_id'):
@@ -292,7 +292,7 @@ class LinkedTimelineEditUseCase:
 
 
     def preview_remove_silence(self, task, payload, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         from app.silence_edits import detect_silence_cuts
         if len(payload.selected_object_refs) != 1 or not payload.selected_object_refs[0].startswith('clip:'):
             raise EditPreviewRejected(status_code=422, detail='请先选择要剪掉停顿的镜头。')

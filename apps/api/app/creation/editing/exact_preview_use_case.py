@@ -370,7 +370,7 @@ class ExactPreviewUseCase:
         self.clip_preview.seal(actor, command)
         return command
     def submit_clip(self, runtime, media, actor, command, *, operation):
-        workspace_id, task_id = (actor.workspace_id, command.task_id)
+        _unused_workspace_id, task_id = (actor.workspace_id, command.task_id)
         source = command.source
         media.clip_preview = ClipPreviewExecutor(self.clip_preview, self.metadata.audio_service)
         arguments = {'_media_kind': 'clip_preview', '_draft': False, '_clip_preview': asdict(command)}

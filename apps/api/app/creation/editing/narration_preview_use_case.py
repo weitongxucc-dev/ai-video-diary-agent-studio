@@ -40,7 +40,7 @@ class NarrationPreviewUseCase:
 
 
     def preview(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         if payload.context_stage not in {'narration', 'montage', 'review'}:
             raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤不能修改配音片段。', impact='任务内容没有发生变化。', repair_action='进入配音、视频剪辑或检查成片后选择一段配音。', retryable=True)
         try:

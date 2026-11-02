@@ -65,7 +65,7 @@ class GoalReadinessUseCase:
     def verify(self, goal, event):
         owner = self.projection_for()
         business=self.business_for()
-        workspace_id,task_id=goal['workspace_id'],goal['task_id']
+        workspace_id,_unused_task_id=goal['workspace_id'],goal['task_id']
         try:
             actor,task,scope=business.original(goal)
             version=self.read_timeline(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None

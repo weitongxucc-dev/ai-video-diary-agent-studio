@@ -28,7 +28,7 @@ class PersonPreviewUseCase:
 
 
     def preview(self, task, payload, selected_ref, command, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         if payload.context_stage not in {'montage', 'review'}:
             raise edit_preview_failure(status_code=409, error='edit_scope_unavailable', reason='当前步骤还不能把人物口型片段写入成片。', impact='任务内容没有发生变化。', repair_action='进入视频剪辑或检查成片后选择一个镜头。', retryable=True)
         clip_id = selected_ref.removeprefix('clip:')
@@ -83,7 +83,7 @@ class PersonPreviewUseCase:
 
 
     def preview_share(self, task, payload, target, *, identity, request_source, draft_only, execution, actor):
-        workspace_id, task_id = (task.workspace_id, task.id)
+        workspace_id, _unused_task_id = (task.workspace_id, task.id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
         base = self.metadata.ensure_montage_base(workspace_id, task, plan, source=request_source)
         selected, actual = self.share_selection(plan, target)

@@ -2640,7 +2640,7 @@ class CreationJobUnitExecutor:
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
         with self.repository.execution_inputs.creation_execution_read() as conn:
             job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
-            task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+            task, _unused_script, _unused_plan = snapshot.task, snapshot.script_header, snapshot.plan
         job, remaining_seconds, remaining_bytes = self.repository.narration_units.start_creation_narration_unit(grant, resources, None,
             pending_segment_for=self.narration_stage.pending_segment if resources['narration_phase'] == 'segment' else None)
         already_elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
