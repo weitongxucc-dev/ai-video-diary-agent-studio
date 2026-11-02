@@ -5,6 +5,9 @@ import wave
 from PIL import Image
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
+from starlette.requests import Request
+from app.creation.clip_preview import ClipPreviewConflict
 
 import app.main as main
 from app.artifact_store import ArtifactStore
@@ -87,6 +90,17 @@ def test_task_visual_metadata_reads_and_refusals_preserve_state(tmp_path, monkey
     stale = client.post(base+'/visual/preview', json={
         'base_version_id': 'stale-version', 'clip_ids': ['clip'], 'effects': {}})
     assert stale.status_code == 409 and stale.json()['detail'] == '时间线已经变化，请刷新后重新预览'
+    request = Request({"type": "http", "method": "POST", "scheme": "http",
+        "server": ("testserver", 80), "client": ("testclient", 50000),
+        "path": base + "/visual/preview", "query_string": b"",
+        "headers": [(b"x-local-member-token", token.encode())]})
+    with pytest.raises(HTTPException) as missing_base:
+        main._clip_preview_submission_http_adapter().submit(task.id, request,
+            base_version_id=None, operation_type="AdjustVisualEffects", clip_ids=["clip"],
+            values={}, raw_command="metadata preview")
+    assert missing_base.value.status_code == 409
+    assert missing_base.value.detail == "当前故事板没有基础版本，请先保留当前故事板并建立版本"
+    assert isinstance(missing_base.value.__cause__, ClipPreviewConflict)
     assert database() == before_db
     assert tree() == before_tree
     assert forbidden_calls == []

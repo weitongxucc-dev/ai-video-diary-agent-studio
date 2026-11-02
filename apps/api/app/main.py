@@ -252,7 +252,7 @@ from app.application_info_routes import build_application_info_router
 from app.voice_reference_routes import build_voice_reference_router
 from app.media_capability_routes import build_media_capability_router
 from app.voice_transcription_routes import build_voice_transcription_router
-from app.task_visual_routes import build_task_visual_router
+from app.task_visual_routes import ClipPreviewSubmissionHttpAdapter, build_task_visual_router
 from app.task_audio_routes import build_task_audio_router
 from app.production_profile_routes import build_production_profile_router
 from app.legacy_voice_routes import build_legacy_voice_router
@@ -2256,70 +2256,22 @@ def _clip_preview_use_case(repository=None):
     return ClipPreviewUseCase(repo, resolve_presenter_source=presenter_source, budget=profile)
 
 
-def _submit_clip_preview(task_id, request, *, base_version_id, operation_type, clip_ids, values, raw_command):
-    """HTTP adapter: trusted identity/source in, explicit persistent command out."""
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    draft = request.query_params.get("draft") == "true" or request.url.path.endswith("/edits/exact")
-    if draft:
-        command_values = ({'clip_ids':clip_ids, 'effects':values} if operation_type == 'AdjustVisualEffects'
-            else {'clip_id':clip_ids[0], **values})
-        return _preview_metadata_settings(task, request, operation_type, command_values, base_version_id)
-    actor = _require_permit_actor(request, workspace_id)
-    source = EXACT_EDIT_SOURCE.get()
-    if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
-        raise HTTPException(status_code=403, detail="当前成员不能修改此任务")
-    try:
-        if base_version_id is None:
-            raise ClipPreviewConflict("当前故事板没有基础版本，请先保留当前故事板并建立版本")
-        if task.current_timeline_version_id != base_version_id:
-            raise ClipPreviewConflict("时间线已经变化，请刷新后重新预览")
-        base = production_repo.timeline_records.get_timeline_version(workspace_id, base_version_id)
-        original = getattr(request.state, "task_media_command", None)
-        if source is None and original is not None:
-            action = CreationTaskExactEditRequest(operation_type=operation_type,
-                **({"clip_ids":clip_ids, "effects":values} if operation_type == "AdjustVisualEffects" else {"clip_id":clip_ids[0], **values}))
-            source = {"workspace_id":workspace_id, "task_id":task_id, "member_id":actor.user_id or actor.member_id,
-                "actor_identity":actor.identity_payload(), "request_id":None, "raw_command":original.raw_command,
-                "expected_timeline_version_id":base.id, "expected_timeline_sequence":base.sequence,
-                "action":action.model_dump(mode="json", exclude_unset=True),
-                "source_facts":_exact_edit_source_facts(task, action, request)}
-            if original.assistant_turn_id is not None:
-                origin = conversation_repo.task_turn_source(str(original.assistant_turn_id), workspace_id,
-                    actor.user_id or actor.member_id, task_id)
-                source.update(assistant_turn_id=str(original.assistant_turn_id), conversation_id=origin["conversation_id"],
-                              **{key: origin[key] for key in ("input_id", "input_turn_id") if key in origin})
-        if source is not None:
-            _require_assistant_input_origin(request, source)
-        command = ClipPreviewCommand(task_id, base.id, operation_type, clip_ids, values, raw_command, source)
-        use_case = _clip_preview_use_case()
-        use_case.prepare(actor, command)
-        use_case.seal(actor, command)
-        runtime = _creation_runtime()
-        media = runtime.registrations["creation_job"].owner.task_media
-        media.clip_preview = ClipPreviewExecutor(use_case, _task_audio())
-        operation = ("exact_edit_preview" if source is not None or operation_type != "AdjustVisualEffects" else "visual_edit_preview")
-        arguments = {"_media_kind":"clip_preview", "_draft":False, "_clip_preview":asdict(command)}
-        if source is not None:
-            arguments["_typed_source"] = source
-        # Keep the original action/target projection used by existing receipts.
-        arguments["payload"] = {"operation_type":operation_type, "clip_ids":clip_ids,
-            "clip_id":clip_ids[0], "base_version_id":base.id,
-            **({"effects":values} if operation_type == "AdjustVisualEffects" else values)}
-        job = media.submit(runtime, actor, task_id, operation, arguments, "edit_preview")
-        receipt = _media_result_receipt(media, job, actor, runtime)
-        receipt["result"] = None
-        return JSONResponse(status_code=202, content=receipt)
-    except (ClipPreviewUnavailable, HostBudgetUncalibrated) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (ClipPreviewConflict, TimelineVersionConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+def _clip_preview_submission_http_adapter():
+    return ClipPreviewSubmissionHttpAdapter(
+        current_workspace=lambda request: current_workspace_id(request),
+        task404=lambda workspace_id, task_id: _creation_task_or_404(workspace_id, task_id),
+        draft_metadata=lambda task, request, operation_type, command_values, base_version_id: _preview_metadata_settings(task, request, operation_type, command_values, base_version_id),
+        permit_actor=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
+        exact_source_getter=lambda: EXACT_EDIT_SOURCE.get(),
+        repository_for=lambda: production_repo,
+        source_facts=lambda task, action, request: _exact_edit_source_facts(task, action, request),
+        task_turn_source=lambda turn_id, workspace_id, member_id, task_id: conversation_repo.task_turn_source(turn_id, workspace_id, member_id, task_id),
+        require_input_origin=lambda request, source: _require_assistant_input_origin(request, source),
+        clip_case_for=lambda: _clip_preview_use_case(),
+        runtime_for=lambda: _creation_runtime(),
+        task_audio_for=lambda: _task_audio(),
+        media_receipt=lambda media, job, actor, runtime: _media_result_receipt(media, job, actor, runtime),
+    )
 
 
 
@@ -2398,7 +2350,7 @@ def _task_visual_http_router(route_names):
         json_response_for=lambda: JSONResponse,
         preview_case_for=lambda: _visual_preview_use_case,
         needs_full_for=lambda: needs_full_visual_preview,
-        clip_submit_for=lambda: _submit_clip_preview,
+        clip_submit_for=lambda: _clip_preview_submission_http_adapter().submit,
         edit_response_for=lambda: _edit_preview_response,
         picture_error_type_for=lambda: PicturePreviewRejected,
         route_names=route_names,
