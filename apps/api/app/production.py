@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from app.creation.plan_contracts import (
     CreationPlan as _CreationPlan,
-    CreationPlanBlocker as _CreationPlanBlocker,
-    CreationPlanKnowledgeReference as _CreationPlanKnowledgeReference,
-    CreationPlanSourceReference as _CreationPlanSourceReference,
 )
 from app.creation.plan_records import CreationPlanRecordStore
 from app.creation.plan_confirmation_use_case import CreationPlanConfirmationUseCase
@@ -42,32 +39,14 @@ from app.materials.scene_records import MaterialSceneRecordStore
 from app.materials.hash_intake import MaterialHashIntake
 from app.materials.hash_records import MaterialHashRecordStore
 from app.material_hash import (
-    MaterialHashCandidate as _MaterialHashCandidate,
-    MaterialHashResult as _MaterialHashResult,
     material_hash_candidate as _material_hash_candidate,
-)
-from app.material_scene import MaterialSceneCandidate as _MaterialSceneCandidate
-from app.material_probe import (
-    MaterialProbeDependency as _MaterialProbeDependency,
-    MaterialProbeCandidate as _MaterialProbeCandidate,
-    material_probe_unit_key as _material_probe_unit_key,
-)
-from app.creation.topic_contracts import (
-    TopicCandidate as _TopicCandidate,
-    TopicEvidenceKind as _TopicEvidenceKind,
-    TopicEvidenceReference as _TopicEvidenceReference,
-    TopicGenerationRun as _TopicGenerationRun,
-    TopicGenerationRunStatus as _TopicGenerationRunStatus,
-    TopicSelectionStatus as _TopicSelectionStatus,
 )
 
 import io
 import json
 import logging
 import math
-import os
 import sqlite3
-import subprocess
 import wave
 from contextlib import nullcontext
 from contextvars import ContextVar
@@ -82,7 +61,6 @@ from app.creation.transactions import EditAdoptionTransaction
 from app.creation import contracts as _creation_contracts
 from app.creation.timeline_restore_records import TimelineRestoreRecordStore
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import unquote
 from uuid import uuid4
 
 from app.creation.contracts import (
@@ -101,27 +79,23 @@ from app.creation.cover_records import CoverAssetRecordStore, validate_cover_ass
 from app.creation.editing.records import EditRecordStore, validate_edit_operation
 from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload,
-    narration_segment_row, narration_segment_rows,
 )
-from app.profiles.contracts import (Authorization, PersonProfile, _as_utc, PronunciationEntry as PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
-from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
+from app.profiles.contracts import (Authorization, PersonProfile, PronunciationEntry as PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
+from app.profiles.authorizations import MediaAuthorizationStore, _authorization_from_payload
 from app.creation.editing.timeline_history_repository import TimelineHistoryReadRepository
-from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
 from app.profiles.legacy_voice import LegacyVoiceProfileStore, VoiceProfile
 from app.profiles.workspace_profile import WorkspaceProductionProfileStore, ProductionProfile
 from app.creation.production_foundation_readiness import ProductionFoundationReadiness
 from app.profiles.input_resolution import ProfileInputResolver
 from app.profiles.records import (
-    ProfileRecordStore, _person_profile_payload, _versioned_voice_profile_payload,
-    _profile_reference_payload, _profile_reference_fields,
+    ProfileRecordStore, _versioned_voice_profile_payload,
 )
-from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
 from app.production_schema import initialize_production_schema
-from app.visual_understanding import LocalVisualUnderstanding, SegmentUnderstanding, OCR_RETRIEVAL_MIN_CONFIDENCE
+from app.visual_understanding import LocalVisualUnderstanding
 from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
-from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _scene_ranges, _segment_id
+from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _segment_id
 from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.usage_records import MaterialUsageRecordReader
@@ -144,7 +118,6 @@ from app.creation.contracts import (
 )
 from app.persistence_json import (
     _json_payload, _json_object, _json_default, _with_datetime,
-    _required_text, _optional_string_tuple, _required_datetime, _optional_datetime,
 )
 from app.materials.segment_search_use_case import MaterialSegmentSearchUseCase
 from app.materials.contracts import (
@@ -170,20 +143,13 @@ from app.materials.contracts import (
     material_usage_eligibility,
     effective_segment_usage_role as effective_segment_usage_role,
 )
-from app.asr import SubtitleSegment as SpeechObservation
-from app.material_speech import LocalMaterialSpeechAnalyzer, MaterialSpeechAnalysis
+from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_semantics import (
     UnavailableVisualSemanticProvider,
     VisualSemanticProvider,
 )
-from app.material_probe import MaterialProbeFacts, probe_checkpoint_needs_rate_refresh
-from app.material_scene import (
-    SCENE_LOGICAL_WINDOW_SECONDS, SceneWindow, SceneWindowFacts, scene_unit_key,
-    scene_window_for_key, scene_windows,
-)
 
 if TYPE_CHECKING:
-    from app.device_scheduler import Grant
     from app.profile_reference_media import ProfileReferenceInput, ProfileReferenceArtifact
 
 logger = logging.getLogger(__name__)

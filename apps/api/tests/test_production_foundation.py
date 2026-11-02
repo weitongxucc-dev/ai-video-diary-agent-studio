@@ -4567,6 +4567,15 @@ def test_creation_values_keep_canonical_identity_and_retire_repository_exports()
     from app import production
     from app.creation import contracts, script_contracts
 
+    retired_private_names = {
+        'CreationTaskScriptSection',
+        'ScriptLibraryEntry',
+        'ClipSourceSelection',
+        'TimelineVersion',
+        'SUPPORTED_EDIT_OPERATION_TYPES',
+        'EditOperation',
+    }
+
     for canonical, names in (
         (script_contracts, (
             'ScriptGenerationRunStatus',
@@ -4606,7 +4615,11 @@ def test_creation_values_keep_canonical_identity_and_retire_repository_exports()
         )),
     ):
         for name in names:
-            assert getattr(production, "_" + name) is getattr(canonical, name)
+            canonical_object = getattr(canonical, name)
+            if name in retired_private_names:
+                assert not hasattr(production, "_" + name)
+            else:
+                assert getattr(production, "_" + name) is canonical_object
             assert not hasattr(production, name)
     # These canonical types were already absent from the repository namespace.
     for name in ("TaskAuthorization", "TaskAuthorizationConflict", "EditCommand"):
