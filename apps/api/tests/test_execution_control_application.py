@@ -618,3 +618,131 @@ def test_segment_unit_receipts_block_unknown_resume_and_keep_caller_atomicity(tm
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM job_runs WHERE workspace_id=? AND task_id=?',
             (task.workspace_id, task.id)).fetchone()[0] == 1
+
+
+def test_execution_job_state_transactions_keep_declared_requeue_render_and_caller_rollback(tmp_path, monkeypatch):
+    import hashlib
+    import socket
+    import subprocess
+    import threading
+    import wave
+    from PIL import Image
+    from app.creation.contracts import CreationTask, TimelineVersion
+    from app.creation.plan_contracts import CreationPlan
+    from app.production import ProductionRepository
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('job state metadata forbids media, network and execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn'):
+        monkeypatch.setattr(main, name, forbidden)
+    repo = ProductionRepository(tmp_path / 'job-state.sqlite3', tmp_path / 'library',
+        duration_reader=forbidden, scene_reader=forbidden)
+    plan = CreationPlan('state-plan', 'metadata-ws', 'Read declared Job transitions', 'Metadata plan',
+        1, 'zh-CN', '9:16', 4, [], [], None, [], 0, 0, '', [], [], [], 'metadata-only')
+    task = CreationTask('state-task', plan.workspace_id, plan.id, 'Metadata task', 'knowledge_explanation')
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='metadata-member')
+    head = TimelineVersion('declared-head', task.workspace_id, task.id, None, 1, {'metadata_only': True}, None)
+    repo.timeline_records.create_timeline_version(head, expected_current_version_id=None)
+    task = repo.task_records.get_creation_task(task.workspace_id, task.id)
+    task.confirmed_script_id, task.stage, task.stage_status = 'declared-script', 'montage', 'running'
+    with repo._connect() as connection:
+        connection.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task), default=str), task.workspace_id, task.id))
+    job = repo.job_records.create_job_run(JobRun('original-state-job', task.workspace_id, task.id,
+        'creation_task_execution', 'original-state-key', 'a' * 64))
+    start = TaskEvent(f'event_{job.id}_start', task.workspace_id, task.id, job.id, 'creation_execution_started',
+        {'input_digest': job.input_digest, 'script_id': task.confirmed_script_id, 'member_id': 'metadata-member',
+            'identity_kind': 'device', 'device_id': 'metadata-device', 'user_id': None})
+    repo.execution_records.append_task_event(start)
+    # A refused, never-started Job declaration, without a device request or grant.
+    with repo._connect() as connection:
+        connection.execute("UPDATE job_runs SET status='failed',failure_reason=?,impact=?,repair_action=?,finished_at=? "
+            'WHERE workspace_id=? AND id=?', ('metadata refusal', 'no execution', 'review original input',
+                start.created_at.isoformat(), task.workspace_id, job.id))
+    states = repo.creation_execution_jobs
+    with repo._connect() as connection:
+        assert not connection.in_transaction
+        with pytest.raises(PermissionError, match='原未授予'):
+            states.requeue_ungranted_narration_job(task.workspace_id, job.id, 'declared-request', connection=connection)
+        assert not connection.in_transaction
+    refused = repo.job_records.get_job_run(task.workspace_id, job.id)
+    assert refused.status == 'failed' and refused.attempt == 0 and refused.started_at is None
+    rejection = TaskEvent('declared-rejection', task.workspace_id, task.id, job.id, 'creation_execution_stage',
+        {'failure_kind': 'input_budget_exceeded', 'reason_code': 'declared_resources_exceed_budget',
+            'device_request_id': 'declared-request'})
+    repo.execution_records.append_task_event(rejection)
+    with repo._connect() as connection:
+        assert not connection.in_transaction
+        states.requeue_ungranted_narration_job(task.workspace_id, job.id, 'declared-request', connection=connection)
+        queued = repo.job_records.get_job_run(task.workspace_id, job.id, connection=connection)
+        assert queued.status == 'queued' and queued.attempt == 0 and queued.started_at is None
+        assert queued.failure_reason is queued.impact is queued.repair_action is queued.finished_at is None
+        assert connection.in_transaction
+        connection.commit()
+    # Record helpers declare a completed state; no stage or worker is executed.
+    repo.job_records.claim_job_run(task.workspace_id, job.id)
+    repo.job_records.finish_job_run(task.workspace_id, job.id, status='succeeded')
+    succeeded = repo.job_records.get_job_run(task.workspace_id, job.id)
+    original_task = repo.task_records.get_creation_task(task.workspace_id, task.id)
+    unit_key = 'render:metadata-fixed-head'
+    identity = hashlib.sha256(json.dumps([head.id, unit_key]).encode()).hexdigest()
+    render = TaskEvent(f'event_{job.id}_render_requested_{identity}', task.workspace_id, task.id, job.id,
+        'creation_execution_stage', {**start.payload, 'stage': 'render', 'status': 'pending',
+            'execution_purpose': 'render_current', 'input_timeline_version_id': head.id,
+            'start_event_id': start.id, 'unit_key': unit_key})
+    interrupted = TaskEvent('declared-interrupt', task.workspace_id, task.id, job.id, 'creation_execution_stage',
+        {'stage': 'render', 'reason': 'metadata_tail_failure'})
+    observed = []
+    append = repo.execution_records.append_task_event
+    def current(connection):
+        observed.append(connection)
+        assert connection.in_transaction
+        return True
+    def append_then_fail(event, **kwargs):
+        saved = append(event, **kwargs)
+        assert saved == interrupted
+        raise RuntimeError('metadata interrupt tail after actual append')
+    with repo._connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        reopened = states.reopen_creation_execution_for_render(succeeded, render,
+            expected_timeline_version_id=head.id, connection=connection)
+        assert reopened.id == succeeded.id and reopened.status == 'queued' and reopened.progress == 66
+        assert reopened.updated_at == render.created_at
+        assert repo.execution_records.get_task_event(task.workspace_id, render.id, connection=connection) == render
+        permit = connection.execute('SELECT state,generation FROM device_permit WHERE id=1').fetchone()
+        assert permit['state'] == 'free'
+        with pytest.raises(ValueError, match='设备许可在制作恢复前已变化'):
+            states.interrupt_creation_execution(interrupted, impact='metadata impact', repair_action='review metadata',
+                task_is_current=current, expected_free_permit_generation=permit['generation'] + 1, connection=connection)
+        assert observed == []
+        assert repo.job_records.get_job_run(task.workspace_id, job.id, connection=connection) == reopened
+        with monkeypatch.context() as patch:
+            patch.setattr(repo.execution_records, 'append_task_event', append_then_fail)
+            with pytest.raises(RuntimeError, match='after actual append'):
+                states.interrupt_creation_execution(interrupted, impact='metadata impact', repair_action='review metadata',
+                    task_is_current=current, expected_free_permit_generation=permit['generation'], connection=connection)
+        assert observed == [connection] and connection.in_transaction
+        assert repo.job_records.get_job_run(task.workspace_id, job.id, connection=connection).status == 'interrupted'
+        changed_task = repo.task_records.get_creation_task(task.workspace_id, task.id, connection=connection)
+        assert changed_task.stage == 'montage' and changed_task.stage_status == 'not_started'
+        assert changed_task.stage_retryable and changed_task.recovery_point == 'montage'
+        assert repo.execution_records.get_task_event(task.workspace_id, interrupted.id, connection=connection) == interrupted
+        assert repo.job_records.get_job_run(task.workspace_id, job.id) == succeeded
+        assert repo.task_records.get_creation_task(task.workspace_id, task.id) == original_task
+        connection.rollback()
+        assert not connection.in_transaction and connection.execute('SELECT 1').fetchone()[0] == 1
+        assert repo.job_records.get_job_run(task.workspace_id, job.id, connection=connection) == succeeded
+    assert repo.task_records.get_creation_task(task.workspace_id, task.id) == original_task
+    assert repo.execution_records.get_task_event(task.workspace_id, start.id) == start
+    assert repo.execution_records.get_task_event(task.workspace_id, rejection.id) == rejection
+    for event_id in (render.id, interrupted.id):
+        with pytest.raises(KeyError):
+            repo.execution_records.get_task_event(task.workspace_id, event_id)

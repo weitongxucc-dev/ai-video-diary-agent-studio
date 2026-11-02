@@ -1318,7 +1318,7 @@ class CreationJobOwnerVerifier:
                     pcm_preparation=preparation, comparison_reference=old.resources['narration_reference'])
             if (original_key, original_resources) != (old.unit_key, old.resources):
                 raise RecoveryBlocked('原配音其他输入或预算已变化，来源重验证不能改写')
-            self.repository.requeue_ungranted_narration_job(job.workspace_id, job.id, old.id, connection=conn)
+            self.repository.creation_execution_jobs.requeue_ungranted_narration_job(job.workspace_id, job.id, old.id, connection=conn)
             job, task, event, script, plan = self._facts(conn, old.workspace_id, old.owner_id)
             key, resources = self.narration_unit_facts(conn, job, task, script, plan, pcm_preparation=preparation)
         else:
@@ -2211,7 +2211,7 @@ class CreationJobUnitExecutor:
                    "permit_retained": permit_retained}
         if decision is not None:
             payload["decision"] = asdict(decision)
-        self.repository.interrupt_creation_execution(TaskEvent(
+        self.repository.creation_execution_jobs.interrupt_creation_execution(TaskEvent(
             id=f"event_{job.id}_{receipt}_{grant.generation}", workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage", payload=payload),
             impact="本次执行未完成，上游有效产物和已采用版本保留。",
@@ -2581,7 +2581,7 @@ class CreationJobUnitExecutor:
                             'request_id': request.id, 'unit_id': active['usage_id'],
                             'pcm': receipt, 'publication_blocked': True, 'reason': 'edit_source_unavailable',
                             'source_error': source_error, 'stage': 'narration_edit', 'status': 'interrupted'})
-                    self.repository.interrupt_creation_execution(reconciled,
+                    self.repository.creation_execution_jobs.interrupt_creation_execution(reconciled,
                         impact='原音频产物和已结算消耗保留，未发布版本。',
                         repair_action='请由真实交互重新核实原编辑来源。',
                         task_is_current=lambda _: False, connection=conn)
@@ -3687,7 +3687,7 @@ class CreationExecution:
             conn.execute('BEGIN IMMEDIATE')
             if write_guard is not None:
                 write_guard(conn)
-            self.repository.reopen_creation_execution_for_render(job, event,
+            self.repository.creation_execution_jobs.reopen_creation_execution_for_render(job, event,
                 expected_timeline_version_id=version_id, connection=conn)
             owner.verify_submission(intent, actor, connection=conn)
         return True

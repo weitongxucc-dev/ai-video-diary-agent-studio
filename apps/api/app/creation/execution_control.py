@@ -481,7 +481,7 @@ class CreationExecutionControl:
                 request = self.repository.job_records.creation_execution_wait_row(
                     job.workspace_id, original.member_id, job.id, job.input_digest)
                 stage = request["unit_key"].split(":", 1)[0] if request is not None else task.stage
-                self.repository.interrupt_creation_execution(TaskEvent(
+                self.repository.creation_execution_jobs.interrupt_creation_execution(TaskEvent(
                     id=f"event_{job.id}_recovery_{job.attempt}", workspace_id=job.workspace_id,
                     task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
                     payload={"stage": stage, "status": "interrupted",

@@ -1476,98 +1476,13 @@ class ProductionRepository:
 
 
 
-    def requeue_ungranted_narration_job(self, workspace_id, job_id, request_id, *, connection):
-        """Only the verified aggregate-to-unit contract migration may revive this Job."""
-        row = connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?', (workspace_id, job_id)).fetchone()
-        if (row is None or row['kind'] != 'creation_task_execution' or row['attempt'] != 0
-                or row['started_at'] is not None or row['status'] not in {'queued', 'interrupted', 'failed'}
-                or (row['status'] == 'failed' and not connection.execute(
-                    "SELECT 1 FROM task_events WHERE workspace_id=? AND job_id=? AND event_type='creation_execution_stage' "
-                    "AND json_extract(payload_json,'$.failure_kind')='input_budget_exceeded' "
-                    "AND json_extract(payload_json,'$.reason_code')='declared_resources_exceed_budget' "
-                    "AND json_extract(payload_json,'$.device_request_id')=? LIMIT 1",
-                    (workspace_id, job_id, request_id)).fetchone())):
-            raise PermissionError('只有原未授予的配音契约拒绝可在原作业继续')
-        connection.execute("UPDATE job_runs SET status='queued',failure_reason=NULL,impact=NULL,repair_action=NULL,"
-            "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?", (utc_now().isoformat(), workspace_id, job_id))
-
-    def reopen_creation_execution_for_render(self, run, event, *, expected_timeline_version_id, connection):
-        """Reopen this completed creation only for its current, fixed render input."""
-        if not connection.in_transaction:
-            raise ValueError('重新输出必须使用原作业的提交事务')
-        row = connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
-            (run.workspace_id, run.id)).fetchone()
-        task = require_creation_task(connection, run.workspace_id, run.task_id)
-        if (row is None or self.job_records.job_run_from_row(row) != run
-                or run.kind != 'creation_task_execution' or run.status != 'succeeded'
-                or not expected_timeline_version_id or task.current_timeline_version_id != expected_timeline_version_id
-                or (event.workspace_id, event.task_id, event.job_id) != (run.workspace_id, run.task_id, run.id)
-                or event.event_type != 'creation_execution_stage' or event.payload.get('stage') != 'render'
-                or event.payload.get('status') != 'pending'
-                or event.payload.get('input_timeline_version_id') != expected_timeline_version_id
-                or event.payload.get('execution_purpose') != 'render_current'
-                or event.payload.get('script_id') != task.confirmed_script_id
-                or event.payload.get('input_digest') != run.input_digest
-                or event.payload.get('start_event_id') != f'event_{run.id}_start'
-                or not event.payload.get('unit_key', '').startswith('render:')):
-            raise PermissionError('原完成作业或重新输出的时间线已变化')
-        connection.execute("UPDATE job_runs SET status='queued',progress=66,failure_reason=NULL,impact=NULL,repair_action=NULL,"
-            "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
-            (event.created_at.isoformat(), run.workspace_id, run.id))
-        self.execution_records.append_task_event(event, connection=connection)
-        return self.job_records.get_job_run(run.workspace_id, run.id, connection=connection)
 
 
 
 
 
 
-    def interrupt_creation_execution(
-        self, event: _TaskEvent, *, impact: str, repair_action: str,
-        task_is_current: Callable[[sqlite3.Connection], bool],
-        expected_free_permit_generation: int | None = None,
-        connection: sqlite3.Connection | None = None,
-    ) -> None:
-        """Save one owner's interrupted job, current stage and receipt together."""
-        if connection is None:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                self.interrupt_creation_execution(event, impact=impact,
-                    repair_action=repair_action, task_is_current=task_is_current,
-                    expected_free_permit_generation=expected_free_permit_generation,
-                    connection=conn)
-            return
-        if expected_free_permit_generation is not None:
-            permit = connection.execute("SELECT state,generation FROM device_permit WHERE id=1").fetchone()
-            if permit is None or (permit["state"], permit["generation"]) != ("free", expected_free_permit_generation):
-                raise ValueError("设备许可在制作恢复前已变化，原作业保持待核查")
-        row = connection.execute("SELECT * FROM job_runs WHERE workspace_id=? AND id=?",
-                                 (event.workspace_id, event.job_id)).fetchone()
-        if row is None or row["task_id"] != event.task_id:
-            raise ValueError("中断回执不属于当前制作作业")
-        if row["status"] not in {"queued", "running", "interrupted"}:
-            return  # A stopped dispatcher cannot overwrite a committed terminal result.
-        reason = event.payload["reason"]
-        now = event.created_at.isoformat()
-        connection.execute(
-            "UPDATE job_runs SET status='interrupted',failure_reason=?,impact=?,repair_action=?,"
-            "finished_at=?,updated_at=? WHERE workspace_id=? AND id=?",
-            (reason, impact, repair_action, now, now, event.workspace_id, event.job_id))
-        stage = event.payload["stage"]
-        task_stage = "narration" if stage == "narration" else "montage"
-        if (row["kind"] == "creation_task_execution"
-                and stage in {"narration", "person_render", "montage_plan", "render"}
-                and task_is_current(connection)):
-            task_row = connection.execute("SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
-                                          (event.workspace_id, event.task_id)).fetchone()
-            payload = json.loads(task_row["payload"])
-            if payload["stage"] == task_stage and payload["stage_status"] == "running":
-                payload.update(stage_status="not_started", stage_reason=reason,
-                    stage_impact=impact, stage_repair_action=repair_action, stage_retryable=True,
-                    recovery_point=task_stage, updated_at=now)
-                connection.execute("UPDATE creation_tasks SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
-                    (json.dumps(payload, ensure_ascii=False), now, event.workspace_id, event.task_id))
-        self.execution_records.append_task_event(event, connection=connection)
+
 
 
 
