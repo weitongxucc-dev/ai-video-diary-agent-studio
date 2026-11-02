@@ -300,8 +300,8 @@ class QualityCheckUnitExecutor:
                     return
                 if not exc.recoverable_pressure:
                     scheduler.fail_unit(grant, reason="quality_resource_unavailable",
-                        failure_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
-                            status="failed", error=str(exc)))
+                        failure_write=lambda conn, current, error=exc: self.service.settle(conn, job, record["check_id"],
+                            status="failed", error=str(error)))
                     return
                 scheduler.defer_unit(grant, reason="resource_pressure", retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
                 self.service.production.job_records.finish_job_run(job.workspace_id, job.id, status="interrupted",
@@ -315,8 +315,8 @@ class QualityCheckUnitExecutor:
                         self._cancel(grant,scheduler,job,record["check_id"],"user_cancelled")
                     return
                 scheduler.fail_unit(grant, reason="quality_check_failed",
-                    failure_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
-                        status="failed", error=str(exc)))
+                    failure_write=lambda conn, current, error=exc: self.service.settle(conn, job, record["check_id"],
+                        status="failed", error=str(error)))
                 return
             # Keep terminal SQL outside the worker-error handler. A late SQL error
             # rolls back the whole checkpoint and preserves its staged worker receipt.

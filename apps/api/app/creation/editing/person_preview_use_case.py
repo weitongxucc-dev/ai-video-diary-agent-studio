@@ -1,6 +1,8 @@
 """Original PersonPreviewUseCase command preview, separate from compilation and rendering."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.creation_execution import presenter_input_facts
 
 from app.creation.contracts import EditIntent
@@ -12,6 +14,11 @@ from app.montage import select_presenter_sections
 from app.models import utc_now
 from uuid import uuid4
 from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs
+
+
+if TYPE_CHECKING:
+    from app.creation.person_renders import PersonRender
+    from app.creation.contracts import NarrationSegment, TransformRun
 
 
 class PersonPreviewUseCase:

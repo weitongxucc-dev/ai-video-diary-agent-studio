@@ -2759,10 +2759,10 @@ class CreationJobUnitExecutor:
                 pressure = False
             if quitting or pressure or isinstance(exc, PermissionError):
                 reason = 'application_quit' if quitting else 'resource_pressure' if pressure else 'task_authorization_unavailable'
-                def interrupted(conn, current):
+                def interrupted(conn, current, error=exc):
                     settle(conn, current)
                     self._write_interrupted(conn, current, scheduler=scheduler, stage='narration', reason=reason,
-                        decision=exc.decision if isinstance(exc, HostResourceRefusal) else None)
+                        decision=error.decision if isinstance(error, HostResourceRefusal) else None)
                 scheduler.defer_unit(grant, reason='resource_pressure' if pressure else 'worker_interrupted',
                     retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30 if pressure else 1 if quitting else 60),
                     owner_database_path=self.repository.database_path, owner_write=interrupted)
@@ -2773,9 +2773,9 @@ class CreationJobUnitExecutor:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=stopped, cancelled=True)
             else:
-                def failed(conn, current):
+                def failed(conn, current, error=exc):
                     settle(conn, current)
-                    return self._checkpoint(conn, current, status='failed', stage='narration', reason=str(exc))
+                    return self._checkpoint(conn, current, status='failed', stage='narration', reason=str(error))
                 scheduler.fail_unit(grant, reason='creation_narration_failed', failure_write=failed)
         finally:
             with self._cancellation_lock:
@@ -2889,8 +2889,8 @@ class CreationJobUnitExecutor:
                 scheduler.defer_unit(grant, reason='resource_pressure',
                     retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30),
                     owner_database_path=self.repository.database_path,
-                    owner_write=lambda conn, current: self._write_interrupted(conn, current,
-                        scheduler=scheduler, stage=stage, reason="resource_pressure", decision=exc.decision))
+                    owner_write=lambda conn, current, error=exc: self._write_interrupted(conn, current,
+                        scheduler=scheduler, stage=stage, reason="resource_pressure", decision=error.decision))
         except RecoveryBlocked:
             raise
         except GrantedCommandCancelled:
@@ -3144,9 +3144,9 @@ class CreationJobUnitExecutor:
                     retry_not_before_utc=datetime.now(timezone.utc)+timedelta(seconds=1),
                     owner_database_path=self.repository.database_path,owner_write=pause)
                 return
-            def fail(conn,current):
+            def fail(conn,current, error=exc):
                 settle(conn,current)
-                return self._narration_edit_checkpoint(conn,current,'failed',reason=str(exc))
+                return self._narration_edit_checkpoint(conn,current,'failed',reason=str(error))
             scheduler.fail_unit(grant,reason='narration_edit_failed',failure_write=fail)
         finally:
             with self._cancellation_lock:
@@ -3341,9 +3341,9 @@ class CreationJobUnitExecutor:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=stopped, cancelled=True)
             else:
-                def failed(conn, current):
+                def failed(conn, current, error=exc):
                     settle(conn, current)
-                    return self._checkpoint(conn, current, status='failed', reason=str(exc))
+                    return self._checkpoint(conn, current, status='failed', reason=str(error))
                 scheduler.fail_unit(grant, reason='delivery_adoption_failed' if adoption else 'picture_fragment_failed' if picture_leaf else 'audio_delivery_failed' if delivery else 'picture_packet_copy_failed' if packet_copy else 'audio_assembly_failed', failure_write=failed)
         finally:
             with self._cancellation_lock:
@@ -3469,8 +3469,8 @@ class CreationJobUnitExecutor:
                     scheduler.defer_unit(grant, reason="resource_pressure",
                         retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30),
                         owner_database_path=self.repository.database_path,
-                        owner_write=lambda conn, current: self._write_interrupted(conn, current,
-                            scheduler=scheduler, stage="render", reason="resource_pressure", decision=exc.decision))
+                        owner_write=lambda conn, current, error=exc: self._write_interrupted(conn, current,
+                            scheduler=scheduler, stage="render", reason="resource_pressure", decision=error.decision))
                     return
             except RecoveryBlocked:
                 raise

@@ -18,6 +18,8 @@ import hashlib
 from app.creation.editing.metadata_use_case import refresh_montage_review_state, LegacyMontageReference, InvalidMontage
 if TYPE_CHECKING:
     from app.creation_execution import CreationStageGrantContext
+    from app.montage import NarrationCue
+    from app.creation.plan_contracts import CreationPlan
 
 class NarrationStageRejected(Exception):
 

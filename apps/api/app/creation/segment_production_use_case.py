@@ -1151,10 +1151,10 @@ class SegmentProductionUseCase:
             if isinstance(exc,HostResourceRefusal):
                 executor.last_resource_refusal = exc
             reason = 'application_quit' if quitting else 'resource_pressure' if pressure else str(exc)
-            def stop(conn,current):
+            def stop(conn,current, error=exc):
                 settle(conn,current)
                 return self.repository.segment_units.checkpoint_segment_unit(current,status='interrupted' if quitting or pressure else 'failed',
-                    reason=reason or type(exc).__name__,connection=conn)
+                    reason=reason or type(error).__name__,connection=conn)
             cancelled = self.repository.job_records.get_job_run(job.workspace_id,job.id).status=='cancelled'
             measure_retained()
             if cancelled:

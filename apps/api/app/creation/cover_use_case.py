@@ -636,9 +636,9 @@ class CoverUseCase:
             if executor._pause_for_quit(grant, scheduler):
                 return
             if known_failure:
-                def failed(connection, current):
+                def failed(connection, current, error=exc):
                     self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="failed",
-                        failure_reason=str(exc), impact="当前时间线保持不变。",
+                        failure_reason=str(error), impact="当前时间线保持不变。",
                         repair_action="检查原成片、选帧和本机FFmpeg后重新发起。", connection=connection)
                     return f"cover:{job.id}:failed"
                 scheduler.fail_unit(grant, reason="cover_generation_failed", failure_write=failed)
