@@ -357,7 +357,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, CreationTaskEditJobReplayResponse, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskTopicsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskScriptsResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -1913,24 +1913,20 @@ def _audio_mix_request(payload, base_version_id):
         target_id=payload.audio_edit.target_id, values=payload.audio_edit.values.model_dump(mode="json", exclude_unset=True))
 
 
-def _claim_edit_request(task,member_id,request_id,phase,inputs):
-    try:return _exact_preview_use_case().claim_request(task,member_id,request_id,phase,inputs)
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+def _task_edit_receipt_http_adapter():
+    return TaskEditReceiptHttpAdapter(
+        repository_for=lambda: production_repo,
+        exact_preview_for=lambda: _exact_preview_use_case(),
+        montage_response=lambda plan: _creation_task_response_adapter().creation_task_montage_response(plan),
+        wake=lambda: _wake_assistant_continuations(),
+    )
 
 
-def _save_edit_request_result(task, event_id, result):
-    status = result.status_code if isinstance(result, JSONResponse) else 200
-    content = json.loads(result.body) if isinstance(result, JSONResponse) else result.model_dump(mode="json")
-    _exact_preview_use_case().record_request_result(task, event_id, status_code=status, response=content)
-    _wake_assistant_continuations()
 
 
-def _read_edit_request_result(task, event_id):
-    recorded = _exact_preview_use_case().read_request_result(task, event_id)
-    return JSONResponse(status_code=recorded["status_code"], content=recorded["response"]) if recorded is not None else None
 
 
-from app.task_edit_routes import build_task_edit_router
+from app.task_edit_routes import TaskEditReceiptHttpAdapter, build_task_edit_router
 
 
 def _task_edit_http_router(route_names):
@@ -1958,7 +1954,7 @@ def _task_edit_http_router(route_names):
         assistant_conversation_for_request_for=lambda: _assistant_conversation_for_request,
         assistant_member_id_for=lambda: _assistant_member_id,
         bind_assistant_edit_instruction_for=lambda: _bind_assistant_edit_instruction,
-        claim_edit_request_for=lambda: _claim_edit_request,
+        claim_edit_request_for=lambda: _task_edit_receipt_http_adapter().claim_edit_request,
         command_preview_use_case_for=lambda: _command_preview_use_case,
         compound_edit_use_case_for=lambda: _compound_edit_use_case,
         compound_proposal_command_for=lambda: _compound_proposal_command,
@@ -1980,12 +1976,12 @@ def _task_edit_http_router(route_names):
         media_result_receipt_for=lambda: _media_result_receipt,
         metadata_edit_command_for=lambda: _metadata_edit_command,
         metadata_edit_response_for=lambda: _metadata_edit_response,
-        original_edit_result_for=lambda: _original_edit_result,
-        read_edit_request_result_for=lambda: _read_edit_request_result,
+        original_edit_result_for=lambda: _task_edit_receipt_http_adapter().original_edit_result,
+        read_edit_request_result_for=lambda: _task_edit_receipt_http_adapter().read_edit_request_result,
         request_permit_actor_for=lambda: _request_permit_actor,
         require_assistant_input_origin_for=lambda: _require_assistant_input_origin,
         require_permit_actor_for=lambda: _require_permit_actor,
-        save_edit_request_result_for=lambda: _save_edit_request_result,
+        save_edit_request_result_for=lambda: _task_edit_receipt_http_adapter().save_edit_request_result,
         subtitle_edit_use_case_for=lambda: _subtitle_edit_use_case,
         subtitle_proposal_command_for=lambda: _subtitle_proposal_command,
         topic_failure_response_for=lambda: _topic_failure_response,
@@ -4533,7 +4529,7 @@ def _confirm_linked_timeline_response(task, proposal, request, payload=None, *, 
     response = _metadata_edit_response(outcome.outcome)
     if outcome.record_projection:
         if outcome.newly_applied:
-            _save_edit_request_result(task, outcome.event_id, response)
+            _task_edit_receipt_http_adapter().save_edit_request_result(task, outcome.event_id, response)
         else:
             production_repo.execution_records.save_edit_request_result(task, outcome.event_id,
                 status_code=200, response=response.model_dump(mode="json"))
@@ -4840,19 +4836,6 @@ app.include_router(_task_edit_http_router(('reject_creation_task_edit_proposal',
 
 
 
-def _original_edit_result(task, proposal):
-    operations = [item for item in production_repo.edit_records.list_edit_operations(task.workspace_id, task.id) if item.proposal_id == proposal.id]
-    if operations:
-        operation = operations[0]
-        version = production_repo.timeline_records.get_timeline_version(task.workspace_id, operation.result_version_id)
-        montage = creation_task_montage_plan_from_payload(version.snapshot["montage"])
-        return CreationTaskEditConfirmResponse(operation=asdict(operation), montage=_creation_task_response_adapter().creation_task_montage_response(montage), narration=None)
-    row = production_repo.edit_records.find_proposal_job_result(task.workspace_id, task.id, proposal.id)
-    if row is None:
-        return None
-    result = CreationTaskEditJobReplayResponse(status=row["status"], job_id=row["job_id"],
-        request_id=row["request_id"], failure_reason=row["failure_reason"])
-    return JSONResponse(status_code=202 if row["status"] in {"queued", "running", "interrupted"} else 200, content=result.model_dump(mode="json"))
 
 
 app.include_router(_task_edit_http_router(('get_creation_task_edit_result',)))
@@ -7302,7 +7285,7 @@ def _assistant_business_turn_can_continue(binding, turn_id):
 
 
 def _assistant_request_projection_receipt(task, event_id):
-    recorded = _read_edit_request_result(task, event_id)
+    recorded = _task_edit_receipt_http_adapter().read_edit_request_result(task, event_id)
     return {"status_code": recorded.status_code, "response": json.loads(recorded.body)} if recorded is not None else None
 
 

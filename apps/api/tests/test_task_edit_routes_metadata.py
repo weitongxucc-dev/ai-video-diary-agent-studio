@@ -1,4 +1,5 @@
 """Complete edit HTTP refusal/read metadata only; never begin a request or perform an edit."""
+from app.task_edit_routes import TaskEditReceiptHttpAdapter
 import sqlite3
 import subprocess
 import wave
@@ -67,7 +68,10 @@ def test_task_edit_reads_and_pre_admission_refusals_never_claim_or_edit(tmp_path
                  '_device_operation_budget', '_workspace_settings_for', '_claim_edit_request',
                  '_save_edit_request_result', '_wake_assistant_continuations', 'run_task_turn',
                  'run_plan_turn', 'start_assistant_continuation_driver'):
-        monkeypatch.setattr(main, name, forbidden)
+        if name in {'_claim_edit_request', '_save_edit_request_result'}:
+            monkeypatch.setattr(TaskEditReceiptHttpAdapter, name[1:], forbidden)
+        else:
+            monkeypatch.setattr(main, name, forbidden)
     monkeypatch.setattr(main, 'montage_renderer', SimpleNamespace(render=forbidden))
     monkeypatch.setattr(main, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
     provider = SimpleNamespace(ready=False, model_id='metadata-only', message='isolated',

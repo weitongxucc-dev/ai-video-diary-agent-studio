@@ -1,5 +1,10 @@
 """Complete task editing HTTP: previews, proposal controls, application and original receipts. Durable editing and execution owners remain unchanged."""
-from fastapi import APIRouter, Request
+from dataclasses import asdict
+import json
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.montage import creation_task_montage_plan_from_payload
 from typing import Literal
 from uuid import UUID
 from app.creation.contracts import CreationTask
@@ -366,3 +371,41 @@ def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for
             raise http_exception_for()(status_code=exc.status_code, detail=exc.detail) from exc
     router.routes[:] = [route for route in router.routes if route.name in route_names]
     return router
+
+
+class TaskEditReceiptHttpAdapter:
+    def __init__(self, *, repository_for, exact_preview_for, montage_response, wake):
+        self.repository_for = repository_for
+        self.exact_preview_for = exact_preview_for
+        self.montage_response = montage_response
+        self.wake = wake
+
+    def claim_edit_request(self, task,member_id,request_id,phase,inputs):
+        try:
+            return self.exact_preview_for().claim_request(task,member_id,request_id,phase,inputs)
+        except EditPreviewRejected as exc:
+            raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+
+    def save_edit_request_result(self, task, event_id, result):
+        status = result.status_code if isinstance(result, JSONResponse) else 200
+        content = json.loads(result.body) if isinstance(result, JSONResponse) else result.model_dump(mode="json")
+        self.exact_preview_for().record_request_result(task, event_id, status_code=status, response=content)
+        self.wake()
+
+    def read_edit_request_result(self, task, event_id):
+        recorded = self.exact_preview_for().read_request_result(task, event_id)
+        return JSONResponse(status_code=recorded["status_code"], content=recorded["response"]) if recorded is not None else None
+
+    def original_edit_result(self, task, proposal):
+        operations = [item for item in self.repository_for().edit_records.list_edit_operations(task.workspace_id, task.id) if item.proposal_id == proposal.id]
+        if operations:
+            operation = operations[0]
+            version = self.repository_for().timeline_records.get_timeline_version(task.workspace_id, operation.result_version_id)
+            montage = creation_task_montage_plan_from_payload(version.snapshot["montage"])
+            return CreationTaskEditConfirmResponse(operation=asdict(operation), montage=self.montage_response(montage), narration=None)
+        row = self.repository_for().edit_records.find_proposal_job_result(task.workspace_id, task.id, proposal.id)
+        if row is None:
+            return None
+        result = CreationTaskEditJobReplayResponse(status=row["status"], job_id=row["job_id"],
+            request_id=row["request_id"], failure_reason=row["failure_reason"])
+        return JSONResponse(status_code=202 if row["status"] in {"queued", "running", "interrupted"} else 200, content=result.model_dump(mode="json"))

@@ -111,7 +111,7 @@ def test_original_edit_result_reads_persisted_metadata_without_writes(tmp_path, 
     target = proposal('original-proposal')
     reopened, task, target = reopen(target)
     before = snapshot()
-    assert main._original_edit_result(task, target) is None
+    assert main._task_edit_receipt_http_adapter().original_edit_result(task, target) is None
     assert get(target) is None
     assert snapshot() == before
 
@@ -130,7 +130,7 @@ def test_original_edit_result_reads_persisted_metadata_without_writes(tmp_path, 
                  identity, '[]', 'normal_make', 'asap', stamp, 'waiting', '{}', stamp, stamp))
     reopened, task, target = reopen(target)
     before = snapshot()
-    queued = main._original_edit_result(task, target)
+    queued = main._task_edit_receipt_http_adapter().original_edit_result(task, target)
     assert queued.status_code == 202
     queued_body = json.loads(queued.body)
     assert queued_body == {'status': 'queued', 'job_id': first.id,
@@ -145,12 +145,12 @@ def test_original_edit_result_reads_persisted_metadata_without_writes(tmp_path, 
     no_request_job = declared_job('no-request-job', no_request, when)
     reopened, task, target = reopen(target)
     before = snapshot()
-    terminal = main._original_edit_result(task, target)
+    terminal = main._task_edit_receipt_http_adapter().original_edit_result(task, target)
     assert terminal.status_code == 200
     terminal_body = json.loads(terminal.body)
     assert terminal_body == {**queued_body, 'status': 'cancelled', 'failure_reason': 'declared cancellation'}
     assert get(target) == terminal_body
-    missing_request = main._original_edit_result(task, no_request)
+    missing_request = main._task_edit_receipt_http_adapter().original_edit_result(task, no_request)
     assert missing_request.status_code == 202
     assert json.loads(missing_request.body)['job_id'] == no_request_job.id
     assert json.loads(missing_request.body)['request_id'] is None
@@ -167,10 +167,77 @@ def test_original_edit_result_reads_persisted_metadata_without_writes(tmp_path, 
     reopened, task, target = reopen(target)
     monkeypatch.setattr(reopened.edit_records, 'find_proposal_job_result', forbidden)
     before = snapshot()
-    applied = main._original_edit_result(task, target)
+    applied = main._task_edit_receipt_http_adapter().original_edit_result(task, target)
     assert applied.operation.id == operation.id
     assert applied.operation.result_version_id == result_version.id
     assert applied.montage.id == state.plan.id and applied.narration is None
     assert get(target) == applied.model_dump(mode='json')
     assert snapshot() == before
     assert violations == []
+
+
+def test_edit_receipt_http_claim_replay_and_record_precede_wake(tmp_path, monkeypatch):
+    from uuid import UUID
+    from fastapi.responses import JSONResponse
+    from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+    from app.task_edit_routes import TaskEditReceiptHttpAdapter
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('edit receipt metadata forbids media, transport and execution')
+    # Install before seed. This node uses no HTTP transport and needs no portal exception.
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    for name in ('_build_device_components', '_creation_runtime', '_start_device_runtime',
+                 '_wake_assistant_continuations', 'run_task_turn', 'run_plan_turn'):
+        monkeypatch.setattr(main, name, forbidden)
+    current = {'repo': None, 'case': None}
+    reads, wakes = [], []
+    expected = {'detail': {'reason': '声明的原验证拒绝', 'retryable': False}}
+    def repository_for():
+        assert current['repo'] is not None
+        reads.append('repo')
+        return current['repo']
+    def exact_preview_for():
+        assert current['case'] is not None
+        reads.append('case')
+        return current['case']
+    def wake_after_record():
+        persisted = current['repo'].execution_records.read_edit_request_result(state.task, event_id)
+        assert persisted == {'status_code': 422, 'response': expected}
+        wakes.append(persisted)
+        raise RuntimeError('metadata wake failure after durable record')
+    adapter = TaskEditReceiptHttpAdapter(repository_for=repository_for, exact_preview_for=exact_preview_for,
+        montage_response=forbidden, wake=wake_after_record)
+    assert reads == []
+    state = metadata_state(tmp_path)
+    case = ExactPreviewUseCase(state.repo, state.case, None, None, None, None, None, None, None)
+    current.update(repo=state.repo, case=case)
+    before_jobs = state.repo.job_records.list_job_runs(state.task.workspace_id, state.task.id)
+    request_id = UUID('3b38b7c6-0000-4000-8000-000000000001')
+    inputs = {'operation_type': 'ChangeCrop', 'base_version_id': state.base.id, 'clip_id': 'clip'}
+    event_id, fresh = adapter.claim_edit_request(state.task, state.member.member_id, request_id, 'preview', inputs)
+    assert fresh and adapter.read_edit_request_result(state.task, event_id) is None
+    replay_id, fresh = adapter.claim_edit_request(state.task, state.member.member_id, request_id, 'preview', dict(inputs))
+    assert replay_id == event_id and not fresh
+    response = JSONResponse(status_code=422, content=expected)
+    with pytest.raises(RuntimeError, match='after durable record'):
+        adapter.save_edit_request_result(state.task, event_id, response)
+    assert len(wakes) == 1
+    recorded = adapter.read_edit_request_result(state.task, event_id)
+    assert isinstance(recorded, JSONResponse) and recorded.status_code == response.status_code
+    assert json.loads(recorded.body) == expected
+    assert current['repo'].execution_records.read_edit_request_result(state.task, event_id) == {
+        'status_code': response.status_code, 'response': expected}
+    assert state.repo.job_records.list_job_runs(state.task.workspace_id, state.task.id) == before_jobs
+    with state.repo._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM task_events WHERE workspace_id=? AND task_id=? "
+            "AND event_type='edit_request_claimed'", (state.task.workspace_id, state.task.id)).fetchone()[0] == 1
+    assert reads and set(reads) == {'case'}

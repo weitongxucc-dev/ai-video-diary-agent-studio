@@ -1,4 +1,5 @@
 """Typed edits through isolated domain/API state; no live model or service."""
+from app.task_edit_routes import TaskEditReceiptHttpAdapter
 from app.creation_task_responses import CreationTaskResponseAdapter
 import json
 from dataclasses import replace
@@ -1072,7 +1073,7 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
     result_url = state.url + f'/edits/{proposal_id}/result'
     original = state.client.get(result_url).json()
     request = {'request_id': str(uuid4()), 'expected_base_version_id': state.base.id, 'expected_input_digest': original['input_digest']}
-    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('speed must recover durable facts directly'))
+    monkeypatch.setattr(TaskEditReceiptHttpAdapter, 'original_edit_result', lambda *args: pytest.fail('speed must recover durable facts directly'))
     before_confirm = len(wakes)
     accepted = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert accepted.status_code == 200, accepted.text
@@ -1150,7 +1151,7 @@ def test_linked_clip_public_preview_confirm_and_fixed_read(linked_speed_http_sta
     result_url = state.url + f"/edits/{proposal['id']}/result"
     original = state.client.get(result_url)
     assert original.status_code == 200 and original.json()['result'] is None
-    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('family must read durable fixed results'))
+    monkeypatch.setattr(TaskEditReceiptHttpAdapter, 'original_edit_result', lambda *args: pytest.fail('family must read durable fixed results'))
     monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('family must bypass generic confirm'))
     accepted = state.client.post(state.url + f"/edits/{proposal['id']}/confirm", json={
         'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
@@ -1278,7 +1279,7 @@ def test_subtitle_family_public_preview_confirm_fixed_read_preserves_other_facts
     result_url = state.url + f'/edits/{proposal_id}/result'
     original = state.client.get(result_url)
     assert original.status_code == 200 and original.json()['result'] is None
-    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('subtitle reads must consume durable business facts'))
+    monkeypatch.setattr(TaskEditReceiptHttpAdapter, 'original_edit_result', lambda *args: pytest.fail('subtitle reads must consume durable business facts'))
     request = {'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
         'expected_input_digest': original.json()['input_digest']}
     null_base = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json={**request, 'expected_base_version_id': None})
@@ -1454,7 +1455,7 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
     result_url = state.url + f"/edits/{proposal['id']}/result"
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result'] is None
-    monkeypatch.setattr(main, '_original_edit_result', lambda *args: pytest.fail('compound must read durable business results'))
+    monkeypatch.setattr(TaskEditReceiptHttpAdapter, 'original_edit_result', lambda *args: pytest.fail('compound must read durable business results'))
     accepted = state.client.post(state.url + f"/edits/{proposal['id']}/confirm", json={
         'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
         'expected_input_digest': fixed.json()['input_digest']})

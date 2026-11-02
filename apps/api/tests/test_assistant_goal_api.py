@@ -466,9 +466,9 @@ def test_original_request_correction_requires_actual_422_no_side_effect(edit_res
     # The host derives the deterministic request id; use that exact receipt.
     request_id = locator.request_id
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    event_id, fresh = main._claim_edit_request(task, state.member.member_id, request_id, "preview", {"fixture": "validation"})
+    event_id, fresh = main._task_edit_receipt_http_adapter().claim_edit_request(task, state.member.member_id, request_id, "preview", {"fixture": "validation"})
     assert fresh
-    main._save_edit_request_result(task, event_id, main.JSONResponse(status_code=code, content={"detail": "actual validation"}))
+    main._task_edit_receipt_http_adapter().save_edit_request_result(task, event_id, main.JSONResponse(status_code=code, content={"detail": "actual validation"}))
     state.finish(edit_request=locator.model_dump(mode="json"))
     goal = main._goal_service().register_turn(state.turn["id"])
     event = {"type": "business_result", "event_id": "validation", "task_id": state.task.id, "phase": "request",

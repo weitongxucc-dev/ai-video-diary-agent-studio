@@ -174,9 +174,9 @@ def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state
     main.start_assistant_continuation_driver()
     assert current(state)["result"]["response"]["edit_request"]["status"] == "unknown"
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
-    event_id, fresh = main._claim_edit_request(task, state.member.member_id, request_id, "preview", {"fixture": "late rejection"})
+    event_id, fresh = main._task_edit_receipt_http_adapter().claim_edit_request(task, state.member.member_id, request_id, "preview", {"fixture": "late rejection"})
     assert fresh
-    main._save_edit_request_result(task, event_id, main.JSONResponse(status_code=409, content={"detail": "original turn ended"}))
+    main._task_edit_receipt_http_adapter().save_edit_request_result(task, event_id, main.JSONResponse(status_code=409, content={"detail": "original turn ended"}))
     after = await_projection(state, lambda item: item["result"]["response"]["edit_request"]["status"] == "rejected")
     assert not after["result"]["edit_preview"]
     assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
