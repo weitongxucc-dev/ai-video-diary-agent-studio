@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.config import Settings, llm_service_verification, record_llm_service_verification
 from app.local_members import LocalMemberService
 from app.creation.script_generation_use_case import ScriptGenerationUseCase, ScriptGenerationRejected
@@ -595,7 +596,7 @@ def _script_domain_state(tmp_path, monkeypatch):
     settings = Settings(llm_provider='custom', llm_model='same-model',
         llm_base_url='https://models.invalid/v1', llm_api_key='isolated-key', llm_api_key_provider='custom')
     monkeypatch.setattr(main, '_workspace_settings_for', lambda workspace_id: settings)
-    monkeypatch.setattr(main, '_topic_route_snapshot', lambda workspace_id: {
+    monkeypatch.setattr(WorkspaceLlmRouteSnapshot, "snapshot", lambda adapter, workspace_id: {
         'availability': 'unverified', 'execution_location': 'cloud', 'provider_kind': 'controlled',
         'model_id': 'same-model', 'endpoint_identity': 'isolated', 'connection_version': 'isolated-v1',
         'checked_at': datetime.now(timezone.utc).isoformat()})
@@ -652,7 +653,7 @@ def set_api_provider(monkeypatch, document, review, calls):
 
 def generate_with_provider(state):
     case=ScriptGenerationUseCase(repository=state.repository,source_inputs=main._source_inputs_use_case().prepare,
-        route_snapshot=main._topic_route_snapshot('local'),
+        route_snapshot=main._workspace_llm_route_snapshot().snapshot('local'),
         generate=lambda inputs:main._creation_task_script_generator_for(state.settings).generate(inputs),
         record_service=lambda **facts:main.record_llm_service_verification(state.settings,workspace_id='local',**facts))
     return case.generate_script('local','task',viewer_user_id=state.owner.member_id)
@@ -1004,7 +1005,7 @@ def task_script_metadata_guard(request, monkeypatch, tmp_path):
         with repository._connect() as conn:
             row = conn.execute('SELECT payload FROM script_generation_runs WHERE id=?', (original.run_id,)).fetchone()
             payload = json.loads(row['payload'])
-            payload['route_snapshot'] = main._topic_route_snapshot('local')
+            payload['route_snapshot'] = main._workspace_llm_route_snapshot().snapshot('local')
             conn.execute('UPDATE script_generation_runs SET payload=? WHERE id=?',
                 (json.dumps(payload, ensure_ascii=False), original.run_id))
         confirm = CreationTaskScriptConfirmRequest(title=body['title'], sections=body['sections'],

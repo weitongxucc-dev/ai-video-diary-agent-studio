@@ -55,7 +55,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal
 from types import SimpleNamespace
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 from weakref import WeakSet
 
@@ -160,6 +160,7 @@ from app.creation.editing.person_preview_use_case import PersonPreviewUseCase
 from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
 from app.creation_task_responses import CreationTaskResponseAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
+from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.creation.editing.subtitles import subtitle_display_selection
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
     clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset)
@@ -1525,43 +1526,11 @@ def _creation_task_response_adapter():
 
 
 
-def _topic_route_snapshot(workspace_id: str) -> dict[str, object]:
-    """按当前工作区的文字服务配置判断可用性。
-
-    读全局设置会把配置正确的工作区判成「未配置」，所以这里只用该工作区的配置。
-    """
-    settings_for_workspace = _workspace_settings_for(workspace_id)
-    provider_kind = settings_for_workspace.effective_llm_provider
-    base_url = settings_for_workspace.effective_llm_base_url
-    parsed = urlparse(base_url)
-    host = parsed.hostname or "unconfigured"
-    try:
-        port = f":{parsed.port}" if parsed.port else ""
-    except ValueError:
-        port = ""
-    endpoint_identity = (
-        f"{parsed.scheme or 'unknown'}://{host}{port}"
-        if host != "unconfigured"
-        else "unconfigured"
+def _workspace_llm_route_snapshot():
+    return WorkspaceLlmRouteSnapshot(
+        settings_for=lambda workspace_id: _workspace_settings_for(workspace_id),
+        clock=lambda: utc_now(),
     )
-    execution_location = (
-        "local"
-        if provider_kind == "ollama" or host in {"localhost", "127.0.0.1", "::1"}
-        else "cloud"
-    )
-    availability = "unverified" if settings_for_workspace.llm_configured else "unconfigured"
-    connection_version = hashlib.sha256(
-        f"{provider_kind}|{endpoint_identity}|{settings_for_workspace.effective_llm_model}".encode("utf-8")
-    ).hexdigest()[:16]
-    return {
-        "provider_kind": provider_kind,
-        "execution_location": execution_location,
-        "model_id": settings_for_workspace.effective_llm_model,
-        "endpoint_identity": endpoint_identity,
-        "connection_version": connection_version,
-        "availability": availability,
-        "checked_at": utc_now(),
-    }
 
 
 from app.creation.source_inputs_use_case import CreationSourceInputs
@@ -1606,7 +1575,7 @@ def _workspace_settings_for(workspace_id: str) -> Settings:
 def _creation_task_text_response_adapter():
     return CreationTaskTextResponseAdapter(
         repository_for=lambda: production_repo,
-        topic_route_snapshot=lambda workspace_id: _topic_route_snapshot(workspace_id),
+        topic_route_snapshot=lambda workspace_id: _workspace_llm_route_snapshot().snapshot(workspace_id),
     )
 
 
@@ -3146,7 +3115,7 @@ app.include_router(build_task_topic_router(
     workspace_for=lambda: current_workspace_id,
     task_for=lambda: _creation_task_or_404,
     plan_for=lambda: _creation_plan_for_task_or_404,
-    route_for=lambda: _topic_route_snapshot,
+    route_for=lambda: _workspace_llm_route_snapshot().snapshot,
     preflight_error_for=lambda: _CreationTaskTopicPreflightError,
     source_inputs_for=lambda: _source_inputs_use_case,
     response_for=lambda: _creation_task_text_response_adapter().creation_task_topic_response,
@@ -3277,7 +3246,7 @@ def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None
         script_goal=context.goal,topic_origin=context.topic_origin,
         check_draft=lambda inputs,candidate:_creation_task_script_generator_for(_workspace_settings_for(workspace_id)).check_draft(inputs,candidate),
         record_service=lambda **facts: record_llm_service_verification(_workspace_settings_for(workspace_id),**facts),
-        route_snapshot=_topic_route_snapshot,
+        route_snapshot=_workspace_llm_route_snapshot().snapshot,
         record_adoption=lambda *args, **kwargs: _goal_service().record_script_adoption(*args, **kwargs))
 
     case.plan_for_task=_creation_plan_for_task_or_404
@@ -3594,7 +3563,7 @@ app.include_router(build_script_sections_router(
 
 def _script_generation_intent(workspace_id):
     return ScriptGenerationIntent(production_repo, conversation_repo,
-        source_inputs=_source_inputs_use_case().prepare, route_snapshot=_topic_route_snapshot(workspace_id),
+        source_inputs=_source_inputs_use_case().prepare, route_snapshot=_workspace_llm_route_snapshot().snapshot(workspace_id),
         verify_identity=_verify_creation_identity)
 
 
@@ -6395,7 +6364,7 @@ def _automation_runtime() -> AutomationRuntime:
                     viewer_user_id=actor.user_id or actor.member_id,local_diagnostic=False)],
             preflight=_creation_plan_preflight_http_adapter().preflight,preview_response=_creation_task_response_adapter().creation_plan_preview_response,
             plan_response=_creation_task_response_adapter().creation_plan_response,execution_status=_creation_execution_status,
-            sync_connector=_sync_connector,inspect_topic_route=_topic_route_snapshot,
+            sync_connector=_sync_connector,inspect_topic_route=_workspace_llm_route_snapshot().snapshot,
             execution_available=lambda:device_runtime is not None,
         )
     return automation_runtime

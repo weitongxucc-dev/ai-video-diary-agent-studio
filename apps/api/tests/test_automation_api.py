@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 import pytest
 import app.main as main
+from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.creation_execution import CreationExecutionActor
 from app.creation.video_template_records import VideoTemplate
 from app.production import ProductionRepository
@@ -24,7 +25,7 @@ def automation_state(tmp_path,monkeypatch,plan_owner):
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
     client=TestClient(main.app,headers=plan_owner[1])
     monkeypatch.setattr(main,'automation_runtime',None)
-    monkeypatch.setattr(main,'_topic_route_snapshot',lambda ws:{'availability':'unconfigured'})
+    monkeypatch.setattr(WorkspaceLlmRouteSnapshot,"snapshot",lambda adapter, ws:{'availability':'unconfigured'})
     asset=next(item for item in production.list_assets('local',viewer_user_id=actor.member_id) if item.file_name=='local.mp4')
     for segment in asset.segments:
         segment.description='梳理真实信息源'

@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 import app.main as main
+from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.conversation_repository import ConversationRepository, ConversationTurnRequestConflict, ConversationTurnAlreadyRunning
 from app.creation.script_generation_intent import (
     ScriptGenerationIntent, ScriptGenerationAgentFailed, ScriptGenerationAgentUnknown,
@@ -189,7 +190,7 @@ def test_execute_finishes_actual_reviewed_window_without_adopting_or_saving_mode
         validate_inputs=lambda ws, plan, refs: main._validate_script_input_sources(ws, plan, refs, actor.member_id),
         script_goal=lambda plan, task, viewer: plan.goal, topic_origin=main._script_context_use_case().topic_origin,
         check_draft=lambda script_input, candidate: candidate,
-        record_service=lambda **facts: None, route_snapshot=main._topic_route_snapshot,
+        record_service=lambda **facts: None, route_snapshot=main._workspace_llm_route_snapshot().snapshot,
         record_adoption=lambda **facts: pytest.fail("generation must not adopt"))
     script_case.read_generation_request = case.read_generation_request
     script_case.read_generation_result = case.read_generation_result
@@ -251,7 +252,7 @@ def test_restart_reconciles_original_run_and_preserves_saved_or_unknown_writes(g
     # Recovery only reads durable facts; changed provider/identity availability is irrelevant.
     def forbidden(*args, **kwargs):
         pytest.fail("restart must not call a model, capture sources, or require current device identity")
-    monkeypatch.setattr(main, "_topic_route_snapshot", forbidden)
+    monkeypatch.setattr(WorkspaceLlmRouteSnapshot, "snapshot", forbidden)
     monkeypatch.setattr(main, "_verify_creation_identity", forbidden)
     main.recover_interrupted_assistant_turns()
     result = case.read("local", "task", request_id, actor.member_id)

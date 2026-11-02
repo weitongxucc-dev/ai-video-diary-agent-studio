@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from workspace_secret_test_fixtures import workspace_secrets_tool_double as workspace_secrets_tool_double
 from fastapi import HTTPException
 
 from app import workspace_settings as module
@@ -288,8 +289,8 @@ def test_topic_route_snapshot_reads_the_requesting_workspace():
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
 
-    snapshot = main_module._topic_route_snapshot("ws-a")
-    unconfigured = main_module._topic_route_snapshot("ws-b")
+    snapshot = main_module._workspace_llm_route_snapshot().snapshot("ws-a")
+    unconfigured = main_module._workspace_llm_route_snapshot().snapshot("ws-b")
 
     assert snapshot["availability"] == "unverified"
     assert snapshot["model_id"] == "MiniMax-M3"

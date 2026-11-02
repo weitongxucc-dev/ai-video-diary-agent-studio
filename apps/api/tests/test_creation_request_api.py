@@ -1,4 +1,5 @@
 from app.materials.library_routes import MaterialLibraryHTTPAdapter
+from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 """Member boundary, bounded windows and live preflight revalidation over SQLite."""
 from dataclasses import replace
 from types import SimpleNamespace
@@ -421,7 +422,7 @@ def test_delegated_existing_topic_is_adopted_without_topic_generation(client_sta
     route = {"provider_kind": "openai_compatible", "execution_location": "cloud", "model_id": "test-model",
         "endpoint_identity": "https://models.invalid", "connection_version": "test-connection",
         "availability": "unconfigured", "checked_at": "2026-10-18T00:00:00Z"}
-    monkeypatch.setattr(main, "_topic_route_snapshot", lambda workspace: route)
+    monkeypatch.setattr(WorkspaceLlmRouteSnapshot, "snapshot", lambda adapter, workspace: route)
     c.client.app.add_api_route("/api/creation-tasks/{task_id}/topics", next(route.endpoint for route in main.app.routes if route.name == "get_creation_task_topics"), methods=["GET"])
     response = c.client.get(f"/api/creation-tasks/{task.id}/topics", headers=c.alice)
     assert response.status_code == 200, response.text
