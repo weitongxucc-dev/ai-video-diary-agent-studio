@@ -1,7 +1,10 @@
 """Two finite audio editor journeys on real isolated stores and synthetic original grants."""
 from dataclasses import asdict,replace
 from datetime import datetime,timezone
-import hashlib,io,json,wave
+import hashlib
+import io
+import json
+import wave
 from pathlib import Path
 from uuid import uuid4
 

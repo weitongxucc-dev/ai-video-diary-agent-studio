@@ -183,7 +183,16 @@ def main() -> None:
             raise SystemExit('PCM worker requires its fixed --manifest argument')
         # The worker is an external packaged resource; these static imports let
         # PyInstaller collect its stdlib dependencies without importing app.main.
-        import argparse, contextlib, fcntl, hashlib, json, stat, struct, time, uuid, wave  # noqa: F401
+        import argparse  # noqa: F401
+        import contextlib  # noqa: F401
+        import fcntl  # noqa: F401
+        import hashlib  # noqa: F401
+        import json  # noqa: F401
+        import stat  # noqa: F401
+        import struct  # noqa: F401
+        import time  # noqa: F401
+        import uuid  # noqa: F401
+        import wave  # noqa: F401
         from datetime import datetime, timezone  # noqa: F401
         import runpy
         worker = (_freeze_root() / 'model-workers' / 'pcm_assembly.py' if getattr(sys, 'frozen', False)
