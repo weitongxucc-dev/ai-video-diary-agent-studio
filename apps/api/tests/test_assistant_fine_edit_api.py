@@ -22,7 +22,7 @@ def fine_state(material_edit_state, monkeypatch):
     monkeypatch.setattr(main.settings, "video_inbox_path", str(state.production.video_library_path), raising=False)
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     plan = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id))
-    graph = main._effective_audio_timeline(plan)
+    graph = main._creation_task_response_adapter().effective_audio_timeline(plan)
     voice = graph.tracks[0].clips[0]
     duration = main._task_audio().source_metadata(state.workspace_id, state.task.id, voice.source_ref)["duration_seconds"]
     voice.source_end_ms = min(voice.source_end_ms, round(duration * 1000))

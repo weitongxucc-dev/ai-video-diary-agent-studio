@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation_task_responses import CreationTaskResponseAdapter
 
 import hashlib
 import threading
@@ -542,7 +543,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         make_plan(), preflight_fingerprint="f" * 64,
     ))
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(main_module, "_creation_plan_response", lambda plan, task: {"plan_id": plan.id, "task_id": task.id})
+    monkeypatch.setattr(CreationTaskResponseAdapter, "creation_plan_response", lambda adapter, plan, task: {"plan_id": plan.id, "task_id": task.id})
     request = Request({"type": "http", "headers": []})
     payload = main_module.CreationPlanConfirmRequest(
         goal="介绍资料的核心功能", name="核心功能介绍", preflight_fingerprint="f" * 64,

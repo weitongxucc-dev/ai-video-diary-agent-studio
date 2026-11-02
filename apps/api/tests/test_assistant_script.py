@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation_task_responses import CreationTaskResponseAdapter
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -162,7 +163,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     monkeypatch.setattr(material_repo, "get_creation_task_montage_plan", lambda workspace_id, task_id: {})
     monkeypatch.setattr(main_module, "production_repo", material_repo)
     monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
-    monkeypatch.setattr(main_module, "_effective_audio_timeline", lambda plan: SimpleNamespace(tracks=[]))
+    monkeypatch.setattr(CreationTaskResponseAdapter, "effective_audio_timeline", lambda adapter, plan: SimpleNamespace(tracks=[]))
     def no_execution(*_):
         pytest.fail("this scope test must not run a media executor")
     monkeypatch.setattr(main_module, "creation_execution", CreationExecution(material_repo,

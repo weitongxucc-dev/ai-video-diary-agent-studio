@@ -578,10 +578,11 @@ def test_creation_task_narration_response_preserves_artifact_and_segment_languag
         audio_reference=artifact.audio_path, duration_seconds=2, sample_rate=24000,
         model_id="local", voice_profile_id="voice-language", voice_version="v1",
         language=language, pronunciation_version="", status="ready")
+    adapter = main._creation_task_response_adapter()
     monkeypatch.setattr(main, "production_repo", SimpleNamespace(
         narration_records=SimpleNamespace(list_narration_segments=lambda *_: [segment]),
         narration_artifacts=SimpleNamespace(narration_artifact_reference=lambda _: artifact.audio_path)))
-    response = main._creation_task_narration_response(task, artifact).model_dump(mode="json")
+    response = adapter.creation_task_narration_response(task, artifact).model_dump(mode="json")
     assert response["language"] == language
     assert response["segments"][0]["language"] == language
     assert response["segments"][0]["audio_url"].endswith("/segment-language/audio")

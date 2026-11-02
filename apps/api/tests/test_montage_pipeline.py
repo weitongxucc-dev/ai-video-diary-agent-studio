@@ -4685,7 +4685,7 @@ def test_cross_object_compiler_keeps_context_and_lock_boundaries(person_render_e
     from app.compound_edits import compile_compound_edit
     state=person_render_edit_state
     plan=deepcopy(state.montage)
-    audio=main_module._effective_audio_timeline(plan)
+    audio=main_module._creation_task_response_adapter().effective_audio_timeline(plan)
     refs=[f'clip:{plan.clips[0].id}']
     changed,steps=compile_compound_edit('当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒',plan,audio,refs,None,None)
     assert changed.audio_timeline.tracks[0].clips[0].fade_out_ms==400
@@ -5090,7 +5090,7 @@ def _save_fixture_narration_duration(state, duration_seconds):
 def test_audio_draft_uses_registered_duration_without_probe(person_render_edit_state, monkeypatch):
     state = person_render_edit_state
     service = main_module._task_audio()
-    timeline = main_module._effective_audio_timeline(state.montage)
+    timeline = main_module._creation_task_response_adapter().effective_audio_timeline(state.montage)
     monkeypatch.setattr("app.task_audio.probe_audio_source", lambda *_: pytest.fail("draft must not probe media"))
     with pytest.raises(ValueError, match="音频裁剪区间超出"):
         service.validate(state.workspace_id, state.task.id, timeline, 8, draft_only=True)
@@ -5154,7 +5154,7 @@ def test_extract_original_audio_real_media_preview_confirm_undo(permitted_media_
     assert duplicate.status_code==409 and '已有原声' in duplicate.text
     assert state.client.post(base+'/timeline/undo',json={}).status_code==200
     restored=creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
-    assert not any(t.clips for t in main_module._effective_audio_timeline(restored).tracks if t.role=='original')
+    assert not any(t.clips for t in main_module._creation_task_response_adapter().effective_audio_timeline(restored).tracks if t.role=='original')
 
 
 

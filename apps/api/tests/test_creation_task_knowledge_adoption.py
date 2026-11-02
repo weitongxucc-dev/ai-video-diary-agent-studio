@@ -156,7 +156,7 @@ def test_append_is_atomic_replayable_and_preserves_old_script_and_run(state, mon
     assert task.id == old.task_id and task.selected_topic_id == old.topic_id
     assert task.stage == 'script' and task.stage_status == 'not_started'
     assert rows(state, historical) == historical
-    assert main._creation_plan_preview_response(state.repository.plan_records.get_creation_plan('local', 'plan')).updated_at == task.updated_at
+    assert main._creation_task_response_adapter().creation_plan_preview_response(state.repository.plan_records.get_creation_plan('local', 'plan')).updated_at == task.updated_at
     events = [event for event in state.repository.execution_records.list_task_events('local', 'task') if event.event_type == 'task_knowledge_adopted']
     assert len(events) == 1
     assert datetime.fromisoformat(events[0].payload['receipt']['task_updated_at']) == datetime.fromisoformat(receipt['task_updated_at'])

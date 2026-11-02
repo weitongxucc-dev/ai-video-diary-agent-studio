@@ -1,4 +1,5 @@
 """Typed edits through isolated domain/API state; no live model or service."""
+from app.creation_task_responses import CreationTaskResponseAdapter
 import json
 from dataclasses import replace
 from uuid import uuid4
@@ -324,7 +325,7 @@ def test_task_turn_scope_uses_current_metadata_refs_and_original_stage_gates(sco
 
     # No-selection review keeps the original early return even before a rendered path exists.
     assert scope("review") == ("review", [])
-    graph = main._effective_audio_timeline(montage)
+    graph = main._creation_task_response_adapter().effective_audio_timeline(montage)
     selected = ["clip:clip", "overlay:declared-overlay", "audio:" + graph.tracks[0].id,
                 "audio:" + graph.tracks[0].clips[0].id, "narration:fixed-segment", "clip:clip"]
     assert scope("montage", selected, 4000) == ("montage", selected)
@@ -425,7 +426,7 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
     original_events = state.repo.execution_records.list_task_events
     original_evidence = state.repo.topic_records.list_topic_evidence_references
     original_headers = state.repo.script_records.active_creation_task_script_headers
-    original_plan_dto = main._creation_plan_preview_response
+    original_plan_dto = CreationTaskResponseAdapter.creation_plan_preview_response
 
     def events(*args):
         trace.append("events")
@@ -439,14 +440,14 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
         trace.append("headers")
         return original_headers(*args)
 
-    def plan_dto(plan):
+    def plan_dto(adapter, plan):
         trace.append("plan_dto")
-        return original_plan_dto(plan)
+        return original_plan_dto(adapter, plan)
 
     monkeypatch.setattr(state.repo.execution_records, "list_task_events", events)
     monkeypatch.setattr(state.repo.topic_records, "list_topic_evidence_references", evidence)
     monkeypatch.setattr(state.repo.script_records, "active_creation_task_script_headers", headers)
-    monkeypatch.setattr(main, "_creation_plan_preview_response", plan_dto)
+    monkeypatch.setattr(CreationTaskResponseAdapter, "creation_plan_preview_response", plan_dto)
     # Declared profile facts at the finite profile owner ports, not model/profile-registration evidence.
     voices = [SimpleNamespace(id=name, version="v1", person_profile_id="person", person_version="v1",
                               display_name="备用名称", language="zh", model_id="declared-voice")
