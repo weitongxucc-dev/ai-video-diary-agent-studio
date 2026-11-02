@@ -297,7 +297,6 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     assert versioned.version == "2"
     # 让已确认文案的引用指向这条真正有版本快照的资料，并同步方案的引用版本。
     with repo._connect() as conn:
-        row = conn.execute("SELECT payload FROM creation_task_scripts WHERE id='script_original'").fetchone()
         script=repo.script_records.get_creation_task_script('local','script_original')
         script.sections[0].evidence_reference_ids=[f"knowledge:{versioned.id}:1"]
         conn.execute("BEGIN IMMEDIATE")
@@ -351,7 +350,6 @@ def test_cross_workspace_cannot_search_or_reuse(library, monkeypatch):
 def test_owned_script_without_external_references_can_save_and_reuse(library):
     client, repo, _ = library
     with repo._connect() as conn:
-        row = conn.execute("SELECT payload FROM creation_task_scripts WHERE id='script_original'").fetchone()
         script=repo.script_records.get_creation_task_script('local','script_original')
         script.sections[0].evidence_reference_ids=[]
         conn.execute("BEGIN IMMEDIATE")

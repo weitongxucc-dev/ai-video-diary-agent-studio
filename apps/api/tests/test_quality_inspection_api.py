@@ -223,7 +223,7 @@ def test_unreadable_or_unregistered_render_is_failed_not_clean(system, registere
 
 def test_polling_and_retry_reuse_active_check(system, monkeypatch):
     client, _, _, checks, headers, _, _ = system
-    publication = seed_render(system)
+    seed_render(system)
     check_id = client.quality_service.start(client.quality_runtime, client.quality_actor, "local", "task", force=True)
     def forbidden(*args):
         pytest.fail("active check must not start twice")

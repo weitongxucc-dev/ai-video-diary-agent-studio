@@ -33,7 +33,7 @@ def test_window_receipt_finishes_conversation_without_full_script_projection(api
     turn, _ = conversations.create_turn_idempotent(conversation['id'], 'local', member,
         user_message=message, client_request_id=str(uuid4()), expected_draft_version=conversation['draft_version'],
         request_context={'kind': 'task', 'task_id': 'task', 'stage': 'script', 'plan_id': 'plan'})
-    source = conversations.task_turn_source(turn['id'], 'local', member, 'task')
+    conversations.task_turn_source(turn['id'], 'local', member, 'task')
     monkeypatch.setattr(main, 'conversation_repo', conversations)
     monkeypatch.setattr(main, '_goal_service', lambda: SimpleNamespace(register_turn=lambda _: None,
         record_script_adoption=lambda *args, **kwargs: pytest.fail('reading a saved window cannot adopt it')))

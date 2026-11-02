@@ -294,7 +294,6 @@ class CommandPreviewUseCase:
                     value = source[field]
                     if value is not None and (not isinstance(value, (int, float)) or value <= 0 or value > cap):
                         raise ValueError('已保存的音频源规格超出标定预算')
-            known_duration = max((item['duration_seconds'] or 0 for item in audio_inputs), default=0)
             if plan is None:
                 raise ValueError('当前任务没有可试听的音轨')
             start = payload.get('start_seconds', 0)

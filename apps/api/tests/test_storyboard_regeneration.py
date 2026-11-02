@@ -594,7 +594,7 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
         elif outcome == 'unknown_commit':
             complete = case.scheduler.complete_unit
             def lost(*args, **kwargs):
-                result = complete(*args, **kwargs)
+                complete(*args, **kwargs)
                 raise KeyboardInterrupt('transport exits after original complete transaction')
             monkeypatch.setattr(case.scheduler, 'complete_unit', lost)
         if outcome == 'unknown_commit':

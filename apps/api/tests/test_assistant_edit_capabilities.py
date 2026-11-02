@@ -78,7 +78,7 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
     assert len(set(sessions)) == 1
     contexts = []
     for call in calls:
-        cmd = call["cmd"]
+        call["cmd"]
         current = envelope(json.loads(call["message"])["message"])
         assert current == envelope(json.loads(call["message"])["systemPrompt"])
         assert current["tool_names"] == json.loads(call["message"])["tools"]

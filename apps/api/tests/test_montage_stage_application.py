@@ -271,7 +271,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
     monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
     try:
-        result = case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
+        case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
             case.runtime, verify_media=False)
         grant = case.scheduler.pick_and_grant()
         assert grant is not None
@@ -335,7 +335,7 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
             assert len(versions) == 1
             assert [row['id'] for row in versions[0].snapshot['narration_segments']] == [row.id for row in reversed(case.rows)]
             assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'queued'
-            same = case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
+            case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
                 case.runtime, verify_media=False)
             assert len(builds) == 1 and len(case.repo.timeline_records.list_timeline_versions('local', case.task.id)) == 1
     finally:

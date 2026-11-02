@@ -661,7 +661,6 @@ class ScriptDraftUseCase:
         _creation_task_topic_inputs=self.topic_inputs
         _CreationTaskTopicPreflightError=self.preflight_error_type
         record_service=self.record_service
-        task_id=task.id
         plan = _creation_plan_for_task_or_404(workspace_id, task)
         route_snapshot = _topic_route_snapshot(workspace_id)
         provider_sources: tuple[CreationTaskTopicSource, ...] = ()

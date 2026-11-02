@@ -51,7 +51,6 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
         cover_file = state.case.output_root / cover_ref
         cover_file.parent.mkdir(parents=True, exist_ok=True)
         Image.new('RGB', (8, 8), '#404040').save(cover_file)
-        now = utc_now()
         digest = hashlib.sha256(cover_file.read_bytes()).hexdigest()
         state.repo.job_records.create_job_run(JobRun('fixture-cover-job', 'ws', state.task.id, 'fixture_input',
             'fixture-cover-input', digest))

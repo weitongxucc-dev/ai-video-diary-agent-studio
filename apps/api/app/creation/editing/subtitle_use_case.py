@@ -389,7 +389,7 @@ class SubtitleEditUseCase:
 
     def _apply_cue(self, command, task, proposal, montage, current_tracks, result_version_id):
         operation_payload = command.values
-        track_id = operation_payload['track_id']
+        operation_payload['track_id']
         cue_id, text = operation_payload['cue_id'], operation_payload['text']
         track, updated_track, linked_tracks = apply_subtitle_cue(current_tracks, operation_payload, montage.duration_seconds)
         cue = next(item for item in track.cues if item.id == cue_id)
