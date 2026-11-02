@@ -36,7 +36,8 @@ def fixture():
     def read(conn,workspace,task,key,member):
         assert (workspace,task,key,member)==('workspace','task',request,'member')
         state.connections.append(conn)
-        if state.revoked: raise PermissionError('original action stopped')
+        if state.revoked:
+            raise PermissionError('original action stopped')
         return deepcopy(state.facts)
     task=SimpleNamespace(workspace_id='workspace',id='task')
     business=object.__new__(domain.TaskBusiness)
@@ -87,10 +88,14 @@ def test_sdk_generation_tools_are_final_and_do_not_restrict_ordinary_task(monkey
 def test_sdk_rejects_unbound_generation_before_any_runtime(monkeypatch,invalid):
     business,_,binding,_,_=fixture()
     handler=TaskBusinessAdapter(business)
-    if invalid=='missing_intent': del binding['intent_kind']
-    if invalid=='other_task': binding['task_id']='other'
-    if invalid=='no_host': handler=None
-    if invalid=='appended_input': binding['input_id']='new-message'
+    if invalid=='missing_intent':
+        del binding['intent_kind']
+    if invalid=='other_task':
+        binding['task_id']='other'
+    if invalid=='no_host':
+        handler=None
+    if invalid=='appended_input':
+        binding['input_id']='new-message'
     monkeypatch.setattr(pi,'_run_turn',forbidden)
     with pytest.raises(ValueError):
         pi.run_task_turn(None,workspace_id='workspace',task_id='task',conversation_id=binding['conversation_id'],turn_id=binding['turn_id'],
@@ -122,7 +127,8 @@ def test_generation_window_ports_receive_original_host_request_and_not_model_run
         if name!='query':
             assert kwargs['instruction_origin']['raw_command']==''
             assert kwargs['reread_origin'](True)==kwargs['instruction_origin']
-            with pytest.raises(TaskBusinessRejected): kwargs['reread_origin'](False)
+            with pytest.raises(TaskBusinessRejected):
+                kwargs['reread_origin'](False)
     assert str(state.ports[0][1][2].assistant_turn_id)==binding['turn_id']
     assert state.ports[2][2]['include_input'] is True
 
@@ -145,16 +151,20 @@ def test_generation_denies_adoption_legacy_and_native_bypasses_before_owner():
 @pytest.mark.parametrize('changed',['turn','effect','actor'])
 def test_generation_rejects_cross_scope_reader_facts(changed):
     business,state,binding,_,_=fixture()
-    if changed=='turn': state.facts['turn_id']='other'
-    if changed=='effect': state.facts['requested_effect']='adopt'
-    if changed=='actor': state.facts['actor']['member_id']='other'
+    if changed=='turn':
+        state.facts['turn_id']='other'
+    if changed=='effect':
+        state.facts['requested_effect']='adopt'
+    if changed=='actor':
+        state.facts['actor']['member_id']='other'
     result=invoke(business,binding,'read_task_workspace')
     assert not result['ok'] and not state.ports
 
 
 def test_generation_commit_guard_rechecks_original_request_in_the_same_transaction():
     business,state,binding,_,_=fixture()
-    committed=[];transaction=object()
+    committed=[]
+    transaction=object()
     def start(*args,write_guard,**kwargs):
         state.revoked=True
         write_guard(transaction)
@@ -169,7 +179,8 @@ def test_generation_cannot_patch_a_different_script_or_write_after_cancel():
     business,state,binding,_,_=fixture()
     denied=invoke(business,binding,'patch_script_sections',{'script_id':'other','payload':{}})
     assert not denied['ok'] and not state.ports
-    cancelled=Event();cancelled.set()
+    cancelled=Event()
+    cancelled.set()
     denied=invoke(business,binding,'read_task_workspace',cancel_event=cancelled)
     assert not denied['ok'] and denied['failure']['submission_effect']=='not_submitted'
 
@@ -192,7 +203,8 @@ def test_real_node_task_preflight_reads_its_required_host_dependencies():
     import shutil
     import subprocess
     node=shutil.which('node')
-    if node is None: pytest.skip('node unavailable')
+    if node is None:
+        pytest.skip('node unavailable')
     business,state,binding,_,_=fixture()
     business.workspace_facts=lambda *args:{'task':{'id':'task','stage':'script','confirmed_script_id':None},
         'plan':{'id':'plan','knowledge_references':[],'source_references':[]}}
@@ -233,12 +245,14 @@ input.close();
                     break
                 operations.append(request['operation'])
                 result=invoke(business,binding,request['operation'],request['args'])
-                child.stdin.write(json.dumps(result)+'\n');child.stdin.flush()
+                child.stdin.write(json.dumps(result)+'\n')
+                child.stdin.flush()
             _,stderr=child.communicate(timeout=5)
             assert child.returncode==0,stderr
     finally:
         if child.poll() is None:
-            child.kill();child.communicate()
+            child.kill()
+            child.communicate()
     assert operations==['read_creator_memory','read_task_workspace','read_creation_execution','read_assistant_script_context']
     assert not state.ports
 

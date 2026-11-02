@@ -507,12 +507,15 @@ class ExactPreviewUseCase:
                 path = service.source(workspace_id,task_id,reference,actor=actor)
                 stat = path.stat()
                 fact = [reference,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]
-                if fact not in files:files.append(fact)
+                if fact not in files:
+                    files.append(fact)
                 values = service.source_metadata(workspace_id,task_id,reference)
                 audio_inputs.append({'reference':reference,'path':str(path.resolve()),'size_bytes':stat.st_size,'uses':uses.get(reference,1),**values})
         facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
-        if visual_scope is not None:facts['visual_preview']=visual_scope
-        if graphics:facts['graphic_sources']=graphics
+        if visual_scope is not None:
+            facts['visual_preview']=visual_scope
+        if graphics:
+            facts['graphic_sources']=graphics
         return task,plan,payload,picture_candidates,facts,audio_inputs
 
     def picture_resources(self,prepared,budget):
@@ -531,7 +534,8 @@ class ExactPreviewUseCase:
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise EditPreviewRejected(status_code=403,detail='当前成员不能安排此任务的媒体处理')
         values={'_media_kind':media_kind,'_draft':draft_only}
-        if source is not None:values['_typed_source']=source
+        if source is not None:
+            values['_typed_source']=source
         values['payload']=payload.model_dump(mode='json',exclude_unset=True)
         if 'base_version_id' in values['payload'] and values['payload']['base_version_id'] is None:
             values['payload']['base_version_id']=task.current_timeline_version_id
@@ -544,7 +548,8 @@ class ExactPreviewUseCase:
                 raise PermissionError('媒体处理身份失效或无法复核')
             montage=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id,task.id))
             base=self.metadata.ensure_montage_base(task.workspace_id,task,montage,source=values.get('_typed_source'))
-            if 'base_version_id' in values['payload']:values['payload']['base_version_id']=base.id
+            if 'base_version_id' in values['payload']:
+                values['payload']['base_version_id']=base.id
         return media.submit(runtime,actor,task.id,'exact_edit_preview',values,'edit_preview',write_guard=write_guard)
 
     def validate_origin(self, source, actor, *, connection=None):

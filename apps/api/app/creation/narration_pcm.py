@@ -399,7 +399,9 @@ def read_receipt(path, *, unit_id, job_id, source_digest, baseline, sources, fin
             part=os.pread(fd,min(65536,remaining),offset)
             if not part:
                 raise RecoveryBlocked('原PCM封存数据不完整')
-            digest.update(part);offset+=len(part);remaining-=len(part)
+            digest.update(part)
+            offset+=len(part)
+            remaining-=len(part)
         after=os.fstat(fd)
         if (digest.hexdigest()!=value['pcm_sha256'] or
                 (after.st_size,after.st_mtime_ns,after.st_ctime_ns,after.st_nlink)!=

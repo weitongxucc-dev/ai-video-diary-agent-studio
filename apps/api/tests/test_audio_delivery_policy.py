@@ -95,7 +95,8 @@ def test_delivery_preserves_real_stream_work_and_original_grant_without_film_cap
         probe.scene_runtime_limits(grant, purpose='packet_copy')
     # A codec recipe cannot turn the copy unit into another encode pass.
     if operation == 'final_mux':
-        bad = deepcopy(resources); bad['mux_recipe']['audio'] = 'aac'
+        bad = deepcopy(resources)
+        bad['mux_recipe']['audio'] = 'aac'
         assert audio_delivery_refusal(bad, budget) == 'audio_delivery_resources_invalid'
 
 
@@ -184,11 +185,13 @@ def test_delivery_adoption_streams_existing_media_and_reserves_only_database_met
 
 
 def test_delivery_normal_first_use_is_explicit_unverified_and_invalid_explicit_policy_is_not_replaced(tmp_path):
-    document = profile_document(); path = write_profile(tmp_path, document)
+    document = profile_document()
+    path = write_profile(tmp_path, document)
     settings = Settings(device_resource_profile_path=str(path))
     identities = {**BACKENDS, 'audio_encode':'a'*64, 'final_mux':'b'*64}
     resolve = lambda **kw: resolve_device_resources(settings, {}, device=DEVICE, backend_identities=identities, **kw)
-    ordinary = resolve(); original = path.read_bytes()
+    ordinary = resolve()
+    original = path.read_bytes()
     selected = resolve(select_audio_delivery_preparation=True)
     assert selected == resolve(select_audio_delivery_preparation=True)
     assert ordinary.budget.audio_encode is None and ordinary.budget.final_mux is None
@@ -203,7 +206,8 @@ def test_delivery_normal_first_use_is_explicit_unverified_and_invalid_explicit_p
         assert not hasattr(budget, 'max_output_bytes') and not hasattr(budget, 'max_duration_seconds')
     document['budget']['audio_encode'] = asdict(selected.budget.audio_encode)
     document['backends']['audio_encode'] = 'a'*64
-    write_profile(tmp_path, document); identities['audio_encode'] = 'c'*64
+    write_profile(tmp_path, document)
+    identities['audio_encode'] = 'c'*64
     invalid = resolve(select_audio_delivery_preparation=True)
     assert invalid.budget.audio_encode is None and invalid.budget.final_mux is not None
     assert invalid.unavailable['audio_encode'] == 'backend_identity_changed_or_unavailable'
@@ -222,7 +226,9 @@ def test_delivery_actual_tool_identity_and_audio_only_process_source(tmp_path, m
     from app.audio_delivery_policy import audio_delivery_preparation_budget
     tools = {}
     for name in ('ffmpeg', 'ffprobe'):
-        path = tmp_path/name; path.write_text('original-'+name); tools[name] = str(path)
+        path = tmp_path/name
+        path.write_text('original-'+name)
+        tools[name] = str(path)
     monkeypatch.setattr(configuration.shutil, 'which', lambda name:tools.get(name))
     original = configuration.backend_identity('audio_encode', None, settings=SimpleNamespace())
     assert original and len(original) == 64

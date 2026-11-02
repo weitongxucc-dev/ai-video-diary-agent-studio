@@ -822,7 +822,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
     media = TaskMediaJobs(state.production,facts=facts,verify_identity=identity)
     owner = CreationJobOwnerVerifier(state.production,task_media=media,verify_identity=identity)
     executor = CreationJobUnitExecutor(state.production,render_action=None,render_is_valid=None,task_media=media)
-    resources = Resources();resources.memory_monitor=IsolatedMemoryMonitor()
+    resources = Resources()
+    resources.memory_monitor=IsolatedMemoryMonitor()
     runtime = build_device_runtime(database_path=state.production.database_path,
         device_lock_path=tmp_path/'submission-only.lock',device_access=MemberDeviceAccess(state.members,identity_verifier=identity),
         registrations={'creation_job':OwnerRegistration(owner,executor)},resources=resources,processes=Processes())
@@ -866,7 +867,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
         assert stored['status_code']==202 and stored['response']['result']=={'declared_snapshot':'must survive HTTP projection'}
         replay=state.client.post(state.base_url+'/media-scripts/preview',json=raw)
         assert replay.status_code==202 and replay.json()==stored['response']
-        call=invocation(state);state.expansions.clear()
+        call=invocation(state)
+        state.expansions.clear()
         tool_url=state.base_url+'/media-script-tools/'+state.tool['tool_id']+'/preview'
         queued_tool=state.client.post(tool_url,json=call)
         assert queued_tool.status_code==202 and len(state.expansions)==3
@@ -883,7 +885,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
             binding_calls.append(contracts)
             return source
         monkeypatch.setattr(main,'_completed_script_submission_receipt',completed)
-        reused=state.raw_payload();reused['assistant_turn_id']=state.turn_id
+        reused=state.raw_payload()
+        reused['assistant_turn_id']=state.turn_id
         config_before=list(state.config_calls)
         result=state.client.post(state.base_url+'/media-scripts/preview',json=reused)
         assert result.status_code==200 and result.json()==source and len(binding_calls)==1
@@ -894,7 +897,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
             new_payload={**state.save_payload,'request_id':str(uuid4()),'name':'checkpoint '+str(stop_at)}
             registered=state.client.post(state.base_url+'/media-script-tools',json=new_payload)
             assert registered.status_code==200,registered.text
-            tool=registered.json();calls=[]
+            tool=registered.json()
+            calls=[]
             def expand(actor,tool_id,values):
                 calls.append(tool_id)
                 if len(calls)==stop_at:

@@ -204,7 +204,8 @@ def _montage_stream_case(tmp_path, monkeypatch):
         conn.execute('BEGIN')
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo.script_records._script_payload(conn, script), script.id))
     actor = CreationExecutionActor('local', 'stream-member')
-    path = tmp_path/'paid.wav'; path.write_bytes(b'paid source metadata; no decode')
+    path = tmp_path/'paid.wav'
+    path.write_bytes(b'paid source metadata; no decode')
     record = NarrationArtifactRecord(id='paid', workspace_id='local', task_id=task.id, script_id=script.id,
         voice_profile_id='voice_1', cache_key='paid', audio_path=str(path), duration_seconds=4,
         sample_rate=24000, model_id='fixture', language='zh', pronunciation_version='v1')
@@ -213,10 +214,12 @@ def _montage_stream_case(tmp_path, monkeypatch):
         repo.narration_artifacts.narration_artifact_reference('paid'), 2, 24000, 'fixture', 'voice_1', 'v1', 'zh', 'v1', 'ready',
         created_at=script.created_at-timedelta(seconds=i)) for i, section in enumerate(script.sections)]
     repo.narration_records.save_narration_segments('local', task.id, script.id, rows)
-    task.narration_cache_key = 'paid'; task.stage = 'montage'
+    task.narration_cache_key = 'paid'
+    task.stage = 'montage'
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
-    source = tmp_path/'library'/'metadata.mp4'; source.write_bytes(b'fixed metadata-only asset')
+    source = tmp_path/'library'/'metadata.mp4'
+    source.write_bytes(b'fixed metadata-only asset')
     stat = source.stat()
     asset = MaterialAsset('stream-asset', 'local', source.name, str(source), stat.st_size,
         datetime.fromtimestamp(stat.st_mtime, timezone.utc), duration_seconds=8, analysis_status='ready', review_status='approved',
@@ -271,7 +274,8 @@ def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, 
     try:
         result = case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
             case.runtime, verify_media=False)
-        grant = case.scheduler.pick_and_grant(); assert grant is not None
+        grant = case.scheduler.pick_and_grant()
+        assert grant is not None
         if outcome in {'save_base_gap', 'save_base_gap_changed_audio'}:
             original = case.stage.metadata.ensure_montage_base
             def interrupted(*args, **kwargs):

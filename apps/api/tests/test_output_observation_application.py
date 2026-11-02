@@ -32,8 +32,10 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     with repo._connect() as conn:
         for table in ('creation_tasks','creation_plans'):
             row=conn.execute('SELECT id,payload FROM '+table+' WHERE workspace_id=?',('local',)).fetchone()
-            payload=json.loads(row['payload']);payload['owner_user_id']=actor.member_id
-            if table=='creation_tasks':payload['stage']='review'
+            payload=json.loads(row['payload'])
+            payload['owner_user_id']=actor.member_id
+            if table=='creation_tasks':
+                payload['stage']='review'
             conn.execute('UPDATE '+table+' SET payload=? WHERE id=?',(json.dumps(payload),row['id']))
     store = ArtifactStore(tmp_path/'outputs')
     monkeypatch.setattr(main, 'production_repo', repo)
@@ -101,7 +103,8 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         {'montage':payload,'output_refs':[publication.logical_ref]}, None))
     assert type(media.output_observation) is OutputObservationUseCase
     assert runtime.registrations['creation_job'].owner.task_media is media
-    calls=[];execute=media.output_observation.execute
+    calls=[]
+    execute=media.output_observation.execute
     def observed(job,event,who,context):
         assert TASK_MEDIA_CONTEXT.get() is None and who==actor and context.grant.owner_id==job.id
         calls.append(job.id)
@@ -112,11 +115,15 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         'expected_timeline_sequence':base.sequence,'target':{'kind':'final'}}
     first=client.post('/api/creation-tasks/task/observations',json=request)
     assert first.status_code==202,first.text
-    receipt=first.json();assert receipt['result'] is None and receipt['result_kind']=='observation'
+    receipt=first.json()
+    assert receipt['result'] is None and receipt['result_kind']=='observation'
     assert runtime.run_once()
-    done=client.get(receipt['result_url']);assert done.status_code==200,done.text
-    result=done.json();assert result['status']=='succeeded',result
-    measured=result['result'];assert measured['measurement_scope']=='actual_output_bounded_frames'
+    done=client.get(receipt['result_url'])
+    assert done.status_code==200,done.text
+    result=done.json()
+    assert result['status']=='succeeded',result
+    measured=result['result']
+    assert measured['measurement_scope']=='actual_output_bounded_frames'
     assert measured['output_role']=='composed_output' and measured['media']['width']==width and measured['media']['height']==height
     assert measured['output']['artifact_id']==artifact.id and measured['output']['sha256']==publication.sha256
     assert len(measured['samples'])==3 and all(s['object_refs']==['clip:clip-1'] for s in measured['samples'])

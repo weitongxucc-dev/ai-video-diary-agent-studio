@@ -932,7 +932,8 @@ def _stream_person_executor(case, monkeypatch, boundary):
             return AvatarAndLipSyncResult('succeeded', output_cache_key, str(output), 1,
                 'fixture alignment; no model or decoding', None, None, None)
     monkeypatch.setattr(module, 'AvatarAndLipSyncService', PaidProvider)
-    root = case.tmp_path/'stream-output'; root.mkdir(exist_ok=True)
+    root = case.tmp_path/'stream-output'
+    root.mkdir(exist_ok=True)
     stage = PersonStageUseCase(case.repo, metadata, SimpleNamespace(provider=lambda quality: provider),
         VideoJobRunner(case.repo.job_records), SimpleNamespace(video_output_path=root))
     def forbidden(*args, **kwargs):
@@ -956,7 +957,8 @@ def test_presenter_row_owner_executes_after_reader_release_and_reuses_original_r
         request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
         assert submit_creation_stage(case.execution, scheduler, case.job, case.actor) == request_id
         original = scheduler._get(request_id)
-        grant = scheduler.pick_and_grant(); assert grant is not None
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
         executor.execute(grant, scheduler)
         assert boundary == [request_id]
         assert scheduler._get(request_id).resources == original.resources
@@ -982,12 +984,14 @@ def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(pre
     grant = None
     try:
         request_id = module.submit_creation_stage(case.execution, scheduler, case.job, case.actor)
-        grant = scheduler.pick_and_grant(); assert grant is not None
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
         # A preexisting review gate makes the real next-unit selection return None.
         _presenter_montage_fixture(case, SimpleNamespace(id='pending-review-person'))
         with case.repo._connect() as conn:
             row = conn.execute('SELECT payload FROM creation_task_montage_plans WHERE id=?', ('montage',)).fetchone()
-            pending = json.loads(row['payload']); pending['status'] = 'waiting_for_user'
+            pending = json.loads(row['payload'])
+            pending['status'] = 'waiting_for_user'
             pending['clips'][0]['needs_confirmation'] = True
             conn.execute('UPDATE creation_task_montage_plans SET payload=? WHERE id=?', (json.dumps(pending), 'montage'))
         next_units = []

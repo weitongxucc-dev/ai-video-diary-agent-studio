@@ -111,7 +111,8 @@ def test_owner_workspace_sharing_and_current_revocation_gate_bytes(tmp_path, mon
     data = word_file()
     _, saved = uploaded(repo, data)
     for workspace, user in [("ws","bob"),("other","alice")]:
-        with pytest.raises(KeyError): repo.read_knowledge_original(workspace, saved.id, "1", user_id=user)
+        with pytest.raises(KeyError):
+            repo.read_knowledge_original(workspace, saved.id, "1", user_id=user)
     with pytest.raises(ValueError, match="已验证"):
         repo.read_knowledge_original("ws", saved.id, "1", user_id=None)
     repo.set_knowledge_item_visibility("ws", saved.id, "shared")
@@ -122,10 +123,13 @@ def test_owner_workspace_sharing_and_current_revocation_gate_bytes(tmp_path, mon
     repo.revoke_knowledge_grant("ws", saved.id, grant.id, user_id="alice")
     # Authorization must fail before the filesystem sees an attempted read.
     monkeypatch.setattr(repo._original_files, "read", lambda *args: pytest.fail("revoked original must not be read"))
-    with pytest.raises(KeyError): repo.read_knowledge_original("target", saved.id, "1", user_id="bob")
-    with pytest.raises(KeyError): repo.read_knowledge_original("ws", saved.id, "1", user_id="bob")
+    with pytest.raises(KeyError):
+        repo.read_knowledge_original("target", saved.id, "1", user_id="bob")
+    with pytest.raises(KeyError):
+        repo.read_knowledge_original("ws", saved.id, "1", user_id="bob")
     repo.set_knowledge_item_use_state("ws", saved.id, "excluded")
-    with pytest.raises(KeyError): repo.read_knowledge_original("ws", saved.id, "1", user_id="alice")
+    with pytest.raises(KeyError):
+        repo.read_knowledge_original("ws", saved.id, "1", user_id="alice")
 
 
 def test_other_uploaders_and_workspaces_never_share_original_receipts(tmp_path):
@@ -171,7 +175,8 @@ def test_source_with_an_original_cannot_be_overwritten_by_generic_refresh(tmp_pa
 def test_failed_receipt_transaction_exposes_no_half_object_and_reuses_published_file(tmp_path):
     path = tmp_path / "app.sqlite3"
     repo = SourceRepository(path)
-    data = word_file(); item = source(repo,data)
+    data = word_file()
+    item = source(repo,data)
     with sqlite3.connect(path) as conn:
         conn.execute("CREATE TRIGGER reject_receipt BEFORE INSERT ON knowledge_original_files BEGIN SELECT RAISE(ABORT, 'isolated receipt failure'); END")
     with pytest.raises(sqlite3.IntegrityError,match="isolated receipt failure"):
@@ -180,7 +185,8 @@ def test_failed_receipt_transaction_exposes_no_half_object_and_reuses_published_
     published = files(tmp_path)
     assert len(published) == 1 and published[0].read_bytes() == data
     identity = (published[0].stat().st_ino,published[0].stat().st_mtime_ns)
-    with sqlite3.connect(path) as conn: conn.execute("DROP TRIGGER reject_receipt")
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TRIGGER reject_receipt")
     rebuilt = SourceRepository(path)
     stored = rebuilt.save_source_file("ws",item,data,verified_owner_user_id="alice")
     saved = rebuilt.save_source_item_to_knowledge("ws",stored.id,verified_owner_user_id="alice")
@@ -190,7 +196,8 @@ def test_failed_receipt_transaction_exposes_no_half_object_and_reuses_published_
 
 def test_copy_failure_cleans_temporary_file_and_does_not_register_source(tmp_path, monkeypatch):
     repo = SourceRepository(tmp_path / "app.sqlite3")
-    data = word_file(); item = source(repo,data)
+    data = word_file()
+    item = source(repo,data)
     def fail_link(*args): raise PermissionError("isolated destination publication denied")
     monkeypatch.setattr("app.knowledge_file_store.os.link",fail_link)
     with pytest.raises(PermissionError):
@@ -200,50 +207,67 @@ def test_copy_failure_cleans_temporary_file_and_does_not_register_source(tmp_pat
 
 def test_missing_corrupt_and_symlinked_originals_cannot_be_returned_or_overwritten(tmp_path):
     repo = SourceRepository(tmp_path / "app.sqlite3")
-    data = word_file(); stored,saved = uploaded(repo,data)
+    data = word_file()
+    stored,saved = uploaded(repo,data)
     path = files(tmp_path)[0]
-    bad = b"X" + data[1:]; path.write_bytes(bad)
-    with pytest.raises(KnowledgeOriginalIntegrityError): repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
-    with pytest.raises(KnowledgeOriginalIntegrityError): repo.save_source_file("ws",replace(stored,id="retry"),data,verified_owner_user_id="alice")
+    bad = b"X" + data[1:]
+    path.write_bytes(bad)
+    with pytest.raises(KnowledgeOriginalIntegrityError):
+        repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
+    with pytest.raises(KnowledgeOriginalIntegrityError):
+        repo.save_source_file("ws",replace(stored,id="retry"),data,verified_owner_user_id="alice")
     assert path.read_bytes() == bad
     path.unlink()
-    with pytest.raises(KnowledgeOriginalUnavailable): repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
+    with pytest.raises(KnowledgeOriginalUnavailable):
+        repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
     # Only a new upload of actual matching bytes can restore a previously received file.
     repo.save_source_file("ws",replace(stored,id="retry"),data,verified_owner_user_id="alice")
     assert repo.read_knowledge_original("ws",saved.id,"1",user_id="alice").content == data
-    path.unlink();outside=tmp_path/"outside";outside.write_bytes(data);path.symlink_to(outside)
-    with pytest.raises(KnowledgeOriginalStorageError): repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
+    path.unlink()
+    outside=tmp_path/"outside"
+    outside.write_bytes(data)
+    path.symlink_to(outside)
+    with pytest.raises(KnowledgeOriginalStorageError):
+        repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
 
 
 def test_missing_disk_and_replaced_storage_directory_never_choose_another_root(tmp_path):
     missing = tmp_path / "missing-volume"
     repo = SourceRepository(tmp_path / "app.sqlite3",file_store=KnowledgeFileStore(missing))
-    data=word_file();item=source(repo,data)
-    with pytest.raises(KnowledgeOriginalStorageError): repo.save_source_file("ws",item,data,verified_owner_user_id="alice")
+    data=word_file()
+    item=source(repo,data)
+    with pytest.raises(KnowledgeOriginalStorageError):
+        repo.save_source_file("ws",item,data,verified_owner_user_id="alice")
     assert not missing.exists() and repo.list_source_items("ws") == []
-    outside = tmp_path / "other-root";outside.mkdir()
+    outside = tmp_path / "other-root"
+    outside.mkdir()
     (tmp_path / "originals").symlink_to(outside,target_is_directory=True)
     repo = SourceRepository(tmp_path / "app.sqlite3")
-    with pytest.raises(KnowledgeOriginalStorageError): repo.save_source_file("ws",item,data,verified_owner_user_id="alice")
+    with pytest.raises(KnowledgeOriginalStorageError):
+        repo.save_source_file("ws",item,data,verified_owner_user_id="alice")
     assert list(outside.iterdir()) == []
 
 
 def test_filename_hash_size_and_verified_identity_are_enforced(tmp_path):
     repo=SourceRepository(tmp_path / "app.sqlite3")
-    data=word_file();item=source(repo,data)
+    data=word_file()
+    item=source(repo,data)
     for changed,content,owner in [(item,data,None),(replace(item,content_hash="a"*64),data,"alice"),
                                    (replace(item,file_reference="../escape.docx"),data,"alice"),
                                    (item,b"","alice"),(item,b"x"*(MAX_ORIGINAL_FILE_BYTES+1),"alice")]:
-        with pytest.raises(ValueError): repo.save_source_file("ws",changed,content,verified_owner_user_id=owner)
+        with pytest.raises(ValueError):
+            repo.save_source_file("ws",changed,content,verified_owner_user_id=owner)
     assert repo.list_source_items("ws") == [] and files(tmp_path) == []
 
 
 def test_read_only_storage_refuses_new_original_without_creating_a_source(tmp_path):
     repo=SourceRepository(tmp_path / "app.sqlite3")
-    data=word_file();item=source(repo,data)
+    data=word_file()
+    item=source(repo,data)
     tmp_path.chmod(0o500)
     try:
-        with pytest.raises(OSError): repo.save_source_file("ws",item,data,verified_owner_user_id="alice")
+        with pytest.raises(OSError):
+            repo.save_source_file("ws",item,data,verified_owner_user_id="alice")
     finally:
         tmp_path.chmod(0o700)
     assert repo.list_source_items("ws") == [] and files(tmp_path) == []
@@ -251,13 +275,15 @@ def test_read_only_storage_refuses_new_original_without_creating_a_source(tmp_pa
 
 def test_only_an_actual_matching_reupload_adds_missing_fixed_version_original_evidence(tmp_path):
     repo=SourceRepository(tmp_path / "app.sqlite3")
-    data=word_file();old=source(repo,data)
+    data=word_file()
+    old=source(repo,data)
     repo.save_source_items("ws",[old])
     saved=repo.save_source_item_to_knowledge("ws",old.id,verified_owner_user_id="alice")
     before=repo.list_knowledge_item_versions("ws",saved.id)[0]
     assert before.original_source_item_id is None
     uploaded(repo,data,owner="bob")
-    with pytest.raises(KnowledgeOriginalUnavailable): repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
+    with pytest.raises(KnowledgeOriginalUnavailable):
+        repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
     actual,current=uploaded(repo,data,filename="实际重传.docx")
     assert current.id==saved.id and current.version=="1" and current.source_item_id==old.id
     after=repo.list_knowledge_item_versions("ws",saved.id)[0]
@@ -280,13 +306,15 @@ def test_actual_historical_reupload_never_substitutes_for_a_different_current_ve
     actual,current=uploaded(repo,first_data)
     assert current.id==saved.id and current.version=="2"
     assert repo.read_knowledge_original("ws",saved.id,"1",user_id="alice").content==first_data
-    with pytest.raises(KnowledgeOriginalUnavailable): repo.read_knowledge_original("ws",saved.id,"2",user_id="alice")
+    with pytest.raises(KnowledgeOriginalUnavailable):
+        repo.read_knowledge_original("ws",saved.id,"2",user_id="alice")
 
 
 def test_existing_schema_upgrade_keeps_old_bytes_missing_and_body_unchanged(tmp_path):
     path=tmp_path / "app.sqlite3"
     repo=SourceRepository(path)
-    data=word_file();old=source(repo,data)
+    data=word_file()
+    old=source(repo,data)
     repo.save_source_items("ws",[old])
     saved=repo.save_source_item_to_knowledge("ws",old.id,verified_owner_user_id="alice")
     with sqlite3.connect(path) as conn:
@@ -305,7 +333,9 @@ def test_nonregular_original_is_rejected_without_waiting_for_a_fifo_writer(tmp_p
     import os
     repo=SourceRepository(tmp_path / "app.sqlite3")
     _,saved=uploaded(repo,word_file())
-    path=files(tmp_path)[0];path.unlink();os.mkfifo(path)
+    path=files(tmp_path)[0]
+    path.unlink()
+    os.mkfifo(path)
     with pytest.raises(KnowledgeOriginalIntegrityError,match="类型已变化"):
         repo.read_knowledge_original("ws",saved.id,"1",user_id="alice")
 
@@ -317,7 +347,8 @@ def test_fresh_python_process_reads_committed_original_version(tmp_path):
     import sys
     path=tmp_path / "app.sqlite3"
     repo=SourceRepository(path)
-    data=excel_file();_,saved=uploaded(repo,data,"重启.xlsx")
+    data=excel_file()
+    _,saved=uploaded(repo,data,"重启.xlsx")
     code="""
 import hashlib,json,sys
 from app.source_repository import SourceRepository

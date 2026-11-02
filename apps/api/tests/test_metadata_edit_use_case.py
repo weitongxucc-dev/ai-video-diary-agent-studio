@@ -170,7 +170,8 @@ def test_restore_material_uses_current_adoption_baseline_before_historical_subti
     from app.creation.contracts import TaskAuthorization,EditIntent,EditProposal
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation_execution import CreationExecutionActor
-    removed=deepcopy(state.plan);removed.clips=[]
+    removed=deepcopy(state.plan)
+    removed.clips=[]
     payload=creation_task_montage_plan_to_payload(removed)
     state.repo.montage_plan_adoption.save_creation_task_montage_plan('ws',state.task.id,removed.id,payload)
     base=TimelineVersion('without-material','ws',state.task.id,state.base.id,2,
@@ -238,7 +239,8 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     s.repo.timeline_records.create_timeline_version(s.base)
     s.repo.subtitle_records.create_subtitle_track(replace(s.track,id='complete-zh',timeline_version_id=s.base.id))
     s.repo.narration_records.save_narration_segments('ws',s.task.id,'fixed-script',[segment])
-    path=tmp_path/'library'/'inserted.mp4';path.write_bytes(b'opaque inserted source')
+    path=tmp_path/'library'/'inserted.mp4'
+    path.write_bytes(b'opaque inserted source')
     info=path.stat()
     asset=replace(s.asset,id='inserted-material',path=str(path),file_name=path.name,size_bytes=info.st_size,
         modified_at=datetime.fromtimestamp(info.st_mtime,timezone.utc),duration_seconds=1,

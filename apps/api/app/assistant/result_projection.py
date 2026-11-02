@@ -220,7 +220,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
             script_window_attempted=True
             operation=SCRIPT_WINDOW_TOOL_OPERATIONS[event['toolName']]
             projected=project_script_window_request(details,expected_operation=operation,is_error=bool(event.get('isError')))
-            if projected is not None: script_window_result=projected
+            if projected is not None:
+                script_window_result=projected
         if (event.get('type') == 'tool_execution_end'
                 and event.get('toolName') in {'revise_narration_segment', 'read_narration_revision', 'resume_narration_revision'}
                 and details.get('kind') == 'segment_revision'):

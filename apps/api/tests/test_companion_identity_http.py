@@ -130,16 +130,26 @@ def test_session_uses_explicit_membership_native_device_and_current_permission(l
     ('missing_workspace', 400), ('bad_workspace', 403), ('wrong_workspace', 403),
     ('local_header', 403), ('missing_jwt', 401), ('bad_jwt', 401)])
 def test_session_does_not_fallback_on_unverified_binding(linked, failure, status):
-    if failure == 'membership': linked.member = False
-    elif failure == 'device': linked.permit = False
-    elif failure == 'unknown': linked.permit = {'ready': True}
-    elif failure == 'transport': linked.permit = httpx.ConnectError('offline')
-    elif failure == 'missing_workspace': del linked.client.headers['X-Workspace-Id']
-    elif failure == 'bad_workspace': linked.client.headers['X-Workspace-Id'] = 'local'
-    elif failure == 'wrong_workspace': linked.client.headers['X-Workspace-Id'] = str(uuid4())
-    elif failure == 'local_header': linked.client.headers['X-Local-Member-Token'] = 'development-token'
-    elif failure == 'missing_jwt': del linked.client.headers['Authorization']
-    elif failure == 'bad_jwt': linked.client.headers['Authorization'] = 'Bearer invalid'
+    if failure == 'membership':
+        linked.member = False
+    elif failure == 'device':
+        linked.permit = False
+    elif failure == 'unknown':
+        linked.permit = {'ready': True}
+    elif failure == 'transport':
+        linked.permit = httpx.ConnectError('offline')
+    elif failure == 'missing_workspace':
+        del linked.client.headers['X-Workspace-Id']
+    elif failure == 'bad_workspace':
+        linked.client.headers['X-Workspace-Id'] = 'local'
+    elif failure == 'wrong_workspace':
+        linked.client.headers['X-Workspace-Id'] = str(uuid4())
+    elif failure == 'local_header':
+        linked.client.headers['X-Local-Member-Token'] = 'development-token'
+    elif failure == 'missing_jwt':
+        del linked.client.headers['Authorization']
+    elif failure == 'bad_jwt':
+        linked.client.headers['Authorization'] = 'Bearer invalid'
     response = linked.client.get('/api/companion/session')
     assert response.status_code == status, response.text
     assert 'local' != response.json().get('workspace_id')

@@ -30,7 +30,9 @@ from test_task_media_grants import case
 def pcm_bytes():
     buffer = io.BytesIO()
     with wave.open(buffer, 'wb') as stream:
-        stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000)
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
         stream.writeframes(b'\0\0' * 3200)
     return buffer.getvalue()
 
@@ -76,7 +78,9 @@ def confirmed_script(repo, *, montage=False, cache_key=None):
     script = CreationTaskScript('script','local','task','fixture-script','fixture-topic','输入文案','zh-CN',
         [CreationTaskScriptSection('section','段落','合成配音','合成画面',[])],
         selection_status='confirmed', created_at=stamp,updated_at=stamp,confirmed_at=stamp)
-    task.stage='montage';task.confirmed_script_id=script.id;task.narration_cache_key=cache_key
+    task.stage='montage'
+    task.confirmed_script_id=script.id
+    task.narration_cache_key=cache_key
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
         conn.execute('INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
@@ -118,7 +122,8 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
     assert failed['status']=='failed' and failed['failure_reason']=='HTTPException' and failed['result'] is None
     assert errors==[(409,'请先确认当前任务文案，再保存电脑录音')]
     task,script=confirmed_script(repo)
-    source=tmp_path/'fixture-source.wav';source.write_bytes(data)
+    source=tmp_path/'fixture-source.wav'
+    source.write_bytes(data)
     mp4=tmp_path/'fixture-recording.mp4'
     # Generate only this owned synthetic input via the existing persisted fixture grant.
     with granted_media([source]) as context:
@@ -131,7 +136,8 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
     assert recording.status_code==202, recording.text
     recorded=settled(client,runtime,recording.json())
     assert recorded['status']=='succeeded', recorded
-    result=recorded['result'];assert result['applied'] is False and result['duration_ms']==200
+    result=recorded['result']
+    assert result['applied'] is False and result['duration_ms']==200
     artifact=repo.execution_records.get_artifact_record('local',result['artifact_id'])
     assert artifact.kind=='task_recording' and artifact.logical_ref.endswith('.mp4')
     assert artifact.sha256==hashlib.sha256(mp4.read_bytes()).hexdigest()
@@ -150,9 +156,12 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
 def seed_narration(repo, media, tmp_path):
     task,script=confirmed_script(repo,cache_key='fixed-recorded')
     digest=repo.script_records.confirmed_creation_task_script_digest('local',task.id,script.id)
-    data=pcm_bytes();source=tmp_path/'seed.wav';source.write_bytes(data)
+    data=pcm_bytes()
+    source=tmp_path/'seed.wav'
+    source.write_bytes(data)
     store=media.audio_ingress.task_audio.artifact_store
-    ref='artifacts/task/fixture-voice.wav';publication=store.publish_file(ref,source)
+    ref='artifacts/task/fixture-voice.wav'
+    publication=store.publish_file(ref,source)
     job=repo.job_records.create_job_run(JobRun('fixture-source-job','local','task','fixture_input','fixture-source-input',publication.sha256))
     running=repo.job_records.claim_job_run('local',job.id)
     artifact=repo.execution_records.create_artifact_record(ArtifactRecord('fixture-source-artifact','local','task','task_recording',ref,
@@ -199,15 +208,18 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
     assert listened.status_code==202, listened.text
     result=settled(client,runtime,listened.json())
     assert result['status']=='succeeded',result
-    playable=client.get(result['result']['audio_url']);assert playable.status_code==200
+    playable=client.get(result['result']['audio_url'])
+    assert playable.status_code==200
     with wave.open(io.BytesIO(playable.content)) as output:
         assert output.getframerate()==48000 and output.getnchannels()==2
     records_before=repo.execution_records.list_artifact_records('local','task')
     waveforms=[]
     for url in ('/api/creation-tasks/task/audio/waveform/'+graph.tracks[0].clips[0].id,
                 '/api/creation-tasks/task/narration/waveform'):
-        submitted=client.get(url);assert submitted.status_code==202,submitted.text
-        receipt=submitted.json();_,start=media.read('local',receipt['job_id'])
+        submitted=client.get(url)
+        assert submitted.status_code==202,submitted.text
+        receipt=submitted.json()
+        _,start=media.read('local',receipt['job_id'])
         assert start['input_facts']['base_version_id']==version.id
         waveform=settled(client,runtime,receipt)
         assert waveform['status']=='succeeded',waveform
@@ -216,7 +228,8 @@ def test_public_listen_and_both_waveforms_use_explicit_original_grant(tmp_path, 
         assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
         assert repo.job_records.get_job_run('local',receipt['job_id']).output_refs==[]
         waveforms.append(waveform['result'])
-        fixed=client.get(url).json();assert fixed['job_id']==receipt['job_id'] and fixed['result'] is None
+        fixed=client.get(url).json()
+        assert fixed['job_id']==receipt['job_id'] and fixed['result'] is None
         assert client.get(fixed['result_url']).json()['result']==waveform['result']
     assert waveforms[0]==waveforms[1]
     assert repo.execution_records.list_artifact_records('local','task')==records_before

@@ -52,9 +52,11 @@ class TaskAuthorizationUseCase:
                                 if clip.get("asset_id") and not clip.get("person_render_id"))
         def references(value):
             if isinstance(value, dict):
-                for child in value.values(): references(child)
+                for child in value.values():
+                    references(child)
             elif isinstance(value, list):
-                for child in value: references(child)
+                for child in value:
+                    references(child)
             elif isinstance(value, str) and value.startswith(("workspace://", "artifact://", "narration://", "person-render://", "artifacts/")):
                 result["references"].add(value)
         references({key:value for key,value in montage.items() if key not in {'output_path','subtitle_path'}})
@@ -441,7 +443,8 @@ class TaskAuthorizationUseCase:
             try:
                 now = self.clock()
                 for authorization in self.repository.task_authorization_records.list_task_authorizations(due_before=now-AUTHORIZATION_OBSERVATION_INTERVAL):
-                    if self._stop.is_set(): break
+                    if self._stop.is_set():
+                        break
                     if (authorization.revoked_at is None and (authorization.last_checked_at is None
                             or now - authorization.last_checked_at >= AUTHORIZATION_OBSERVATION_INTERVAL)):
                         self.refresh(authorization)
@@ -453,7 +456,8 @@ class TaskAuthorizationUseCase:
             self._wake.clear()
 
     def start(self):
-        if self._thread is not None and self._thread.is_alive(): return
+        if self._thread is not None and self._thread.is_alive():
+            return
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="task-authorization-observation", daemon=True)
         self._thread.start()

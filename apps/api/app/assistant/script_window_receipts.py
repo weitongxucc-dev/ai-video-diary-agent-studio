@@ -23,14 +23,18 @@ def project_script_window_request(details, *, expected_operation=None, is_error=
         return None
     result={'kind':'script_window_request','operation':operation,'task_id':task_id,'request_id':request_id}
     script_id=identifier(details.get('script_id'))
-    if operation!='start' and script_id is None: return None
-    if script_id is not None: result['script_id']=script_id
+    if operation!='start' and script_id is None:
+        return None
+    if script_id is not None:
+        result['script_id']=script_id
     for key in ('input_id','input_turn_id'):
         value=identifier(details.get(key))
-        if value is not None: result[key]=value
+        if value is not None:
+            result[key]=value
     failure=_safe_business_failure(details.get('failure'))
     receipt=details.get('receipt') if 'receipt' in details else details
-    if not isinstance(receipt,dict): receipt={}
+    if not isinstance(receipt,dict):
+        receipt={}
     matching=(receipt.get('task_id')==task_id and receipt.get('request_id')==request_id
               and (script_id is None or receipt.get('script_id')==script_id))
     status=receipt.get('status') if matching else None
@@ -47,11 +51,13 @@ def project_script_window_request(details, *, expected_operation=None, is_error=
         if valid_revision:
             result.update(status=status,script_id=receipt['script_id'],updated_at=revision)
             count=receipt.get('total_count')
-            if type(count) is int and count>=0: result['total_count']=count
+            if type(count) is int and count>=0:
+                result['total_count']=count
             ids=receipt.get('affected_section_ids')
             if isinstance(ids,list) and len(ids)<=20 and all(identifier(value) is not None for value in ids):
                 result['affected_section_ids']=ids
-        else: result.update(status='unknown',submission_effect='unknown')
+        else:
+            result.update(status='unknown',submission_effect='unknown')
     elif matching and status in {'unknown','failed'}:
         result.update(status=status,submission_effect='unknown')
     else:
@@ -59,7 +65,8 @@ def project_script_window_request(details, *, expected_operation=None, is_error=
         result.update(status=effect if effect in {'not_submitted','rejected'} else 'unknown')
         result['submission_effect']=effect if effect in {'not_submitted','rejected'} else 'unknown'
     if failure and result['status'] not in {'saved','confirmed'}:
-        if result['status'] in {'unknown','failed'}: failure['submission_effect']='unknown'
+        if result['status'] in {'unknown','failed'}:
+            failure['submission_effect']='unknown'
         result['failure']=failure
     return result
 

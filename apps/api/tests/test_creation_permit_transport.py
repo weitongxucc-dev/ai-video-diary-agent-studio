@@ -23,10 +23,12 @@ def test_continuation_pause_spends_one_deadline_and_restores_failed_pause(monkey
     from threading import Event
     driver=main.AssistantContinuationDriver.__new__(main.AssistantContinuationDriver)
     driver._paused=Event()
-    now=[100.0];budgets=[]
+    now=[100.0]
+    budgets=[]
     class TickLock:
         def acquire(self,timeout):
-            budgets.append(timeout);now[0]+=0.4
+            budgets.append(timeout)
+            now[0]+=0.4
             return True
         def release(self): pass
     driver._tick_lock=TickLock()

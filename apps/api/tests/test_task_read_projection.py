@@ -32,7 +32,8 @@ def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monke
         assert client.post('/api/creation-tasks/task/timeline/redo',json={}).status_code==200
         redone=read()
         assert redone['timeline_sequence']==4 and redone['can_undo'] and not redone['can_redo']
-    finally:runtime.stop(0)
+    finally:
+        runtime.stop(0)
 
 
 def test_workspace_and_list_share_revision_and_script_rule(person_render_edit_state):

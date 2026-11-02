@@ -1597,7 +1597,8 @@ class ProductionRepository:
 
 
     def _create_script_library_task(self, conn, workspace_id, plan, now):
-        if not conn.in_transaction: raise ValueError("文案库复用必须属于原事务")
+        if not conn.in_transaction:
+            raise ValueError("文案库复用必须属于原事务")
         task=_CreationTask(id=f"task_{uuid4().hex[:12]}",workspace_id=workspace_id,plan_id=plan.id,
             name=plan.name,owner_user_id=plan.owner_user_id,scenario="script_library_reuse",stage="script",stage_status="waiting_for_user",
             status="running",progress=20,recovery_point="script")

@@ -507,7 +507,8 @@ class QualityInspectionUseCase:
                     'detail': f'成片技术有效不代表时长达标：目标 {requirement.target_seconds:g} 秒，'
                               f'实际视频 {evidence.get("video_duration_seconds")} 秒。'})
             else:
-                if evidence['status'] == 'clean': evidence['status'] = 'unavailable'
+                if evidence['status'] == 'clean':
+                    evidence['status'] = 'unavailable'
                 evidence.setdefault('unavailable', []).append({'kind': 'delivery_duration',
                     'reason': '缺少实际视频时基或帧率，不能证明交付时长', 'status': 'unavailable'})
 

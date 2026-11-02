@@ -199,7 +199,9 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
     audio_budget=CpuAudioBudget(2,32*1024**2,30,30,48000,2,3*1024**2,1,30,1024,16,.1,2048,1024)
     montage_budget=MontageBudget(10,20,1_000_000,1_000_000,30,1_000_000)
     host_budget=HostBudget(100,1,100*1024**3,1,10**12,10_000_000,narration=budget,montage=montage_budget)
-    swap=psutil.swap_memory();disk=psutil.disk_io_counters();disk_devices=psutil.disk_io_counters(perdisk=True)
+    swap=psutil.swap_memory()
+    disk=psutil.disk_io_counters()
+    disk_devices=psutil.disk_io_counters(perdisk=True)
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))
     monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:disk_devices if kwargs.get('perdisk') else disk)
@@ -358,7 +360,8 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
             'projection_and_query_fixtures':'Explicit interrupted/history event, rejected local kind and two read-only ordering probe rows; no real worker interruption, alternate actor or submitted probe work claimed.',
             'stage_dispatch_model_media_native':0,'business_guard_substitutes':0}
         destination=os.environ.get('EXECUTION_CONTROL_EVIDENCE_DIR')
-        if destination:Path(destination,'NORMAL_SUMMARY.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2,default=str)+'\n')
+        if destination:
+            Path(destination,'NORMAL_SUMMARY.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2,default=str)+'\n')
     finally:
         assert runtime.stop(1)
 
@@ -389,7 +392,8 @@ def test_bounded_narration_start_source_seal_rolls_back_preparation_race(tmp_pat
         with repo._connect() as writer:
             if change == 'tail':
                 row = writer.execute('SELECT section_json FROM creation_task_script_sections WHERE section_id=?', ('section_45',)).fetchone()
-                value = json.loads(row['section_json']); value['content'] = '准备期间尾段发生变化'
+                value = json.loads(row['section_json'])
+                value['content'] = '准备期间尾段发生变化'
                 writer.execute('UPDATE creation_task_script_sections SET section_json=? WHERE section_id=?',
                     (json.dumps(value), 'section_45'))
             else:

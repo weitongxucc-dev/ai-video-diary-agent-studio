@@ -714,7 +714,8 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
         message="等当前作业结束后检查结果，不要重新制作"
         chat=state.conversations.get(state.conversation["id"],state.workspace_id,state.member.member_id)
         draft=state.conversations.save_draft(chat["id"],state.workspace_id,state.member.member_id,message,chat["draft_version"])
-        input_id=str(uuid4());input_ids.append(input_id)
+        input_id=str(uuid4())
+        input_ids.append(input_id)
         accepted=state.raw_post(f"/api/assistant/conversations/{chat['id']}/inputs",json={"target_turn_id":turn_id,
             "client_request_id":input_id,"message":message,"mode":"follow_up","expected_draft_version":draft["draft_version"],
             "expected_reference_version":draft["reference_version"]})
@@ -1001,7 +1002,8 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
             goal={'workspace_id':'local','task_id':task.id,'member_id':actor.member_id,
                 'original_turn_id':turn['id'],'current_turn_id':turn['id'],'status':'waiting_result',
                 'original_instruction':'继续完成当前修改'}
-            with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+            with conversations._connect() as conn:
+                conversations._write_goal(conn,{'id':turn['id']},goal)
             intent=SubmissionIntent('local','creation_job',job.id,job.input_digest,request.unit_key,request.policy)
             registration.owner.verify_submission(intent,actor)
             with pytest.raises(EditPreviewRejected):
@@ -1009,7 +1011,8 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
                     identity={'member_id':actor.member_id,'local_diagnostic':False})
             with conversations._connect() as conn:
                 conversations._write_goal(conn,{'id':turn['id']},{**goal,'status':'stopped'})
-            with pytest.raises(ValueError): registration.owner.verify_submission(intent,actor)
+            with pytest.raises(ValueError):
+                registration.owner.verify_submission(intent,actor)
             assert repo.execution_records.get_task_event('local',f'event_{job.id}_start').payload==event
 
         assert s.provider.output_cache_keys==calls
@@ -1024,17 +1027,20 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
     from app.creation.execution_control import CreationExecutionControl
     from app.assistant.task_business import TaskBusiness
     from test_creation_execution import _segment_units_case,_require_section_visual_decision,submit_creation_stage,_submit_section_revision
-    root=tmp_path/'visual-http';root.mkdir()
+    root=tmp_path/'visual-http'
+    root.mkdir()
     case=_segment_units_case(root,monkeypatch,declared_source=True)
     asset=case.repo.get_asset('local','section_video')
     asset.segments[0].end_seconds=asset.duration_seconds
     case.repo._save_asset(asset)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     if case_kind=='revision':
-        for _ in range(2): case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
+        for _ in range(2):
+            case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
         _,revision,_=_submit_section_revision(case)
         job=case.repo.job_records.get_job_run('local',revision['job_id'])
-    else: job=case.job
+    else:
+        job=case.job
     monkeypatch.setattr(case.segments.renderer,'render',lambda *a,**kw:pytest.fail('visual HTTP must not render'))
     _require_section_visual_decision(case,monkeypatch)
     grant=case.scheduler.pick_and_grant()
@@ -1050,7 +1056,8 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
     monkeypatch.setattr(main,'_verify_creation_identity',case.owner.verify_identity)
     def current_actor(request,workspace):
         from fastapi import HTTPException
-        if case.owner.verify_identity(case.actor)!='ready': raise HTTPException(403,'原成员授权已撤销')
+        if case.owner.verify_identity(case.actor)!='ready':
+            raise HTTPException(403,'原成员授权已撤销')
         return case.actor
     monkeypatch.setattr(main,'_require_permit_actor',current_actor)
     monkeypatch.setattr(main,'_creation_execution_control',lambda:control)
@@ -1086,8 +1093,10 @@ def test_segment_visual_http_reads_and_adopts_the_original_job(tmp_path,monkeypa
         before_segments=case.repo.narration_records.list_narration_segments('local',case.task_id,case.script_id)
         before_usage=case.repo.narration_units.creation_narration_usage('local',job.id)
         monkeypatch.setattr(case.stage,'prepare_segment',lambda *a,**kw:pytest.fail('不能重新生成已保留配音'))
-        if case_kind=='stale': payload['decision_digest']='0'*64
-        elif case_kind=='revoked': monkeypatch.setattr(case.owner,'verify_identity',lambda actor:'unauthorized')
+        if case_kind=='stale':
+            payload['decision_digest']='0'*64
+        elif case_kind=='revoked':
+            monkeypatch.setattr(case.owner,'verify_identity',lambda actor:'unauthorized')
         elif case_kind=='cancelled':
             case.repo.job_records.finish_job_run('local',job.id,status='cancelled',failure_reason='user_cancelled',impact='保留音频',repair_action='核对原任务')
         elif case_kind=='queue_gap':
@@ -1126,7 +1135,8 @@ def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_b
     from app.assistant.task_business import TaskBusiness,TaskBusinessRejected
     from app.conversation_repository import ConversationRepository
     from test_creation_execution import _visual_decision_case
-    root=tmp_path/'visual-origin';root.mkdir()
+    root=tmp_path/'visual-origin'
+    root.mkdir()
     case=_visual_decision_case(root,monkeypatch)
     conversations=ConversationRepository(case.repo.database_path)
     chat=conversations.create('local',case.actor.member_id,'task',case.task_id)
@@ -1135,7 +1145,8 @@ def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_b
         {'kind':'task','task_id':case.task_id})
     goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'workspace_id':'local',
         'task_id':case.task_id,'member_id':case.actor.member_id,'status':'waiting_result'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     source={'assistant_turn_id':turn['id'],'input_id':turn['id'],'conversation_id':chat['id']}
     case.repo.execution_records.append_task_event(TaskEvent('visual-review','local',case.task_id,None,'narration_semantic_review',{'source':source}))
     job=case.repo.job_records.create_job_run(JobRun('visual-revision','local',case.task_id,'creation_task_segment_revision','visual-revision','original-digest'))
@@ -1152,7 +1163,8 @@ def test_segment_visual_business_locator_uses_persisted_review_goal_not_a_tool_b
         assert business.read_execution(goal,case.actor)['job']['id']==job.id
         foreign={**goal,'original_turn_id':'another-goal'}
         assert not business.visual_job_belongs_to_goal(foreign,case.actor,job.id)
-        with pytest.raises(TaskBusinessRejected): business.read_execution(foreign,case.actor,job_id=job.id)
+        with pytest.raises(TaskBusinessRejected):
+            business.read_execution(foreign,case.actor,job_id=job.id)
     finally:
         case.scheduler.close()
 
@@ -1161,7 +1173,8 @@ def test_segment_visual_empty_locator_does_not_require_a_generated_script(tmp_pa
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     from app.creation_execution import CreationExecutionActor
     from test_metadata_edit_use_case import metadata_state
-    root=tmp_path/'no-visual-job';root.mkdir()
+    root=tmp_path/'no-visual-job'
+    root.mkdir()
     s=metadata_state(root)
     service=SegmentProductionUseCase(s.repo,narration_stage=None,renderer=None,artifact_store=s.store,output_root=root)
     assert s.task.confirmed_script_id is None

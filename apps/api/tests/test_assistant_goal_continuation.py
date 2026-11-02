@@ -962,8 +962,10 @@ def test_home_resume_selection_and_original_authorization_are_required(tmp_path)
 
 def test_home_resume_rolls_back_all_roots_when_scope_inheritance_fails(tmp_path,monkeypatch):
     case=_adopted_groups_for_resume(tmp_path)
-    saved,roots=case.adopted[0];turn=case.human('继续原任务')
-    inherit=case.authorizations.inherit_business_context;calls=[]
+    saved,roots=case.adopted[0]
+    turn=case.human('继续原任务')
+    inherit=case.authorizations.inherit_business_context
+    calls=[]
     def fail_second(*args,**kwargs):
         calls.append(True)
         inherit(*args,**kwargs)
@@ -983,8 +985,10 @@ def test_home_resume_rolls_back_all_roots_when_scope_inheritance_fails(tmp_path,
 def test_home_resume_reconciles_unknown_original_request_before_any_new_business(tmp_path):
     from app.creation_execution import CreationExecutionActor
     case=_adopted_groups_for_resume(tmp_path)
-    saved,roots=case.adopted[0];root=roots[0]
-    goal=case.conversations.get_task_goal(root);task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
+    saved,roots=case.adopted[0]
+    root=roots[0]
+    goal=case.conversations.get_task_goal(root)
+    task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
     request_id=str(uuid4())
     case.production.execution_records.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
@@ -1032,9 +1036,12 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     from app.creation_execution import CreationExecutionActor
     from app.task_audio import TASK_MEDIA_KIND
     case=_adopted_groups_for_resume(tmp_path)
-    saved,roots=case.adopted[0];root=roots[0]
-    goal=case.conversations.get_task_goal(root);task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
-    actor=CreationExecutionActor('workspace','member');owner=GoalResultProjection(case.production,case.conversations)
+    saved,roots=case.adopted[0]
+    root=roots[0]
+    goal=case.conversations.get_task_goal(root)
+    task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
+    actor=CreationExecutionActor('workspace','member')
+    owner=GoalResultProjection(case.production,case.conversations)
     request_id=str(uuid4())
     event_id,_=case.production.execution_records.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
@@ -1043,7 +1050,9 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
         'request_id':request_id,'query_tool':'read_task_observation_request'}})
     case.conversations.finish_turn(claim['turn_id'],'failed',result={'reason':'goal_runner_interrupted'})
     case.conversations.settle_goal_round(claim)
-    receipt={};code=202;job=None
+    receipt={}
+    code=202
+    job=None
     if recorded_state in {'queued','running'}:
         job=case.production.job_records.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
             'original-request-job','a'*64))
@@ -1054,7 +1063,8 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
         if recorded_state=='running':
             case.production.job_records.claim_job_run('workspace',job.id)
     elif recorded_state=='rejected':
-        code=409;receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
+        code=409
+        receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
     case.production.execution_records.save_edit_request_result(task,event_id,status_code=code,response=receipt)
     assert not (case.conversations.get_turn(claim['turn_id'])['result'].get('response') or {}).get('media_job')
     turn=case.human('继续原任务，先核对原回执')
@@ -1102,7 +1112,8 @@ def test_slow_pending_input_does_not_block_other_goal_receipt_reconciliation(rep
     svc=GoalContinuationService(repo,verify_current_goal=lambda *_:{'status':'ready','business':business},run_goal_turn=run)
     svc.start()
     try:
-        svc.tick();assert entered.wait(1)
+        svc.tick()
+        assert entered.wait(1)
         same_goal_event=emit(repo,turn,status='queued',result_kind='edit_preview')
         event=emit(repo,later,status='queued',result_kind='edit_preview')
         svc.tick()
@@ -1116,8 +1127,10 @@ def test_slow_pending_input_does_not_block_other_goal_receipt_reconciliation(rep
         assert same_goal_event['event_id'] not in current_goal['handled_event_ids']
         assert repo.task_turn_source(current_goal['current_turn_id'],'workspace','member','task')['raw_command']=='只查进度'
         assert svc.stop(deadline_monotonic=time.monotonic()) is False
-        release.set();assert svc.stop(deadline_monotonic=time.monotonic()+1)
+        release.set()
+        assert svc.stop(deadline_monotonic=time.monotonic()+1)
         assert repo.list_inputs(chat['id'],'workspace','member')[0]['status']=='completed'
         assert repo.get_task_goal(turn['id'])['original_instruction']==turn['user_message']
     finally:
-        release.set();svc.stop(deadline_monotonic=time.monotonic()+1)
+        release.set()
+        svc.stop(deadline_monotonic=time.monotonic()+1)

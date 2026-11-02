@@ -17,7 +17,8 @@ from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 def environment(tmp_path):
     source = tmp_path / "source"
     target = tmp_path / "inbox"
-    source.mkdir(); target.mkdir()
+    source.mkdir()
+    target.mkdir()
     database = tmp_path / "test.sqlite"
     def connect():
         conn = sqlite3.connect(database)
@@ -88,9 +89,11 @@ def test_candidates_never_register_or_analyze_before_selection(environment):
 
 def test_exclusions_symlinks_and_software_outputs_are_not_candidates(environment):
     source = environment[0]
-    excluded = source / "private"; excluded.mkdir()
+    excluded = source / "private"
+    excluded.mkdir()
     (excluded / "secret.mp4").write_bytes(b"private")
-    dependencies = source / "node_modules"; dependencies.mkdir()
+    dependencies = source / "node_modules"
+    dependencies.mkdir()
     (dependencies / "demo.mp4").write_bytes(b"demo")
     (source / "shortcut.mp4").symlink_to(excluded / "secret.mp4")
     (source / "ok.mp4").write_bytes(b"ok")
@@ -178,7 +181,8 @@ def test_missing_target_and_source_change_cannot_register(environment):
 
 
 def test_permission_failure_is_reported_not_whole_disk_success(environment):
-    locked = environment[0] / "denied"; locked.mkdir()
+    locked = environment[0] / "denied"
+    locked.mkdir()
     locked.chmod(0)
     try:
         session = scan(environment)

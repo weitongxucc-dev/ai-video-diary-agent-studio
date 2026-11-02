@@ -37,7 +37,9 @@ def speed_state(tmp_path):
     neighbour_ref = repo.workspace_media_reference_for_asset('ws', neighbour.id)
     voice_path = repo.video_library_path / 'speech.wav'
     with wave.open(str(voice_path), 'wb') as stream:
-        stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000)
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
         stream.writeframes(b'\0\0' * 64000)
     voice = MaterialAsset('voice-input', 'ws', voice_path.name, str(voice_path), voice_path.stat().st_size,
         datetime.fromtimestamp(voice_path.stat().st_mtime, timezone.utc), media_type='audio', duration_seconds=4,

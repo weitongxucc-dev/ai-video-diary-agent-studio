@@ -103,7 +103,8 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
             assert 'clip_10' not in command.affected_clip_ids
             assert any(fact['asset_id']=='neighbor' for fact in command.affected_source_facts)
             if change == 'file':
-                with path.open('ab') as output:output.write(b'neighbor revised')
+                with path.open('ab') as output:
+                    output.write(b'neighbor revised')
             else:
                 repo._save_asset(replace(repo.get_asset('local','neighbor'),
                     **({'owner_user_id':'other-member','visibility':'private'} if change=='private' else {'use_state':'excluded'})))
@@ -164,7 +165,8 @@ def test_unaffected_distant_private_source_is_not_part_of_a_reorder(tmp_path,mon
         assert response.status_code==200,response.text
         saved=repo.get_creation_task_montage_plan('local','task')
         assert saved['clips'][10]==seed['clips'][10]
-    finally:runtime.stop(0)
+    finally:
+        runtime.stop(0)
 
 
 def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_transaction(tmp_path,monkeypatch):
@@ -209,7 +211,8 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         assert repo.task_records.get_creation_task('local','task').current_timeline_version_id=='transition-base'
         assert len(repo.edit_records.list_edit_intents('local','task'))==1 and len(repo.edit_records.list_edit_proposals('local','task'))==1
         assert repo.edit_records.list_edit_operations('local','task')==[] and len(repo.timeline_records.list_timeline_versions('local','task'))==2
-    finally:runtime.stop(0)
+    finally:
+        runtime.stop(0)
 
 
 def test_split_does_not_include_distant_stable_sources_due_to_ordinal_shift():

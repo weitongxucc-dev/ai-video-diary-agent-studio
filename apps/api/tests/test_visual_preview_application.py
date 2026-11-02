@@ -142,7 +142,8 @@ def test_short_and_full_tail_visual_preview_use_real_native_media(visual_applica
         assert set(side_records)=={'before','after'}
         files = {side:main.artifact_store.resolve_file(record.logical_ref) for side,record in side_records.items()}
         with granted_media(files.values(),kind='creation_render') as context:
-            directory = tmp_path / ('frames-'+label);directory.mkdir()
+            directory = tmp_path / ('frames-'+label)
+            directory.mkdir()
             visuals = {side:_inspect(context,path,directory,label+'-'+side) for side,path in files.items()}
         for visual in visuals.values():
             assert (visual['video']['width'],visual['video']['height']) == ((360,640) if label=='short' else (1080,1920))

@@ -164,7 +164,8 @@ def test_prospective_and_from_env_use_exact_same_six_path_resolution(monkeypatch
             if name != "MODEL_ROOT_PATH":
                 monkeypatch.delenv(name, raising=False)
                 del values[name]
-    for name,value in values.items():monkeypatch.setenv(name,value)
+    for name,value in values.items():
+        monkeypatch.setenv(name,value)
     parsed=Settings.from_env()
     expected=model_catalog_configuration(values)
     assert {name:getattr(parsed,name) for name in expected}==expected

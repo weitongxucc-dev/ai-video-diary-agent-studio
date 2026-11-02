@@ -39,16 +39,26 @@ def actual_mime(path):
     """Inspect bytes before selecting a model-readable text or local media path."""
     with path.open('rb') as source:
         head = source.read(READ_BYTES)
-    if head.startswith(b'\x89PNG\r\n\x1a\n'): return 'image/png'
-    if head.startswith(b'\xff\xd8\xff'): return 'image/jpeg'
-    if head.startswith((b'GIF87a',b'GIF89a')): return 'image/gif'
-    if head[:4]==b'RIFF' and head[8:12]==b'WEBP': return 'image/webp'
-    if head[:4]==b'RIFF' and head[8:12]==b'WAVE': return 'audio/wav'
-    if head.startswith(b'fLaC'): return 'audio/flac'
-    if head.startswith(b'OggS'): return 'audio/ogg'
-    if head.startswith(b'ID3'): return 'audio/mpeg'
-    if len(head)>12 and head[4:8]==b'ftyp': return 'video/mp4'
-    if head.startswith(b'\x1aE\xdf\xa3'): return 'video/webm'
+    if head.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if head.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    if head.startswith((b'GIF87a',b'GIF89a')):
+        return 'image/gif'
+    if head[:4]==b'RIFF' and head[8:12]==b'WEBP':
+        return 'image/webp'
+    if head[:4]==b'RIFF' and head[8:12]==b'WAVE':
+        return 'audio/wav'
+    if head.startswith(b'fLaC'):
+        return 'audio/flac'
+    if head.startswith(b'OggS'):
+        return 'audio/ogg'
+    if head.startswith(b'ID3'):
+        return 'audio/mpeg'
+    if len(head)>12 and head[4:8]==b'ftyp':
+        return 'video/mp4'
+    if head.startswith(b'\x1aE\xdf\xa3'):
+        return 'video/webm'
     try:
         text = codecs.getincrementaldecoder('utf-8')().decode(head,final=path.stat().st_size<=len(head))
     except UnicodeDecodeError:
@@ -256,7 +266,9 @@ class NativeTaskOperations:
                     piece = source.readline(limit-used)
                     if not piece:
                         break
-                    pieces.append(piece);used+=len(piece);lines+=piece.count(b'\n')
+                    pieces.append(piece)
+                    used+=len(piece)
+                    lines+=piece.count(b'\n')
                 content = b''.join(pieces)
                 next_offset = source.tell()
                 try:
@@ -295,7 +307,9 @@ class NativeTaskOperations:
                     path.parent.mkdir(parents=True,exist_ok=True)
                     temporary = root/'control'/f'{job.id}.write'
                     with temporary.open('wb') as target:
-                        target.write(content);target.flush();os.fsync(target.fileno())
+                        target.write(content)
+                        target.flush()
+                        os.fsync(target.fileno())
                     if (file_hash(path) if path.exists() else None)!=arguments['expected_sha256']:
                         raise ValueError('提交前文件版本已变化')
                     os.replace(temporary,path)
@@ -322,17 +336,20 @@ class NativeTaskOperations:
         for folder in ('work','outputs'):
             for path in (root/folder).rglob('*'):
                 if path.is_symlink():
-                    size+=path.lstat().st_size;count+=1
+                    size+=path.lstat().st_size
+                    count+=1
                     continue
                 if path.is_file():
-                    size+=path.stat().st_size;count+=1
+                    size+=path.stat().st_size
+                    count+=1
                     if count>budget.max_file_count or size>budget.max_input_bytes:
                         raise ValueError('任务工作文件超过通用执行已配置的有限范围')
         catalog = root/'control'/'inputs.json'
         if catalog.exists():
             for name,value in json.loads(catalog.read_text()).items():
                 path = self.path(root,'/task/inputs/'+name)
-                size+=path.stat().st_size;count+=1
+                size+=path.stat().st_size
+                count+=1
                 if count>budget.max_file_count or size>budget.max_input_bytes:
                     raise ValueError('授权输入超过通用执行已配置的有限范围')
         return {'kind':'native_command','execution_mode':'isolated_task_shell','input_bytes':size,
@@ -413,7 +430,8 @@ class NativeTaskOperations:
                         break
                     if source.tell()-offset>limit:
                         break
-                    messages.append(json.loads(line));next_offset=source.tell()
+                    messages.append(json.loads(line))
+                    next_offset=source.tell()
         job = self.repository.job_records.get_job_run(job.workspace_id,job.id)
         result = self.repository.native_execution_records.native_operation_result(job.workspace_id,job.id) or {}
         requests = self.repository.job_records.list_creation_job_request_states(job.workspace_id,job.id)
@@ -535,7 +553,8 @@ class NativeTaskOperations:
                         if library.startswith('@loader_path/'):
                             library = str(binary.parent/library.removeprefix('@loader_path/'))
                         if library.startswith('/'):
-                            path = Path(library);canonical = path.resolve()
+                            path = Path(library)
+                            canonical = path.resolve()
                             files.extend([path,canonical,*(parent for parent in path.parents if parent.is_symlink())])
                             if canonical.is_file() and not str(canonical).startswith(('/usr/lib/','/System/')):
                                 reads.append(canonical.parent)
@@ -566,7 +585,8 @@ class NativeTaskOperations:
         job = self.repository.job_records.claim_job_run(job.workspace_id,job.id)
         cancellation = threading.Event()
         executor.register_cancellation(grant.request_id,cancellation)
-        resources = event['resources']; started=time.monotonic()
+        resources = event['resources']
+        started=time.monotonic()
         result = {'exit_code':None,'cancelled':False,'timed_out':False,'process_state':'not_started','release_state':'unknown',
             'published_output_bytes':0,'publication_in_progress':False}
         before = None
@@ -698,7 +718,8 @@ class NativeTaskOperations:
             for job in new:
                 if time.monotonic()>=deadline_monotonic:
                     break
-                self.cancel_job(job,actor,runtime);processed.add(job.id)
+                self.cancel_job(job,actor,runtime)
+                processed.add(job.id)
             if time.monotonic()>=deadline_monotonic:
                 break
             if total>len(jobs):
@@ -753,7 +774,8 @@ class NativeTaskOperations:
 
     def register_files(self,job,event,root,actor,scheduler,grant,cancellation,deadline,process_result):
         from app.granted_subprocess import run_granted_command
-        arguments=event['arguments']; values=[]
+        arguments=event['arguments']
+        values=[]
         for index,item in enumerate(arguments['files']):
             path = self.path(root,item['path'])
             source_output = self.repository.native_execution_records.native_output_for_path(job.workspace_id,arguments['execution_job_id'],item['path'])

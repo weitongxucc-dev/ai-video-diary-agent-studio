@@ -122,7 +122,8 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     sides = {case.metadata.audio_service._transform_for(state.workspace_id,state.task.id,r).parameters['graphic_overlays'][0]['x']: r for r in records}
     assert set(sides) == {.5, .25}
     files = {side:main.artifact_store.resolve_file(sides[x].logical_ref) for side,x in [('before',.5),('after',.25)]}
-    directory = tmp_path / 'frames'; directory.mkdir()
+    directory = tmp_path / 'frames'
+    directory.mkdir()
     with granted_media(files.values(),kind='creation_render') as context:
         visuals = {side:_inspect(context,path,directory,side) for side,path in files.items()}
     for side,visual in visuals.items():

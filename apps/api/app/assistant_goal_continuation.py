@@ -109,11 +109,15 @@ class GoalContinuationService:
             self.run_goal_turn(claim,fresh)
         except Exception:
             self.repo.finish_turn(claim['turn_id'],'failed',result={'reason':'goal_runner_interrupted'})
-            if claim['event'].get('phase')=='input': self.repo.settle_input_round(claim)
-            else: self.repo.settle_goal_round(claim)
+            if claim['event'].get('phase')=='input':
+                self.repo.settle_input_round(claim)
+            else:
+                self.repo.settle_goal_round(claim)
             raise
-        if claim['event'].get('phase')=='input': self.repo.settle_input_round(claim)
-        else: self.repo.settle_goal_round(claim)
+        if claim['event'].get('phase')=='input':
+            self.repo.settle_input_round(claim)
+        else:
+            self.repo.settle_goal_round(claim)
 
     def _dispatch_claim(self, claim, fresh):
         if self._thread is None:
@@ -122,11 +126,15 @@ class GoalContinuationService:
             self._execute_claim(claim,fresh)
             return
         def run():
-            try: self._execute_claim(claim,fresh)
-            except Exception: logging.getLogger(__name__).exception('原目标回合中断，持久回执已保留')
-            finally: self._wake.set()
+            try:
+                self._execute_claim(claim,fresh)
+            except Exception:
+                logging.getLogger(__name__).exception('原目标回合中断，持久回执已保留')
+            finally:
+                self._wake.set()
         with self._worker_lock:
-            if not self._execution_available(): raise RuntimeError('已有原目标回合占用唯一执行位')
+            if not self._execution_available():
+                raise RuntimeError('已有原目标回合占用唯一执行位')
             self._worker=threading.Thread(target=run,name='assistant-goal-turn',daemon=True)
             self._worker.start()
 
@@ -187,7 +195,8 @@ class GoalContinuationService:
         bound=self.repo.get_task_goal(resumed['previous_turn_id'])
         if previous is None or bound is None or bound['original_turn_id']!=goal['original_turn_id']:
             return {'status':'waiting_unknown','reason':'original_resume_source_not_verified'}
-        result=previous.get('result') or {};response=result.get('response') or {}
+        result=previous.get('result') or {}
+        response=result.get('response') or {}
         facts['previous_business_failure']=result.get('business_failure')
         failures=[item['failure'] for item in previous['events'] if item.get('type')=='tool_end'
             and isinstance(item.get('failure'),dict) and item['failure'].get('submission_effect')=='unknown']
@@ -212,7 +221,8 @@ class GoalContinuationService:
                     return {'status':'waiting_unknown','reason':'original_request_receipt_missing'}
                 if actual['status']=='unknown':
                     return {'status':'waiting_unknown','reason':'read_original_request_result'}
-                code=actual.get('result_status_code');receipt=actual.get('result')
+                code=actual.get('result_status_code')
+                receipt=actual.get('result')
                 if code is None or not isinstance(receipt,dict):
                     return {'status':'waiting_unknown','reason':'original_request_receipt_not_verified'}
                 if not 200<=code<300:
@@ -293,7 +303,8 @@ class GoalContinuationService:
             task=production.task_records.get_creation_task(workspace_id,goal['task_id'],connection=conn)
             plan=json.loads(conn.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?',
                 (workspace_id,task.plan_id)).fetchone()[0])
-            adoption=plan.get('adoption') or {};original=goal['creation_adoption']
+            adoption=plan.get('adoption') or {}
+            original=goal['creation_adoption']
             if (adoption.get('plan_id')!=task.plan_id or adoption.get('request_id')!=original['request_id'] or adoption.get('window_id')!=original['window_id']
                     or adoption.get('kind')!='delegated_system' or adoption.get('member_id')!=member_id
                     or adoption.get('authorization_source')!=original['source']
@@ -324,16 +335,20 @@ class GoalContinuationService:
     def _reconcile(self, *, limit: int) -> int:
         advanced = 0
         for candidate in self.repo.pending_input_candidates(limit=limit):
-            if self.stop_event.is_set() or self._paused.is_set(): break
-            if not self._execution_available() and not candidate.get('reconcile_only'): continue
+            if self.stop_event.is_set() or self._paused.is_set():
+                break
+            if not self._execution_available() and not candidate.get('reconcile_only'):
+                continue
             fresh=self.verify_current_goal(candidate['root']['goal'],candidate['event'])
-            if fresh['status']!='ready': continue
+            if fresh['status']!='ready':
+                continue
             if candidate.get('reconcile_only'):
                 receipt=fresh['business'].read_input_submission(candidate)
                 self.repo.reconcile_input_submission(candidate,receipt)
                 continue
             claim=fresh['business'].claim_pending_input(candidate)
-            if claim is None: continue
+            if claim is None:
+                continue
             self._dispatch_claim(claim,fresh)
             advanced+=1
         for candidate in self.repo.goal_event_candidates(limit=limit):
@@ -406,7 +421,8 @@ class GoalContinuationService:
                 next_checkpoint=checkpoint, expected_goal=goal)
             if self.stop_event.is_set() or self._paused.is_set():
                 break
-            if not self._execution_available(): continue
+            if not self._execution_available():
+                continue
             claim = self.repo.claim_goal_event(candidate, fresh["task_version"], max_rounds=self.max_rounds,
                 selection_context=fresh.get("selection_context"))
             if claim is None:

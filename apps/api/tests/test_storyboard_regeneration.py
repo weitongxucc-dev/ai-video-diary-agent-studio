@@ -548,7 +548,8 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
     repo = case.repo
     try:
         case.control.start('local', case.task.id, case.script.id, case.digest, case.actor, case.runtime, verify_media=False)
-        first = case.scheduler.pick_and_grant(); assert first is not None
+        first = case.scheduler.pick_and_grant()
+        assert first is not None
         case.executor.execute(first, case.scheduler)
         case.control.cancel('local', case.task.id, case.actor, case.runtime, verify_media=False)
         task = repo.task_records.get_creation_task('local', case.task.id)
@@ -569,7 +570,8 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
             return original_build(*args, **kwargs)
         monkeypatch.setattr(case.stage, 'build_candidate', build)
         receipt = case.control.regenerate_storyboard('local', task.id, payload, case.actor, case.runtime)
-        grant = case.scheduler.pick_and_grant(); assert grant is not None
+        grant = case.scheduler.pick_and_grant()
+        assert grant is not None
         changed = []
         if outcome in {'tail', 'source', 'revoked', 'head'}:
             released = case.scheduler._released_for_commit
@@ -581,7 +583,8 @@ def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_p
                         conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','changed tail') WHERE script_id=? AND section_id='second'", (case.script.id,))
                     elif outcome == 'source':
                         from pathlib import Path
-                        path = Path(case.record.audio_path); path.write_bytes(path.read_bytes()+b'changed')
+                        path = Path(case.record.audio_path)
+                        path.write_bytes(path.read_bytes()+b'changed')
                     elif outcome == 'revoked':
                         monkeypatch.setattr(case.owner, 'verify_identity', lambda _: 'unauthorized')
                     else:

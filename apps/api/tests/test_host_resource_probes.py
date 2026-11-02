@@ -137,8 +137,10 @@ def test_frozen_worker_context_is_reused_without_reaching_target(tmp_path,monkey
 
 def test_task_file_count_failure_keeps_actual_limit_and_release_receipt(tmp_path):
     scheduler=RecordingScheduler()
-    output=tmp_path/'task-output';output.mkdir()
-    for index in range(4): (output/str(index)).write_bytes(b'x')
+    output=tmp_path/'task-output'
+    output.mkdir()
+    for index in range(4):
+        (output/str(index)).write_bytes(b'x')
     with pytest.raises(GrantedCommandOutputLimit) as stopped:
         run(scheduler,[sys.executable,'-c','import time;time.sleep(5)'],output_paths=(output,),
             max_output_file_bytes=1024,max_output_files=3)
@@ -1690,7 +1692,9 @@ def pcm_runner_case(tmp_path):
     source = tmp_path / 'next.wav'
     for path, frames in ((work,1000),(source,100)):
         with wave.open(str(path),'wb') as stream:
-            stream.setnchannels(1);stream.setsampwidth(2);stream.setframerate(24000)
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(24000)
             stream.writeframes(b'\0\0'*frames)
     work.chmod(0o600)
     info, source_info = work.stat(),source.stat()
@@ -1770,11 +1774,13 @@ def test_pcm_runner_caps_do_not_charge_or_truncate_the_committed_prefix(pcm_runn
     check,_ = _pcm_assembly_monitor(scheduler,grant,argv,outputs,4096)
     target = outputs[0] if kind=='pcm_generated_bytes' else outputs[1]
     if kind=='pcm_generated_bytes':
-        with target.open('ab') as stream: stream.write(b'\0'*202)
+        with target.open('ab') as stream:
+            stream.write(b'\0'*202)
     else:
         target.write_bytes(b'x'*(PCM_METADATA_MAX_BYTES+1))
     length = target.stat().st_size
-    with pytest.raises(GrantedCommandOutputLimit) as failed: check()
+    with pytest.raises(GrantedCommandOutputLimit) as failed:
+        check()
     assert failed.value.file_sample['budget_kind']==kind
     assert target.stat().st_size==length  # Unknown tails and receipts are never repaired by the runner.
 

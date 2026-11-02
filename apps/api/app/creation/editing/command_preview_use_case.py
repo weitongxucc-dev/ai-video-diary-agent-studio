@@ -55,12 +55,16 @@ class CommandPreviewUseCase:
         return self.visual.preview_full(task,payload,prepared,draft_only=draft_only,source=request_source,execution=execution)
 
     def preview_compound(self,task,payload,*,identity,request_source,draft_only,execution,actor):
-        if not self.compound.applicable(payload.raw_command):return None
+        if not self.compound.applicable(payload.raw_command):
+            return None
         control=CompoundPreviewCommand(task.workspace_id,task.id,identity,task.current_timeline_version_id,payload.raw_command,
             payload.context_stage,payload.selected_object_refs,payload.playhead_ms,source=request_source)
-        try:return self.compound.preview(self.compound.prepare_preview(control),draft_only=draft_only,execution=execution)
-        except PermissionError as exc:raise EditPreviewRejected(status_code=403,detail=str(exc)) from exc
-        except (EditConflict,TimelineVersionConflict) as exc:raise EditPreviewRejected(status_code=409,detail=str(exc)) from exc
+        try:
+            return self.compound.preview(self.compound.prepare_preview(control),draft_only=draft_only,execution=execution)
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403,detail=str(exc)) from exc
+        except (EditConflict,TimelineVersionConflict) as exc:
+            raise EditPreviewRejected(status_code=409,detail=str(exc)) from exc
         except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else '复合修改预览失败，请检查来源后重试') from exc
 
@@ -68,7 +72,8 @@ class CommandPreviewUseCase:
         options={} if execution is None else dict(zip(('context','job','event'),execution[:3]))
         if action.original_clip:
             result=self.audio.original_clip(task.workspace_id,task.id,action.request.model_dump(mode='json'),actor,draft_only=draft_only,source=request_source,**options)
-        else:result=self.audio.preview(task.workspace_id,task.id,action.request,actor,draft_only=draft_only,source=request_source,**options)
+        else:
+            result=self.audio.preview(task.workspace_id,task.id,action.request,actor,draft_only=draft_only,source=request_source,**options)
         return result.intent,result.proposal
 
     def execute(self,job,event,actor,context):
@@ -78,12 +83,15 @@ class CommandPreviewUseCase:
             payload=CreationTaskEditPreviewRequest.model_validate(payload.model_dump(mode='json',exclude_unset=True,exclude={'assistant_turn_id'}))
         identity={'member_id':actor.user_id or actor.member_id,'local_diagnostic':False}
         source=event['arguments'].get('_typed_source')
-        if source is not None:source={**source,'media_job_id':job.id,'actor_identity':actor.identity_payload()}
+        if source is not None:
+            source={**source,'media_job_id':job.id,'actor_identity':actor.identity_payload()}
         outcome=self.preview(task,payload,base_version_id=event['input_facts']['base_version_id'],identity=identity,
             reader_identity={'member_id':actor.user_id or actor.member_id,'local_diagnostic':False},request_source=source,
             draft_only=event['arguments'].get('_draft',False),execution=(context,job,event,actor),actor=actor)
-        if isinstance(outcome,AudioCommandPreview):outcome=self.preview_audio(task,outcome,actor,request_source=source,draft_only=event['arguments'].get('_draft',False),execution=(context,job,event,actor))
-        if outcome is None:return None
+        if isinstance(outcome,AudioCommandPreview):
+            outcome=self.preview_audio(task,outcome,actor,request_source=source,draft_only=event['arguments'].get('_draft',False),execution=(context,job,event,actor))
+        if outcome is None:
+            return None
         intent,proposal=outcome
         return CreationTaskEditPreviewResponse.model_validate({'intent':asdict(intent),'proposal':asdict(proposal)}).model_dump(mode='json')
 

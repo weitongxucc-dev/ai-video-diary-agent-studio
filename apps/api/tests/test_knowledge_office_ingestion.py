@@ -139,7 +139,8 @@ def test_docx_body_order_heading_hierarchy_blank_paragraph_and_no_invented_pages
     document = Document()
     document.add_paragraph("")
     document.add_paragraph("第二段")
-    stream = BytesIO(); document.save(stream)
+    stream = BytesIO()
+    document.save(stream)
     assert parse_knowledge_file("段落.docx", stream.getvalue()).sections[0].locator == "正文第2段"
 
 
@@ -147,12 +148,16 @@ def test_docx_merged_cells_and_nested_table_have_unique_real_origins():
     document = Document()
     table = document.add_table(rows=3, cols=3)
     for i, row in enumerate((("参数","值","单位"),("功率","1000","W"),("","1200","W"))):
-        for j, value in enumerate(row): table.cell(i,j).text = value
+        for j, value in enumerate(row):
+            table.cell(i,j).text = value
     table.cell(1,0).merge(table.cell(2,0))
     nested = table.cell(2,2).add_table(rows=2,cols=2)
-    nested.cell(0,0).text="参数"; nested.cell(0,1).text="值"
-    nested.cell(1,0).text="型号"; nested.cell(1,1).text="Z9"
-    stream=BytesIO(); document.save(stream)
+    nested.cell(0,0).text="参数"
+    nested.cell(0,1).text="值"
+    nested.cell(1,0).text="型号"
+    nested.cell(1,1).text="Z9"
+    stream=BytesIO()
+    document.save(stream)
     parsed = parse_knowledge_file("合并.docx", stream.getvalue())
     assert len({s.locator for s in parsed.sections}) == len(parsed.sections)
     merged = next(s for s in parsed.sections if s.locator == "表1!R2C1:R3C1")
@@ -162,29 +167,44 @@ def test_docx_merged_cells_and_nested_table_have_unique_real_origins():
 
 
 def test_docx_empty_tables_are_explicit_and_cannot_be_the_only_body():
-    document=Document(); document.add_table(rows=2,cols=2)
-    stream=BytesIO(); document.save(stream)
+    document=Document()
+    document.add_table(rows=2,cols=2)
+    stream=BytesIO()
+    document.save(stream)
     with pytest.raises(KnowledgeFileError, match="没有可提取"):
         parse_knowledge_file("空表.docx", stream.getvalue())
     document.add_paragraph("真实正文")
-    stream=BytesIO(); document.save(stream)
+    stream=BytesIO()
+    document.save(stream)
     parsed=parse_knowledge_file("空表.docx",stream.getvalue())
     assert parsed.sections[0].locator == "表1" and "空表格" in parsed.sections[0].text
     assert parsed.parameters == ()
 
 
 def test_xlsx_merged_cells_empty_sheet_hidden_data_types_and_units():
-    workbook=Workbook(); sheet=workbook.active; sheet.title="O'Brien 参数"
+    workbook=Workbook()
+    sheet=workbook.active
+    sheet.title="O'Brien 参数"
     sheet.append(["参数","值","单位"])
-    sheet.append(["功率",1000,"W"]); sheet.append([None,1200,"W"])
+    sheet.append(["功率",1000,"W"])
+    sheet.append([None,1200,"W"])
     sheet.merge_cells("A2:A3")
-    sheet["E1"]="中文与English型号M-03"; sheet["E2"]="00123"
-    sheet["E3"]=0; sheet["E4"]=False; sheet["E5"]=date(2026,10,18)
-    sheet["E6"]=0.125;sheet["E6"].number_format="0.0%"
-    sheet["E7"]="#DIV/0!";sheet.row_dimensions[7].hidden=True
+    sheet["E1"]="中文与English型号M-03"
+    sheet["E2"]="00123"
+    sheet["E3"]=0
+    sheet["E4"]=False
+    sheet["E5"]=date(2026,10,18)
+    sheet["E6"]=0.125
+    sheet["E6"].number_format="0.0%"
+    sheet["E7"]="#DIV/0!"
+    sheet.row_dimensions[7].hidden=True
     workbook.create_sheet("空表")
-    hidden=workbook.create_sheet("隐藏页");hidden.sheet_state="hidden";hidden["A1"]="隐藏原文"
-    stream=BytesIO();workbook.save(stream);workbook.close()
+    hidden=workbook.create_sheet("隐藏页")
+    hidden.sheet_state="hidden"
+    hidden["A1"]="隐藏原文"
+    stream=BytesIO()
+    workbook.save(stream)
+    workbook.close()
     parsed=parse_knowledge_file("参数.xlsx",stream.getvalue())
     cells={s.locator:s for s in parsed.sections}
     assert "'O''Brien 参数'!A2:A3" in cells and "'O''Brien 参数'!A3" not in cells
@@ -200,20 +220,26 @@ def test_xlsx_merged_cells_empty_sheet_hidden_data_types_and_units():
 
 
 def test_xlsx_formulas_keep_expression_cache_zero_error_and_no_calculation():
-    workbook=Workbook();sheet=workbook.active;sheet.title="公式"
+    workbook=Workbook()
+    sheet=workbook.active
+    sheet.title="公式"
     sheet.append(["参数","值","单位"])
     sheet.append(["计算功率","=600*2","W"])
     sheet.append(["缓存零","=0","W"])
     sheet.append(["缓存报错","=1/0","W"])
     sheet["D1"]=ArrayFormula(ref="D1:D2", text="=SUM(A10:A11)")
     sheet["F1"]=DataTableFormula(ref="F1:G2", r1="A1", r2="A2")
-    stream=BytesIO();workbook.save(stream);workbook.close()
+    stream=BytesIO()
+    workbook.save(stream)
+    workbook.close()
     def caches(xml):
-        root=ET.fromstring(xml);ns={"s":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        root=ET.fromstring(xml)
+        ns={"s":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
         for cell in root.findall(".//s:c",ns):
             if cell.attrib["r"] in {"B3","B4"}:
                 cell.find("s:v",ns).text="0" if cell.attrib["r"]=="B3" else "#DIV/0!"
-                if cell.attrib["r"]=="B4": cell.set("t","e")
+                if cell.attrib["r"]=="B4":
+                    cell.set("t","e")
         return ET.tostring(root)
     data=zipped_edit(stream.getvalue(),"xl/worksheets/sheet1.xml",caches)
     parsed=parse_knowledge_file("公式.xlsx",data)
@@ -228,15 +254,20 @@ def test_xlsx_formulas_keep_expression_cache_zero_error_and_no_calculation():
 
 
 def test_blank_xlsx_is_not_a_success():
-    workbook=Workbook();sheet=workbook.active;sheet["A1"].number_format="0.00"
-    stream=BytesIO();workbook.save(stream);workbook.close()
+    workbook=Workbook()
+    sheet=workbook.active
+    sheet["A1"].number_format="0.00"
+    stream=BytesIO()
+    workbook.save(stream)
+    workbook.close()
     with pytest.raises(KnowledgeFileError,match="空工作表"):
         parse_knowledge_file("空.xlsx",stream.getvalue())
 
 
 @pytest.mark.parametrize("filename", ["损坏.docx", "损坏.xlsx", "旧.doc", "旧.xls", "宏.xlsm"])
 def test_corrupt_or_unsupported_format_is_explicit(filename):
-    with pytest.raises(KnowledgeFileError): parse_knowledge_file(filename,b"not an office archive")
+    with pytest.raises(KnowledgeFileError):
+        parse_knowledge_file(filename,b"not an office archive")
 
 
 @pytest.mark.parametrize("data, filename, path", [
@@ -261,22 +292,29 @@ def test_xlsx_dtd_and_giant_merge_are_rejected_before_allocation():
 def test_package_expansion_and_ambiguous_duplicate_parts_are_rejected(monkeypatch):
     monkeypatch.setattr(office_package,"MAX_EXPANDED_BYTES",128)
     output=BytesIO()
-    with ZipFile(output,"w",ZIP_DEFLATED) as archive: archive.writestr("word/document.xml",b"x"*1024)
+    with ZipFile(output,"w",ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml",b"x"*1024)
     with pytest.raises(KnowledgeFileError,match="展开后过大"):
         parse_knowledge_file("压缩.docx",output.getvalue())
     monkeypatch.setattr(office_package,"MAX_EXPANDED_BYTES",64*1024*1024)
     with pytest.warns(UserWarning,match="Duplicate"):
         with ZipFile(output:=BytesIO(),"w",ZIP_DEFLATED) as archive:
-            archive.writestr("part.xml",b"one");archive.writestr("part.xml",b"two")
+            archive.writestr("part.xml",b"one")
+            archive.writestr("part.xml",b"two")
     with pytest.raises(KnowledgeFileError,match="重复部件"):
         parse_knowledge_file("歧义.xlsx",output.getvalue())
 
 
 def test_xlsx_parameter_region_ends_at_blank_row_instead_of_guessing_an_unlabelled_table():
-    workbook=Workbook();sheet=workbook.active
-    sheet.append(["参数","值","单位"]);sheet.append(["功率",1200,"W"])
-    sheet.append([None,None,None]);sheet.append(["不属于参数表",999,"不可猜单位"])
-    stream=BytesIO();workbook.save(stream);workbook.close()
+    workbook=Workbook()
+    sheet=workbook.active
+    sheet.append(["参数","值","单位"])
+    sheet.append(["功率",1200,"W"])
+    sheet.append([None,None,None])
+    sheet.append(["不属于参数表",999,"不可猜单位"])
+    stream=BytesIO()
+    workbook.save(stream)
+    workbook.close()
     parsed=parse_knowledge_file("分区.xlsx",stream.getvalue())
     assert [parameter.key for parameter in parsed.parameters] == ["功率"]
     assert "不属于参数表" in parsed.full_text
@@ -298,14 +336,16 @@ def test_package_part_and_encrypted_entry_limits_are_explicit(monkeypatch):
     import struct
     output=BytesIO()
     with ZipFile(output,"w",ZIP_DEFLATED) as archive:
-        archive.writestr("a.xml",b"one");archive.writestr("b.xml",b"two")
+        archive.writestr("a.xml",b"one")
+        archive.writestr("b.xml",b"two")
     monkeypatch.setattr(office_package,"MAX_PACKAGE_PARTS",1)
     with pytest.raises(KnowledgeFileError,match="4096"):
         parse_knowledge_file("部件过多.xlsx",output.getvalue())
     monkeypatch.setattr(office_package,"MAX_PACKAGE_PARTS",4096)
     raw=bytearray(output.getvalue())
     central=raw.index(b"PK\x01\x02")
-    struct.pack_into("<H",raw,6,1);struct.pack_into("<H",raw,central+8,1)
+    struct.pack_into("<H",raw,6,1)
+    struct.pack_into("<H",raw,central+8,1)
     with pytest.raises(KnowledgeFileError,match="已加密"):
         parse_knowledge_file("加密.docx",bytes(raw))
 
@@ -313,7 +353,8 @@ def test_package_part_and_encrypted_entry_limits_are_explicit(monkeypatch):
 @pytest.mark.parametrize("factory,filename,part", [(word_file,"压缩损坏.docx","word/document.xml"), (excel_file,"压缩损坏.xlsx","xl/worksheets/sheet1.xml")])
 def test_damaged_compressed_body_maps_to_a_file_error(factory,filename,part):
     import struct
-    data=factory();raw=bytearray(data)
+    data=factory()
+    raw=bytearray(data)
     with ZipFile(BytesIO(data)) as archive:
         offset=archive.getinfo(part).header_offset
     name_length,extra_length=struct.unpack_from("<HH",raw,offset+26)

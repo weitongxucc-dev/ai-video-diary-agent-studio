@@ -178,12 +178,14 @@ def script_layout_digest(connection, workspace_id, script_id, *, insert_ids=(), 
                                   (workspace_id, script_id)):
         add(row['section_id'])
         if row['section_id'] == insert_after_section_id:
-            for section_id in insert_ids: add(section_id)
+            for section_id in insert_ids:
+                add(section_id)
             inserted = True
     if insert_after_section_id is not None and not inserted:
         raise ValueError('插入位置已不存在，请重新读取当前文案')
     if not inserted:
-        for section_id in insert_ids: add(section_id)
+        for section_id in insert_ids:
+            add(section_id)
     return digest.hexdigest()
 
 

@@ -865,9 +865,11 @@ class TaskMediaJobs:
                     asset = value.get(key)
                     if isinstance(asset, str):
                         references.add(asset if asset.startswith("asset:") else "asset:"+asset)
-                for child in value.values(): collect(child)
+                for child in value.values():
+                    collect(child)
             elif isinstance(value, list):
-                for child in value: collect(child)
+                for child in value:
+                    collect(child)
             elif isinstance(value, str) and value.startswith(("workspace://", "artifact://", "narration://", "person-render://", "artifacts/", "asset:")):
                 references.add(value)
         if check_scope:
@@ -1349,16 +1351,26 @@ class TaskMediaJobs:
             else:
                 result = result_event.payload["result"]
             context.check()
-            if direct_clip:verification_facts=self.clip_preview.validate_result(job,event,result,context)
-            elif direct_command:verification_facts=self.command_preview.validate_result(job,event,result,context)
-            elif direct_exact:verification_facts=self.exact_preview.validate_result(job,event,result,context)
-            elif direct_compound:verification_facts=self.compound_selection.validate_result(job,event,result,context)
-            elif direct_visual:verification_facts=self.visual_preview.validate_result(job,event,result,context)
-            elif direct_script:verification_facts=media_script.validate_result(job,event,result,context)
-            elif direct_observation:verification_facts=self.output_observation.validate_result(job,event,result,context)
-            elif direct_edit:verification_facts=self.audio_edit.validate_result(job,event,result,context)
-            elif direct_audio:verification_facts=self.audio_ingress.validate_result(job,event,result,context)
-            else:raise ValueError('未知任务媒体处理类型')
+            if direct_clip:
+                verification_facts=self.clip_preview.validate_result(job,event,result,context)
+            elif direct_command:
+                verification_facts=self.command_preview.validate_result(job,event,result,context)
+            elif direct_exact:
+                verification_facts=self.exact_preview.validate_result(job,event,result,context)
+            elif direct_compound:
+                verification_facts=self.compound_selection.validate_result(job,event,result,context)
+            elif direct_visual:
+                verification_facts=self.visual_preview.validate_result(job,event,result,context)
+            elif direct_script:
+                verification_facts=media_script.validate_result(job,event,result,context)
+            elif direct_observation:
+                verification_facts=self.output_observation.validate_result(job,event,result,context)
+            elif direct_edit:
+                verification_facts=self.audio_edit.validate_result(job,event,result,context)
+            elif direct_audio:
+                verification_facts=self.audio_ingress.validate_result(job,event,result,context)
+            else:
+                raise ValueError('未知任务媒体处理类型')
             if self.check(job, event, actor) != "ready":
                 raise ValueError("媒体处理期间输入版本或身份发生变化")
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,

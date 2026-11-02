@@ -892,7 +892,8 @@ class SegmentProductionUseCase:
                 prepared = self.prepare_video(job, start, task, section_id, audio, owner, text=command.replacement_text)
                 with self.repository._connect() as conn:
                     conn.execute('BEGIN IMMEDIATE')
-                    if write_guard is not None: write_guard(conn)
+                    if write_guard is not None:
+                        write_guard(conn)
                     current = self.repository.job_records.get_job_run(workspace_id, job.id, connection=conn)
                     if current.status != 'queued':
                         raise ValueError('原段落作业已停止，不能保存恢复画面；原音频与取消事实保留')

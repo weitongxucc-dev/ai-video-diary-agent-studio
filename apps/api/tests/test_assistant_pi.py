@@ -1097,7 +1097,8 @@ def test_script_window_projection_keeps_original_facts_and_discards_raw_candidat
     details={'kind':'script_window_request','operation':operation,'task_id':'task','script_id':'script',
              'request_id':request_id,'receipt':receipt,'invocation_input_id':'input','input_id':'input',
              'input_turn_id':'turn','raw_diagnostics':{'source':'/private/file'}}
-    if status=='failed': receipt['error_detail']=diagnostics
+    if status=='failed':
+        receipt['error_detail']=diagnostics
     if status in {'not_submitted','rejected','unknown'}:
         details['failure']={**(diagnostics if status=='rejected' else {}),'submission_effect':status}
     tool='confirm_saved_script' if operation=='confirm' else 'patch_script_sections'
@@ -1113,8 +1114,10 @@ def test_script_window_projection_keeps_original_facts_and_discards_raw_candidat
     assert projected['input_id']=='input'
     if status in {'saved','confirmed'}:
         assert projected['total_count']==45 and projected['updated_at']==receipt['updated_at']
-    if status in {'unknown','failed'}: assert projected['submission_effect']=='unknown'
-    if status in {'failed','rejected'}: assert projected['failure']['candidate_field']=='content'
+    if status in {'unknown','failed'}:
+        assert projected['submission_effect']=='unknown'
+    if status in {'failed','rejected'}:
+        assert projected['failure']['candidate_field']=='content'
     public=json.dumps(projected,ensure_ascii=False)
     assert '/private/' not in public and '原文秘密' not in public and 'submitted_input' not in public
 
@@ -1160,7 +1163,8 @@ def test_script_window_resolver_reads_only_original_receipt_and_never_treats_404
 @pytest.mark.parametrize('operation',['patch','confirm'])
 def test_real_window_query_producer_projects_script_identity_for_restored_requests(tmp_path,operation):
     node=shutil.which('node')
-    if not node: pytest.skip('node unavailable')
+    if not node:
+        pytest.skip('node unavailable')
     module=Path(__file__).resolve().parents[1]/'agent_tools/diary/script-tools.ts'
     request_id=str(uuid4())
     code="""
@@ -1211,10 +1215,14 @@ def test_stream_window_locator_rejects_unrelated_tool_and_unbound_invocation(inv
         'input_id':'input','input_turn_id':'turn','invocation_input_id':'input',
         'failure':{'submission_effect':'unknown'}}
     tool='patch_script_sections'
-    if invalid=='other_tool': tool='read_current_task'
-    if invalid=='wrong_operation': details['operation']='confirm'
-    if invalid=='foreign_input': details['invocation_input_id']='old-input'
-    if invalid=='missing_source': del details['input_id']
+    if invalid=='other_tool':
+        tool='read_current_task'
+    if invalid=='wrong_operation':
+        details['operation']='confirm'
+    if invalid=='foreign_input':
+        details['invocation_input_id']='old-input'
+    if invalid=='missing_source':
+        del details['input_id']
     event=_PiStreamProjector().project(json.dumps({'type':'tool_execution_end','toolName':tool,'result':{'details':details}}))
     assert 'script_window_request' not in event and 'invocation_input_id' not in event
 

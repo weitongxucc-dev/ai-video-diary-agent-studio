@@ -455,7 +455,9 @@ def _pcm_assembly_monitor(scheduler, grant, argv, output_paths, absolute_limit):
                     data = os.pread(fd,min(65536,remaining),offset)
                     if not data:
                         raise RecoveryBlocked('原PCM前缀不可完整读取')
-                    digest.update(data);remaining-=len(data);offset+=len(data)
+                    digest.update(data)
+                    remaining-=len(data)
+                    offset+=len(data)
                 if digest.hexdigest() != baseline['committed_pcm_sha256']:
                     raise RecoveryBlocked('原PCM前缀内容已变化')
             finally:

@@ -167,13 +167,15 @@ class AudioEditUseCase:
         try:
             if edit.action == 'replace_narration':
                 self.verify_recording(task,plan,payload,edit,after,actor)
-                changed = deepcopy(plan);changed.audio_timeline=after
+                changed = deepcopy(plan)
+                changed.audio_timeline=after
             else:
                 plan.audio_timeline=before
                 changed=apply_audio_metadata(task,plan,command,validate_sources=lambda graph,duration:
                     self.audio.validate(task.workspace_id,task.id,graph,duration,draft_only=True,actor=actor))
         except (KeyError,ValueError,OSError,subprocess.SubprocessError) as exc:
-            if isinstance(exc,AudioEditRejected):raise
+            if isinstance(exc,AudioEditRejected):
+                raise
             raise AudioEditRejected(409,'音频提案不再适用，请检查源文件并重新预览') from exc
         prepare_changed_montage(changed,message='音轨已更新，可以试听或重新渲染成片。')
         base=self.repository.timeline_records.get_timeline_version(task.workspace_id,task.current_timeline_version_id)
@@ -188,7 +190,8 @@ class AudioEditUseCase:
         if any(clip.person_render_id for clip in plan.clips):
             raise ValueError('当前人物口型依赖旧配音，请先移除或重做口型')
         source_ref=edit.values.get('source_ref')
-        if not isinstance(source_ref,str):raise ValueError('录音引用无效')
+        if not isinstance(source_ref,str):
+            raise ValueError('录音引用无效')
         recording,measured_ms=self.audio.recording(task.workspace_id,task.id,source_ref,actor=actor)
         stat=self.audio.artifact_store.resolve_file(recording.logical_ref).stat()
         duration_ms=round(plan.duration_seconds*1000)
@@ -224,13 +227,18 @@ class AudioEditUseCase:
             raise AudioEditRejected(422,'请先选择一个镜头，再提取原声。')
         plan=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id,task.id))
         clip=next((item for item in plan.clips if item.id==refs[0][5:]),None)
-        if clip is None:raise AudioEditRejected(404,'所选镜头不存在。')
-        if clip.person_render_id:raise AudioEditRejected(409,'生成口型片段使用的是配音；提取真实原声请先选择原视频镜头。')
+        if clip is None:
+            raise AudioEditRejected(404,'所选镜头不存在。')
+        if clip.person_render_id:
+            raise AudioEditRejected(409,'生成口型片段使用的是配音；提取真实原声请先选择原视频镜头。')
         tracks=[track for track in effective_audio_timeline(plan).tracks if track.role=='original']
-        if len(tracks)!=1:raise AudioEditRejected(409,'需要唯一的原声音轨才能添加镜头原声。')
+        if len(tracks)!=1:
+            raise AudioEditRejected(409,'需要唯一的原声音轨才能添加镜头原声。')
         track=tracks[0]
-        if clip.locked or track.locked:raise AudioEditRejected(409,'镜头或原声音轨已锁定，请先解锁。')
-        if track.muted:raise AudioEditRejected(409,'原声音轨已静音，请先取消静音再预览。')
+        if clip.locked or track.locked:
+            raise AudioEditRejected(409,'镜头或原声音轨已锁定，请先解锁。')
+        if track.muted:
+            raise AudioEditRejected(409,'原声音轨已静音，请先取消静音再预览。')
         start,end=round(clip.timeline_start_seconds*1000),round(clip.timeline_end_seconds*1000)
         if any(item.timeline_start_ms<end and item.timeline_start_ms+item.duration_ms>start for item in track.clips):
             raise AudioEditRejected(409,'该范围已有原声，请编辑现有音频片段，避免重复叠加。')
@@ -239,7 +247,8 @@ class AudioEditUseCase:
         return plan,clip,track,start,end,reference
 
     def execute(self, job, event, actor, context):
-        arguments=event['arguments'];operation=event['operation']
+        arguments=event['arguments']
+        operation=event['operation']
         source=arguments.get('_typed_source')
         if source is not None:
             source={**source,'media_job_id':job.id,'actor_identity':actor.identity_payload()}
@@ -266,24 +275,29 @@ class AudioEditUseCase:
                 workspace_id,task_id,actor.user_id or actor.member_id,task.current_timeline_version_id,version.sequence if version else 0):
             raise ValueError('封存的类型化编辑输入或成员已失效')
         plan=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id,task_id))
-        before=effective_audio_timeline(plan);graphs=[before]
+        before=effective_audio_timeline(plan)
+        graphs=[before]
         original=(operation=='command_edit_preview' and re.fullmatch(r'(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?',arguments['payload']['raw_command'].strip()) is not None)
         if not original:
             edit=self.edit_from_arguments(task,operation,arguments)
-            if edit.base_version_id!=task.current_timeline_version_id:raise ValueError('时间线已变化，请重新安排当前要求')
-            if edit.action=='replace_narration':edit=edit.model_copy(update={'values':{**edit.values,'source_end_ms':round(plan.duration_seconds*1000)}})
+            if edit.base_version_id!=task.current_timeline_version_id:
+                raise ValueError('时间线已变化，请重新安排当前要求')
+            if edit.action=='replace_narration':
+                edit=edit.model_copy(update={'values':{**edit.values,'source_end_ms':round(plan.duration_seconds*1000)}})
             graphs.append(apply_audio_edit(before,edit,round(plan.duration_seconds*1000)))
         uses=Counter()
         for graph in graphs:
             audible=Counter(clip.source_ref for track in graph.tracks if not track.muted for clip in track.clips if not clip.muted)
-            for ref,count in audible.items():uses[ref]=max(uses.get(ref,0),count)
+            for ref,count in audible.items():
+                uses[ref]=max(uses.get(ref,0),count)
         references=set(uses)
         if original:
             _plan,clip,_track,_start,_end,reference=self.original_inputs(task,arguments['payload'])
             references.add(reference)
         files,inputs=[],[]
         for ref in sorted(references):
-            path=self.audio.source(workspace_id,task_id,ref,actor=actor);stat=path.stat()
+            path=self.audio.source(workspace_id,task_id,ref,actor=actor)
+            stat=path.stat()
             files.append([ref,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns])
             inputs.append({'reference':ref,'path':str(path.resolve()),'size_bytes':stat.st_size,'uses':uses.get(ref,1),
                 **self.audio.source_metadata(workspace_id,task_id,ref)})

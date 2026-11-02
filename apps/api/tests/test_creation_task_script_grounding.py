@@ -2068,13 +2068,20 @@ def test_no_facts_cannot_be_an_unbound_or_contradictory_pass_marker(malformation
     def edit(report, data):
         section = report['sections'][0]
         decision = section['no_factual_assertions']
-        if malformation == 'empty_reason': decision['reason'] = '   '
-        elif malformation == 'missing_fragment': decision['candidate_quote_ids'].pop()
-        elif malformation == 'duplicate': decision['candidate_quote_ids'][-1] = decision['candidate_quote_ids'][0]
-        elif malformation == 'foreign_fragment': decision['candidate_quote_ids'][-1] = 'previous-version-or-other-section'
-        elif malformation == 'extra_key': decision['grounded'] = True
-        elif malformation == 'supports': section['supports'] = [{'candidate_quote_id': decision['candidate_quote_ids'][0], 'source_quote_id': 'fake'}]
-        else: section['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': decision['candidate_quote_ids'][0],
+        if malformation == 'empty_reason':
+            decision['reason'] = '   '
+        elif malformation == 'missing_fragment':
+            decision['candidate_quote_ids'].pop()
+        elif malformation == 'duplicate':
+            decision['candidate_quote_ids'][-1] = decision['candidate_quote_ids'][0]
+        elif malformation == 'foreign_fragment':
+            decision['candidate_quote_ids'][-1] = 'previous-version-or-other-section'
+        elif malformation == 'extra_key':
+            decision['grounded'] = True
+        elif malformation == 'supports':
+            section['supports'] = [{'candidate_quote_id': decision['candidate_quote_ids'][0], 'source_quote_id': 'fake'}]
+        else:
+            section['issues'] = [{'kind': 'unsupported_fact', 'candidate_quote_id': decision['candidate_quote_ids'][0],
                                   'reference_ids': [], 'missing_or_conflicting': '陈述没有资料支持'}]
     generator, calls = no_facts_provider(rhetorical_draft(), edit)
     with pytest.raises(CreationTaskScriptGenerationError) as error:
@@ -2257,15 +2264,21 @@ def test_confirmation_reviews_the_entire_changed_candidate_identity(api_state, m
     script = state.repository.script_records.list_creation_task_scripts('local', 'task')[0]
     body = {'edit_mode': 'replace_all', 'title': script.title, 'sections': [copy.deepcopy(vars(section)) for section in script.sections],
             'expected_updated_at': script.updated_at.isoformat()}
-    if change == 'title': body['title'] = '换一个问题'
-    elif change == 'references': body['sections'][1]['evidence_reference_ids'] = [state.refs[0]['reference_id']]
-    elif change == 'order': body['sections'].reverse()
-    elif change == 'visual': body['sections'][1]['visual_prompt'] = '计划展示另一种抽象色块'
+    if change == 'title':
+        body['title'] = '换一个问题'
+    elif change == 'references':
+        body['sections'][1]['evidence_reference_ids'] = [state.refs[0]['reference_id']]
+    elif change == 'order':
+        body['sections'].reverse()
+    elif change == 'visual':
+        body['sections'][1]['visual_prompt'] = '计划展示另一种抽象色块'
     elif change == 'borrow_reference_for_fact':
         body['sections'][1]['content'] = '我们的销量全国第一。'
         body['sections'][1]['evidence_reference_ids'] = [state.refs[0]['reference_id']]
-    elif change == 'outside_scope': body['sections'][1]['evidence_reference_ids'] = ['foreign-reference']
-    else: body['title'] = '检查来源有效的修订'
+    elif change == 'outside_scope':
+        body['sections'][1]['evidence_reference_ids'] = ['foreign-reference']
+    else:
+        body['title'] = '检查来源有效的修订'
     calls = []
     def review(request):
         data = json.loads(json.loads(request.content)['messages'][1]['content'])
@@ -2480,9 +2493,12 @@ def test_section_patch_keeps_existing_write_protections(api_state, rejection):
     script = saved_row_draft(state)
     candidate = copy.deepcopy(script.sections[0])
     sections = [candidate]
-    if rejection == 'scope': candidate.evidence_reference_ids = ['foreign-source']
-    elif rejection == 'duplicates': sections *= 2
-    elif rejection == 'oversize': sections *= 21
+    if rejection == 'scope':
+        candidate.evidence_reference_ids = ['foreign-source']
+    elif rejection == 'duplicates':
+        sections *= 2
+    elif rejection == 'oversize':
+        sections *= 21
     with pytest.raises(KeyError if rejection == 'wrong_task' else ValueError):
         state.repository.script_records.patch_assistant_script_sections('local', 'other-task' if rejection == 'wrong_task' else 'task', script.id,
             sections=sections, expected_updated_at=script.updated_at, request_id='patch-1', member_id=state.owner.member_id)
@@ -2558,7 +2574,8 @@ def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_
     while cursor is not None:
         page = state.repository.script_records.read_creation_task_script_sections('local','task',first['script_id'],
             expected_updated_at=last['updated_at'],after_ordinal=cursor)
-        all_parts.extend(page['items']); cursor=page['next_after_ordinal']
+        all_parts.extend(page['items'])
+        cursor=page['next_after_ordinal']
     assert [item['section']['id'] for item in all_parts] == [f'section-{index}' for index in range(45)]
     with state.repository._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM creation_task_scripts').fetchone()[0] == 1
@@ -2592,7 +2609,8 @@ def test_same_window_request_in_flight_is_query_only_not_a_second_model_call(api
     calls=[]
     def review(request):
         data=json.loads(json.loads(request.content)['messages'][1]['content'])
-        calls.append(data); entered.set()
+        calls.append(data)
+        entered.set()
         assert release.wait(5)
         return _review_tool_response(bound_review(reviewed(draft()),data))
     checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
@@ -2668,9 +2686,11 @@ def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_
         plan=json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()[0])
         plan['template_settings']={'script_section_count':25}
         conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'",(json.dumps(plan),))
-    calls=[]; mode={'truncate':True}
+    calls=[]
+    mode={'truncate':True}
     def review(request):
-        data=json.loads(json.loads(request.content)['messages'][1]['content']); calls.append(data)
+        data=json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
         if data['review_window']['finalizing'] and data['review_window']['section_ids'][0]=='part-20' and mode['truncate']:
             return httpx.Response(200,json={'choices':[{'finish_reason':'length','message':{'content':''}}]})
         return _review_tool_response({'sections':[{'index':part['index'],'supports':[{
@@ -2764,7 +2784,8 @@ def test_patch_rechecks_revoked_source_after_preflight_inside_writer_transaction
     from fastapi import HTTPException
     from app.schemas import CreationTaskScriptWindowStartRequest,CreationTaskScriptSectionsPatchRequest
     from app.creation.script_draft_use_case import ScriptDraftRejected
-    state=api_state; calls=[]
+    state=api_state
+    calls=[]
     set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     saved=case.start_window('local','task',CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
@@ -2785,7 +2806,8 @@ def test_patch_rechecks_revoked_source_after_preflight_inside_writer_transaction
 def test_first_window_receipt_failure_rolls_back_original_task_run_and_body_together(api_state, monkeypatch):
     from uuid import uuid4
     from app.schemas import CreationTaskScriptWindowStartRequest
-    state=api_state; calls=[]
+    state=api_state
+    calls=[]
     set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     before=state.repository.task_records.get_creation_task('local','task')
@@ -2808,7 +2830,8 @@ def test_legacy_changed_confirmation_checks_revocation_at_its_commit_boundary(ap
     from app.schemas import CreationTaskScriptDraftRequest,CreationTaskScriptConfirmRequest
     from app.creation.script_draft_use_case import ScriptDraftRejected
     from fastapi import HTTPException
-    state=api_state; calls=[]
+    state=api_state
+    calls=[]
     set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     before=case.save('local','task',CreationTaskScriptDraftRequest(title='有据稿',sections=[{
@@ -2830,13 +2853,15 @@ def test_legacy_changed_confirmation_checks_revocation_at_its_commit_boundary(ap
 def test_script_owner_task_port_failure_rolls_back_same_transaction(api_state, monkeypatch):
     from uuid import uuid4
     from app.schemas import CreationTaskScriptWindowStartRequest
-    state=api_state;calls=[]
+    state=api_state
+    calls=[]
     set_agent_reviewer(monkeypatch,reviewed(draft()),calls)
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     before=state.repository.task_records.get_creation_task('local','task')
     transition=state.repository.script_records._transition_task
     def fail_saved(conn,task,event,now,**kwargs):
-        if event=='saved': raise RuntimeError('synthetic task-owner failure')
+        if event=='saved':
+            raise RuntimeError('synthetic task-owner failure')
         return transition(conn,task,event,now,**kwargs)
     monkeypatch.setattr(state.repository.script_records,'_transition_task',fail_saved)
     request=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='有据稿',sections=[{
@@ -2861,9 +2886,11 @@ def test_library_rows_reuse_patch_and_confirm_without_hydrating_library_or_scrip
         aspect_ratio: str
         duration_target_seconds: int
         requirements_confirmed: bool
-    state=api_state;calls=[]
+    state=api_state
+    calls=[]
     def reviewer(request):
-        data=json.loads(json.loads(request.content)['messages'][1]['content']);calls.append(data)
+        data=json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
         return _review_tool_response({'sections':[{'index':p['index'],'supports':[{'candidate_quote_id':p['content'][0]['quote_id'],
             'source_quote_id':p['allowed_source_quote_ids']['evidence_1'][0]}]} for p in data['script']['sections']]})
     checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(reviewer))
@@ -2886,7 +2913,8 @@ def test_library_rows_reuse_patch_and_confirm_without_hydrating_library_or_scrip
         assert case.reuse_library_entry('local',header['id'],payload,member_id=state.owner.member_id,plan=replace(plan,id='different-ephemeral-plan'))==saved
         assert case.library_reuse_request_result('local',payload.request_id,member_id=state.owner.member_id)==saved
         page=store.read_creation_task_script_sections('local',saved['task_id'],saved['script_id'],limit=1)
-        part=page['items'][0]['section'];part['visual_prompt']=''
+        part=page['items'][0]['section']
+        part['visual_prompt']=''
         changed=case.patch('local',saved['task_id'],saved['script_id'],CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],sections=[part]),member_id=state.owner.member_id)
         result=case.confirm_saved('local',saved['task_id'],saved['script_id'],CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=changed['updated_at']),member_id=state.owner.member_id)
         assert result['status']=='confirmed'
@@ -2908,9 +2936,11 @@ def test_library_save_original_request_is_atomic_and_does_not_create_a_second_ve
         source_script_id: str
         name: str
         category: str=''
-    state=api_state;calls=[]
+    state=api_state
+    calls=[]
     def reviewer(request):
-        data=json.loads(json.loads(request.content)['messages'][1]['content']);calls.append(data)
+        data=json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
         return _review_tool_response({'sections':[{'index':p['index'],'supports':[{'candidate_quote_id':p['content'][0]['quote_id'],
             'source_quote_id':p['allowed_source_quote_ids']['evidence_1'][0]}]} for p in data['script']['sections']]})
     checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(reviewer))
@@ -2928,7 +2958,8 @@ def test_library_save_original_request_is_atomic_and_does_not_create_a_second_ve
     assert case.library_save_request_result('local',request.request_id,member_id=state.owner.member_id)==result
     with pytest.raises(ScriptDraftRejected):
         case.save_library_entry('local',request.model_copy(update={'name':'换输入'}),member_id=state.owner.member_id)
-    with pytest.raises(KeyError): case.library_save_request_result('local',request.request_id,member_id='another-member')
+    with pytest.raises(KeyError):
+        case.library_save_request_result('local',request.request_id,member_id='another-member')
     with state.repository._connect() as conn:
         assert conn.execute('SELECT count(*) FROM script_library_entries').fetchone()[0]==1
         conn.execute("CREATE TRIGGER fail_library_receipt BEFORE INSERT ON task_events WHEN NEW.event_type='script_library_saved' BEGIN SELECT RAISE(ABORT,'synthetic receipt failure'); END")
@@ -2947,7 +2978,8 @@ def test_owned_candidate_without_sources_still_gets_independent_fact_and_goal_re
         title='开场',content='全国销量第一。' if factual else '接下来想聊什么？',visual_prompt='',evidence_reference_ids=()),))
     calls=[]
     def review(request):
-        data=json.loads(json.loads(request.content)['messages'][1]['content']);calls.append(data)
+        data=json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
         p=data['script']['sections'][0]
         if factual:
             report={'index':1,'issues':[{'kind':'unsupported_fact','candidate_quote_id':p['content'][0]['quote_id'],
@@ -2960,10 +2992,12 @@ def test_owned_candidate_without_sources_still_gets_independent_fact_and_goal_re
     args=replace(inputs(),sources=(),topic_origin='provided',topic_title='纯提问',goal='只写一个纯提问开场，不开始制作。',
         review_window=CreationTaskScriptReviewWindow('script','new',('first',),1))
     if factual:
-        with pytest.raises(CreationTaskScriptGenerationError) as err: checker.check_draft(args,document)
+        with pytest.raises(CreationTaskScriptGenerationError) as err:
+            checker.check_draft(args,document)
         assert err.value.code=='script_fact_unsupported'
     else:
         checker.check_draft(args,document)
     assert len(calls)==1 and calls[0]['sources']==[]
-    with pytest.raises(CreationTaskScriptGenerationError) as err: checker.generate(args)
+    with pytest.raises(CreationTaskScriptGenerationError) as err:
+        checker.generate(args)
     assert err.value.code=='input_invalid' and len(calls)==1

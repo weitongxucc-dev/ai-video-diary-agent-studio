@@ -58,7 +58,8 @@ def captured_runtime(monkeypatch, tmp_path):
 
 
 def envelope(text):
-    if text.lstrip().startswith("{"): text=json.loads(text)["message"]
+    if text.lstrip().startswith("{"):
+        text=json.loads(text)["message"]
     return json.loads(text.split("本轮能力与对象（JSON）：\n", 1)[1].splitlines()[0])
 
 

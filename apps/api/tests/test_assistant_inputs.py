@@ -217,10 +217,12 @@ def test_restart_reconciles_original_input_request_without_replaying_it(tmp_path
     assert item['status']=='consumed' and item['reason']=='read_original_input_request'
     with restarted._connect() as conn:
         assert restarted._goal_origin_current(conn,restarted._goal_root(conn,claim['turn_id']))
-    reads=[]; observed={'available':submission_state!='result_unknown','status':'queued'}
+    reads=[]
+    observed={'available':submission_state!='result_unknown','status':'queued'}
     def read_request(ws,task,request_id,actor):
         reads.append(request_id)
-        if not observed['available']: raise KeyError(request_id)
+        if not observed['available']:
+            raise KeyError(request_id)
         return {'task_id':task,'request_id':request_id,'input_id':'edit','section_id':'first',
             'job_id':'original-revision-job','status':observed['status']}
     bound=SimpleNamespace(original=lambda goal:(object(),SimpleNamespace(workspace_id='w',id='t'),{}),

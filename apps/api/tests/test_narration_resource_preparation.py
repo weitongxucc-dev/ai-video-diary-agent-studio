@@ -37,7 +37,9 @@ def fixture(tmp_path, monkeypatch):
     status = SimpleNamespace(ready=True, model_path=str(model), worker_path=str(worker), runtime_python_path=str(python))
     reference_path = tmp_path / 'reference.wav'
     with wave.open(str(reference_path), 'wb') as stream:
-        stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(16000)
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
         stream.writeframes(b'\0\0' * 16000)
     voice = VoiceProfile('voice', 'local', 'v1', 'zh', str(reference_path), '参考声音')
     reference = ProfileReferenceInput.from_source(source_path=reference_path, workspace_id='local',
@@ -55,7 +57,9 @@ def fixture(tmp_path, monkeypatch):
         kwargs['grant_context'].run([str(python), str(worker)])
         output = Path(kwargs['output_path'])
         with wave.open(str(output), 'wb') as stream:
-            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(24000)
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(24000)
             stream.writeframes(b'\0\0' * 24000)
         return VoiceCloneResult(str(output), 1, 24000)
     provider.generate_granted = generate

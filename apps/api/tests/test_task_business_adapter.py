@@ -45,7 +45,8 @@ def test_host_preserves_revocation_guard_and_does_not_claim_unsubmitted_after_ow
     revoked=when=='before'
     writes=[]
     def check(*args,**kwargs):
-        if revoked: raise TaskBusinessRejected('source changed',kind='conflict')
+        if revoked:
+            raise TaskBusinessRejected('source changed',kind='conflict')
         return None,SimpleNamespace(id='task'),{},{'input_id':'input'},None
     def owner(guard):
         nonlocal revoked
@@ -59,8 +60,10 @@ def test_host_preserves_revocation_guard_and_does_not_claim_unsubmitted_after_ow
     result=(host.native_call if native else host)('read_task_workspace',{},**OPTIONS)
     assert result['ok'] is False and result['failure']['status_code']==409
     assert not writes
-    if when=='before': assert result['failure']['submission_effect']=='not_submitted'
-    else: assert result['failure'].get('submission_effect')!='not_submitted'
+    if when=='before':
+        assert result['failure']['submission_effect']=='not_submitted'
+    else:
+        assert result['failure'].get('submission_effect')!='not_submitted'
 
 
 @pytest.mark.parametrize('kind,status',[('forbidden',403),('invalid_input',422),('not_found',404),('conflict',409),('unavailable',503)])

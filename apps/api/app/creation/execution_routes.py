@@ -87,9 +87,12 @@ def build_creation_execution_router(
         try:
             return control_for().read_visual_decision(ws,task_id,job_id,section_id,
                 require_actor(request,ws),offset=offset,limit=limit)
-        except PermissionError as exc: raise HTTPException(status_code=403,detail=str(exc)) from exc
-        except KeyError as exc: raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
-        except ValueError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403,detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409,detail=str(exc)) from exc
 
     @router.post('/api/creation-tasks/{task_id}/execution/jobs/{job_id}/sections/{section_id}/visual-decision')
     def adopt_segment_visual_decision(task_id: str, job_id: str, section_id: str, request: Request,
@@ -100,10 +103,14 @@ def build_creation_execution_router(
         try:
             return control_for().adopt_visual_decision(ws,task_id,job_id,section_id,
                 require_actor(request,ws),payload,runtime=runtime_for_execution())
-        except ExecutionControlRejected as exc: raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-        except PermissionError as exc: raise HTTPException(status_code=403,detail=str(exc)) from exc
-        except KeyError as exc: raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
-        except (ValueError,OSError,RecoveryBlocked) as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+        except ExecutionControlRejected as exc:
+            raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403,detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404,detail='原画面决定不存在') from exc
+        except (ValueError,OSError,RecoveryBlocked) as exc:
+            raise HTTPException(status_code=409,detail=str(exc)) from exc
 
     @router.get(
         "/api/creation-tasks/{task_id}/job-runs",

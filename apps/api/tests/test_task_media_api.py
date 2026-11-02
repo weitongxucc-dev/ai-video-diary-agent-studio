@@ -465,7 +465,8 @@ def test_owner_media_pages_reject_foreign_cursor_without_execution(tmp_path):
     def add(job_id,who,task_id=s.task.id):
         s.repo.job_records.create_job_run(JobRun(job_id,'ws',task_id,TASK_MEDIA_KIND,job_id,'fixture'))
         s.repo.execution_records.append_task_event(TaskEvent('event_'+job_id+'_start','ws',task_id,job_id,'task_media_started',who.identity_payload()))
-    for n in range(3): add('own-'+str(n),actor)
+    for n in range(3):
+        add('own-'+str(n),actor)
     other=replace(actor,member_id='other')
     add('foreign',other)
     foreign_plan=replace(s.repo.plan_records.get_creation_plan('ws',s.task.plan_id),id='other-plan')
@@ -477,5 +478,7 @@ def test_owner_media_pages_reject_foreign_cursor_without_execution(tmp_path):
     assert {job.id for job in first+second}=={'own-0','own-1','own-2'}
     assert end is None
     for bad in ['foreign','foreign-task','missing']:
-        with pytest.raises(KeyError): media.list('ws',s.task.id,actor,cursor=bad,limit=2)
-    with pytest.raises(ValueError): media.list('ws',s.task.id,actor,limit=41)
+        with pytest.raises(KeyError):
+            media.list('ws',s.task.id,actor,cursor=bad,limit=2)
+    with pytest.raises(ValueError):
+        media.list('ws',s.task.id,actor,limit=41)

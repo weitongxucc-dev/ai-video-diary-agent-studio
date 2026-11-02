@@ -114,7 +114,8 @@ def run_pi_streaming(
         native_operations={'open_task_working_context','native_task_file','submit_task_command',
             'read_task_command','cancel_task_command','register_task_artifacts'}
         def dispatch(operation,arguments,**context):
-            if operation in native_operations: return native_handler(operation,arguments,**context)
+            if operation in native_operations:
+                return native_handler(operation,arguments,**context)
             if original_business is None:
                 return {'ok':False,'failure':{'status_code':403,'submission_effect':'not_submitted',
                     'reason':'此管道只提供任务原生操作；原业务工具沿原入口执行。'}}
@@ -174,7 +175,8 @@ def run_pi_streaming(
     native_cancel_requested=threading.Event()
 
     def verify_native_release(deadline):
-        if not native_cancel_requested.is_set() and not (stop_event is not None and stop_event.is_set()): return
+        if not native_cancel_requested.is_set() and not (stop_event is not None and stop_event.is_set()):
+            return
         # Called only after the one admitted host worker drained, so no late
         # submit can commit after the native owner enumerates these jobs.
         try:
@@ -182,7 +184,8 @@ def run_pi_streaming(
             if not receipt['cancellation_complete'] or receipt['truncated'] or any((job['process_state'],job['release_state']) not in {
                     ('exited','released'),('not_started','not_acquired')} for job in receipt['jobs']):
                 raise AssistantProcessReleaseError('原生执行仍未证实退出和释放；停止登记保留，请回读原作业')
-        except AssistantProcessReleaseError: raise
+        except AssistantProcessReleaseError:
+            raise
         except Exception as exc:
             raise AssistantProcessReleaseError('原生执行取消回执不可核实；停止登记保留，不能确认资源已释放') from exc
 

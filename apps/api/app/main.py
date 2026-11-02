@@ -1573,7 +1573,8 @@ def _exact_edit_source_facts(task,payload,request):
             actor=_require_permit_actor(request,task.workspace_id)
             return case.audio_source_facts(task,graph,actor)
         ids=payload.clip_ids if payload.operation_type == 'AdjustVisualEffects' else [payload.clip_id] if payload.clip_id else []
-        if not ids:return []
+        if not ids:
+            return []
         reader,diagnostic=_content_identity_http_adapter().reader(request,task.workspace_id)
         return case.source_facts(task,payload,{'member_id':reader,'local_diagnostic':diagnostic},None)
     except EditPreviewRejected as exc:
@@ -1723,12 +1724,14 @@ def _preview_audio_edit_request(task_id, request, payload, *, original_clip=Fals
             raise
         actor=_require_permit_actor(request,workspace_id)
         values={'payload':payload.model_dump(mode='json',exclude_unset=True),'_media_kind':required.kind,'_draft':draft}
-        runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
+        runtime=_creation_runtime()
+        media=runtime.registrations['creation_job'].owner.task_media
         try:
             values=case.prepare_queued_preview(task,actor,values,
                 facts=media.facts,verify_identity=media.verify_identity)
             job=media.submit(runtime,actor,task_id,'audio_edit_preview',values,'edit_preview')
-            receipt=_media_result_receipt(media,job,actor,runtime);receipt['result']=None
+            receipt=_media_result_receipt(media,job,actor,runtime)
+            receipt['result']=None
             return JSONResponse(status_code=202,content=receipt)
         except PermissionError as exc:
             raise HTTPException(status_code=403,detail=str(exc)) from exc
@@ -1808,7 +1811,8 @@ def _queue_exact_preview(task_id,request,payload,*,source,media_kind):
     try:
         task,values=case.submission_arguments(workspace_id,task_id,actor,payload,media_kind=media_kind,
             draft_only=request.query_params.get('draft')=='true' or request.url.path.endswith('/edits/exact'),source=source)
-        runtime=_creation_runtime();media=runtime.registrations['creation_job'].owner.task_media
+        runtime=_creation_runtime()
+        media=runtime.registrations['creation_job'].owner.task_media
         job=case.submit(runtime,media,actor,task,values)
         return _media_result_receipt(media,job,actor,runtime)
     except EditPreviewRejected as exc:
@@ -1822,12 +1826,15 @@ def _queue_exact_preview(task_id,request,payload,*,source,media_kind):
 def _exact_preview_facts(workspace_id,task_id,arguments,actor):
     case=_exact_preview_use_case()
     prepared=case.prepare_source(workspace_id,task_id,arguments,actor)
-    if prepared[1] is None:raise ValueError('当前任务没有可预览的故事板')
+    if prepared[1] is None:
+        raise ValueError('当前任务没有可预览的故事板')
     budget=_device_operation_budget("cpu_render")
-    if budget is None:raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
+    if budget is None:
+        raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
     if any(clip.person_render_id for clip in prepared[1].clips):
         person_budget=_device_operation_budget("presenter_cpu_render")
-        if person_budget is None:raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
+        if person_budget is None:
+            raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
         budget=person_budget
     resources=case.picture_resources(prepared,budget)
     return case.seal_resources(prepared,resources,_device_operation_budget("cpu_audio"),actor=actor)
@@ -4154,16 +4161,20 @@ def _publish_subtitle_text(
 
 
 def _bind_assistant_edit_instruction(request,task,payload):
-    if payload.assistant_turn_id is None:return payload
+    if payload.assistant_turn_id is None:
+        return payload
     turn=conversation_repo.get_turn(str(payload.assistant_turn_id))
-    if turn is None:raise HTTPException(status_code=404,detail='本轮对话不存在或不可访问。')
+    if turn is None:
+        raise HTTPException(status_code=404,detail='本轮对话不存在或不可访问。')
     workspace_id,member_id,_conversation=_assistant_conversation_for_request(request,turn['conversation_id'])
     try:
         origin=conversation_repo.task_turn_source(turn['id'],workspace_id,member_id,task.id)
         _require_assistant_input_origin(request, {**origin, 'assistant_turn_id': turn['id']})
         return _command_preview_use_case().bind_after_access(task,payload,turn,workspace_id,member_id)
-    except ValueError as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409,detail=str(exc)) from exc
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 
@@ -4266,8 +4277,10 @@ def _subtitle_edit_use_case():
 
 
 def _subtitle_values(payload):
-    try:return subtitle_values(payload)
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    try:
+        return subtitle_values(payload)
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 
@@ -4312,9 +4325,11 @@ app.include_router(_timeline_restore_http_router(('get_creation_task_timeline_re
 
 def _apply_creation_task_montage_clip_update(workspace_id,task_id,plan,clip_id,payload,*,request):
     reader,diagnostic=_content_identity_http_adapter().reader(request,workspace_id)
-    try:return _metadata_edit_use_case().apply_clip_update(workspace_id,task_id,plan,clip_id,payload,
+    try:
+        return _metadata_edit_use_case().apply_clip_update(workspace_id,task_id,plan,clip_id,payload,
         reader_identity={'member_id':reader,'local_diagnostic':diagnostic})
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
+    except EditPreviewRejected as exc:
+        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
 app.include_router(_task_montage_control_http_router(('update_creation_task_montage_clip', 'update_creation_task_subtitle_cue', 'render_creation_task_montage')))

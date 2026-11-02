@@ -40,7 +40,8 @@ def result(repo,turn,input_id,job):
 
 def emit(repo,turn,input_id,event_id):
     event={"type":"business_result","event_id":event_id,"task_id":"t","phase":"execution","status":"succeeded"}
-    if input_id:event["input_id"]=input_id
+    if input_id:
+        event["input_id"]=input_id
     assert repo.project_business_result(turn["id"],"w","m",event,response_patch={},message="实际结果")
     return event
 
@@ -121,9 +122,12 @@ def test_late_old_execution_is_history_and_cannot_invalidate_or_replace_new_inpu
     assert repo.task_result_source(turn["id"],"w","m","t")["raw_command"] == turn["user_message"]
     original=repo.task_result_source(turn["id"],"w","m","t",input_id=first,input_turn_id=turn["id"])
     assert original["raw_command"] == "先调蓝色" and original["context"]["target_snapshot"]["timeline_version_id"] == "v1"
-    with pytest.raises(ValueError):repo.task_result_source(turn["id"],"w","other","t",input_id=first,input_turn_id=turn["id"])
-    with pytest.raises(ValueError):repo.task_result_source(turn["id"],"w","m","other",input_id=first,input_turn_id=turn["id"])
-    with pytest.raises(ValueError):repo.task_result_source(turn["id"],"w","m","t",input_id=first,input_turn_id="foreign")
+    with pytest.raises(ValueError):
+        repo.task_result_source(turn["id"],"w","other","t",input_id=first,input_turn_id=turn["id"])
+    with pytest.raises(ValueError):
+        repo.task_result_source(turn["id"],"w","m","other",input_id=first,input_turn_id=turn["id"])
+    with pytest.raises(ValueError):
+        repo.task_result_source(turn["id"],"w","m","t",input_id=first,input_turn_id="foreign")
 
 
 def test_old_preview_source_and_unknown_locator_do_not_block_new_input(tmp_path):
@@ -156,7 +160,8 @@ def test_stale_verification_cannot_overwrite_new_revision_checkpoint(tmp_path):
     calls=[]
     def verify(*_):
         # A real concurrent request can consume input while host verification runs.
-        with repo._connect() as conn:conn.execute("UPDATE assistant_conversation_turns SET status='running' WHERE id=?",(turn["id"],))
+        with repo._connect() as conn:
+            conn.execute("UPDATE assistant_conversation_turns SET status='running' WHERE id=?",(turn["id"],))
         second=consume(repo,chat,turn,message="后续只处理绿色",mode="follow_up")
         result(repo,turn,second,"second-job")
         return {"status":"invalidated","reason":"old_verification_failed"}

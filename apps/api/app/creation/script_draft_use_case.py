@@ -70,8 +70,10 @@ class ScriptDraftUseCase:
                            current_refs, current_reader, asdict(current_entry) if current_entry else None):
                 raise ScriptDraftRejected(status_code=409, detail="方案、选题或资料已变化，确认没有写入，请重新读取当前任务。")
         def commit_guard(conn):
-            if write_guard is not None: write_guard(conn)
-            if run is not None: self.validate_inputs(workspace_id,plan,run.input_references)
+            if write_guard is not None:
+                write_guard(conn)
+            if run is not None:
+                self.validate_inputs(workspace_id,plan,run.input_references)
             if binding is not None:
                 _,cp,ct,cs,cr,ce=self._confirmation_inputs(workspace_id,task_id,script)
                 reader=self.validate_inputs(workspace_id,cp,cr)
@@ -153,12 +155,15 @@ class ScriptDraftUseCase:
         digest=hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
         old=self.scripts.library_save_request_result(workspace_id,request_id,member_id)
         if old is not None:
-            if old['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原保存请求不能更换输入")
+            if old['request_digest']!=digest:
+                raise ScriptDraftRejected(status_code=409,detail="原保存请求不能更换输入")
             return self.library_save_request_result(workspace_id,request_id,member_id=member_id)
-        if self.read_script_header is None: raise ScriptDraftRejected(status_code=409,detail="未装配真实源文案许可读取端口")
+        if self.read_script_header is None:
+            raise ScriptDraftRejected(status_code=409,detail="未装配真实源文案许可读取端口")
         header=self.read_script_header(workspace_id,payload.source_script_id)
         def guard(conn):
-            if write_guard is not None: write_guard(conn)
+            if write_guard is not None:
+                write_guard(conn)
             if header!=self.read_script_header(workspace_id,payload.source_script_id):
                 raise ScriptDraftRejected(status_code=409,detail="保存提交前源文案或许可已变化")
         return self.scripts.save_script_library_entry_header(workspace_id,source_script_id=payload.source_script_id,
@@ -169,8 +174,10 @@ class ScriptDraftUseCase:
         if not isinstance(member_id,str) or not member_id.strip():
             raise PermissionError("库稿原请求必须绑定当前真实成员")
         old=self.scripts.library_save_request_result(workspace_id,str(request_id),member_id)
-        if old is None: raise KeyError(str(request_id))
-        if self.read_library_header is None: raise ScriptDraftRejected(status_code=409,detail="未装配已保存库稿的当前许可读取端口")
+        if old is None:
+            raise KeyError(str(request_id))
+        if self.read_library_header is None:
+            raise ScriptDraftRejected(status_code=409,detail="未装配已保存库稿的当前许可读取端口")
         self.read_library_header(workspace_id,old['result']['entry_id'])
         return old['result']
 
@@ -181,7 +188,8 @@ class ScriptDraftUseCase:
         digest=hashlib.sha256(json.dumps([entry_id,payload.model_dump(mode='json')],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         old=self.scripts.library_reuse_request_result(workspace_id,request_id,member_id)
         if old is not None:
-            if old['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原复用请求不能更换输入")
+            if old['request_digest']!=digest:
+                raise ScriptDraftRejected(status_code=409,detail="原复用请求不能更换输入")
             self._read_reuse_task(workspace_id,old['result']['task_id'],member_id)
             return old['result']
         if not payload.requirements_confirmed:
@@ -189,15 +197,18 @@ class ScriptDraftUseCase:
         if self.read_library_header is None:
             raise ScriptDraftRejected(status_code=409,detail="未装配真实库稿权限读取端口")
         header=self.read_library_header(workspace_id,entry_id)
-        if header['sections_total_count']==0: raise ScriptDraftRejected(status_code=409,detail="空库稿不能作为完整复用来源")
+        if header['sections_total_count']==0:
+            raise ScriptDraftRejected(status_code=409,detail="空库稿不能作为完整复用来源")
         if (plan.name!=payload.name.strip() or plan.aspect_ratio!=payload.aspect_ratio
                 or plan.duration_target_seconds!=payload.duration_target_seconds):
             raise ScriptDraftRejected(status_code=409,detail="复用计划与已确认的新要求不一致")
         plan.owner_user_id=member_id
         def guard(conn):
-            if write_guard is not None: write_guard(conn)
+            if write_guard is not None:
+                write_guard(conn)
             current=self.read_library_header(workspace_id,entry_id)
-            if header!=current: raise ScriptDraftRejected(status_code=409,detail="库稿来源已变化，没有创建新任务")
+            if header!=current:
+                raise ScriptDraftRejected(status_code=409,detail="库稿来源已变化，没有创建新任务")
         return self.scripts.reuse_library_rows(workspace_id,entry_id,plan=plan,expected_updated_at=payload.expected_entry_updated_at,
             request_id=request_id,member_id=member_id,request_digest=digest,write_guard=guard)
 
@@ -211,7 +222,8 @@ class ScriptDraftUseCase:
         if not isinstance(member_id,str) or not member_id.strip():
             raise PermissionError("库稿原请求必须绑定当前真实成员")
         result=self.scripts.library_reuse_request_result(workspace_id,str(request_id),member_id)
-        if result is None: raise KeyError(str(request_id))
+        if result is None:
+            raise KeyError(str(request_id))
         self._read_reuse_task(workspace_id,result['result']['task_id'],member_id)
         return result['result']
 
@@ -279,7 +291,8 @@ class ScriptDraftUseCase:
             raise ScriptDraftRejected(status_code=409,detail="生成原请求有限读写端口尚未装配")
         state={}
         def guard(conn):
-            if parent_guard is not None: parent_guard(conn)
+            if parent_guard is not None:
+                parent_guard(conn)
             current=self.read_generation_request(conn,workspace_id,task_id,str(generation_request_id),member_id)
             if current.get('can_continue') is not True or current.get('requested_effect')!='draft' or not current.get('run_id'):
                 raise PermissionError('原请求没有当前草稿生成授权')
@@ -304,11 +317,13 @@ class ScriptDraftUseCase:
         digest=hashlib.sha256(payload.model_dump_json().encode()).hexdigest()
         prior=self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)
         if prior is not None:
-            if prior['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原首窗不能更换输入")
+            if prior['request_digest']!=digest:
+                raise ScriptDraftRejected(status_code=409,detail="原首窗不能更换输入")
             return self._generation_replay(workspace_id,task_id,generation_request_id,member_id,prior)
         state,guard=self._generation_guard(workspace_id,task_id,generation_request_id,member_id,write_guard)
         def save_first():
-            if state.get('script') is not None: raise ScriptDraftRejected(status_code=409,detail="原生成已有稿，请沿原稿窗口继续")
+            if state.get('script') is not None:
+                raise ScriptDraftRejected(status_code=409,detail="原生成已有稿，请沿原稿窗口继续")
             task,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
             reader=self.validate_inputs(workspace_id,plan,refs)
             sections=[CreationTaskScriptSection(**p.model_dump()) for p in payload.sections]
@@ -333,7 +348,8 @@ class ScriptDraftUseCase:
         digest=hashlib.sha256(json.dumps([str(generation_request_id),payload.expected_updated_at.isoformat()]).encode()).hexdigest()
         prior=self.scripts.generation_draft_result(workspace_id,task_id,script_id,request_id,member_id)
         if prior is not None:
-            if prior['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原草稿收口不能更换输入")
+            if prior['request_digest']!=digest:
+                raise ScriptDraftRejected(status_code=409,detail="原草稿收口不能更换输入")
             return self._generation_replay(workspace_id,task_id,generation_request_id,member_id,prior)
         state,guard=self._generation_guard(workspace_id,task_id,generation_request_id,member_id,write_guard,script_id=script_id)
         def finish():
@@ -370,7 +386,8 @@ class ScriptDraftUseCase:
             if prior is not None:
                 from app.creation.script_windows import script_patch_digest
                 digest=script_patch_digest([p.model_dump() for p in payload.sections],payload.expected_updated_at,payload.insert_after_section_id)
-                if prior['request_digest']!=digest: raise ScriptDraftRejected(status_code=409,detail="原修改请求不能更换输入")
+                if prior['request_digest']!=digest:
+                    raise ScriptDraftRejected(status_code=409,detail="原修改请求不能更换输入")
                 return self._generation_replay(workspace_id,task_id,generation_request_id,member_id,prior)
             state,write_guard=self._generation_guard(workspace_id,task_id,generation_request_id,member_id,write_guard,script_id=script_id)
         return self._claimed_window_operation('patch',workspace_id,task_id,script_id,payload,member_id,
@@ -424,7 +441,8 @@ class ScriptDraftUseCase:
 
     def window_request_result(self, workspace_id, task_id, request_id, *, member_id, operation, script_id=None, include_input=False, generation_request_id=None):
         if generation_request_id is not None:
-            if self.read_generation_result is None: raise ScriptDraftRejected(status_code=409,detail="原生成结果只读端口尚未装配")
+            if self.read_generation_result is None:
+                raise ScriptDraftRejected(status_code=409,detail="原生成结果只读端口尚未装配")
             self.read_generation_result(workspace_id,task_id,str(generation_request_id),member_id)
         if operation == 'start':
             record=self.scripts.script_window_start_result(workspace_id,task_id,str(request_id),member_id)
@@ -438,7 +456,8 @@ class ScriptDraftUseCase:
             raise ValueError('文案请求类型或稿件定位无效')
         if record is None:
             pending=self.scripts.pending_script_window_request(workspace_id,task_id,script_id,operation,str(request_id),member_id,include_input=include_input)
-            if pending is None: raise KeyError(str(request_id))
+            if pending is None:
+                raise KeyError(str(request_id))
             if generation_request_id is not None and pending.get('generation_request_id')!=str(generation_request_id):
                 raise KeyError(str(request_id))
             return pending
@@ -447,7 +466,8 @@ class ScriptDraftUseCase:
         return record['result']
 
     def _record_confirmed_origin(self, workspace_id, task_id, script_id, result, payload, member_id, instruction_origin):
-        if instruction_origin is None: return
+        if instruction_origin is None:
+            return
         actual_task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         actual_plan=self.repository.plan_records.get_creation_plan(workspace_id,actual_task.plan_id)
         facts=self.scripts.confirmed_script_adoption_facts(workspace_id,task_id,script_id,result['updated_at'])
@@ -525,7 +545,8 @@ class ScriptDraftUseCase:
 
     def _source_commit_guard(self, workspace_id, task_id, snapshot, write_guard, instruction_origin, reread_origin, *, draft_only, source_metadata=None):
         def guard(conn):
-            if write_guard is not None: write_guard(conn)
+            if write_guard is not None:
+                write_guard(conn)
             if source_metadata is None:
                 _,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
                 reader=self.validate_inputs(workspace_id,plan,refs)

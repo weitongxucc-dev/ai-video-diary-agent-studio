@@ -935,7 +935,8 @@ class CreationJobOwnerVerifier:
         key,resources=self.stage_facts(task,script,plan,stage)
         changed=key!=rejection['unit_key']
         for failed in rejection['failed_limits']:
-            field=failed['field'];limit=getattr(budget,field if field.startswith('max_') else 'max_'+field)
+            field=failed['field']
+            limit=getattr(budget,field if field.startswith('max_') else 'max_'+field)
             actual=resources[field]
             if actual>limit:
                 return False
@@ -1400,7 +1401,8 @@ class CreationJobOwnerVerifier:
                     job.workspace_id,segment.audio_reference.removeprefix('narration://artifact/'),connection=conn)
                 if record is None or record.task_id != task.id or record.script_id != script.id:
                     raise RecoveryBlocked('局部配音候选或其他原片段已丢失')
-                path=Path(record.audio_path);info=path.stat()
+                path=Path(record.audio_path)
+                info=path.stat()
                 files.append([record.cache_key,str(path.resolve()),info.st_size,info.st_mtime_ns,info.st_ctime_ns])
                 ready.append({'reference':self.repository.narration_artifacts.narration_artifact_reference(record.cache_key),
                     'size_bytes':info.st_size,'duration_seconds':record.duration_seconds,

@@ -109,7 +109,10 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",(json.dumps(asdict(task),default=str),task.id))
     audio_path=tmp_path / "outputs/artifacts/task/fixed-narration.wav"
     with wave.open(str(audio_path),"wb") as audio:
-        audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(16000); audio.writeframes(b"\0\0" * 64000)
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(b"\0\0" * 64000)
     state.repo.narration_artifacts.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
     segment=NarrationSegment("fixed-segment","ws",task.id,script.id,"section","原字幕",state.narration.audio_path,4,16000,
         "fixture-input","fixture-voice","1","zh","fixture-rules","ready")
@@ -147,8 +150,11 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                     assert accepted.status_code == 200,accepted.text
                     delivery["input_id"]=input_id
                 result=delivery["handler"](value["phase"],value.get("input_id"),value.get("mode"))
-                self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
-                self.wfile.write(json.dumps(result).encode());return
+                self.send_response(200)
+                self.send_header("Content-Type","application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+                return
             response = state.client.request(self.command, self.path, content=body,
                 headers={"Content-Type": "application/json", "X-Local-Member-Token": state.token,
                     **({"X-Assistant-Input-ID":self.headers["X-Assistant-Input-ID"]} if self.headers.get("X-Assistant-Input-ID") else {})})
@@ -198,7 +204,8 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 message="只澄清当前保存结果，不再修改或生成" if clarification else "把字幕改成追加输入文字，然后继续生成视频")
             bridge=f"http://127.0.0.1:{server.server_port}/fixture/input-checkpoint"
             steps += [{"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"澄清前的修改" if clarification else "旧输入文字"}}]
-            if not clarification:steps += [{"name":"read_current_task","args":{}},
+            if not clarification:
+                steps += [{"name":"read_current_task","args":{}},
                 {"name":"read_task_edit_capabilities","args":{}},
                 {"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"追加输入文字"}}]
         elif kwargs["message"] == "撤销上一步修改":
@@ -444,7 +451,8 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
     goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'original_instruction':'修改这个作品',
         'workspace_id':'ws','member_id':s.member.member_id,'task_id':s.task.id,'conversation_id':chat['id'],
         'revision':0,'status':'running'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     actor=CreationExecutionActor('ws',s.member.member_id)
     authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
     granted=authority.ensure(s.task,actor,interactive=True)
@@ -494,16 +502,19 @@ def test_edit_origin_queued_work_accepts_finished_turn_only_with_current_goal(me
         'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id']}
     validate_edit_origin(conversations,source,actor)
     conversations.finish_turn(turn['id'],'completed','已排队',{})
-    with pytest.raises(ValueError): validate_edit_origin(conversations,source,actor)
+    with pytest.raises(ValueError):
+        validate_edit_origin(conversations,source,actor)
     goal={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
         'current_turn_id':turn['id'],'status':'waiting_result','original_instruction':'继续完成这段修改'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     validate_edit_origin(conversations,source,actor)
     with conversations._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         validate_edit_origin(conversations,source,actor,connection=conn)
         conversations._write_goal(conn,{'id':turn['id']},{**goal,'status':'stopped'})
-        with pytest.raises(ValueError): validate_edit_origin(conversations,source,actor,connection=conn)
+        with pytest.raises(ValueError):
+            validate_edit_origin(conversations,source,actor,connection=conn)
 
 
 @pytest.mark.parametrize('phase',['apply','preview'])
@@ -523,7 +534,8 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'original_instruction':'调整画幅并继续完成',
         'workspace_id':'ws','member_id':s.member.member_id,'task_id':s.task.id,'conversation_id':chat['id'],
         'revision':0,'status':'running'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     actor=CreationExecutionActor('ws',s.member.member_id)
     authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
     granted=authority.ensure(s.task,actor,interactive=True)
@@ -589,7 +601,8 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     gap_event,_=s.repo.execution_records.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
     gap=s.client.post(endpoint,json=gap_payload)
     assert gap.status_code==409 and gap.json()['detail']['submission_effect']=='unknown',gap.text
-    with pytest.raises(KeyError): s.repo.execution_records.get_task_event('ws',gap_event+'_source')
+    with pytest.raises(KeyError):
+        s.repo.execution_records.get_task_event('ws',gap_event+'_source')
     assert s.repo.execution_records.read_edit_request_result(current,gap_event) is None
     conversations.finish_turn(turn['id'],'completed','原请求已提交',{})
     foreign_input=s.client.post(endpoint,json=payload,headers={'X-Assistant-Input-ID':'another-input'})
@@ -706,7 +719,8 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
     elif invalidation=='stopped':
         goal={'workspace_id':'ws','task_id':task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
             'current_turn_id':turn['id'],'status':'stopped'}
-        with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+        with conversations._connect() as conn:
+            conversations._write_goal(conn,{'id':turn['id']},goal)
     else:
         s.repo.timeline_records.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
             sequence=expected_sequence+1,parent_version_id=task.current_timeline_version_id,created_by_operation_id=None,snapshot={}),
@@ -745,10 +759,14 @@ def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_h
         authorization=authority.ensure(task,actor,interactive=True)
         now=datetime.now(timezone.utc)
         changes={'revision':authorization.revision+1}
-        if authorization_state=='revoked': changes['revoked_at']=now
-        elif authorization_state=='expired': changes['expires_at']=now-timedelta(seconds=1)
-        elif authorization_state=='unverified': changes['expires_at']=None
-        else: changes['identity']={**authorization.identity,'member_id':'another-member'}
+        if authorization_state=='revoked':
+            changes['revoked_at']=now
+        elif authorization_state=='expired':
+            changes['expires_at']=now-timedelta(seconds=1)
+        elif authorization_state=='unverified':
+            changes['expires_at']=None
+        else:
+            changes['identity']={**authorization.identity,'member_id':'another-member'}
         s.repo.task_authorization_records.save_task_authorization(replace(authorization,**changes),expected_revision=authorization.revision)
     case=main._exact_preview_use_case()
     assert case.metadata.write_guard is None

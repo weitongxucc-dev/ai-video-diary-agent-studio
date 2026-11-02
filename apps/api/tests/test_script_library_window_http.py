@@ -152,7 +152,8 @@ def test_library_http_reads_45_sections_without_full_body_getters(library, monke
     sections, cursor, version = [], 0, None
     for size in (20, 20, 5):
         params = {'after_ordinal': cursor}
-        if version: params['expected_updated_at'] = version
+        if version:
+            params['expected_updated_at'] = version
         response = client.get(url, params=params)
         assert response.status_code == 200, response.text
         window = response.json()

@@ -179,11 +179,13 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
     from uuid import uuid4
     from app.assistant.task_business import TaskBusiness
     from app.creation_execution import CreationExecutionActor
-    turn=str(uuid4());request_id=str(uuid4())
+    turn=str(uuid4())
+    request_id=str(uuid4())
     goal={'current_turn_id':turn,'original_turn_id':turn,'task_id':'task','workspace_id':'workspace',
           'member_id':'member','conversation_id':'conversation','status':'running','request_context':{},
           'source_input_id':None,'source_input_turn_id':None}
-    actor=CreationExecutionActor('workspace','member');task=SimpleNamespace(id='task')
+    actor=CreationExecutionActor('workspace','member')
+    task=SimpleNamespace(id='task')
     saved=[]
     def finish_turn(*args,**kwargs): saved.append((args,kwargs))
     conversations=SimpleNamespace(get_task_goal=lambda _:goal,finish_turn=finish_turn)
@@ -194,8 +196,10 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
              'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'submitted_input':{'text':'不复制原文'}}
     case=SimpleNamespace(window_request_result=lambda *args,**kwargs:receipt)
     business=object.__new__(TaskBusiness)
-    business.conversations=conversations;business.production=production
-    business.original=lambda _:(actor,task,None);business.script_case=lambda _:case
+    business.conversations=conversations
+    business.production=production
+    business.original=lambda _:(actor,task,None)
+    business.script_case=lambda _:case
     value={'kind':'script_window_request','operation':'patch','task_id':'task','script_id':'script',
            'request_id':request_id,'status':'unknown','submission_effect':'unknown'}
     response=business.finish({'turn_id':turn,'goal':dict(goal)},'模型说已全部完成',script_window_request=value)
