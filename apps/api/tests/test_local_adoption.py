@@ -128,7 +128,7 @@ def test_adopts_exact_rows_preserves_v1_and_qualifies_real_wav(legacy):
         snapshot = json.loads(receipt['manifest_json'])
         assert snapshot['before']['voice'] == original_voice
         assert snapshot['before']['assets'] == [originals[f'asset_{i}'] for i in sorted(range(12), key=lambda x: f'asset_{x}')]
-    voice = repo.get_versioned_voice_profile('local', 'voice_cc', 'v2')
+    voice = repo.profile_records.get_versioned_voice_profile('local', 'voice_cc', 'v2')
     assert voice.owner_user_id == OWNER and voice.visibility == 'private'
     assert voice.authorization.id == 'consent'
     reference = repo.profile_reference_input(voice, viewer_user_id=OWNER)

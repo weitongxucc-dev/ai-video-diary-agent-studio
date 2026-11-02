@@ -54,22 +54,22 @@ def reference_state(tmp_path, kind):
 @pytest.mark.parametrize('kind', ['person', 'voice'])
 def test_source_reference_calls_raw_reader_preserves_fallback_and_current_permissions(tmp_path, monkeypatch, kind):
     repo, profile, path = reference_state(tmp_path, kind)
-    reader = repo._profile_records._latest_profile_payload_row
+    reader = repo.profile_records._latest_profile_payload_row
     calls = []
     def observed(conn, workspace_id, profile_id, *, person):
         row = reader(conn, workspace_id, profile_id, person=person)
         calls.append((conn, workspace_id, profile_id, person, row))
         return row
-    monkeypatch.setattr(repo._profile_records, '_latest_profile_payload_row', observed)
+    monkeypatch.setattr(repo.profile_records, '_latest_profile_payload_row', observed)
     def forbidden():
         pytest.fail('raw reader/decoder must use caller conn')
-    monkeypatch.setattr(repo._profile_records, '_connect', forbidden)
+    monkeypatch.setattr(repo.profile_records, '_connect', forbidden)
     monkeypatch.setattr(repo._media_authorizations, '_connect', forbidden)
     resolved = repo._profile_reference_source(profile, viewer_user_id='member', local_diagnostic=False,
         for_generation=True, probe_media=False)
     assert resolved == (path.resolve(), None, None)
     assert calls[-1][1:4] == ('ws', profile.id, kind == 'person') and calls[-1][4] is None
-    save = repo._profile_records._save_person_profile if kind == 'person' else repo._profile_records._save_versioned_voice_profile
+    save = repo.profile_records._save_person_profile if kind == 'person' else repo.profile_records._save_versioned_voice_profile
     table = 'person_profiles' if kind == 'person' else 'versioned_voice_profiles'
     with repo._connect() as conn:
         save(conn, profile)

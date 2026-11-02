@@ -142,7 +142,7 @@ def test_independent_wav_registration_restart_and_default_pins_version(repositor
         video_library_path=repository.video_library_path,
     )
     assert reopened.get_default_versioned_voice("ws") == saved
-    assert reopened.get_versioned_voice_profile("ws", saved.id) == v2
+    assert reopened.profile_records.get_versioned_voice_profile("ws", saved.id) == v2
     assert (
         reopened.profile_inputs.resolve_narration_inputs(
             workspace_id="ws",
@@ -157,7 +157,7 @@ def test_independent_wav_registration_restart_and_default_pins_version(repositor
         == wav_bytes()
     )
     with pytest.raises(KeyError):
-        reopened.get_versioned_voice_profile("other", saved.id)
+        reopened.profile_records.get_versioned_voice_profile("other", saved.id)
     with pytest.raises(ValueError):
         reopened.set_default_versioned_voice(
             "ws", saved.id, "", viewer_user_id="member"
@@ -174,7 +174,7 @@ def test_immutable_version_and_owner_cannot_be_replaced(repository):
         repository.save_versioned_voice_profile(
             replace(saved, version="v2"), verified_owner_user_id="intruder"
         )
-    assert repository.get_versioned_voice_profile("ws", "voice", "v1") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice", "v1") == saved
 
 
 def test_person_reference_and_optional_person_pair(repository):
@@ -231,7 +231,7 @@ def test_invalid_reference_range_is_not_registered(repository, reference):
         repository.save_versioned_voice_profile(
             voice(repository, reference=reference), verified_owner_user_id="member"
         )
-    assert repository.list_versioned_voice_profiles("ws") == []
+    assert repository.profile_records.list_versioned_voice_profiles("ws") == []
 
 
 def test_person_segment_range_persists_without_a_model_and_never_uses_whole_file(
@@ -287,7 +287,7 @@ def test_person_segment_range_persists_without_a_model_and_never_uses_whole_file
         ),
     )
     saved = repository.save_person_profile(profile, verified_owner_user_id="member")
-    assert repository.get_person_profile("ws", "person", "v1") == saved
+    assert repository.profile_records.get_person_profile("ws", "person", "v1") == saved
     assert repository.resolve_profile_reference(
         saved, viewer_user_id="member", for_generation=False
     )[1:] == (0.25, 1.5)
@@ -316,7 +316,7 @@ def test_profile_and_source_restrictions_are_separate_and_reread(repository, sta
     asset.use_state = state
     repository._save_asset(asset)
     assert (
-        repository.get_versioned_voice_profile("ws", "voice").use_state == "available"
+        repository.profile_records.get_versioned_voice_profile("ws", "voice").use_state == "available"
     )
     with pytest.raises(ValueError, match="来源"):
         repository.resolve_voice_reference(saved, viewer_user_id="member")
@@ -346,7 +346,7 @@ def test_shared_source_revocation_foreign_owner_and_lost_file(repository):
     with pytest.raises(PermissionError):
         repository.resolve_voice_reference(saved, viewer_user_id="other")
     path.unlink()
-    assert repository.get_versioned_voice_profile("ws", "voice") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice") == saved
     with pytest.raises(ValueError, match="失联"):
         repository.resolve_voice_reference(saved, viewer_user_id="member")
 
@@ -452,7 +452,7 @@ def test_legacy_payload_is_read_without_write_or_assumed_private_owner(repositor
             raw.pop(key)
         before = json.dumps(raw, ensure_ascii=False)
         conn.execute("UPDATE versioned_voice_profiles SET payload=?", (before,))
-    old = repository.get_versioned_voice_profile("ws", "voice")
+    old = repository.profile_records.get_versioned_voice_profile("ws", "voice")
     assert old.reference is None and old.owner_user_id is None
     assert old.model_id == "" and old.person_profile_id == ""
     with pytest.raises(PermissionError):
@@ -558,7 +558,7 @@ def test_unconfigured_model_does_not_block_saved_reference_or_fake_preview(
         preview_text="合成文字",
         viewer_user_id="member",
     )
-    assert repository.get_versioned_voice_profile("ws", "voice") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice") == saved
     assert result.status == "unavailable" and result.reason == "capability_unavailable"
     assert result.output_path is None and provider.calls == 0
 
@@ -652,7 +652,7 @@ def test_unmapped_historical_authorization_remains_readable_but_not_runnable(
         payload.update(auth_link)
         before = json.dumps(payload)
         conn.execute("UPDATE versioned_voice_profiles SET payload=?", (before,))
-    read = repository.get_versioned_voice_profile("ws", "voice")
+    read = repository.profile_records.get_versioned_voice_profile("ws", "voice")
     assert (
         read.id == saved.id and read.reference_audio_path == saved.reference_audio_path
     )
@@ -686,7 +686,7 @@ def test_voice_reference_can_be_registered_before_transcript_but_not_generated(
     repository, tmp_path
 ):
     saved = save_voice(repository, reference_text="")
-    assert repository.get_versioned_voice_profile("ws", "voice") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice") == saved
     provider = Provider()
     result = VoicePreviewService(tmp_path / "output", provider).request(
         repository=repository,
@@ -707,7 +707,7 @@ def test_new_registration_cannot_use_legacy_proof_shape_to_skip_reference_valida
         repository.save_versioned_voice_profile(
             replace(value, reference=None), verified_owner_user_id="member"
         )
-    assert repository.list_versioned_voice_profiles("ws") == []
+    assert repository.profile_records.list_versioned_voice_profiles("ws") == []
 
 
 def test_readiness_does_not_count_a_lost_reference_as_usable(repository):
@@ -1109,7 +1109,7 @@ def test_range_permission_failure_cancel_never_publish_cache_and_release_registe
         is True
     )
     assert (
-        repository.get_versioned_voice_profile("ws", value.id, value.version) == value
+        repository.profile_records.get_versioned_voice_profile("ws", value.id, value.version) == value
     )
 
 
@@ -1171,7 +1171,7 @@ def test_range_failed_real_ffmpeg_keeps_profile_without_success_output(
         is True
     )
     assert (
-        repository.get_versioned_voice_profile("ws", value.id, value.version) == value
+        repository.profile_records.get_versioned_voice_profile("ws", value.id, value.version) == value
     )
 
 
@@ -1362,7 +1362,7 @@ def test_range_video_audio_and_person_use_distinct_exact_derived_media(
     assert Path(recorder.calls[0].visual_path) == person_input.path != source
     assert avatar_lipsync_cache_key(request) == result.cache_key
     assert (
-        repository.get_versioned_voice_profile("ws", audio.id, "v1").reference_text
+        repository.profile_records.get_versioned_voice_profile("ws", audio.id, "v1").reference_text
         == ""
     )
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
@@ -1565,13 +1565,13 @@ def test_profile_input_resolver_keeps_historical_facts_current_access_and_readon
     with repository._connect() as conn:
         for value in (old_voice, current_voice, protected_voice,
                       replace(protected_voice, version='v2', use_state='available', authorization=alternate)):
-            repository._profile_records._save_versioned_voice_profile(conn, value)
+            repository.profile_records._save_versioned_voice_profile(conn, value)
         for value in (old_person, current_person):
-            repository._profile_records._save_person_profile(conn, value)
+            repository.profile_records._save_person_profile(conn, value)
         conn.execute('INSERT INTO episode_voice_selections VALUES(?,?,?,?,?)',
             ('ws', 'metadata-episode', old_voice.id, 'v1', now.isoformat()))
     entry = PronunciationEntry('metadata-pronunciation', 'ws', 'term', 'zh', 'fixed pronunciation', 'workspace', None, 'v1')
-    repository._profile_records.save_pronunciation_entry(entry)
+    repository.profile_records.save_pronunciation_entry(entry)
     inputs = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
         voice_profile_id=old_voice.id, voice_version='v1')
     assert isinstance(inputs, VersionedNarrationInputs)
@@ -1602,8 +1602,8 @@ def test_profile_input_resolver_keeps_historical_facts_current_access_and_readon
         repository.profile_inputs.resolve_avatar_lipsync_request(**command)
     assert reference_calls == [old_voice.id]
     with repository._connect() as conn:
-        repository._profile_records._save_person_profile(conn, replace(current_person, version='v3', visibility='private'))
-        repository._profile_records._save_versioned_voice_profile(conn, replace(current_voice, version='v3', visibility='private'))
+        repository.profile_records._save_person_profile(conn, replace(current_person, version='v3', visibility='private'))
+        repository.profile_records._save_versioned_voice_profile(conn, replace(current_voice, version='v3', visibility='private'))
     with pytest.raises(PermissionError, match='已取消共享'):
         repository.profile_inputs.resolve_avatar_lipsync_request(**command, for_generation=False)
     assert reference_calls == [old_voice.id]

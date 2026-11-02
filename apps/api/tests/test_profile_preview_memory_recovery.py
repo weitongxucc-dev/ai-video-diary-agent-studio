@@ -35,7 +35,7 @@ def test_voice_preview_text_budget_includes_fixed_reference_transcript(repo, tmp
     runtime, _, _, queued = setup_preview(repo, tmp_path)
     owner = runtime.registrations["media_preview"].owner
     _, _, resources = owner.facts(queued)
-    voice = repo.get_versioned_voice_profile("ws", queued.voice_profile_id, queued.voice_version)
+    voice = repo.profile_records.get_versioned_voice_profile("ws", queued.voice_profile_id, queued.voice_version)
     assert resources["text_chars"] == len(queued.preview_input["preview_text"]) + len(voice.reference_text)
     with repo._connect() as connection:
         request = connection.execute("SELECT resources_json FROM device_work_requests WHERE id=?",

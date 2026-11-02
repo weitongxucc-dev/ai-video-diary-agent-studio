@@ -50,7 +50,7 @@ def state(tmp_path, monkeypatch, plan_owner):
     )
     asset.segments[0].description = "完全不同的新主题"
     production._save_asset(asset)
-    production.save_pronunciation_entry(ProfilePronunciationEntry(
+    production.profile_records.save_pronunciation_entry(ProfilePronunciationEntry(
         id="pronunciation-workspace-a", workspace_id="workspace_a", term="Codex",
         language="zh", target_pronunciation="科德克斯", scope="person",
         scope_reference=voice.person_profile_id, version="v1",
@@ -95,7 +95,7 @@ def test_versions_are_append_only_workspace_scoped_and_survive_restart(state):
 
 def test_preflight_preserves_exact_voice_version_and_new_plan_snapshot(state):
     production, template, client = state
-    voice = production.get_versioned_voice_profile("workspace_a", "voice-workspace_a", "v1")
+    voice = production.profile_records.get_versioned_voice_profile("workspace_a", "voice-workspace_a", "v1")
     production.save_versioned_voice_profile(
         replace(voice, version="v2"), verified_owner_user_id=template.owner_user_id
     )

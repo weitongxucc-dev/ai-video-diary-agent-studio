@@ -699,7 +699,7 @@ class SegmentProductionUseCase:
                 digest(dependencies),tuple(assets))
         before = read(conn)
         plan = self.repository.plan_records.read_creation_plan(conn,request.workspace_id,task.plan_id)
-        profiles = self.repository.capture_profile_local_check(conn,request.workspace_id,
+        profiles = self.repository.profile_records.capture_local_check(conn,request.workspace_id,
             [('voice',plan.selected_voice.profile_id,plan.selected_voice.version)],
             [(item.id,item.version) for item in plan.pronunciation_references])
         def check(current):

@@ -51,8 +51,8 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
     def stream_profile_reference(profile_kind: Literal["person-profiles", "voice-profiles"], profile_id: str, request: Request, version: str):
         ws = workspace_for(request)
         try:
-            profile = (records_for().get_person_profile(ws, profile_id, version) if profile_kind == "person-profiles"
-                       else records_for().get_versioned_voice_profile(ws, profile_id, version))
+            profile = (records_for().profile_records.get_person_profile(ws, profile_id, version) if profile_kind == "person-profiles"
+                       else records_for().profile_records.get_versioned_voice_profile(ws, profile_id, version))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="profile not found") from exc
         path, reason, _, _ = read_facts_for(profile, request)
@@ -64,7 +64,7 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
 
     @router.get("/api/media/person-profiles", response_model=PersonProfilesResponse)
     def list_media_person_profiles(request: Request) -> PersonProfilesResponse:
-        people = _readable_profiles(request, records_for().list_person_profiles(workspace_for(request)))
+        people = _readable_profiles(request, records_for().profile_records.list_person_profiles(workspace_for(request)))
         return PersonProfilesResponse(
             items=[person_response_for(item, request) for item in people],
             total_count=len(people),
@@ -76,8 +76,8 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
         if "use_state" in payload.model_fields_set:
             return payload.use_state
         try:
-            previous = (records_for().get_person_profile(workspace_id, payload.id) if person
-                        else records_for().get_versioned_voice_profile(workspace_id, payload.id))
+            previous = (records_for().profile_records.get_person_profile(workspace_id, payload.id) if person
+                        else records_for().profile_records.get_versioned_voice_profile(workspace_id, payload.id))
         except KeyError:
             return payload.use_state
         return previous.use_state
@@ -132,7 +132,7 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
         version: str | None = None,
     ) -> PersonProfileResponse:
         try:
-            person = records_for().get_person_profile(
+            person = records_for().profile_records.get_person_profile(
                 workspace_for(request), person_id, version
             )
         except KeyError as exc:
@@ -151,10 +151,10 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
     ) -> PersonProfilesResponse:
         workspace_id = workspace_for(request)
         try:
-            records_for().get_person_profile(workspace_id, person_id)
+            records_for().profile_records.get_person_profile(workspace_id, person_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="person profile not found") from exc
-        items = _readable_profiles(request, records_for().list_person_profile_versions(workspace_id, person_id))
+        items = _readable_profiles(request, records_for().profile_records.list_person_profile_versions(workspace_id, person_id))
         return PersonProfilesResponse(
             items=[person_response_for(item, request) for item in items],
             total_count=len(items),
@@ -164,7 +164,7 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
 
     @router.get("/api/media/voice-profiles", response_model=VersionedVoiceProfilesResponse)
     def list_media_voice_profiles(request: Request) -> VersionedVoiceProfilesResponse:
-        voices = _readable_profiles(request, records_for().list_versioned_voice_profiles(workspace_for(request)))
+        voices = _readable_profiles(request, records_for().profile_records.list_versioned_voice_profiles(workspace_for(request)))
         return VersionedVoiceProfilesResponse(
             items=[voice_response_for(item, request) for item in voices],
             total_count=len(voices),
@@ -181,7 +181,7 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
         person_pair = (payload.person_profile_id, payload.person_version)
         if not {"person_profile_id", "person_version"} & payload.model_fields_set:
             try:
-                previous = records_for().get_versioned_voice_profile(workspace_id, payload.id)
+                previous = records_for().profile_records.get_versioned_voice_profile(workspace_id, payload.id)
                 person_pair = (previous.person_profile_id, previous.person_version)
             except KeyError:
                 pass  # A new independent voice has no historical person restriction.
@@ -228,7 +228,7 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
         version: str | None = None,
     ) -> VersionedVoiceProfileResponse:
         try:
-            voice = records_for().get_versioned_voice_profile(
+            voice = records_for().profile_records.get_versioned_voice_profile(
                 workspace_for(request), voice_profile_id, version
             )
         except KeyError as exc:
@@ -247,10 +247,10 @@ def build_profile_router(*, records_for, workspace_for, reader_for, voice_respon
     ) -> VersionedVoiceProfilesResponse:
         workspace_id = workspace_for(request)
         try:
-            records_for().get_versioned_voice_profile(workspace_id, voice_profile_id)
+            records_for().profile_records.get_versioned_voice_profile(workspace_id, voice_profile_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="voice profile not found") from exc
-        items = _readable_profiles(request, records_for().list_versioned_voice_profile_versions(
+        items = _readable_profiles(request, records_for().profile_records.list_versioned_voice_profile_versions(
             workspace_id, voice_profile_id
         ))
         return VersionedVoiceProfilesResponse(

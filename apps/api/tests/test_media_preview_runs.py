@@ -106,8 +106,8 @@ def _avatar_request(repository, *, audio, provider=None, retry=False, complete=T
     service = repository._preview_avatar_service
     if provider is not None:
         service.provider = provider
-    person = repository.get_person_profile(harness.actor.workspace_id, "person_a")
-    voice = repository.get_versioned_voice_profile(harness.actor.workspace_id, "voice_a", "voice-v1")
+    person = repository.profile_records.get_person_profile(harness.actor.workspace_id, "person_a")
+    voice = repository.profile_records.get_versioned_voice_profile(harness.actor.workspace_id, "voice_a", "voice-v1")
     params = {
         "person_id": person.id, "person_version": person.version,
         "voice_profile_id": voice.id, "voice_version": voice.version,
@@ -491,7 +491,7 @@ def test_voice_preview_persists_unavailable_and_revoked_historical_versions(tmp_
 
     assert active.identity != revoked.identity
     assert (revoked.status, revoked.reason) == ("blocked", "authorization_revoked")
-    assert repository.get_versioned_voice_profile("workspace_a", voice.id, voice.version) == voice
+    assert repository.profile_records.get_versioned_voice_profile("workspace_a", voice.id, voice.version) == voice
 
 
 def test_voice_preview_preflights_language_and_pronunciation_before_provider(tmp_path):
@@ -515,7 +515,7 @@ def test_voice_preview_preflights_language_and_pronunciation_before_provider(tmp
     )
     assert language_result.impact and language_result.repair_action
 
-    repository.save_pronunciation_entry(
+    repository.profile_records.save_pronunciation_entry(
         PronunciationEntry(
             id="pronunciation-a",
             workspace_id="workspace_a",
@@ -642,7 +642,7 @@ def test_avatar_preview_persists_unavailable_and_revoked_historical_versions(tmp
     assert active_provider.calls == 1
     assert active.identity != revoked.identity
     assert (revoked.status, revoked.reason) == ("blocked", "authorization_revoked")
-    assert repository.get_person_profile("workspace_a", person.id, person.version) == person
+    assert repository.profile_records.get_person_profile("workspace_a", person.id, person.version) == person
 
 
 def test_avatar_preview_failure_requires_explicit_retry(tmp_path):

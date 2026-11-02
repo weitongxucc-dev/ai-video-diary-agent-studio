@@ -4365,7 +4365,7 @@ def test_new_voice_adoption_reuses_only_exact_received_sampling_sha(tmp_path):
     received = service.receive('local', case.actor.member_id, sample.id, request_id='sample-receive',
         text_version=sample.text_version, purpose=sample.purpose, source_device='import',
         content=synthetic_wav_bytes(), model_id='test')
-    voice = case.repo.get_versioned_voice_profile('local', received.voice_profile_id, received.voice_version)
+    voice = case.repo.profile_records.get_versioned_voice_profile('local', received.voice_profile_id, received.voice_version)
     proof = service.received_source_evidence(voice)
     assert proof['sha256'] == received.audio_sha256
     assert service.received_source_evidence(replace(voice, version='other-version')) is None

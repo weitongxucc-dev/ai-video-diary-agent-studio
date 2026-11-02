@@ -345,7 +345,7 @@ def _seed_creation_plan_facts(
         person_id=f"voice-{workspace_id}-person", voice_id=f"voice-{workspace_id}",
         person_version="v1", voice_version="v1", language="zh", model_id="test-voice-model",
     )
-    production.save_pronunciation_entry(
+    production.profile_records.save_pronunciation_entry(
         PronunciationEntry(
             id=f"pronunciation-{workspace_id}",
             workspace_id=workspace_id,
@@ -3988,7 +3988,7 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
     assert stale_confirm.json()["detail"]["error"] == "creation_plan_preflight_stale"
 
     pronunciation_preview = client.post("/api/creation-plans/preview", json=payload)
-    production.save_pronunciation_entry(
+    production.profile_records.save_pronunciation_entry(
         PronunciationEntry(
             id="pronunciation-local",
             workspace_id="local",
@@ -4011,7 +4011,7 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
     assert pronunciation_stale.json()["detail"]["error"] == "creation_plan_preflight_stale"
 
     authorization_preview = client.post("/api/creation-plans/preview", json=payload)
-    person = production.get_person_profile("local", "voice-local-person", "v1")
+    person = production.profile_records.get_person_profile("local", "voice-local-person", "v1")
     person_authorization = production.get_authorization(
         "local", person.authorization.id
     )
@@ -4485,7 +4485,7 @@ def test_foundation_separates_voice_reference_from_live_engine(foundation_state,
 
     state = foundation_state
     if issue in {"no_voice", "both_missing"}:
-        monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [])
+        monkeypatch.setattr(state.repo.profile_records, "list_versioned_voice_profiles", lambda _ws: [])
     elif issue == "lost_reference":
         state.repo.resolve_workspace_media_reference(LEGACY_WORKSPACE_ID, state.voice.reference_audio_path).unlink()
     elif issue in {"empty_text", "restricted", "range"}:
@@ -4536,7 +4536,7 @@ def test_foundation_video_voice_preparation_never_decodes_or_derives(foundation_
             segment_id=state.video.segments[0].id if ranged else None,
             start_seconds=.5 if ranged else None, end_seconds=2 if ranged else None),
     ), verified_owner_user_id=state.owner.member_id)
-    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [voice])
+    monkeypatch.setattr(state.repo.profile_records, "list_versioned_voice_profiles", lambda _ws: [voice])
 
     def no_decoder(_asset):
         raise AssertionError("foundation preparation must not decode video")
@@ -4557,7 +4557,7 @@ def test_foundation_checks_all_readable_voices_before_reporting_missing_text(fou
         replace(state.voice, id="incomplete-voice", reference_text=""),
         verified_owner_user_id=state.owner.member_id,
     )
-    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _ws: [incomplete, state.voice])
+    monkeypatch.setattr(state.repo.profile_records, "list_versioned_voice_profiles", lambda _ws: [incomplete, state.voice])
     response = state.client.get("/api/production/foundation", headers=state.headers)
     assert response.status_code == 200
     assert response.json()["readiness"]["ready"] is True

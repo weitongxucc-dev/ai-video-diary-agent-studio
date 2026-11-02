@@ -17,7 +17,7 @@ def build_pronunciation_router(*, records_for, workspace_for, required_text_for,
         response_model=PronunciationEntriesResponse,
     )
     def list_media_pronunciation_entries(request: Request) -> PronunciationEntriesResponse:
-        entries = records_for().list_pronunciation_entries(workspace_for(request))
+        entries = records_for().profile_records.list_pronunciation_entries(workspace_for(request))
         return PronunciationEntriesResponse(
             items=[_pronunciation_entry_response(item) for item in entries],
             total_count=len(entries),
@@ -39,7 +39,7 @@ def build_pronunciation_router(*, records_for, workspace_for, required_text_for,
                 if payload.scope_reference is not None
                 else None
             )
-            saved = records_for().save_pronunciation_entry(
+            saved = records_for().profile_records.save_pronunciation_entry(
                 PronunciationEntry(
                     id=required_text_for(payload.id, "pronunciation entry id"),
                     workspace_id=workspace_id,
@@ -70,7 +70,7 @@ def build_pronunciation_router(*, records_for, workspace_for, required_text_for,
         version: str | None = None,
     ) -> PronunciationEntryResponse:
         try:
-            entry = records_for().get_pronunciation_entry(
+            entry = records_for().profile_records.get_pronunciation_entry(
                 workspace_for(request), entry_id, version
             )
         except KeyError as exc:
@@ -88,10 +88,10 @@ def build_pronunciation_router(*, records_for, workspace_for, required_text_for,
     ) -> PronunciationEntriesResponse:
         workspace_id = workspace_for(request)
         try:
-            records_for().get_pronunciation_entry(workspace_id, entry_id)
+            records_for().profile_records.get_pronunciation_entry(workspace_id, entry_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="pronunciation entry not found") from exc
-        items = records_for().list_pronunciation_entry_versions(workspace_id, entry_id)
+        items = records_for().profile_records.list_pronunciation_entry_versions(workspace_id, entry_id)
         return PronunciationEntriesResponse(
             items=[_pronunciation_entry_response(item) for item in items],
             total_count=len(items),

@@ -35,10 +35,10 @@ class PersonPreviewUseCase:
             selected_person = creation_plan.selected_person
             if selected_person is None:
                 raise ValueError('当前任务没有绑定人物声音版本')
-            person = self.repository.get_person_profile(workspace_id, selected_person.profile_id, selected_person.version)
+            person = self.repository.profile_records.get_person_profile(workspace_id, selected_person.profile_id, selected_person.version)
             current_render = self.repository.person_renders.get_person_render(workspace_id, task.id, clip.person_render_id) if clip.person_render_id else None
             if current_render is not None:
-                person = self.repository.get_person_profile(workspace_id, current_render.person_profile_id, current_render.person_version)
+                person = self.repository.profile_records.get_person_profile(workspace_id, current_render.person_profile_id, current_render.person_version)
         except (KeyError, StopIteration) as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task person edit target not found') from exc
         except ValueError as exc:
@@ -138,7 +138,7 @@ class PersonPreviewUseCase:
         if not matching:
             return False
         try:
-            person = self.repository.get_person_profile(render.workspace_id, render.person_profile_id, render.person_version)
+            person = self.repository.profile_records.get_person_profile(render.workspace_id, render.person_profile_id, render.person_version)
             audio = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(render.workspace_id, segment.audio_reference)
             task = self.repository.task_records.get_creation_task(render.workspace_id, render.task_id)
             request = self.repository.profile_inputs.resolve_avatar_lipsync_request(workspace_id=render.workspace_id, person_id=person.id, person_version=person.version, voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version, audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language, motion=render.motion, expression=render.expression, authorization_id=person.authorization.id if person.authorization else None, authorization_version=person.authorization.version if person.authorization else None, model_id=render.model_id, viewer_user_id=task.owner_user_id)

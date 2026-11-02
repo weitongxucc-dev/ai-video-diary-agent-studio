@@ -191,8 +191,8 @@ class CreationPlanPreflightUseCase:
         default_voice = self.production.get_default_versioned_voice(workspace_id) if explicit is None and required_voice is None else None
         voice_media_failure = None
         try:
-            voices = ([self.production.get_versioned_voice_profile(workspace_id, explicit[0], explicit[1])] if explicit else
-                      [self.production.get_versioned_voice_profile(workspace_id, required_voice["profile_id"], required_voice["version"])] if required_voice else
+            voices = ([self.production.profile_records.get_versioned_voice_profile(workspace_id, explicit[0], explicit[1])] if explicit else
+                      [self.production.profile_records.get_versioned_voice_profile(workspace_id, required_voice["profile_id"], required_voice["version"])] if required_voice else
                       [default_voice] if default_voice else [])
         except KeyError:
             voices = []
@@ -211,7 +211,7 @@ class CreationPlanPreflightUseCase:
                 active_voices.append(voice)
                 pronunciation_references = [CreationPlanPronunciationReference(id=entry.id, version=entry.version,
                     scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language)
-                    for entry in self.production.list_applicable_pronunciation_entries(workspace_id=workspace_id,
+                    for entry in self.production.profile_records.list_applicable_pronunciation_entries(workspace_id=workspace_id,
                         person_profile_id=voice.person_profile_id, episode_id="")]
             except (PermissionError, ValueError, OSError, KeyError) as exc:
                 voice_media_failure = str(exc)

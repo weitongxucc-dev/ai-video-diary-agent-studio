@@ -4867,7 +4867,7 @@ def test_person_preview_rejects_partial_or_negated_request(person_render_edit_st
 def test_person_generation_reads_narration_language(permitted_person_edit_state, monkeypatch):
     state = permitted_person_edit_state
     segment = state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id)
-    voice = state.production.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id, segment.voice_version)
+    voice = state.production.profile_records.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id, segment.voice_version)
     state.production.save_versioned_voice_profile(
         replace(voice, version='v2', language='en'),
         verified_owner_user_id=state.member.member_id,
@@ -4990,7 +4990,7 @@ def test_person_lineage_requires_matching_language_and_success(person_render_edi
         input_refs=[segment.audio_reference], parameters={'language': segment.language})
     assert not main_module._person_render_matches_narration(render, segment, [transform])
     audio = state.production.narration_artifacts.resolve_authorized_narration_audio_reference(state.workspace_id, segment.audio_reference)
-    person = state.production.get_person_profile(state.workspace_id, render.person_profile_id, render.person_version)
+    person = state.production.profile_records.get_person_profile(state.workspace_id, render.person_profile_id, render.person_version)
     visual = state.production.resolve_workspace_media_reference(
         state.workspace_id, person.avatar_reference, require_registered=True)
     facts = main_module.presenter_input_facts(SimpleNamespace(audio_path=str(audio), visual_path=str(visual)))
@@ -5002,7 +5002,7 @@ def test_person_lineage_requires_matching_language_and_success(person_render_edi
     transform.status = 'failed'
     assert not main_module._person_render_matches_narration(render, segment, [transform])
     transform.status = 'succeeded'
-    voice = state.production.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id,
+    voice = state.production.profile_records.get_versioned_voice_profile(state.workspace_id, segment.voice_profile_id,
                                                           segment.voice_version)
     state.production.save_authorization(replace(voice.authorization, version='v2', status='revoked'))
     assert not main_module._person_render_matches_narration(render, segment, [transform])
@@ -5575,7 +5575,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     person_segment = state.production.narration_records.get_narration_segment(
         state.workspace_id, state.task.id, state.montage.cues[0].narration_segment_id,
     )
-    person_profile = state.production.get_person_profile(
+    person_profile = state.production.profile_records.get_person_profile(
         state.workspace_id, state.old_render.person_profile_id, state.old_render.person_version,
     )
     person_audio = state.production.narration_artifacts.resolve_authorized_narration_audio_reference(
@@ -5677,7 +5677,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert main_module._creation_render_is_valid(
         state.workspace_id, state.task.id, verify_media=False, timeline_version=original,
     )
-    person_authorization = state.production.get_person_profile(
+    person_authorization = state.production.profile_records.get_person_profile(
         state.workspace_id, person_profile.id, person_profile.version,
     ).authorization
     state.production.save_authorization(replace(person_authorization, version="v2-revoked", status="revoked"))
@@ -5763,7 +5763,7 @@ def _queued_person_edit(state, *, exact=False, change=False):
 
 
 def _revoke_person_edit_authorization(state):
-    person = state.production.get_person_profile(state.workspace_id,
+    person = state.production.profile_records.get_person_profile(state.workspace_id,
         state.old_render.person_profile_id, state.old_render.person_version)
     state.production.save_authorization(replace(person.authorization, version="v2-revoked", status="revoked"))
 

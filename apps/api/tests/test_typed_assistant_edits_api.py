@@ -451,7 +451,7 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
     voices = [SimpleNamespace(id=name, version="v1", person_profile_id="person", person_version="v1",
                               display_name="备用名称", language="zh", model_id="declared-voice")
               for name in ("hidden", "valid", "missing", "wrong-language")]
-    monkeypatch.setattr(state.repo, "list_versioned_voice_profiles", lambda _: voices)
+    monkeypatch.setattr(state.repo.profile_records, "list_versioned_voice_profiles", lambda _: voices)
 
     def readable(voice, owner):
         assert owner == state.task.owner_user_id
@@ -469,9 +469,9 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
         return SimpleNamespace(person_profile_id="person", language="en" if profile_id == "wrong-language" else "zh")
 
     monkeypatch.setattr(state.repo, "profile_readable", readable)
-    monkeypatch.setattr(state.repo, "get_person_profile", person)
+    monkeypatch.setattr(state.repo.profile_records, "get_person_profile", person)
     monkeypatch.setattr(state.repo, "creation_plan_voice_reference", reference)
-    monkeypatch.setattr(state.repo, "list_applicable_pronunciation_entries", lambda **_: [])
+    monkeypatch.setattr(state.repo.profile_records, "list_applicable_pronunciation_entries", lambda **_: [])
 
     def returned(event_id, status, *, model="declared-model"):
         state.repo.execution_records.append_task_event(TaskEvent(event_id, "ws", state.task.id, None,

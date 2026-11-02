@@ -101,7 +101,7 @@ from app.creation.task_input_reads import (
     require_creation_task, creation_task_from_payload,
     narration_segment_row, narration_segment_rows,
 )
-from app.profiles.contracts import (Authorization, PersonProfile, _as_utc, PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
+from app.profiles.contracts import (Authorization, PersonProfile, _as_utc, PronunciationEntry as PronunciationEntry, VoiceProfile as VersionedVoiceProfile)
 from app.profiles.authorizations import MediaAuthorizationStore, _authorization_payload, _authorization_from_payload, _validate_authorization
 from app.creation.editing.timeline_history_repository import TimelineHistoryReadRepository
 from app.profiles.versioned_payloads import _save_versioned_payload, _list_versioned_payloads, _versioned_row
@@ -424,17 +424,17 @@ class ProductionRepository:
         self._legacy_voice_profiles = LegacyVoiceProfileStore(self._connect)
         self._workspace_profiles = WorkspaceProductionProfileStore(self._connect)
         self._profile_references = ProfileReferenceAccess(
-            self._connect, self._profile_records, self._media_authorizations,
+            self._connect, self.profile_records, self._media_authorizations,
             self._material_assets, self._workspace_media_references, self._material_source_files)
         self._profile_registration = ProfileRegistrationUseCase(
-            self._connect, self._profile_records, self._media_authorizations,
+            self._connect, self.profile_records, self._media_authorizations,
             self._workspace_profiles, self._legacy_voice_profiles, self._profile_references,
             self._workspace_media_references, self._material_assets)
         self.foundation_readiness = ProductionFoundationReadiness(
             get_profile=lambda workspace_id: self.get_profile(workspace_id),
             list_assets=lambda workspace_id, *, include_private, viewer_user_id, local_diagnostic: self.list_assets(
                 workspace_id, include_private=include_private, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic),
-            list_versioned_voices=lambda workspace_id: self.list_versioned_voice_profiles(workspace_id),
+            list_versioned_voices=lambda workspace_id: self.profile_records.list_versioned_voice_profiles(workspace_id),
             profile_readable=lambda profile, viewer_user_id, local_diagnostic: self.profile_readable(
                 profile, viewer_user_id, local_diagnostic),
             profile_reference_input=lambda profile, *, viewer_user_id, local_diagnostic: self.profile_reference_input(
@@ -442,7 +442,7 @@ class ProductionRepository:
             material_segment_eligible=lambda asset, segment, workspace_id: material_segment_eligible(asset, segment, workspace_id),
         )
         self.person_renders = PersonRenderStore(
-            self._connect, self._profile_records, self._workspace_media_references)
+            self._connect, self.profile_records, self._workspace_media_references)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         initialize_production_schema(self._connect)
         self.material_links = LinkMaterialIntakeUseCase(
@@ -512,7 +512,7 @@ class ProductionRepository:
             decode_object=_json_object_from_text, decode_timeline_version=self.timeline_records.timeline_version_from_row)
         self.preview_records = PreviewRecordStore(self._connect)
         self._media_authorizations = MediaAuthorizationStore(self._connect)
-        self._profile_records = ProfileRecordStore(self._connect, self._media_authorizations)
+        self.profile_records = ProfileRecordStore(self._connect, self._media_authorizations)
         self.hash_records = MaterialHashRecordStore(self._connect)
         self.hash_intake = MaterialHashIntake(self._connect, records=self.hash_records,
             library_root=lambda: self.video_library_path,
@@ -565,7 +565,8 @@ class ProductionRepository:
         self.narration_voice_selection = NarrationVoiceSelectionTransaction(self._connect,
             require_task=require_creation_task, decode_plan=self.plan_records.creation_plan_from_payload,
             voice_reference=self.creation_plan_voice_reference,
-            pronunciation_entries=self.list_applicable_pronunciation_entries,
+            pronunciation_entries=lambda *, workspace_id, person_profile_id, episode_id: self.profile_records.list_applicable_pronunciation_entries(
+                workspace_id=workspace_id, person_profile_id=person_profile_id, episode_id=episode_id),
             append_event=self.execution_records.append_task_event, decode_job=self.job_records.job_run_from_row,
             revision_value=_revision_value)
         self.knowledge_adoption = TaskKnowledgeAdoptionUseCase(self._connect,
@@ -686,11 +687,11 @@ class ProductionRepository:
         )
         self.profile_inputs = ProfileInputResolver(
             connection_factory=lambda: self._connect(), task_records=self.task_records,
-            read_voice=lambda conn, workspace_id, profile_id, version=None: self._get_versioned_voice_profile(conn, workspace_id, profile_id, version),
-            read_person=lambda conn, workspace_id, profile_id, version=None: self._get_person_profile(conn, workspace_id, profile_id, version),
+            read_voice=lambda conn, workspace_id, profile_id, version=None: self.profile_records._get_versioned_voice_profile(conn, workspace_id, profile_id, version),
+            read_person=lambda conn, workspace_id, profile_id, version=None: self.profile_records._get_person_profile(conn, workspace_id, profile_id, version),
             current_authorization=lambda conn, workspace_id, authorization: self._current_authorization(conn, workspace_id, authorization),
             read_authorization=lambda conn, workspace_id, authorization_id, version: self._get_authorization(conn, workspace_id, authorization_id, version),
-            list_pronunciation=lambda *, workspace_id, person_profile_id, episode_id: self.list_applicable_pronunciation_entries(
+            list_pronunciation=lambda *, workspace_id, person_profile_id, episode_id: self.profile_records.list_applicable_pronunciation_entries(
                 workspace_id=workspace_id, person_profile_id=person_profile_id, episode_id=episode_id),
             profile_readable=lambda profile, user_id, local_diagnostic=False: self.profile_readable(profile, user_id, local_diagnostic),
             profile_reference_input=lambda profile, *, viewer_user_id=None, local_diagnostic=False: self.profile_reference_input(
@@ -972,27 +973,9 @@ class ProductionRepository:
     ) -> PersonProfile:
         return self._profile_registration.save_person_profile(person, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
-    def capture_profile_local_check(self, conn, workspace_id, profile_refs, pronunciation_refs=(), *, pronunciation_scope=None):
-        return self._profile_records.capture_local_check(conn, workspace_id, profile_refs, pronunciation_refs,
-            pronunciation_scope=pronunciation_scope)
 
-    def get_person_profile(
-        self,
-        workspace_id: str,
-        person_id: str,
-        version: str | None = None,
-    ) -> PersonProfile:
-        return self._profile_records.get_person_profile(workspace_id, person_id, version)
 
-    def list_person_profiles(self, workspace_id: str) -> list[PersonProfile]:
-        return self._profile_records.list_person_profiles(workspace_id)
 
-    def list_person_profile_versions(
-        self,
-        workspace_id: str,
-        person_id: str,
-    ) -> list[PersonProfile]:
-        return self._profile_records.list_person_profile_versions(workspace_id, person_id)
 
     def save_versioned_voice_profile(
         self,
@@ -1001,50 +984,12 @@ class ProductionRepository:
     ) -> VersionedVoiceProfile:
         return self._profile_registration.save_versioned_voice_profile(voice, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
-    def get_versioned_voice_profile(
-        self,
-        workspace_id: str,
-        voice_profile_id: str,
-        version: str | None = None,
-    ) -> VersionedVoiceProfile:
-        return self._profile_records.get_versioned_voice_profile(workspace_id, voice_profile_id, version)
 
-    def list_versioned_voice_profiles(
-        self,
-        workspace_id: str,
-    ) -> list[VersionedVoiceProfile]:
-        return self._profile_records.list_versioned_voice_profiles(workspace_id)
 
-    def list_versioned_voice_profile_versions(
-        self,
-        workspace_id: str,
-        voice_profile_id: str,
-    ) -> list[VersionedVoiceProfile]:
-        return self._profile_records.list_versioned_voice_profile_versions(workspace_id, voice_profile_id)
 
-    def save_pronunciation_entry(
-        self,
-        entry: PronunciationEntry,
-    ) -> PronunciationEntry:
-        return self._profile_records.save_pronunciation_entry(entry)
 
-    def get_pronunciation_entry(
-        self,
-        workspace_id: str,
-        entry_id: str,
-        version: str | None = None,
-    ) -> PronunciationEntry:
-        return self._profile_records.get_pronunciation_entry(workspace_id, entry_id, version)
 
-    def list_pronunciation_entries(self, workspace_id: str) -> list[PronunciationEntry]:
-        return self._profile_records.list_pronunciation_entries(workspace_id)
 
-    def list_pronunciation_entry_versions(
-        self,
-        workspace_id: str,
-        entry_id: str,
-    ) -> list[PronunciationEntry]:
-        return self._profile_records.list_pronunciation_entry_versions(workspace_id, entry_id)
 
 
 
@@ -1063,14 +1008,6 @@ class ProductionRepository:
     ) -> VersionedVoiceProfile:
         return self._profile_registration.migrate_legacy_voice_profile(workspace_id=workspace_id, legacy_voice_profile_id=legacy_voice_profile_id, person_profile_id=person_profile_id, person_version=person_version, version=version, language=language, authorization=authorization, verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
 
-    def list_applicable_pronunciation_entries(
-        self,
-        *,
-        workspace_id: str,
-        person_profile_id: str | None,
-        episode_id: str,
-    ) -> list[PronunciationEntry]:
-        return self._profile_records.list_applicable_pronunciation_entries(workspace_id=workspace_id, person_profile_id=person_profile_id, episode_id=episode_id)
 
 
     def _claim_workspace_media_reference(
@@ -1103,23 +1040,7 @@ class ProductionRepository:
     ) -> Authorization | None:
         return self._media_authorizations._current_authorization(conn, workspace_id, authorization)
 
-    def _get_person_profile(
-        self,
-        conn: sqlite3.Connection,
-        workspace_id: str,
-        person_id: str,
-        version: str | None = None,
-    ) -> PersonProfile:
-        return self._profile_records._get_person_profile(conn, workspace_id, person_id, version)
 
-    def _get_versioned_voice_profile(
-        self,
-        conn: sqlite3.Connection,
-        workspace_id: str,
-        voice_profile_id: str,
-        version: str | None = None,
-    ) -> VersionedVoiceProfile:
-        return self._profile_records._get_versioned_voice_profile(conn, workspace_id, voice_profile_id, version)
 
     def get_profile(self, workspace_id: str) -> ProductionProfile:
         return self._workspace_profiles.get_profile(workspace_id)
@@ -1930,24 +1851,8 @@ class ProductionRepository:
 
     _authorization_from_payload = staticmethod(_authorization_from_payload)
 
-    def _profile_authorization_from_payload(self, conn, workspace_id, data):
-        return self._profile_records._profile_authorization_from_payload(conn, workspace_id, data)
 
-    def _person_profile_from_payload(
-        self,
-        conn: sqlite3.Connection,
-        workspace_id: str,
-        data: dict[str, object],
-    ) -> PersonProfile:
-        return self._profile_records._person_profile_from_payload(conn, workspace_id, data)
 
-    def _versioned_voice_profile_from_payload(
-        self,
-        conn: sqlite3.Connection,
-        workspace_id: str,
-        data: dict[str, object],
-    ) -> VersionedVoiceProfile:
-        return self._profile_records._versioned_voice_profile_from_payload(conn, workspace_id, data)
 
 
 

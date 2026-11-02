@@ -163,7 +163,7 @@ class NarrationResourcePreparation(DeviceResourcePreparation):
     def _inputs(self, shape, actor):
         if self.verify_identity(actor) != 'ready':
             raise PermissionError('当前成员身份不可用')
-        voice = self.repository.get_versioned_voice_profile(actor.workspace_id, shape.voice_profile_id, shape.voice_version)
+        voice = self.repository.profile_records.get_versioned_voice_profile(actor.workspace_id, shape.voice_profile_id, shape.voice_version)
         failure = profile_use_failure(voice, content_type='voice', usage_scope='narration')
         if (failure or voice.language not in {shape.language, 'zh-en'} or not voice.reference_text.strip()
                 or (voice.workspace_id, voice.id, voice.version) != (actor.workspace_id, shape.voice_profile_id, shape.voice_version)):
@@ -175,7 +175,7 @@ class NarrationResourcePreparation(DeviceResourcePreparation):
                 raise PermissionError('当前成员不能使用该任务范围的发音词典')
         entries = []
         for selected in shape.pronunciation_references:
-            entry = self.repository.get_pronunciation_entry(actor.workspace_id, selected['id'], selected['version'])
+            entry = self.repository.profile_records.get_pronunciation_entry(actor.workspace_id, selected['id'], selected['version'])
             if ((entry.workspace_id, entry.id, entry.version) !=
                     (actor.workspace_id, selected['id'], selected['version'])
                     or not entry.applies_to(workspace_id=actor.workspace_id,

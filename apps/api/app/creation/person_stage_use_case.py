@@ -61,7 +61,7 @@ class PersonStageUseCase:
             segment = self.repository.narration_records.get_narration_segment(workspace_id, task_id, payload.narration_segment_id)
             if segment.status != 'ready' or not segment.audio_reference:
                 raise ValueError('人物片段只能使用已完成的配音分段')
-            person = self.repository.get_person_profile(workspace_id, payload.person_profile_id, payload.person_version)
+            person = self.repository.profile_records.get_person_profile(workspace_id, payload.person_profile_id, payload.person_version)
             audio_path = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(workspace_id, segment.audio_reference)
             render_request = self.repository.profile_inputs.resolve_avatar_lipsync_request(workspace_id=workspace_id, person_id=person.id, person_version=person.version, voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version, audio_path=str(audio_path), audio_cache_key=segment.audio_reference, language=segment.language, motion=payload.motion, expression=payload.expression, authorization_id=person.authorization.id if person.authorization else None, authorization_version=person.authorization.version if person.authorization else None, viewer_user_id=task.owner_user_id, model_id=provider.model_id)
             input_facts = presenter_input_facts(render_request)

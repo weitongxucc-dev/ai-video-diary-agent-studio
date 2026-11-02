@@ -195,7 +195,7 @@ class TaskAuthorizationUseCase:
         plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         previous_voice = f'{plan.selected_voice.profile_id}:{plan.selected_voice.version}' if plan.selected_voice else None
         with self.repository._connect() as conn:
-            candidate_current = self.repository.capture_profile_local_check(conn, task.workspace_id,
+            candidate_current = self.repository.profile_records.capture_local_check(conn, task.workspace_id,
                 [('voice', voice_profile_id, voice_version)])
         candidate = self.repository.creation_plan_voice_reference(task.workspace_id, voice_profile_id,
             voice_version, viewer_user_id=identity.get('user_id') or identity['member_id'], local_diagnostic=False)

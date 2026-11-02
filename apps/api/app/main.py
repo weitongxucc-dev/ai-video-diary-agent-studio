@@ -1239,7 +1239,7 @@ def _authorization_response(authorization: Authorization) -> AuthorizationRespon
 
 def _profile_read_facts(profile, request: Request):
     user_id, diagnostic = _content_reader(request, profile.workspace_id)
-    current = production_repo.get_person_profile(profile.workspace_id, profile.id) if isinstance(profile, PersonProfile) else production_repo.get_versioned_voice_profile(profile.workspace_id, profile.id)
+    current = production_repo.profile_records.get_person_profile(profile.workspace_id, profile.id) if isinstance(profile, PersonProfile) else production_repo.profile_records.get_versioned_voice_profile(profile.workspace_id, profile.id)
     if any(not production_repo.profile_readable(item, user_id, diagnostic) for item in (profile, current)):
         raise HTTPException(status_code=404, detail="profile not found")
     reference_reason = None
@@ -3098,11 +3098,12 @@ def _task_workspace_read_use_case() -> TaskWorkspaceReadUseCase:
         find_tool=shutil.which,
         image_capability=unconfigured_image_generation_capability,
         read_script_headers=production_repo.script_records.active_creation_task_script_headers,
-        read_voices=production_repo.list_versioned_voice_profiles,
+        read_voices=lambda workspace_id: repo.profile_records.list_versioned_voice_profiles(workspace_id),
         profile_readable=production_repo.profile_readable,
-        read_person=production_repo.get_person_profile,
+        read_person=lambda workspace_id, person_id, version=None: repo.profile_records.get_person_profile(workspace_id, person_id, version),
         read_voice_reference=production_repo.creation_plan_voice_reference,
-        read_pronunciations=production_repo.list_applicable_pronunciation_entries,
+        read_pronunciations=lambda *, workspace_id, person_profile_id, episode_id: repo.profile_records.list_applicable_pronunciation_entries(
+            workspace_id=workspace_id, person_profile_id=person_profile_id, episode_id=episode_id),
         portrait_available=lambda ws: _portrait_processor(ws).available,
         read_person_renders=lambda workspace_id, task_id: repo.person_renders.list_person_renders(workspace_id, task_id),
     )
@@ -3120,8 +3121,8 @@ def _assistant_profile_snapshot(request: Request, kind: str, profile_id: str, ve
     workspace_id = current_workspace_id(request)
     user_id, diagnostic = _content_reader(request, workspace_id)
     try:
-        profile = (production_repo.get_person_profile(workspace_id, profile_id, version) if kind == "person"
-                   else production_repo.get_versioned_voice_profile(workspace_id, profile_id, version))
+        profile = (production_repo.profile_records.get_person_profile(workspace_id, profile_id, version) if kind == "person"
+                   else production_repo.profile_records.get_versioned_voice_profile(workspace_id, profile_id, version))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="所引用档案版本不存在或当前不可访问。") from exc
     if not production_repo.profile_readable(profile, user_id, diagnostic):

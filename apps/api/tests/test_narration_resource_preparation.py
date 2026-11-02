@@ -43,7 +43,7 @@ def fixture(tmp_path, monkeypatch):
     reference = ProfileReferenceInput.from_source(source_path=reference_path, workspace_id='local',
         profile_id='voice', profile_version='v1', asset_id=None, segment_id=None, source_type='audio',
         kind='voice_audio', start_seconds=None, end_seconds=None, source_duration_seconds=1)
-    monkeypatch.setattr(repository, 'get_versioned_voice_profile', lambda workspace, identity, version: voice)
+    monkeypatch.setattr(repository.profile_records, 'get_versioned_voice_profile', lambda workspace, identity, version: voice)
     def resolve(selected, **kwargs):
         assert kwargs['viewer_user_id'] == actor.member_id and kwargs['for_generation'] is True
         return reference
@@ -80,7 +80,7 @@ def test_model_preparation_binds_real_reference_and_dirs_without_publishing_or_r
     with pytest.raises(ValueError, match='输入已变化'):
         service.prepare(replace(shape, text='changed'), actor, request_id='request')
     assert service.profile_path.read_bytes() == original
-    monkeypatch.setattr(repository, 'get_versioned_voice_profile', lambda *args: replace(voice, use_state='excluded'))
+    monkeypatch.setattr(repository.profile_records, 'get_versioned_voice_profile', lambda *args: replace(voice, use_state='excluded'))
     with pytest.raises(PermissionError):
         service.prepare(shape, actor, request_id='revoked')
 
@@ -198,9 +198,9 @@ def test_bilingual_preparation_uses_original_pronunciation_versions_in_digest_an
     from app.narration_resource_preparation import narration_preparation_shape_digest
     repository, actor, access, service, voice = fixture(tmp_path, monkeypatch)
     voice = replace(voice, language='zh-en')
-    monkeypatch.setattr(repository, 'get_versioned_voice_profile', lambda *args: voice)
+    monkeypatch.setattr(repository.profile_records, 'get_versioned_voice_profile', lambda *args: voice)
     entry = PronunciationEntry('term', actor.workspace_id, '曜核', 'zh', 'yao he', 'task', 'task', 'v1')
-    repository.save_pronunciation_entry(entry)
+    repository.profile_records.save_pronunciation_entry(entry)
     monkeypatch.setattr(repository.task_records, 'get_creation_task', lambda workspace, task: SimpleNamespace(
         visibility='private', owner_user_id=actor.user_id or actor.member_id))
     shape = NarrationPreparationShape('voice', 'v1', '曜核样本', 'zh', 2,
@@ -233,7 +233,7 @@ def test_bilingual_preparation_uses_original_pronunciation_versions_in_digest_an
         assert len(calls) == 1 and calls[0]['language'] == 'zh'
         assert calls[0]['pronunciation_dictionary'] == (entry.task_input(),)
         service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
-        monkeypatch.setattr(repository, 'get_pronunciation_entry', lambda *args: replace(entry, target_pronunciation='changed'))
+        monkeypatch.setattr(repository.profile_records, 'get_pronunciation_entry', lambda *args: replace(entry, target_pronunciation='changed'))
         with pytest.raises(ValueError, match='变化'):
             service._recheck(plan, actor)
     finally:
@@ -244,7 +244,7 @@ def test_preparation_pronunciation_scope_visibility_and_provider_contract_are_en
     from app.profiles.contracts import PronunciationEntry
     repository, actor, access, service, voice = fixture(tmp_path, monkeypatch)
     entry = PronunciationEntry('term', actor.workspace_id, '曜核', 'zh', 'yao he', 'task', 'task', 'v1')
-    repository.save_pronunciation_entry(entry)
+    repository.profile_records.save_pronunciation_entry(entry)
     shape = NarrationPreparationShape('voice', 'v1', '样本', 'zh', 2,
         pronunciation_references=({'id': entry.id, 'version': entry.version},))
     with pytest.raises(PermissionError, match='范围'):

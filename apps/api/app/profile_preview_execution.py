@@ -135,11 +135,11 @@ class ProfilePreviewOwner:
         pronunciation_scope = None
         if run.preview_type == "voice":
             try:
-                voice = self.repository.get_versioned_voice_profile(run.workspace_id, run.voice_profile_id, run.voice_version)
+                voice = self.repository.profile_records.get_versioned_voice_profile(run.workspace_id, run.voice_profile_id, run.voice_version)
             except KeyError:
                 return lambda current: "stale"
             pronunciation_scope = (voice.person_profile_id, run.preview_input.get("episode_id", "voice_preview"))
-        profiles = self.repository.capture_profile_local_check(conn, run.workspace_id, refs,
+        profiles = self.repository.profile_records.capture_local_check(conn, run.workspace_id, refs,
             pronunciation_scope=pronunciation_scope)
         def read(current):
             own, upstream = self.repository.preview_records.local_revisions(run.workspace_id, run.id,

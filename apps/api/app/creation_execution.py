@@ -269,7 +269,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
     selected = select_presenter_sections(timings, plan.presenter_share_target)
     if plan.selected_person is None:
         raise ValueError("请单独选择人物档案与固定版本后再制作人物段")
-    person = repository.get_person_profile(task.workspace_id, plan.selected_person.profile_id,
+    person = repository.profile_records.get_person_profile(task.workspace_id, plan.selected_person.profile_id,
                                            plan.selected_person.version)
     for section_id in selected:
         segment = repository.section_inputs.read_creation_section_input(task, script, section_id, connection=connection)['audio']
@@ -529,7 +529,7 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
             or segment.status != "ready" or segment.audio_reference != payload["expected_audio_reference"]
             or payload.get("lipsync_quality", plan.lipsync_quality) != plan.lipsync_quality):
         raise ValueError("人物编辑对象或配音已变化，请重新预览")
-    person = repository.get_person_profile(task.workspace_id, payload["person_profile_id"], payload["person_version"])
+    person = repository.profile_records.get_person_profile(task.workspace_id, payload["person_profile_id"], payload["person_version"])
     audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
     request = repository.profile_inputs.resolve_avatar_lipsync_request(
         workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
@@ -1746,12 +1746,12 @@ class CreationJobOwnerVerifier:
         pronunciation_scope = None
         if stage == "narration" and plan.selected_voice:
             try:
-                voice = self.repository.get_versioned_voice_profile(request.workspace_id,
+                voice = self.repository.profile_records.get_versioned_voice_profile(request.workspace_id,
                     plan.selected_voice.profile_id, plan.selected_voice.version)
             except KeyError:
                 return lambda current: "stale"
             pronunciation_scope = (voice.person_profile_id, task.id)
-        profiles = self.repository.capture_profile_local_check(conn, request.workspace_id, refs,
+        profiles = self.repository.profile_records.capture_local_check(conn, request.workspace_id, refs,
             [(item.id, item.version) for item in plan.pronunciation_references],
             pronunciation_scope=pronunciation_scope)
         assets, persons = set(), set()

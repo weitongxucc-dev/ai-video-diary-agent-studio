@@ -386,7 +386,7 @@ def record_only_preview(repo, tmp_path, monkeypatch, *, before_submit=None):
         reference=ProfileReference(asset_id=asset.id))
     # Seed an already registered profile fact; registration's real ffprobe is outside this evidence.
     with repo._connect() as conn:
-        repo._profile_records._save_versioned_voice_profile(conn, voice)
+        repo.profile_records._save_versioned_voice_profile(conn, voice)
     provider = VoiceProvider()
     service = VoicePreviewService(tmp_path/'output',provider)
     budget = NarrationBudget(100,1,10**6,5,10**6,1,10,10**6,2,0.1,10**6,10**6)
@@ -857,7 +857,7 @@ def restricted_preview(repo, tmp_path):
     try:
         resources.admit_value = True
         assert runtime.run_once()
-        voice = repo.get_versioned_voice_profile("ws", "voice", "v1")
+        voice = repo.profile_records.get_versioned_voice_profile("ws", "voice", "v1")
         path = repo.video_library_path / "person.png"
         Image.new("RGB", (2, 2)).save(path)
         asset = repo._save_asset(
@@ -1127,7 +1127,7 @@ def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo, tmp_pa
 def test_preview_stale_and_cancel_do_not_generate(repo, tmp_path):
     runtime, resources, provider, queued = setup_preview(repo, tmp_path)
     try:
-        voice = repo.get_versioned_voice_profile("ws", "voice", "v1")
+        voice = repo.profile_records.get_versioned_voice_profile("ws", "voice", "v1")
         asset = repo.get_asset("ws", voice.reference.asset_id)
         repo.update_asset_use_state("ws", asset.id, "excluded")
         resources.admit_value = True
@@ -1495,7 +1495,7 @@ def test_changed_pronunciation_before_admission_does_not_use_old_queue(repo, tmp
 
     runtime, resources, provider, queued = setup_preview(repo, tmp_path)
     try:
-        repo.save_pronunciation_entry(
+        repo.profile_records.save_pronunciation_entry(
             PronunciationEntry(
                 "rule", "ws", "AI", "zh", "诶艾", "workspace", None, "v1"
             )
@@ -1656,7 +1656,7 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
             and result.person_version == "p1"
         )
         assert avatar_provider.calls == 1
-        assert repo.get_person_profile("ws", person.id, person.version) == person
+        assert repo.profile_records.get_person_profile("ws", person.id, person.version) == person
         assert repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == audio
     finally:
         assert runtime.stop(1)
@@ -1696,7 +1696,7 @@ def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeyp
         lambda ws, task: SimpleNamespace(owner_user_id="member"),
     )
     monkeypatch.setattr(
-        repo,
+        repo.profile_records,
         "get_person_profile",
         lambda *args: SimpleNamespace(id="person", version="p1", authorization=None),
     )

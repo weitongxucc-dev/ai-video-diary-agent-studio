@@ -527,13 +527,13 @@ def test_waiting_stale_or_unauthorized_never_calls_provider(fixture, mutation):
                 (json.dumps(payload),),
             )
     elif mutation == "voice":
-        voice = f.repo.get_versioned_voice_profile("local", "voice")
+        voice = f.repo.profile_records.get_versioned_voice_profile("local", "voice")
         f.repo.save_versioned_voice_profile(
             replace(voice, version="v2", use_state="excluded"),
             verified_owner_user_id=f.actor.member_id,
         )
     elif mutation == "reference":
-        voice = f.repo.get_versioned_voice_profile("local", "voice")
+        voice = f.repo.profile_records.get_versioned_voice_profile("local", "voice")
         asset = f.repo.get_asset("local", voice.reference.asset_id)
         Path(asset.path).write_bytes(wav_bytes() + b"changed")
     elif mutation == "artifact_scope":

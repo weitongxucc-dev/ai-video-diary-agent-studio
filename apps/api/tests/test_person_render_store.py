@@ -46,8 +46,8 @@ def case(tmp_path):
     )
     # Source-record owners seed legal fixed metadata; no registration/generation qualification is mocked.
     with repo._connect() as conn:
-        repo._profile_records._save_person_profile(conn, person)
-        repo._profile_records._save_versioned_voice_profile(conn, voice)
+        repo.profile_records._save_person_profile(conn, person)
+        repo.profile_records._save_versioned_voice_profile(conn, voice)
         for reference in (visual, voice_reference):
             repo._workspace_media_references.claim_workspace_media_reference(conn, workspace_id="ws", reference=reference)
         values = asdict(segment)
@@ -84,7 +84,7 @@ def test_public_person_render_store_preserves_cache_state_artifact_and_restart(t
     assert not any(hasattr(repo, name) for name in retired)
     assert not hasattr(repo, '_person_renders')
     assert not hasattr(production, 'PersonRender') and not hasattr(production, 'PersonRenderStatus')
-    assert repo.person_renders._profiles is repo._profile_records
+    assert repo.person_renders._profiles is repo.profile_records
     assert repo.person_renders._workspace_references is repo._workspace_media_references
     saved = repo.person_renders.create_person_render(pending)
     assert type(saved) is person_renders.PersonRender
@@ -149,7 +149,7 @@ def test_public_person_render_store_preserves_cache_state_artifact_and_restart(t
     assert type(ready) is person_renders.PersonRender and type(interrupted) is person_renders.PersonRender
     (tmp_path / "person-store-observations.json").write_text(json.dumps({
         "actual_store": type(repo.person_renders).__module__ + "." + type(repo.person_renders).__name__,
-        "profiles_owner_identity": repo.person_renders._profiles is repo._profile_records,
+        "profiles_owner_identity": repo.person_renders._profiles is repo.profile_records,
         "workspace_reference_owner_identity": repo.person_renders._workspace_references is repo._workspace_media_references,
         "canonical_return_types": [type(value).__module__ + "." + type(value).__name__ for value in (saved, ready, interrupted)],
         "root_delegates_absent": not any(hasattr(repo, name) for name in retired),

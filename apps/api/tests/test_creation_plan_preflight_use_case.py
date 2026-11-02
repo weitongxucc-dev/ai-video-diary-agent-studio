@@ -132,7 +132,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     for obj, name, label in [(sources, "list_knowledge_items_for_use", "knowledge.list"),
         (sources, "get_knowledge_reference_readable_by", "knowledge.pin"),
         (sources, "list_source_items_for_use", "sources"),
-        (production, "get_versioned_voice_profile", "voice.pin"),
+        (production.profile_records, "get_versioned_voice_profile", "voice.pin"),
         (production, "creation_plan_person_reference", "person.pin"),
         (production, "get_default_versioned_voice", "voice.default")]:
         observe_read(obj, name, label)
@@ -225,8 +225,10 @@ def selected_dependencies():
             raise PermissionError("profile_excluded")
         return SimpleNamespace(profile_id="voice", version="v1", model_id="voice-model")
     production = SimpleNamespace(automatic_material_segments=materials, material_search=SimpleNamespace(search_material_segments=search),
-        get_versioned_voice_profile=lambda *_:SimpleNamespace(id="voice", version="v1", language="zh-en", person_profile_id=""),
-        creation_plan_voice_reference=voice_reference, list_applicable_pronunciation_entries=lambda **_:[])
+        profile_records=SimpleNamespace(
+            get_versioned_voice_profile=lambda *_:SimpleNamespace(id="voice", version="v1", language="zh-en", person_profile_id=""),
+            list_applicable_pronunciation_entries=lambda **_:[]),
+        creation_plan_voice_reference=voice_reference)
     sources = SimpleNamespace(list_knowledge_items_for_use=lambda *_, **__: [knowledge] + ([SimpleNamespace(
         **{**vars(knowledge), "id":"other-knowledge"})] if state.extra else []),
         get_knowledge_reference_readable_by=knowledge_pin, list_source_items_for_use=lambda *_, **__:[])

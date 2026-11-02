@@ -288,7 +288,7 @@ def aggregate_home(
         user_id=viewer_user_id,
         local_diagnostic=local_diagnostic,
     )
-    voices = repository.list_versioned_voice_profiles(workspace_id)
+    voices = repository.profile_records.list_versioned_voice_profiles(workspace_id)
 
     material_meta = HomeFactMeta(
         scope=scope,
