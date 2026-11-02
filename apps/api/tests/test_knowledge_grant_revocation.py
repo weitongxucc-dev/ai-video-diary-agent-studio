@@ -241,7 +241,7 @@ def test_main_consumers_read_original_space_and_recheck_fixed_reference_grants(t
     request = Request({
         "type": "http", "headers": [(b"x-local-member-token", ctx["token_b"].encode())],
     })
-    plan = main._creation_plan_preflight(request, target_space, main.CreationPlanPreviewRequest(**payload))
+    plan = main._creation_plan_preflight_http_adapter().preflight(request, target_space, main.CreationPlanPreviewRequest(**payload))
     plan.knowledge_references[0] = replace(plan.knowledge_references[0], version="1")
     task = CreationTask(id="fixed-task", workspace_id=target_space, plan_id=plan.id,
                         name="固定引用", scenario="knowledge_explanation", owner_user_id=ctx["reader"].member_id)

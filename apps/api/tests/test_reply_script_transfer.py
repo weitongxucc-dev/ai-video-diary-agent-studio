@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation_plan_routes import CreationPlanPreflightHttpAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
 from app.creation_task_responses import CreationTaskResponseAdapter
 
@@ -23,7 +24,7 @@ from app.creation.topic_contracts import (
 from app.creation.contracts import CreationTask
 from app.creation.script_contracts import CreationTaskScriptSection
 from app import main as main_module
-from app.schemas import AssistantReplyScriptTransferRequest
+from app.schemas import AssistantReplyScriptTransferRequest, CreationPlanConfirmRequest
 
 WORKSPACE = "workspace-one"
 OWNER = "member-one"
@@ -540,13 +541,13 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         },
         get_turn=lambda _turn_id: turn,
     ))
-    monkeypatch.setattr(main_module, "_creation_plan_preflight", lambda _request, _workspace, _payload: replace(
+    monkeypatch.setattr(CreationPlanPreflightHttpAdapter, "preflight", lambda adapter, _request, _workspace, _payload: replace(
         make_plan(), preflight_fingerprint="f" * 64,
     ))
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(CreationTaskResponseAdapter, "creation_plan_response", lambda adapter, plan, task: {"plan_id": plan.id, "task_id": task.id})
     request = Request({"type": "http", "headers": []})
-    payload = main_module.CreationPlanConfirmRequest(
+    payload = CreationPlanConfirmRequest(
         goal="介绍资料的核心功能", name="核心功能介绍", preflight_fingerprint="f" * 64,
         reply_origin={
             "conversation_id": conversation_id, "turn_id": turn_id, "request_id": request_id,

@@ -1,6 +1,53 @@
 """Creation plan HTTP; preflight, confirmation, reply adoption and visibility retain their original owners."""
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
+from app.creation.plan_contracts import CreationPlan
+from app.creation.plan_preflight_use_case import CreationPlanPreflightInput, CreationPlanPreflightRejected
 from app.schemas import CreationPlanPreviewRequest, CreationPlanPreviewResponse, CreationPlanConfirmRequest, CreationPlanResponse, ContentVisibilityRequest
+
+class CreationPlanPreflightHttpAdapter:
+    def __init__(self, *, case_for, read_template, content_reader):
+        self.case_for = case_for
+        self.read_template = read_template
+        self.content_reader = content_reader
+
+    def preflight(
+        self,
+        request: Request,
+        workspace_id: str,
+        payload: CreationPlanPreviewRequest | CreationPlanConfirmRequest,
+        *, automation_scope: dict[str, list[str]] | None = None, frozen_plan: dict | None = None,
+    ) -> CreationPlan:
+        values = CreationPlanPreflightInput(
+            goal=payload.goal, name=payload.name, target_count=payload.target_count,
+            language=payload.language, aspect_ratio=payload.aspect_ratio,
+            duration_target_seconds=payload.duration_target_seconds,
+            duration_mode=payload.duration_mode, duration_range_seconds=payload.duration_range_seconds,
+            presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
+            template_id=payload.template_id, template_version=payload.template_version,
+            selected_knowledge=(payload.selected_knowledge.knowledge_item_id, payload.selected_knowledge.version) if payload.selected_knowledge is not None else None,
+            selected_voice=(payload.selected_voice.profile_id, payload.selected_voice.version) if payload.selected_voice is not None else None,
+            selected_person=(payload.selected_person.profile_id, payload.selected_person.version) if payload.selected_person is not None else None,
+            provided_fields=frozenset(payload.model_fields_set),
+        )
+        case = self.case_for()
+        try:
+            case.check_template_selection(values)
+            template = (self.read_template(request, workspace_id, values.template_id, values.template_version)
+                        if values.template_id is not None else None)
+            values = case.inherit_template(values, template)
+            user_id, local_diagnostic = self.content_reader(request, workspace_id)
+            return case.prepare(workspace_id, values, template=template,
+                reader_user_id=user_id, local_diagnostic=local_diagnostic, automation_scope=automation_scope,
+                **({"frozen_plan": frozen_plan} if frozen_plan is not None else {}))
+        except CreationPlanPreflightRejected as exc:
+            status = {"template_version_required": 422, "template_id_required": 422,
+                "knowledge_outside_automation_scope": 409, "knowledge_version_unreadable": 404,
+                "knowledge_automation_forbidden": 409, "knowledge_reference_forbidden": 409}[exc.code]
+            failure = HTTPException(status_code=status, detail=exc.message)
+            if exc.__cause__ is not None:
+                raise failure from exc.__cause__
+            raise failure from None
+
 
 def build_creation_plan_router(*, preview_response_for, preflight_for, workspace_for, http_error_for, reply_for, reader_for, now_for, uuid_for, task_type_for, production_for, plan_response_for, write_guard_for):
     router = APIRouter()

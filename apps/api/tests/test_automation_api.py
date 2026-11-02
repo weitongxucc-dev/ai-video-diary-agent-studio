@@ -122,7 +122,7 @@ def test_empty_scope_stays_empty_and_foreign_fixed_knowledge_rejected(automation
     from starlette.requests import Request
     request=Request({'type':'http','headers':[(b'x-local-member-token',client.headers['x-local-member-token'].encode())]})
     with pytest.raises(HTTPException) as error:
-        main._creation_plan_preflight(request,actor.workspace_id,CreationPlanPreviewRequest(goal='真实目标',selected_knowledge={'knowledge_item_id':'knowledge-local','version':'v1'}),automation_scope=payload['source_scope'])
+        main._creation_plan_preflight_http_adapter().preflight(request,actor.workspace_id,CreationPlanPreviewRequest(goal='真实目标',selected_knowledge={'knowledge_item_id':'knowledge-local','version':'v1'}),automation_scope=payload['source_scope'])
     assert error.value.status_code==409
 
 

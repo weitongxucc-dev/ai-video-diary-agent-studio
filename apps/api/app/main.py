@@ -301,7 +301,7 @@ from app.creation.publish_output_qualification_use_case import PublishOutputQual
 from app.creation.video_template_use_case import VideoTemplateUseCase
 from app.creation import request_workflow_use_case as request_workflow
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
-    CreationPlanPreflightRejected, CreationPlanPreflightUseCase)
+    CreationPlanPreflightUseCase)
 from app.source_types import source_item_identity
 from app.creation.contracts import (
     EditCommand,
@@ -356,7 +356,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontagePlansResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontagePlansResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -1506,43 +1506,13 @@ def _legacy_montage_response_adapter():
 
 
 
-def _creation_plan_preflight(
-    request: Request,
-    workspace_id: str,
-    payload: CreationPlanPreviewRequest | CreationPlanConfirmRequest,
-    *, automation_scope: dict[str, list[str]] | None = None, frozen_plan: dict | None = None,
-) -> CreationPlan:
-    values = CreationPlanPreflightInput(
-        goal=payload.goal, name=payload.name, target_count=payload.target_count,
-        language=payload.language, aspect_ratio=payload.aspect_ratio,
-        duration_target_seconds=payload.duration_target_seconds,
-        duration_mode=payload.duration_mode, duration_range_seconds=payload.duration_range_seconds,
-        presenter_share_target=payload.presenter_share_target, lipsync_quality=payload.lipsync_quality,
-        template_id=payload.template_id, template_version=payload.template_version,
-        selected_knowledge=(payload.selected_knowledge.knowledge_item_id, payload.selected_knowledge.version) if payload.selected_knowledge is not None else None,
-        selected_voice=(payload.selected_voice.profile_id, payload.selected_voice.version) if payload.selected_voice is not None else None,
-        selected_person=(payload.selected_person.profile_id, payload.selected_person.version) if payload.selected_person is not None else None,
-        provided_fields=frozenset(payload.model_fields_set),
+def _creation_plan_preflight_http_adapter():
+    return CreationPlanPreflightHttpAdapter(
+        case_for=lambda: CreationPlanPreflightUseCase(production_repo, source_repository, model_catalog,
+            lipsync_provider_for=_lipsync_provider),
+        read_template=lambda request, workspace_id, template_id, version: _video_template_http_adapter().read_template(request, workspace_id, template_id, version),
+        content_reader=lambda request, workspace_id: _content_reader(request, workspace_id),
     )
-    case = CreationPlanPreflightUseCase(production_repo, source_repository, model_catalog,
-        lipsync_provider_for=_lipsync_provider)
-    try:
-        case.check_template_selection(values)
-        template = (_video_template_http_adapter().read_template(request, workspace_id, values.template_id, values.template_version)
-                    if values.template_id is not None else None)
-        values = case.inherit_template(values, template)
-        user_id, local_diagnostic = _content_reader(request, workspace_id)
-        return case.prepare(workspace_id, values, template=template,
-            reader_user_id=user_id, local_diagnostic=local_diagnostic, automation_scope=automation_scope,
-            **({"frozen_plan": frozen_plan} if frozen_plan is not None else {}))
-    except CreationPlanPreflightRejected as exc:
-        status = {"template_version_required": 422, "template_id_required": 422,
-            "knowledge_outside_automation_scope": 409, "knowledge_version_unreadable": 404,
-            "knowledge_automation_forbidden": 409, "knowledge_reference_forbidden": 409}[exc.code]
-        failure = HTTPException(status_code=status, detail=exc.message)
-        if exc.__cause__ is not None:
-            raise failure from exc.__cause__
-        raise failure from None
 
 
 
@@ -2751,7 +2721,7 @@ def _conversation_http_adapter():
         require_actor=_require_permit_actor,
         segment_for=_segment_production_use_case, restore_for=_timeline_restore_use_case,
         input_context=lambda request, context, reference: _task_turn_http_adapter().input_context(request, context, reference),
-        preflight=_creation_plan_preflight, render_plan=_creation_task_response_adapter().creation_plan_preview_response,
+        preflight=_creation_plan_preflight_http_adapter().preflight, render_plan=_creation_task_response_adapter().creation_plan_preview_response,
     )
 
 
@@ -3042,12 +3012,12 @@ app.include_router(_creation_request_http_router(("confirm_creation_request_wind
 app.include_router(_creation_request_http_router(("list_creation_request_items",)))
 
 
-from app.creation_plan_routes import build_creation_plan_router
+from app.creation_plan_routes import CreationPlanPreflightHttpAdapter, build_creation_plan_router
 
 
 app.include_router(build_creation_plan_router(
     preview_response_for=lambda: _creation_task_response_adapter().creation_plan_preview_response,
-    preflight_for=lambda: _creation_plan_preflight,
+    preflight_for=lambda: _creation_plan_preflight_http_adapter().preflight,
     workspace_for=lambda: current_workspace_id,
     http_error_for=lambda: HTTPException,
     reply_for=lambda: _verified_assistant_reply,
@@ -6423,7 +6393,7 @@ def _automation_runtime() -> AutomationRuntime:
             list_templates=lambda actor:[*VideoTemplateUseCase(production_repo).builtin_templates(actor.workspace_id),
                 *production_repo.video_templates.list_video_templates(actor.workspace_id,
                     viewer_user_id=actor.user_id or actor.member_id,local_diagnostic=False)],
-            preflight=_creation_plan_preflight,preview_response=_creation_task_response_adapter().creation_plan_preview_response,
+            preflight=_creation_plan_preflight_http_adapter().preflight,preview_response=_creation_task_response_adapter().creation_plan_preview_response,
             plan_response=_creation_task_response_adapter().creation_plan_response,execution_status=_creation_execution_status,
             sync_connector=_sync_connector,inspect_topic_route=_topic_route_snapshot,
             execution_available=lambda:device_runtime is not None,

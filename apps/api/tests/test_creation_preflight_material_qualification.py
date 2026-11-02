@@ -93,7 +93,7 @@ def qualification_state(tmp_path, monkeypatch):
     # preflight itself and its search/qualification are the actual implementation.
     @app.post('/scoped-preflight')
     def scoped_preflight(request: Request, payload: CreationPlanPreviewRequest):
-        return asdict(main._creation_plan_preflight(request, WORKSPACE, payload, automation_scope={
+        return asdict(main._creation_plan_preflight_http_adapter().preflight(request, WORKSPACE, payload, automation_scope={
             'knowledge_ids': ['knowledge'], 'connector_ids': [],
             'material_asset_ids': [asset.id for asset in bad],
         }))

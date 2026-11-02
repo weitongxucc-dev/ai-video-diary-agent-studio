@@ -2,6 +2,7 @@
 from uuid import uuid4
 
 import app.main as main
+from app.creation_plan_routes import CreationPlanPreflightHttpAdapter
 import pytest
 from test_creation_request_api import client_state, create, prepare_one
 
@@ -42,12 +43,12 @@ def test_input_ending_during_preflight_cannot_save_or_adopt(client_state, monkey
     c.conversations.save_draft(chat["id"], "request-test", c.member.member_id, "继续制作", 0)
     turn, _ = c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id,
         "继续制作", str(uuid4()), 1)
-    preflight = main._creation_plan_preflight
-    def input_ends(*args, **kwargs):
-        result = preflight(*args, **kwargs)
+    preflight = CreationPlanPreflightHttpAdapter.preflight
+    def input_ends(adapter, *args, **kwargs):
+        result = preflight(adapter, *args, **kwargs)
         c.conversations.finish_turn(turn["id"], "completed", "输入已结束")
         return result
-    monkeypatch.setattr(main, "_creation_plan_preflight", input_ends)
+    monkeypatch.setattr(CreationPlanPreflightHttpAdapter, "preflight", input_ends)
     if action == "replan":
         response = c.client.post(base + "/windows/" + data["current_window"]["id"] + "/replan?assistant_turn_id=" + turn["id"],
             headers=c.alice, json={"expected_revision": data["revision"], "goals": [{"goal": "新主题"}]})

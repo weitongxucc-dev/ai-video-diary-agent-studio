@@ -138,7 +138,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
         observe_read(obj, name, label)
     request = Request({"type": "http", "method": "POST", "path": "/metadata", "headers": []})
     with pytest.raises(HTTPException) as rejected:
-        main._creation_plan_preflight(request, workspace,
+        main._creation_plan_preflight_http_adapter().preflight(request, workspace,
             CreationPlanPreviewRequest(goal="核对事实", template_id=template.id))
     assert rejected.value.status_code == 422 and rejected.value.detail == "请选择明确的模板版本。"
     assert trace == [] and inputs == []
@@ -149,7 +149,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
         "selected_voice": {"profile_id": "absent-voice", "version": "v7"},
         "selected_person": {"profile_id": "absent-person", "version": "v8"}}
     omitted = CreationPlanPreviewRequest(**payload)
-    zero = main._creation_plan_preflight(request, workspace, omitted, automation_scope=scope)
+    zero = main._creation_plan_preflight_http_adapter().preflight(request, workspace, omitted, automation_scope=scope)
     zero_trace = ["template", "reader", "reader", "prepare", "knowledge.list", "knowledge.pin",
         "sources", "materials", "search", "voice.pin", "person.pin", "catalog"]
     assert trace == zero_trace
@@ -170,7 +170,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     trace.clear()
     explicit = CreationPlanConfirmRequest(**payload, presenter_share_target=20, lipsync_quality="high",
         preflight_fingerprint=zero.preflight_fingerprint)
-    positive = main._creation_plan_preflight(request, workspace, explicit, automation_scope=scope)
+    positive = main._creation_plan_preflight_http_adapter().preflight(request, workspace, explicit, automation_scope=scope)
     assert trace == zero_trace + ["provider:high", "provider.ready", "provider.ready", "provider.ready"]
     assert positive.presenter_share_target == 20 and positive.lipsync_quality == "high"
     assert inputs[1].provided_fields == explicit.model_fields_set | {"language", "aspect_ratio", "duration_target_seconds"}

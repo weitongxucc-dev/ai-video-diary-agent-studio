@@ -10,6 +10,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 import app.main as main
+from app.schemas import CreationPlanConfirmRequest
 from app.production import (
     ProductionRepository,
     MaterialAsset,
@@ -1297,16 +1298,16 @@ def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
         "template_version": 1,
         "presenter_share_target": 0,
     }
-    inherited = main._creation_plan_preflight(
+    inherited = main._creation_plan_preflight_http_adapter().preflight(
         request, "ws", CreationPlanPreviewRequest(**base)
     )
-    explicit = main._creation_plan_preflight(
+    explicit = main._creation_plan_preflight_http_adapter().preflight(
         request, "ws", CreationPlanPreviewRequest(**base, duration_target_seconds=30)
     )
-    confirm = main._creation_plan_preflight(
+    confirm = main._creation_plan_preflight_http_adapter().preflight(
         request,
         "ws",
-        main.CreationPlanConfirmRequest(
+        CreationPlanConfirmRequest(
             **base,
             duration_target_seconds=30,
             preflight_fingerprint=explicit.preflight_fingerprint,
@@ -1366,7 +1367,7 @@ def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
         ),
         verified_owner_user_id="member",
     )
-    pinned = main._creation_plan_preflight(
+    pinned = main._creation_plan_preflight_http_adapter().preflight(
         request,
         "ws",
         CreationPlanPreviewRequest(
