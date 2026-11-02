@@ -137,7 +137,7 @@ from app.creation.editing.timeline_restore_use_case import (TimelineRestoreUseCa
     TimelineOutputQualification, TimelineRestoreUnavailable)
 from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.linked_timeline_use_case import (LinkedTimelineEditUseCase, LinkedEditApplyCommand, LinkedEditPreviewFailed,
-    LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError)
+    LINKED_EDIT_OPERATIONS, LinkedEditInputError)
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditReplay, InvalidMontage, LegacyMontageReference, EditPreviewRejected,
     SubtitleNoChange, SubtitleTargetMissing,
@@ -152,7 +152,7 @@ from app.creation.editing.metadata_use_case import (
 from app.creation.editing.compound_use_case import (CompoundEditUseCase, CompoundPreviewCommand,
     CompoundSelectionCommand, CompoundProposalMissing, CompoundSelectionInputError)
 from app.creation.editing.subtitle_use_case import (SubtitleEditUseCase, SubtitlePreviewFailed, is_subtitle_edit, subtitle_values)
-from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase, ExactEditResult, validate_edit_origin, project_submitted_edit_input
+from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase, validate_edit_origin, project_submitted_edit_input
 from app.creation.editing.command_preview_use_case import CommandPreviewUseCase
 from app.creation.editing.command_compile import AudioCommandPreview,CommandParseRejected,indexed_reorder_command,subtitle_text_from_command,edit_material_constraint
 from app.creation.editing.narration_preview_use_case import NarrationPreviewUseCase
@@ -160,6 +160,7 @@ from app.creation.editing.person_preview_use_case import PersonPreviewUseCase
 from app.creation.projection import project_task_summary, undo_target_versions, redo_target_versions
 from app.creation_task_responses import CreationTaskResponseAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
+from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter, MetadataEditConfirmationHttpAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.creation.editing.subtitles import subtitle_display_selection
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
@@ -1690,8 +1691,8 @@ def _task_edit_http_router(route_names):
         compound_edit_use_case_for=lambda: _compound_edit_use_case,
         compound_proposal_command_for=lambda: _compound_proposal_command,
         confirm_cover_response_for=lambda: _cover_confirmation_http_adapter().confirm_cover_response,
-        confirm_creation_task_edit_for=lambda: _confirm_creation_task_edit,
-        confirm_linked_timeline_response_for=lambda: _confirm_linked_timeline_response,
+        confirm_creation_task_edit_for=lambda: _task_edit_confirmation_http_adapter().confirm,
+        confirm_linked_timeline_response_for=lambda: _metadata_edit_confirmation_http_adapter().confirm_linked_timeline_response,
         content_reader_for=lambda: _content_reader,
         content_visible_for=lambda: _content_visible,
         creation_runtime_for=lambda: _creation_runtime,
@@ -4045,29 +4046,38 @@ def _linked_timeline_apply_command(task, proposal, request, payload=None):
         request_fields=payload.model_dump(mode="json", exclude_unset=True) if requesting else {})
 
 
-def _confirm_linked_timeline_response(task, proposal, request, payload=None, *, wake=False):
-    try:
-        outcome = _linked_timeline_use_case().confirm(_linked_timeline_apply_command(task, proposal, request, payload))
-    except InsertMaterialMissing as exc:
-        raise HTTPException(status_code=404, detail=exc.args[0]) from exc
-    except InsertSourceRangeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="编辑提案不存在") from exc
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    response = _metadata_edit_response(outcome.outcome)
-    if outcome.record_projection:
-        if outcome.newly_applied:
-            _task_edit_receipt_http_adapter().save_edit_request_result(task, outcome.event_id, response)
-        else:
-            production_repo.execution_records.save_edit_request_result(task, outcome.event_id,
-                status_code=200, response=response.model_dump(mode="json"))
-    if wake and outcome.newly_applied:
-        _wake_assistant_continuations()
-    return response
+def _task_edit_confirmation_http_adapter():
+    return TaskEditConfirmationHttpAdapter(
+        repo_for=lambda: production_repo,
+        workspace=lambda request: current_workspace_id(request),
+        task404=lambda workspace_id, task_id: _creation_task_or_404(workspace_id, task_id),
+        cover_confirmation=lambda task, proposal, request: _cover_confirmation_http_adapter().confirm_cover_response(task, proposal, request),
+        metadata_confirmations_for=lambda: _metadata_edit_confirmation_http_adapter(),
+        source_facts=lambda task, action, request: _exact_edit_source_facts(task, action, request),
+        content_reader=lambda request, workspace_id: _content_reader(request, workspace_id),
+        member_id=lambda request, workspace_id: _assistant_member_id(request, workspace_id),
+        task_open=lambda request, workspace_id, task_id: _require_automation_task_open(request, workspace_id, task_id),
+        auth_enabled=lambda: auth_context.enabled,
+        request_actor=lambda request, workspace_id: _request_permit_actor(request, workspace_id),
+        exact_case_for=lambda: _exact_preview_use_case(),
+        metadata_response=lambda outcome: _metadata_edit_response(outcome),
+        topic_failure=lambda **values: _topic_failure_response(**values),
+    )
+
+
+def _metadata_edit_confirmation_http_adapter():
+    return MetadataEditConfirmationHttpAdapter(
+        linked_case_for=lambda: _linked_timeline_use_case(),
+        subtitle_case_for=lambda: _subtitle_edit_use_case(),
+        compound_case_for=lambda: _compound_edit_use_case(),
+        linked_command=lambda task, proposal, request, payload: _linked_timeline_apply_command(task, proposal, request, payload),
+        subtitle_command=lambda task, proposal, request: _subtitle_proposal_command(task, proposal, request),
+        compound_command=lambda task, proposal, request: _compound_proposal_command(task, proposal, request),
+        metadata_response=lambda outcome: _metadata_edit_response(outcome),
+        save_receipt=lambda task, event_id, response: _task_edit_receipt_http_adapter().save_edit_request_result(task, event_id, response),
+        repo_for=lambda: production_repo,
+        wake=lambda: _wake_assistant_continuations(),
+    )
 
 
 def _metadata_edit_projection(outcome):
@@ -4376,55 +4386,6 @@ app.include_router(_task_edit_http_router(('get_creation_task_edit_result',)))
 app.include_router(_task_edit_http_router(('confirm_creation_task_edit',)))
 
 
-def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request) -> CreationTaskEditConfirmResponse:
-    workspace_id = current_workspace_id(request)
-    task = _creation_task_or_404(workspace_id, task_id)
-    try:
-        proposal = production_repo.edit_records.get_edit_proposal(workspace_id, proposal_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail='creation task edit proposal not found') from exc
-    if proposal.task_id == task_id and proposal.operation.get('operation_type') == COVER_OPERATION:
-        return _cover_confirmation_http_adapter().confirm_cover_response(task, proposal, request)
-    if proposal.task_id != task_id or proposal.status != 'proposed':
-        raise HTTPException(status_code=409, detail='creation task edit proposal is not confirmable')
-    if proposal.operation.get('operation_type') in LINKED_EDIT_OPERATIONS:
-        return _confirm_linked_timeline_response(task, proposal, request)
-    if is_subtitle_edit(proposal.operation.get('operation_type'), proposal.operation.get('payload', {})):
-        return _confirm_subtitle_response(task, proposal, request)
-    if proposal.operation.get('operation_type') == 'EditCompoundTimeline':
-        return _confirm_compound_response(task, proposal, request)
-    source = production_repo.edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source')
-    if source is not None and source['source_facts'] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
-        raise HTTPException(status_code=409, detail='预览后的源文件或片段修订已变化，请重新预览')
-    operation_draft = proposal.operation
-    operation_payload = operation_draft.get('payload')
-    operation_type = operation_draft.get('operation_type')
-    if isinstance(operation_payload,dict):
-        reader,diagnostic=_content_reader(request,workspace_id)
-        reader_identity={'member_id':reader,'local_diagnostic':diagnostic}
-        identity=({'member_id':_assistant_member_id(request,workspace_id),'local_diagnostic':False}
-            if source is not None else reader_identity)
-        if operation_type in {'ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'}:
-            _require_automation_task_open(request,workspace_id,task_id)
-        actor=(_request_permit_actor(request,workspace_id) if auth_context.enabled
-            else CreationExecutionActor(workspace_id,identity['member_id']))
-        try:
-            outcome=_exact_preview_use_case().confirm(task,proposal,identity=identity,
-                reader_identity=reader_identity,actor=actor,source=source)
-        except (EditPreviewRejected,AudioEditRejected) as exc:
-            raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-        except LegacyMontageReference as exc:
-            raise _topic_failure_response(**exc.details) from exc
-        except InvalidMontage as exc:
-            raise HTTPException(status_code=422,detail=str(exc)) from exc
-        except PermissionError as exc:
-            raise HTTPException(status_code=403,detail=str(exc)) from exc
-        except (ValueError,OSError) as exc:
-            raise HTTPException(status_code=409,detail=str(exc)) from exc
-        if isinstance(outcome,ExactEditResult):
-            return JSONResponse(status_code=outcome.status_code,content=outcome.value)
-        return _metadata_edit_response(outcome)
-    raise HTTPException(status_code=409, detail='unsupported creation task edit operation')
 
 
 from app.task_capability_routes import TaskEditCapabilityResponseAdapter, build_task_capability_router
@@ -4481,14 +4442,6 @@ def _compound_proposal_command(task, proposal, request):
     return _metadata_edit_command(task, request, "EditCompoundTimeline", proposal.operation["payload"], source=source)
 
 
-def _confirm_compound_response(task, proposal, request):
-    try:
-        outcome = _compound_edit_use_case().confirm(_compound_proposal_command(task, proposal, request), proposal.id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _metadata_edit_response(outcome)
 
 
 
@@ -4555,14 +4508,6 @@ def _subtitle_proposal_command(task, proposal, request):
     return _metadata_edit_command(task, request, proposal.operation["operation_type"], proposal.operation["payload"], source=source)
 
 
-def _confirm_subtitle_response(task, proposal, request):
-    try:
-        outcome = _subtitle_edit_use_case().confirm(_subtitle_proposal_command(task, proposal, request), proposal.id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, KeyError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _metadata_edit_response(outcome)
 
 
 def _preview_subtitle_edit(task_id, request, payload):

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 import app.main as main
+from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter
 from app.conversation_repository import ConversationRepository
 from app.schemas import CreationTaskExactEditRequest
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
@@ -1118,7 +1119,7 @@ def test_linked_speed_direct_and_natural_consumers_call_real_application(linked_
         return preview(self, command)
     monkeypatch.setattr(LinkedTimelineEditUseCase, 'preview', observed)
     monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
-    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
+    monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
     applied = state.client.post(state.url + '/edits/exact', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
     assert applied.status_code == 200, applied.text
     natural = state.client.post(state.url + '/edits/preview', json={'raw_command': '这个镜头改成2倍速 同步声音和字幕',
@@ -1158,7 +1159,7 @@ def test_linked_clip_public_preview_confirm_and_fixed_read(linked_speed_http_sta
     original = state.client.get(result_url)
     assert original.status_code == 200 and original.json()['result'] is None
     monkeypatch.setattr(TaskEditReceiptHttpAdapter, 'original_edit_result', lambda *args: pytest.fail('family must read durable fixed results'))
-    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('family must bypass generic confirm'))
+    monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('family must bypass generic confirm'))
     accepted = state.client.post(state.url + f"/edits/{proposal['id']}/confirm", json={
         'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
         'expected_input_digest': original.json()['input_digest']})
@@ -1191,7 +1192,7 @@ def test_linked_clip_direct_and_natural_use_single_application(linked_speed_http
         assert natural.status_code == 200, natural.text
         assert natural.json()['proposal']['operation']['operation_type'] == operation
     monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
-    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
+    monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
     direct = state.client.post(state.url + '/edits/exact', json=linked_clip_action(state, operation))
     assert direct.status_code == 200, direct.text
     assert direct.json()['operation']['operation_type'] == operation
@@ -1381,7 +1382,7 @@ def test_subtitle_direct_and_natural_consumers_use_real_family(subtitle_http_sta
     assert natural.status_code == 200, natural.text
     assert natural.json()['proposal']['operation']['operation_type'] == operation
     monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter HTTP preview'))
-    monkeypatch.setattr(main, '_confirm_creation_task_edit', lambda *args: pytest.fail('direct cannot reenter HTTP confirm'))
+    monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('direct cannot reenter HTTP confirm'))
     direct = state.client.post(state.url + '/edits/exact', json=subtitle_action(state, operation))
     assert direct.status_code == 200, direct.text
     assert direct.json()['operation']['operation_type'] == operation
