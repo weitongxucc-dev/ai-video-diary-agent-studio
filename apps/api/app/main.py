@@ -2464,15 +2464,18 @@ def _script_configuration():
 
 
 
-from app.task_media_script_routes import build_task_media_script_router
+from app.task_media_script_routes import (
+    MediaScriptSubmissionHttpAdapter, build_task_media_script_router,
+    media_script_submission_source, media_script_submission_command,
+)
 
 
 def _task_media_script_http_router(route_names):
     return build_task_media_script_router(
         access_for=lambda: _exact_edit_access,
         facts_for=lambda: _task_script_capability_facts,
-        command_for=lambda: _media_script_submission_command,
-        runner_for=lambda: _run_media_script_submission,
+        command_for=lambda: media_script_submission_command,
+        runner_for=lambda: _media_script_submission_http_adapter().run,
         submission_for=lambda: _media_script_submission_use_case,
         json_response_for=lambda: JSONResponse,
         route_names=route_names,
@@ -2498,26 +2501,28 @@ def _task_script_capability_facts(task, member_id):
         "output_count": 1, "note": "生成PNG来源，尚未应用图层或生成成片；视频和音频脚本未接入。"}
 
 
-def _media_script_submission_source(payload):
-    return script_submission.ScriptSource(
-        str(payload.request_id) if payload.request_id is not None else None,
-        str(payload.assistant_turn_id) if payload.assistant_turn_id is not None else None,
-        payload.expected_timeline_version_id, payload.expected_timeline_sequence,
-        [item.model_dump(mode="json") for item in payload.requested_outputs],
-        [item.model_dump(mode="json") for item in payload.input_refs])
+def _media_script_submission_http_adapter():
+    return MediaScriptSubmissionHttpAdapter(
+        exact_edit_access=lambda task_id, request, **values: _exact_edit_access(task_id, request, **values),
+        current_workspace_id=lambda request: current_workspace_id(request),
+        require_permit_actor=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
+        request_permit_actor=lambda request, workspace_id: _request_permit_actor(request, workspace_id),
+        auth_enabled=lambda: auth_context.enabled,
+        require_assistant_input_origin=lambda request, source: _require_assistant_input_origin(request, source),
+        creation_task_or_404=lambda workspace_id, task_id: _creation_task_or_404(workspace_id, task_id),
+        script_configuration=lambda: _script_configuration(),
+        creation_runtime=lambda: _creation_runtime(),
+        media_result_receipt=lambda media, job, actor, runtime: _media_result_receipt(media, job, actor, runtime),
+        wake=lambda: _wake_assistant_continuations(),
+    )
 
 
-def _media_script_submission_command(task_id, payload, *, tool_id=None):
-    return script_submission.ScriptSubmission(task_id,
-        str(payload.request_id) if payload.request_id is not None else None,
-        payload.model_dump(mode="json", exclude_unset=True),
-        _media_script_submission_source(payload) if tool_id is None else None, tool_id)
 
 
 def _expand_media_script_submission_recipe(actor, tool_id, values):
     expanded, reference = _media_script_use_case().expand_recipe(actor, tool_id,
         MediaScriptToolPreviewRequest.model_validate(values))
-    return script_submission.RecipeExpansion(_media_script_submission_source(expanded), reference)
+    return script_submission.RecipeExpansion(media_script_submission_source(expanded), reference)
 
 
 def _completed_script_submission_receipt(task, actor, turn_id, slot, *, contract, input_refs):
@@ -2534,63 +2539,6 @@ def _media_script_submission_use_case():
         completed_receipt=_completed_script_submission_receipt)
 
 
-def _run_media_script_submission(request: Request, steps):
-    """Answer only the submission owner's explicit access/configuration/queue stages."""
-    try:
-        try:
-            stage = next(steps)
-        except StopIteration as result:
-            return result.value
-        while True:
-            try:
-                if isinstance(stage, script_submission.WriteAccess):
-                    answer = _exact_edit_access(stage.task_id, request, write=True)
-                elif isinstance(stage, script_submission.RequireActor):
-                    workspace_id = stage.workspace_id if stage.workspace_id is not None else current_workspace_id(request)
-                    answer = _require_permit_actor(request, workspace_id)
-                elif isinstance(stage, script_submission.SourceActor):
-                    answer = (_request_permit_actor(request, stage.workspace_id) if auth_context.enabled
-                        else CreationExecutionActor(stage.workspace_id, stage.member_id))
-                elif isinstance(stage, script_submission.InputOrigin):
-                    answer = _require_assistant_input_origin(request, stage.source)
-                elif isinstance(stage, script_submission.ReadWorkspace):
-                    answer = current_workspace_id(request)
-                elif isinstance(stage, script_submission.ReadTask):
-                    answer = _creation_task_or_404(stage.workspace_id, stage.task_id)
-                elif isinstance(stage, script_submission.ReadDraft):
-                    answer = request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')
-                elif isinstance(stage, script_submission.ReadConfiguration):
-                    answer = _script_configuration()
-                elif isinstance(stage, script_submission.QueueScript):
-                    runtime = _creation_runtime()
-                    media = runtime.registrations['creation_job'].owner.task_media
-                    job = media.submit(runtime, stage.actor, stage.task_id, stage.operation, stage.arguments, 'graphic_source')
-                    answer = _media_result_receipt(media, job, stage.actor, runtime)
-                elif isinstance(stage, script_submission.WakeContinuations):
-                    answer = _wake_assistant_continuations()
-                else:
-                    raise TypeError(f"Unsupported media-script submission stage: {type(stage).__name__}")
-            except Exception as exc:
-                # Only formerly HTTP-mapped errors participate in the owner's two recorded-error blocks.
-                if isinstance(exc, HTTPException):
-                    failure = script_submission.ScriptSubmissionRejected(exc.status_code, exc.detail)
-                    failure.__cause__ = exc.__cause__
-                else:
-                    failure = exc
-                try:
-                    stage = steps.throw(failure)
-                except StopIteration as result:
-                    return result.value
-            else:
-                try:
-                    stage = steps.send(answer)
-                except StopIteration as result:
-                    return result.value
-    except script_submission.ScriptSubmissionRejected as exc:
-        failure = HTTPException(status_code=exc.status_code, detail=exc.detail)
-        if exc.__cause__ is not None:
-            raise failure from exc.__cause__
-        raise failure from None
 
 
 app.include_router(_task_media_script_http_router(('preview_media_script',)))
@@ -2632,8 +2580,8 @@ def _media_script_tool_http_router(route_names):
         error_for=lambda: _script_tool_error,
         workspace_for=lambda: current_workspace_id,
         capabilities_for=lambda: _script_tool_capability_facts,
-        command_for=lambda: _media_script_submission_command,
-        runner_for=lambda: _run_media_script_submission,
+        command_for=lambda: media_script_submission_command,
+        runner_for=lambda: _media_script_submission_http_adapter().run,
         submission_for=lambda: _media_script_submission_use_case,
         json_response_for=lambda: JSONResponse,
         http_error_type_for=lambda: HTTPException,
