@@ -56,7 +56,7 @@ class SectionTimelineChange:
         if connection is None:
             with self.repository.execution_inputs.creation_execution_read() as conn:
                 return self.compute(task,snapshot,section_id,local,segment,version_id,conn,desired_version=desired_version)
-        inputs = self.repository.read_section_change_inputs(task,segment,connection=connection)
+        inputs = self.repository.section_inputs.read_section_change_inputs(task,segment,connection=connection)
         snapshot = dict(snapshot)
         snapshot['narration_segments'] = inputs['narration_snapshot']
         snapshot['narration_cache_key'] = None

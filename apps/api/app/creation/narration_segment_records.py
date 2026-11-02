@@ -94,11 +94,13 @@ class NarrationSegmentRecordStore:
         decode_script: Callable[..., CreationTaskScript],
         confirmed_script_digest: Callable[[str, str, str], str | None],
         stage_segment_state: Callable[..., dict | None],
+        iter_section_change_segments: Callable,
     ):
         self._connect = connection_factory
         self._decode_script = decode_script
         self._confirmed_script_digest = confirmed_script_digest
         self._stage_segment_state = stage_segment_state
+        self._iter_section_change_segments = iter_section_change_segments
 
 
     def save_narration_segments(
@@ -289,3 +291,19 @@ class NarrationSegmentRecordStore:
                     segment.id,
                 ),
             )
+
+    def replace_adopted_narration_segment(self, task, replacement, *, connection):
+        for _ in self._iter_section_change_segments(task, replacement, connection=connection, adopted=True):
+            pass
+        # Validation above preserves the complete-set contract, while this write
+        # cannot insert, overwrite another segment, or rewrite unrelated rows.
+        connection.execute('UPDATE narration_segments SET text=?,audio_reference=?,duration_seconds=?,sample_rate=?,model_id=?, '
+            'voice_profile_id=?,voice_version=?,language=?,pronunciation_version=?,status=?,updated_at=?,source_kind=?, '
+            'source_artifact_ref=?,source_sha256=?,source_script_digest=? '
+            'WHERE workspace_id=? AND task_id=? AND script_id=? AND source_section_id=? AND id=?',
+            (replacement.text,replacement.audio_reference,replacement.duration_seconds,replacement.sample_rate,replacement.model_id,
+             replacement.voice_profile_id,replacement.voice_version,replacement.language,replacement.pronunciation_version,
+             replacement.status,replacement.updated_at.isoformat(),replacement.source_kind,replacement.source_artifact_ref,
+             replacement.source_sha256,replacement.source_script_digest,task.workspace_id,task.id,task.confirmed_script_id,
+             replacement.source_section_id,replacement.id))
+        return replacement

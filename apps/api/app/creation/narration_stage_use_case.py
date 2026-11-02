@@ -395,10 +395,10 @@ class NarrationStageUseCase:
                 duration_seconds=target.duration_seconds, sample_rate=target.sample_rate, model_id=target.model_id,
                 pronunciation_version=target.pronunciation_version, status='ready', updated_at=utc_now())
             # This is the real immutable final snapshot, in the legacy script order.
-            narration_snapshot = [asdict(row) for row in self.repository.iter_narration_edit_segments(
+            narration_snapshot = [asdict(row) for row in self.repository.section_inputs.iter_narration_edit_segments(
                 task, updated_target, connection=conn)]
             combined = self.pcm_record(task, resources, receipt,
-                self.repository.iter_narration_edit_segments(task, updated_target, connection=conn))
+                self.repository.section_inputs.iter_narration_edit_segments(task, updated_target, connection=conn))
             montage = creation_task_montage_plan_from_payload(
                 self.repository.get_creation_task_montage_plan(workspace_id, task.id, connection=conn))
         montage = self.retime_for_durations(workspace_id, montage,

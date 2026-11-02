@@ -6929,11 +6929,11 @@ def test_section_change_original_transaction_rolls_back_all_facts(tmp_path,monke
     case = _section_change_paid_case(tmp_path,monkeypatch)
     case.change.prepare_current('local',case.task_id,'section_3',case.local,case.replacement,case.job)
     if failure=='late_guard':
-        update=case.repo.replace_adopted_narration_segment
+        update=case.repo.narration_records.replace_adopted_narration_segment
         def denied(*args,**kwargs):
             update(*args,**kwargs)
             raise PermissionError('current authorization revoked before commit')
-        monkeypatch.setattr(case.repo,'replace_adopted_narration_segment',denied)
+        monkeypatch.setattr(case.repo.narration_records,'replace_adopted_narration_segment',denied)
     with pytest.raises((ValueError,PermissionError),match='发布前|revoked'):
         with case.repo._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -6964,15 +6964,15 @@ def test_section_change_single_target_retains_complete_set_and_recorded_digest(t
         recorded=replace(case.before,source_kind='recorded',model_id=None,voice_profile_id=None,voice_version=None,
             source_artifact_ref='narration://artifact/recorded',source_sha256='a'*64,source_script_digest=original_digest,
             updated_at=datetime.now(timezone.utc))
-        case.repo.replace_adopted_narration_segment(task,recorded,connection=conn)
+        case.repo.narration_records.replace_adopted_narration_segment(task,recorded,connection=conn)
         assert conn.in_transaction
         with pytest.raises(ValueError,match='录音'):
-            case.repo.replace_adopted_narration_segment(task,replace(recorded,source_script_digest='b'*64),connection=conn)
+            case.repo.narration_records.replace_adopted_narration_segment(task,replace(recorded,source_script_digest='b'*64),connection=conn)
         with pytest.raises(ValueError,match='过期'):
-            case.repo.replace_adopted_narration_segment(task,case.before,connection=conn)
+            case.repo.narration_records.replace_adopted_narration_segment(task,case.before,connection=conn)
         conn.execute("DELETE FROM narration_segments WHERE id='audio_5'")
         with pytest.raises(ValueError,match='不完整'):
-            case.repo.read_section_change_inputs(task,recorded,connection=conn)
+            case.repo.section_inputs.read_section_change_inputs(task,recorded,connection=conn)
         conn.rollback()
     assert case.repo.narration_records.get_narration_segment('local',case.task_id,'audio_3')==case.before
     assert case.repo.narration_records.get_narration_segment('local',case.task_id,'audio_5')==case.original_rows[-1]

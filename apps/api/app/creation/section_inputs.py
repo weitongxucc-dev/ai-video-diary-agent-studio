@@ -9,6 +9,7 @@ import json
 import sqlite3
 
 from app.creation.plan_records import CreationPlanRecordStore
+from app.creation.narration_segment_records import validate_narration_segment
 from app.creation.script_contracts import CreationTaskScriptSection as _CreationTaskScriptSection
 from app.creation.script_records import ScriptRecordStore
 from app.creation.task_input_reads import require_creation_task, narration_segment_from_row
@@ -282,3 +283,79 @@ class SectionInputReader:
                     raise ValueError('采用的段版本不属于当前确认文案')
                 sections.append(replace(section, content=state['text']) if state is not None else section)
             return replace(script, sections=sections)
+
+    def iter_section_change_segments(self, task, replacement, *, connection, adopted):
+        """Validate the complete set one row at a time; replace only the target."""
+        if not connection.in_transaction:
+            raise ValueError('局部联动必须复用已开启的事务')
+        header, _ = self.script_records.read_execution_script_metadata(
+            connection, task.workspace_id, task.confirmed_script_id)
+        if (header.task_id != task.id or header.selection_status != 'confirmed'
+                or (replacement.workspace_id, replacement.task_id, replacement.script_id) !=
+                (task.workspace_id, task.id, header.id)):
+            raise ValueError('配音分段与当前确认文案谱系不一致')
+        count = connection.execute('SELECT COUNT(*),COUNT(DISTINCT source_section_id) FROM narration_segments '
+            'WHERE workspace_id=? AND task_id=? AND script_id=?', (task.workspace_id, task.id, header.id)).fetchone()
+        orphan = connection.execute('SELECT 1 FROM narration_segments n WHERE n.workspace_id=? AND n.task_id=? '
+            'AND n.script_id=? AND NOT EXISTS (SELECT 1 FROM creation_task_script_sections s WHERE '
+            's.workspace_id=n.workspace_id AND s.script_id=n.script_id AND s.section_id=n.source_section_id) LIMIT 1',
+            (task.workspace_id, task.id, header.id)).fetchone()
+        if not header.sections_total_count or tuple(count) != (header.sections_total_count, header.sections_total_count) or orphan:
+            raise ValueError('已持久化的配音分段集不完整或不唯一，不能覆盖')
+        target = self.read_creation_section_input(task, header, replacement.source_section_id, connection=connection)['audio']
+        if target is None or target.id != replacement.id or target.created_at != replacement.created_at:
+            raise ValueError('配音分段稳定 ID 或创建时间不能覆盖')
+        if adopted and replacement.updated_at < target.updated_at:
+            raise ValueError('不能用过期状态覆盖配音分段')
+        recorded = replacement.source_kind == 'recorded' or connection.execute(
+            "SELECT 1 FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? "
+            "AND source_section_id<>? AND source_kind='recorded' LIMIT 1",
+            (task.workspace_id, task.id, header.id, replacement.source_section_id)).fetchone() is not None
+        script_digest = None
+        if recorded:
+            checksum = hashlib.sha256()
+            checksum.update(('{"script_id": ' + json.dumps(header.id, ensure_ascii=False) + ', "sections": [').encode())
+            for index, section in enumerate(self.script_records.iter_execution_script_sections(connection, task.workspace_id, header.id)):
+                if index:
+                    checksum.update(b', ')
+                checksum.update(json.dumps({'id': section.id, 'content': section.content},
+                    ensure_ascii=False, sort_keys=True).encode())
+            checksum.update(b']}')
+            script_digest = checksum.hexdigest()
+        cursor = connection.execute('SELECT * FROM narration_segments WHERE workspace_id=? AND task_id=? AND script_id=? '
+            'ORDER BY created_at ASC,id ASC', (task.workspace_id, task.id, header.id))
+        try:
+            for row in cursor:
+                current = narration_segment_from_row(row)
+                segment = replacement if current.source_section_id == replacement.source_section_id else current
+                validate_narration_segment(segment)
+                section = self.read_creation_section_input(task, header, segment.source_section_id, connection=connection)['section']
+                if (adopted or segment.source_section_id != replacement.source_section_id) and segment.text != section.content:
+                    raise ValueError('配音分段文字必须与已采用文案段落一致')
+                if segment.source_kind == 'recorded' and segment.source_script_digest != script_digest:
+                    raise ValueError('电脑录音必须绑定当前确认文案内容')
+                yield segment
+        finally:
+            cursor.close()
+
+    def read_section_change_inputs(self, task, replacement, *, connection):
+        """Keep one real final snapshot body plus ordered audio metadata, not full DTO copies."""
+        header, _ = self.script_records.read_execution_script_metadata(
+            connection, task.workspace_id, task.confirmed_script_id)
+        snapshot_rows, audio = [], {}
+        for segment in self.iter_section_change_segments(task, replacement, connection=connection, adopted=False):
+            snapshot_rows.append(json.loads(json.dumps(asdict(segment), default=str)))
+            audio[segment.source_section_id] = {'section_id': segment.source_section_id, 'narration_segment_id': segment.id,
+                'audio_reference': segment.audio_reference, 'duration_seconds': segment.duration_seconds, 'status': segment.status}
+        ordered = [audio[row[0]] for row in connection.execute('SELECT section_id FROM creation_task_script_sections '
+            'WHERE workspace_id=? AND script_id=? ORDER BY ordinal', (task.workspace_id, header.id))]
+        return {'script_header': header, 'narration_snapshot': snapshot_rows, 'audio': ordered}
+
+    def iter_narration_edit_segments(self, task, replacement, *, connection):
+        """Validate the whole set, then emit the real prospective rows in script order."""
+        for _ in self.iter_section_change_segments(task, replacement, connection=connection, adopted=True):
+            pass
+        header, _ = self.script_records.read_execution_script_metadata(
+            connection, task.workspace_id, task.confirmed_script_id)
+        for _, segment in self.iter_creation_narration_sections(task, header, connection=connection):
+            yield replacement if segment.id == replacement.id else segment

@@ -949,14 +949,14 @@ def test_section_adoption_metadata_borrows_transaction_and_keeps_dynamic_late_gu
     with s.repo._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM edit_operations WHERE operation_type='ReviseScriptSection'").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM transform_runs WHERE id='section-transform'").fetchone()[0] == 0
-    original = s.repo.replace_adopted_narration_segment
+    original = s.repo.narration_records.replace_adopted_narration_segment
     called = []
     def revoked(*args, **kwargs):
         original(*args, **kwargs)
         called.append(kwargs['connection'].in_transaction)
         raise PermissionError('metadata authorization revoked at the real replace port')
     with monkeypatch.context() as guard:
-        guard.setattr(s.repo, 'replace_adopted_narration_segment', revoked)
+        guard.setattr(s.repo.narration_records, 'replace_adopted_narration_segment', revoked)
         with pytest.raises(PermissionError, match='real replace port'):
             with s.repo._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -1771,3 +1771,81 @@ def test_whole_restore_safety_compares_real_sparse_facts_on_the_callers_connecti
         assert not whole._timeline_restore_business_facts(absent, conn)['subtitles']['explicit_empty']
     with pytest.raises(ValueError, match='已有其他时间线成果'):
         whole.verify_whole_timeline_restore('ws', s.task.id, empty.id)
+
+
+def test_section_change_record_reads_keep_distinct_orders_recorded_digest_and_target_only_update(tmp_path, monkeypatch):
+    import hashlib
+    import socket
+    import threading
+    import wave
+    from PIL import Image
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('section change metadata forbids media, network and execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    from app.creation.contracts import NarrationSegment
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    s = metadata_state(tmp_path)
+    repo, task = s.repo, s.task
+    script = CreationTaskScript(id='fixed-script', workspace_id='ws', task_id=task.id,
+        run_id='metadata-script-run', topic_id='metadata-topic', title='声明段落', language='zh-CN',
+        sections=[CreationTaskScriptSection(id='section', title='目标段', content='目标原文',
+            visual_prompt='声明来源', evidence_reference_ids=[]),
+            CreationTaskScriptSection(id='later-section', title='另一段', content='后段原文',
+                visual_prompt='声明来源', evidence_reference_ids=[])], selection_status='confirmed',
+        confirmed_at=task.created_at)
+    with repo._connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        payload = repo.script_records._script_payload(connection, script)
+        connection.execute('INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
+            (script.id, 'ws', task.id, script.run_id, payload, script.updated_at.isoformat()))
+        task.confirmed_script_id = script.id
+        connection.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    # Use the adoption fixture's two declarations, with creation times fixed before insertion.
+    target = NarrationSegment('section-audio', 'ws', task.id, script.id, 'section', '目标原文',
+        'narration://artifact/section-original', 2, 24000, 'metadata', 'metadata-voice', 'v1', 'zh', 'original', 'ready',
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    other = NarrationSegment('later-audio', 'ws', task.id, script.id, 'later-section', '后段原文',
+        'narration://artifact/later-original', 2, 24000, 'metadata', 'metadata-voice', 'v1', 'zh', 'original', 'ready',
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+    repo.narration_records.save_narration_segments('ws', task.id, script.id, [target, other])
+    manifest = {'script_id': task.confirmed_script_id, 'sections': [
+        {'id': 'section', 'content': '目标原文'}, {'id': 'later-section', 'content': '后段原文'}]}
+    digest = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    recorded = replace(target, source_kind='recorded', model_id=None, voice_profile_id=None, voice_version=None,
+        source_artifact_ref='narration://artifact/metadata-recorded', source_sha256='a' * 64,
+        source_script_digest=digest, audio_reference='narration://artifact/metadata-recorded', sample_rate=None,
+        updated_at=datetime.now(timezone.utc))
+    # Source fields declare metadata only; no recording or source bytes are opened.
+    with repo._connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        inputs = repo.section_inputs.read_section_change_inputs(task, recorded, connection=connection)
+        assert [row['id'] for row in inputs['narration_snapshot']] == [other.id, target.id]
+        assert [row['narration_segment_id'] for row in inputs['audio']] == [target.id, other.id]
+        assert inputs['script_header'].id == task.confirmed_script_id
+        prospective = list(repo.section_inputs.iter_narration_edit_segments(task, recorded, connection=connection))
+        assert prospective == [recorded, other]
+        assert repo.narration_records.get_narration_segment('ws', task.id, target.id, connection=connection) == target
+        assert repo.narration_records.replace_adopted_narration_segment(task, recorded, connection=connection) == recorded
+        persisted = repo.narration_records.get_narration_segment('ws', task.id, target.id, connection=connection)
+        assert persisted == recorded and (persisted.id, persisted.created_at) == (target.id, target.created_at)
+        assert repo.narration_records.get_narration_segment('ws', task.id, other.id, connection=connection) == other
+        with pytest.raises(ValueError, match='电脑录音必须绑定'):
+            repo.narration_records.replace_adopted_narration_segment(task,
+                replace(recorded, source_script_digest='b' * 64), connection=connection)
+        assert repo.narration_records.get_narration_segment('ws', task.id, target.id, connection=connection) == recorded
+        connection.execute('DELETE FROM narration_segments WHERE workspace_id=? AND id=?', ('ws', other.id))
+        with pytest.raises(ValueError, match='不完整或不唯一'):
+            repo.section_inputs.read_section_change_inputs(task, recorded, connection=connection)
+        assert connection.in_transaction and connection.execute('SELECT 1').fetchone()[0] == 1
+        connection.rollback()
+        assert not connection.in_transaction and connection.execute('SELECT 1').fetchone()[0] == 1
+    assert repo.narration_records.get_narration_segment('ws', task.id, target.id) == target
+    assert repo.narration_records.get_narration_segment('ws', task.id, other.id) == other
