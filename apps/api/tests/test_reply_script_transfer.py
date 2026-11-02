@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation_task_text_responses import CreationTaskTextResponseAdapter
 from app.creation_task_responses import CreationTaskResponseAdapter
 
 import hashlib
@@ -483,7 +484,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: readable,
     ))
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(main_module, "_creation_task_scripts_response", lambda _workspace, _task: {"saved": True})
+    monkeypatch.setattr(CreationTaskTextResponseAdapter, "creation_task_scripts_response", lambda adapter, _workspace, _task: {"saved": True})
     request = Request({"type": "http", "headers": []})
     payload = AssistantReplyScriptTransferRequest(
         conversation_id=UUID(conversation_id), turn_id=UUID(turn_id),

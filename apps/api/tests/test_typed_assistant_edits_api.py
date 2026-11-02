@@ -413,6 +413,12 @@ def test_task_workspace_active_headers_do_not_hydrate_body(workspace_metadata_st
     summary = response.json()["scripts"][0]
     assert summary["sections"] is None and summary["sections_loaded"] is False
     assert summary["sections_total_count"] == 45
+    task = state.repo.task_records.get_creation_task(state.task.workspace_id, state.task.id)
+    script_facts = main._task_business(generation_case=object()).script_facts(task.workspace_id, task).model_dump(mode="json")
+    assert script_facts["scripts_scope"] == "active"
+    script = script_facts["scripts"][0]
+    assert script["sections"] is None and script["sections_loaded"] is False
+    assert script["sections_total_count"] == 45
 
 
 def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(workspace_metadata_state, monkeypatch):
