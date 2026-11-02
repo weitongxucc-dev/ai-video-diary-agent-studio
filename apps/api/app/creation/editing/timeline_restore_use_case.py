@@ -365,7 +365,8 @@ class TimelineRestoreUseCase:
         plans = [creation_task_montage_plan_from_payload(value) for value in (current, expected, desired)]
         tracks = [self.montage_edits.current_subtitle_tracks(ws, task, current_version=version, montage=plan)
             for version, plan in zip((current_version, expected_version, desired_version), plans)]
-        key = lambda track: (track.language, track.source_language, track.generation_method)
+        def key(track):
+            return (track.language, track.source_language, track.generation_method)
         mapped = [{key(track): track for track in values} for values in tracks]
         if any(len(mapping) != len(values) for mapping, values in zip(mapped, tracks)) or mapped[1].keys() != mapped[2].keys():
             raise EditConflict('原字幕轨身份或集合不适合局部恢复')

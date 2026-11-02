@@ -85,7 +85,8 @@ class TaskBusiness:
         native_origin={**origin,'task_id':task.id,'assistant_turn_id':source_binding['turn_id'],
             'input_id':origin.get('input_id') or source_binding['turn_id'],
             'session_id':source_binding['session_id'],'sdk_round':source_binding.get('sdk_round',0)}
-        guard=lambda conn:self.check(source_binding,cancel_event,deadline_monotonic,connection=conn,check_version=False)
+        def guard(conn):
+            return self.check(source_binding,cancel_event,deadline_monotonic,connection=conn,check_version=False)
         invocation.owner_entered=True
         value=self.native_case.dispatch(operation,arguments,actor=actor,origin=native_origin,
             write_guard=guard,runtime=self.runtime() if operation in {'submit_task_command','cancel_task_command','register_task_artifacts'} else None,
@@ -255,7 +256,8 @@ class TaskBusiness:
                 raise TaskBusinessRejected('局部修改不能切换原输入')
         if operation in {'save_assistant_script_draft','start_script_window','patch_script_sections','confirm_saved_script','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
             arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
-        guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,
+        def guard(conn):
+            return self.check(binding,cancel_event,deadline_monotonic,connection=conn,
             check_version=check_version or operation=='continue_task_quality_check')
         invocation.owner_entered=True
         value=self.execute(operation,arguments,actor,task,goal,{**origin,'assistant_turn_id':binding['turn_id']},sealed,guard)

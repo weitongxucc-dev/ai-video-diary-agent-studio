@@ -104,7 +104,8 @@ def test_delivery_new_outputs_use_actual_volumes_and_unknown_space_stays_unknown
     from app import device_resource_volumes, packet_copy_policy
     budget, resources, probe, paths, files = fixture(tmp_path, monkeypatch)
     ids = {str(path): index for index, path in enumerate(paths.values())}
-    volume = lambda path: (ids[str(path)], Path(path))
+    def volume(path):
+        return (ids[str(path)], Path(path))
     monkeypatch.setattr(device_resource_volumes, 'existing_volume', volume)
     monkeypatch.setattr(packet_copy_policy, 'existing_volume', volume)
     resources['write_volume_ids'] = {role: ids[str(path)] for role, path in paths.items()}
@@ -189,7 +190,8 @@ def test_delivery_normal_first_use_is_explicit_unverified_and_invalid_explicit_p
     path = write_profile(tmp_path, document)
     settings = Settings(device_resource_profile_path=str(path))
     identities = {**BACKENDS, 'audio_encode':'a'*64, 'final_mux':'b'*64}
-    resolve = lambda **kw: resolve_device_resources(settings, {}, device=DEVICE, backend_identities=identities, **kw)
+    def resolve(**kw):
+        return resolve_device_resources(settings, {}, device=DEVICE, backend_identities=identities, **kw)
     ordinary = resolve()
     original = path.read_bytes()
     selected = resolve(select_audio_delivery_preparation=True)

@@ -2886,7 +2886,8 @@ def _bind_script_library_use_case(draft_use_case, reader):
 
 def _script_library_use_case(request: Request):
     workspace_id = current_workspace_id(request)
-    reader = lambda ws: _content_identity_http_adapter().reader(request, ws)
+    def reader(ws):
+        return _content_identity_http_adapter().reader(request, ws)
     draft_use_case = _script_draft_use_case(workspace_id,
         validate_inputs=lambda ws, plan, refs: _validate_script_input_sources(ws, plan, refs, *reader(ws)))
     return _bind_script_library_use_case(draft_use_case, reader)

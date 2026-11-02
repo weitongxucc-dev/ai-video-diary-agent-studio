@@ -559,8 +559,10 @@ class NativeTaskOperations:
                             if canonical.is_file() and not str(canonical).startswith(('/usr/lib/','/System/')):
                                 reads.append(canonical.parent)
                                 pending.append(canonical)
-        literal = lambda path:'(literal '+json.dumps(str(path),ensure_ascii=False)+')'
-        subpath = lambda path:'(subpath '+json.dumps(str(path),ensure_ascii=False)+')'
+        def literal(path):
+            return '(literal '+json.dumps(str(path),ensure_ascii=False)+')'
+        def subpath(path):
+            return '(subpath '+json.dumps(str(path),ensure_ascii=False)+')'
         profile = '\n'.join(['(version 1)','(deny default)','(deny network*)','(allow process-fork process-exec)',
             '(allow sysctl-read)',
             '(allow file-read-metadata '+ ' '.join(literal(path) for path in {Path('/'),root,*(parent for value in [root,*reads,*files,*input_paths] for parent in value.parents)})+')',

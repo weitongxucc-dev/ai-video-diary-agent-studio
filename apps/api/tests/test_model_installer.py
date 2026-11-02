@@ -407,8 +407,10 @@ def test_tiny_resumed_artifact_preserves_hash_manifest_and_publish_without_netwo
         return TinyResponse()
 
     monkeypatch.setattr(execution.urllib.request, "urlopen", receive)
-    report = lambda job, **values: updates.append((job, values))
-    download = lambda *args: execution.download_file(report, *args)
+    def report(job, **values):
+        return updates.append((job, values))
+    def download(*args):
+        return execution.download_file(report, *args)
     files = execution.download_model(staging, "synthetic-job", spec, download, report)
     assert requests == [(f"https://huggingface.co/{spec.repository}/resolve/{spec.revision}/tiny.bin", "bytes=2-", 60)]
     assert files == [{"path": "tiny.bin", "size": 6, "sha256": hashlib.sha256(b"abcdef").hexdigest()}]

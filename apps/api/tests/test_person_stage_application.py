@@ -111,7 +111,8 @@ def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, m
     elif change == 'revoked':
         owners.revoked = True
     before = editorial_rows(state.repo)
-    complete = lambda: scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
+    def complete():
+        return scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
         checkpoint_write=lambda conn, current: commit(conn).id)
     if change == 'none':
         complete()

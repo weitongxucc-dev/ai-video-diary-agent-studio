@@ -157,7 +157,8 @@ def test_narration_identity_binds_helper_and_actual_runtime_files(tmp_path):
     (tmp_path / 'manifest.json').write_text(json.dumps({'files': []}))
     status = SimpleNamespace(ready=True, model_path=str(tmp_path), worker_path=str(worker), runtime_python_path=str(python))
     catalog = SimpleNamespace(status=lambda spec: status)
-    identity = lambda: backend_identity('narration', None, settings=Settings(), model_catalog=catalog)
+    def identity():
+        return backend_identity('narration', None, settings=Settings(), model_catalog=catalog)
     first = identity()
     helper.write_text('changed-helper')
     second = identity()

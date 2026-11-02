@@ -17,7 +17,8 @@ def project_script_window_request(details, *, expected_operation=None, is_error=
         request_id=str(UUID(request_id))
     except (ValueError,TypeError,AttributeError):
         return None
-    identifier=lambda value: value if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',value) else None
+    def identifier(value):
+        return value if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',value) else None
     task_id=identifier(details.get('task_id'))
     if task_id is None:
         return None

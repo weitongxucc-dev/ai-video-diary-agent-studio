@@ -571,7 +571,8 @@ class ScriptDraftUseCase:
                 and event.payload['request_digest']==request_digest]
             if previous:
                 return self.scripts.get_creation_task_script(workspace_id,previous[-1].payload['script_id'])
-            result_write=lambda conn,script:self.scripts.record_assistant_script_save(script,source_binding,request_digest,connection=conn)
+            def result_write(conn,script):
+                return self.scripts.record_assistant_script_save(script,source_binding,request_digest,connection=conn)
         _assistant_script_inputs=self.read_inputs
         _require_current_script_inputs=self.validate_inputs
         _topic_route_snapshot=self.route_snapshot
@@ -602,7 +603,8 @@ class ScriptDraftUseCase:
         review_binding = self._review_candidate(workspace_id, task, plan, topic, sources, reader, payload.title, sections, instruction_origin,
             review_window=window_start['review_window'] if window_start else None)
         if window_start:
-            result_write = lambda conn,script:self.scripts.record_script_window_start(script,window_start['request_id'],
+            def result_write(conn,script):
+                return self.scripts.record_script_window_start(script,window_start['request_id'],
                 window_start['member_id'],window_start['request_digest'],review_binding,connection=conn)
         # The model call can outlive source permissions or the current plan/topic.
         # Re-read those bindings; the repository still owns the final draft CAS.

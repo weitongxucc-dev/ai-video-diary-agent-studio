@@ -350,7 +350,8 @@ def presenter_stage_facts(repository, task, script, plan, budget, models, *, con
                  "duration_seconds": duration,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
-    encode = lambda value: json.dumps(value, sort_keys=True, default=str).encode()
+    def encode(value):
+        return json.dumps(value, sort_keys=True, default=str).encode()
     checksum = hashlib.sha256(b'{"files": ' + encode(facts) + b', "inputs": [')
     for index, (segment_id, request) in enumerate(inputs):
         if index:
@@ -990,7 +991,8 @@ class CreationJobOwnerVerifier:
                     budget=self.narration_audio_budget, connection=conn, request=request)
                 if pending is not None:
                     return pending
-                mix_facts = lambda workspace_id, task_id, current_montage, *, actor: self.audio_assembly.master_mix_facts(
+                def mix_facts(workspace_id, task_id, current_montage, *, actor):
+                    return self.audio_assembly.master_mix_facts(
                     job, current_montage, actor=actor, budget=self.narration_audio_budget)
         if self.audio_delivery is not None and job is not None and not plan.presenter_share_target:
             if prepare_assembly and self.audio_delivery.picture.manifest(job, connection=conn) is not None:
@@ -2419,7 +2421,8 @@ class CreationJobUnitExecutor:
             try:
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 info = os.fstat(fd)
-                identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
                 if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                         or not 0 < info.st_size <= min(settled.payload['output_bytes'], resources['max_output_bytes'])
                         or not started.created_at.timestamp() <= info.st_mtime <= settled.created_at.timestamp()):

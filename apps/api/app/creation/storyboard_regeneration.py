@@ -130,7 +130,8 @@ def narration_signature(repository, task, *, connection=None) -> str:
             raise ValueError('故事板配音文件为空')
         files.append((reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
     checksum = hashlib.sha256()
-    encode = lambda value: json.dumps(value, sort_keys=True, default=str).encode()
+    def encode(value):
+        return json.dumps(value, sort_keys=True, default=str).encode()
     checksum.update(b'[' + encode(asdict(artifact)) + b', [')
     for index, item in enumerate(repository.narration_records.iter_narration_segments(task.workspace_id, task.id,
             task.confirmed_script_id, connection=connection)):

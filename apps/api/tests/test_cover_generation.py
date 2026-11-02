@@ -331,7 +331,8 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     proposal = repo.edit_records.create_edit_proposal(EditProposal("proposal", "workspace", task.id, intent.id, "封面", [published.logical_ref],
         {"operation_type": "GenerateCoverFromFrame", "payload": operation}, [], {}, []))
     actor = CreationExecutionActor("workspace", "member")
-    verify = lambda value: "ready" if value == actor else "unauthorized"
+    def verify(value):
+        return "ready" if value == actor else "unauthorized"
     metadata = MetadataEditUseCase(repo, store, output_root=root, audio_service=None)
     unconfigured = CoverUseCase(repo, store, metadata, verify_identity=verify, output_root=root)
     with pytest.raises(CoverUnavailable):

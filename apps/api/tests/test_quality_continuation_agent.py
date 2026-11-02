@@ -151,12 +151,14 @@ def test_quality_turn_persists_owner_receipt_for_original_input(failed_quality, 
     monkeypatch.setattr(main, '_goal_service', lambda: SimpleNamespace(register_turn=lambda _: None))
     if background:
         claim = {'turn_id': turn_id, 'goal': goal}
-        finish = lambda details: main._task_turn_http_adapter().finish_goal(business, claim, '质检通过，视频完成', details)
+        def finish(details):
+            return main._task_turn_http_adapter().finish_goal(business, claim, '质检通过，视频完成', details)
     else:
         request = Request({'type': 'http', 'method': 'POST', 'path': '/', 'headers': [
             (key.lower().encode(), value.encode()) for key, value in system[4].items()]})
         payload = SimpleNamespace(conversation_id=binding['conversation_id'], expected_draft_version=1)
-        finish = lambda details: main._task_turn_http_adapter().finish('task', request, payload,
+        def finish(details):
+            return main._task_turn_http_adapter().finish('task', request, payload,
             turn_id, '质检通过，视频完成', details, 'review').model_dump(mode='json')
     with pytest.raises((HTTPException, TaskBusinessRejected)):
         finish({**preview, 'invocation_input_id': 'another-input'})

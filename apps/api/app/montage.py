@@ -1217,7 +1217,8 @@ def _build_creation_section_cues(
     section_reader=None,
 ) -> list[NarrationCue]:
     if section_reader is None:
-        section_reader = lambda: iter(sections)
+        def section_reader():
+            return iter(sections)
     if narration_duration_seconds > max_seconds:
         raise ValueError(
             f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"

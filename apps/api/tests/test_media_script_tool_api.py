@@ -814,7 +814,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
     from test_device_runtime import Resources, Processes
     from tests.host_memory_boundary import IsolatedMemoryMonitor
     state = submission_metadata_context(receipt_state, monkeypatch)
-    identity = lambda actor: 'ready' if actor == state.actor and main.find_member(state.members,actor.member_id) else 'unauthorized'
+    def identity(actor):
+        return 'ready' if actor == state.actor and main.find_member(state.members,actor.member_id) else 'unauthorized'
     def facts(workspace,task_id,operation,arguments,actor):
         # Explicit metadata facts only: no program preparation or resource calibration.
         return ({'base_version_id':None,'declared_arguments_digest':main.media_digest(arguments)},
