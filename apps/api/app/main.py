@@ -136,12 +136,12 @@ from app.creation.editing.timeline_history import TimelineHistoryConflict
 from app.creation.editing.timeline_restore_use_case import (TimelineRestoreUseCase, TimelineRestoreCommand,
     TimelineOutputQualification, TimelineRestoreUnavailable)
 from app.creation.editing.sources import EditSourceVerifier
-from app.creation.editing.linked_timeline_use_case import (LinkedTimelineEditUseCase, LinkedEditApplyCommand, LinkedEditPreviewFailed,
+from app.creation.editing.linked_timeline_use_case import (LinkedTimelineEditUseCase, LinkedEditPreviewFailed,
     LINKED_EDIT_OPERATIONS, LinkedEditInputError)
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditReplay, InvalidMontage, LegacyMontageReference, EditPreviewRejected,
     SubtitleNoChange, SubtitleTargetMissing,
-    metadata_edit_command,
+    metadata_edit_command as metadata_edit_command,
     default_subtitle_style as metadata_default_subtitle_style,
     execution_subtitle_track as metadata_execution_subtitle_track,
     narration_linkage_spans as metadata_narration_linkage_spans,
@@ -161,6 +161,7 @@ from app.creation.projection import project_task_summary, undo_target_versions, 
 from app.creation_task_responses import CreationTaskResponseAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
 from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter, MetadataEditConfirmationHttpAdapter
+from app.task_edit_commands import TaskEditCommandHttpAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.creation.editing.subtitles import subtitle_display_selection
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
@@ -1689,7 +1690,7 @@ def _task_edit_http_router(route_names):
         claim_edit_request_for=lambda: _task_edit_receipt_http_adapter().claim_edit_request,
         command_preview_use_case_for=lambda: _command_preview_use_case,
         compound_edit_use_case_for=lambda: _compound_edit_use_case,
-        compound_proposal_command_for=lambda: _compound_proposal_command,
+        compound_proposal_command_for=lambda: _task_edit_command_http_adapter().compound_proposal_command,
         confirm_cover_response_for=lambda: _cover_confirmation_http_adapter().confirm_cover_response,
         confirm_creation_task_edit_for=lambda: _task_edit_confirmation_http_adapter().confirm,
         confirm_linked_timeline_response_for=lambda: _metadata_edit_confirmation_http_adapter().confirm_linked_timeline_response,
@@ -1702,11 +1703,11 @@ def _task_edit_http_router(route_names):
         ensure_montage_base_version_for=lambda: _ensure_montage_base_version,
         exact_edit_access_for=lambda: _exact_edit_access,
         exact_preview_use_case_for=lambda: _exact_preview_use_case,
-        linked_timeline_apply_command_for=lambda: _linked_timeline_apply_command,
+        linked_timeline_apply_command_for=lambda: _task_edit_command_http_adapter().linked_timeline_apply_command,
         linked_timeline_use_case_for=lambda: _linked_timeline_use_case,
         logical_montage_output_refs_for=lambda: _logical_montage_output_refs,
         media_result_receipt_for=lambda: _media_result_receipt,
-        metadata_edit_command_for=lambda: _metadata_edit_command,
+        metadata_edit_command_for=lambda: _task_edit_command_http_adapter().metadata_edit_command,
         metadata_edit_response_for=lambda: _metadata_edit_response,
         original_edit_result_for=lambda: _task_edit_receipt_http_adapter().original_edit_result,
         read_edit_request_result_for=lambda: _task_edit_receipt_http_adapter().read_edit_request_result,
@@ -1715,7 +1716,7 @@ def _task_edit_http_router(route_names):
         require_permit_actor_for=lambda: _require_permit_actor,
         save_edit_request_result_for=lambda: _task_edit_receipt_http_adapter().save_edit_request_result,
         subtitle_edit_use_case_for=lambda: _subtitle_edit_use_case,
-        subtitle_proposal_command_for=lambda: _subtitle_proposal_command,
+        subtitle_proposal_command_for=lambda: _task_edit_command_http_adapter().subtitle_proposal_command,
         topic_failure_response_for=lambda: _topic_failure_response,
         wake_assistant_continuations_for=lambda: _wake_assistant_continuations,
         auth_context_for=lambda: auth_context,
@@ -4020,30 +4021,15 @@ def _linked_timeline_values(payload):
         raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
-def _linked_timeline_command(task,request,operation_type,values,*,source=None):
-    member_id,diagnostic=_content_reader(request,task.workspace_id)
-    if source is not None:
-        member_id,diagnostic=_assistant_member_id(request,task.workspace_id),False
-    identity={'member_id':member_id,'local_diagnostic':diagnostic}
-    reader_identity=None
-    if operation_type == 'InsertClip':
-        reader,reader_diagnostic=_content_reader(request,task.workspace_id)
-        reader_identity={'member_id':reader,'local_diagnostic':reader_diagnostic}
-    return _exact_preview_use_case().linked_command(task,identity,operation_type,values,
-        source=source,reader_identity=reader_identity)
+def _task_edit_command_http_adapter():
+    return TaskEditCommandHttpAdapter(
+        repo_for=lambda: production_repo,
+        content_reader=lambda request, workspace_id: _content_reader(request, workspace_id),
+        assistant_member=lambda request, workspace_id: _assistant_member_id(request, workspace_id),
+        exact_case_for=lambda: _exact_preview_use_case(),
+    )
 
 
-def _linked_timeline_apply_command(task, proposal, request, payload=None):
-    source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
-    command = _linked_timeline_command(task, request, proposal.operation["operation_type"], proposal.operation["payload"], source=source)
-    requesting = payload is not None and payload.request_id is not None
-    return LinkedEditApplyCommand(task.workspace_id, task.id, proposal.id, command.actor_identity,
-        _assistant_member_id(request, task.workspace_id), source=source,
-        request_id=str(payload.request_id) if requesting else None,
-        expected_base_version_id=payload.expected_base_version_id if requesting else None,
-        base_version_submitted=requesting and "expected_base_version_id" in payload.model_fields_set,
-        expected_input_digest=payload.expected_input_digest if requesting else None,
-        request_fields=payload.model_dump(mode="json", exclude_unset=True) if requesting else {})
 
 
 def _task_edit_confirmation_http_adapter():
@@ -4070,9 +4056,9 @@ def _metadata_edit_confirmation_http_adapter():
         linked_case_for=lambda: _linked_timeline_use_case(),
         subtitle_case_for=lambda: _subtitle_edit_use_case(),
         compound_case_for=lambda: _compound_edit_use_case(),
-        linked_command=lambda task, proposal, request, payload: _linked_timeline_apply_command(task, proposal, request, payload),
-        subtitle_command=lambda task, proposal, request: _subtitle_proposal_command(task, proposal, request),
-        compound_command=lambda task, proposal, request: _compound_proposal_command(task, proposal, request),
+        linked_command=lambda task, proposal, request, payload: _task_edit_command_http_adapter().linked_timeline_apply_command(task, proposal, request, payload),
+        subtitle_command=lambda task, proposal, request: _task_edit_command_http_adapter().subtitle_proposal_command(task, proposal, request),
+        compound_command=lambda task, proposal, request: _task_edit_command_http_adapter().compound_proposal_command(task, proposal, request),
         metadata_response=lambda outcome: _metadata_edit_response(outcome),
         save_receipt=lambda task, event_id, response: _task_edit_receipt_http_adapter().save_edit_request_result(task, event_id, response),
         repo_for=lambda: production_repo,
@@ -4103,11 +4089,6 @@ def _metadata_edit_response(outcome):
     return CreationTaskEditConfirmResponse.model_validate(value)
 
 
-def _metadata_edit_command(task, request, operation_type, values, *, source=None):
-    user_id, diagnostic = _content_reader(request, task.workspace_id)
-    if source is not None:
-        user_id, diagnostic = _assistant_member_id(request, task.workspace_id), False
-    return metadata_edit_command(task, {"member_id":user_id, "local_diagnostic":diagnostic}, operation_type, values, source=source)
 
 
 def _validate_edit_graphic_sources(workspace_id, task_id, overlays):
@@ -4437,9 +4418,6 @@ def _compound_edit_use_case(repository=None):
     return CompoundEditUseCase(repo, metadata, picture_renderer=renderer)
 
 
-def _compound_proposal_command(task, proposal, request):
-    source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
-    return _metadata_edit_command(task, request, "EditCompoundTimeline", proposal.operation["payload"], source=source)
 
 
 
@@ -4503,9 +4481,6 @@ def _subtitle_values(payload):
     except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
 
 
-def _subtitle_proposal_command(task, proposal, request):
-    source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get("request_source")
-    return _metadata_edit_command(task, request, proposal.operation["operation_type"], proposal.operation["payload"], source=source)
 
 
 
@@ -4549,7 +4524,7 @@ def _preview_linked_core(task_id,request,payload,*,source):
     case=_exact_preview_use_case()
     try:
         task,values=case.prepare_linked(current_workspace_id(request),task_id,payload)
-        command=_linked_timeline_command(task,request,payload.operation_type,
+        command=_task_edit_command_http_adapter().linked_timeline_command(task,request,payload.operation_type,
             {'base_version_id':task.current_timeline_version_id,**values},source=source)
         return _edit_preview_response(*case.preview_linked(command,payload))
     except EditPreviewRejected as exc:

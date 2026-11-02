@@ -1849,3 +1849,75 @@ def test_section_change_record_reads_keep_distinct_orders_recorded_digest_and_ta
         assert not connection.in_transaction and connection.execute('SELECT 1').fetchone()[0] == 1
     assert repo.narration_records.get_narration_segment('ws', task.id, target.id) == target
     assert repo.narration_records.get_narration_segment('ws', task.id, other.id) == other
+
+
+def test_http_linked_apply_command_preserves_source_and_explicit_base_protocol(tmp_path, monkeypatch):
+    import app.main as main
+    from app.creation.contracts import EditIntent, EditProposal
+    from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+    from app.schemas import CreationTaskEditApplyRequest
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("command protocol must not prepare, preview or confirm an edit")
+
+    for name in ("prepare_linked", "preview_linked", "confirm"):
+        monkeypatch.setattr(ExactPreviewUseCase, name, forbidden)
+    state = metadata_state(tmp_path)
+    source = {}
+    intent = state.repo.edit_records.create_edit_intent(EditIntent(
+        id="command-intent", workspace_id="ws", task_id=state.task.id,
+        raw_command="声明插入命令", context_stage="montage", selected_object_refs=[],
+        playhead_ms=None, intent_type="InsertClip", scope={},
+        constraints={"request_source": source}, confidence=1, status="interpreted"))
+    proposal = state.repo.edit_records.create_edit_proposal(EditProposal(
+        id="command-proposal", workspace_id="ws", task_id=state.task.id, intent_id=intent.id,
+        summary="声明插入提案", target_refs=["clip:clip"],
+        operation={"operation_type": "InsertClip", "payload": {
+            "base_version_id": state.base.id, "clip_id": "clip", "asset_id": state.asset.id}},
+        invalidated_refs=[], preview={}, external_effects=[]))
+    exact = ExactPreviewUseCase(state.repo, state.case, None, None, None, None, None, None, None)
+    request = object()
+    reads = []
+
+    def reader(incoming, workspace_id):
+        assert incoming is request and workspace_id == "ws"
+        reads.append(workspace_id)
+        return ("reader-before-source" if len(reads) % 2 else "material-reader"), True
+
+    monkeypatch.setattr(main, "production_repo", state.repo)
+    monkeypatch.setattr(main, "_content_reader", reader)
+    monkeypatch.setattr(main, "_assistant_member_id", lambda incoming, ws: "assistant-declared")
+    monkeypatch.setattr(main, "_exact_preview_use_case", lambda: exact)
+
+    def facts():
+        with state.repo._connect() as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {name: sorted((tuple(row) for row in connection.execute(
+                'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+
+    before = facts()
+    adapter = main._task_edit_command_http_adapter()
+    request_id, digest = uuid4(), "a" * 64
+    omitted = adapter.linked_timeline_apply_command(state.task, proposal, request,
+        CreationTaskEditApplyRequest(request_id=request_id, expected_input_digest=digest))
+    explicit = adapter.linked_timeline_apply_command(state.task, proposal, request,
+        CreationTaskEditApplyRequest(request_id=request_id, expected_base_version_id=None,
+            expected_input_digest=digest))
+    assert omitted.base_version_submitted is False and explicit.base_version_submitted is True
+    assert "expected_base_version_id" not in omitted.request_fields
+    assert explicit.request_fields["expected_base_version_id"] is None
+    for command in (omitted, explicit):
+        assert (command.workspace_id, command.task_id, command.proposal_id) == ("ws", state.task.id, proposal.id)
+        assert command.request_id == str(request_id) and command.request_fields["request_id"] == str(request_id)
+        assert command.expected_base_version_id is None
+        assert command.expected_input_digest == digest and command.request_fields["expected_input_digest"] == digest
+        assert command.source == source and command.source is not None
+        assert command.member_id == "assistant-declared"
+        assert command.actor_identity["member_id"] == "assistant-declared"
+        assert command.actor_identity["local_diagnostic"] is False
+        assert command.actor_identity["material_reader_identity"] == {
+            "member_id": "material-reader", "local_diagnostic": True}
+    assert len(reads) == 4
+    assert facts() == before
+    assert state.repo.job_records.list_job_runs("ws", state.task.id) == []
