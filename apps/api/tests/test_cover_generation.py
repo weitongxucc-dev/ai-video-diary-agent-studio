@@ -422,3 +422,112 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         assert "app.main" not in sys.modules
     finally:
         runtime.stop(timeout_seconds=1)
+
+
+def test_cover_confirmation_http_budget_refusal_and_adopted_replay_are_metadata_only(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    import socket
+    import threading
+    import wave
+    import httpx
+    from fastapi import HTTPException
+    from app import main
+    from app.creation.contracts import EditIntent, EditProposal, EditOperation, TimelineVersion
+    from app.creation.cover_use_case import CoverUseCase, CoverUnavailable
+    from app.creation_execution import CreationExecutionActor
+    from app.creation_task_responses import CreationTaskResponseAdapter
+    from app.device_runtime import DeviceRuntime
+    from app.task_edit_routes import CoverConfirmationHttpAdapter
+    from test_metadata_edit_use_case import metadata_state
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('cover confirmation metadata forbids media, source verification and execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    for name in ('_build_device_components', '_creation_runtime', '_start_device_runtime',
+                 'run_task_turn', 'run_plan_turn', '_device_operation_budget'):
+        monkeypatch.setattr(main, name, forbidden)
+    state = metadata_state(tmp_path)
+    task = state.task
+    actor = CreationExecutionActor(task.workspace_id, state.member.member_id)
+    declared = []
+    def identity(value):
+        assert value is actor
+        declared.append('identity')
+        return 'ready'
+    owner = CoverUseCase(state.repo, state.store, state.case, verify_identity=identity,
+        output_root=tmp_path / 'cover-output', budget=None)
+    codec = CreationTaskResponseAdapter(repository_for=lambda: state.repo, person_render_media_path=forbidden)
+    intent = EditIntent('cover-http-intent', task.workspace_id, task.id, '声明封面', 'subtitle_cover', [], None,
+        'GenerateCoverFromFrame', {}, {'request_source': {'source_facts': {'metadata_only': True},
+            'action': {'operation_type': 'GenerateCoverFromFrame', 'frame_time_seconds': 0.0,
+                'title': '声明封面', 'title_position': 'bottom'}}}, 1.0, 'interpreted')
+    original = {'base_version_id': state.base.id, 'frame_time_seconds': 0.0, 'title': '声明封面'}
+    proposal = EditProposal('cover-http-proposal', task.workspace_id, task.id, intent.id, '声明封面',
+        [f'timeline://{task.id}/{state.base.id}'], {'operation_type': 'GenerateCoverFromFrame', 'payload': original},
+        [], {'metadata_only': True}, [])
+    state.repo.edit_records.create_edit_intent(intent, source=None)
+    state.repo.edit_records.create_edit_proposal(proposal)
+    request = object()
+    trace = []
+    def open_task(value, workspace_id, task_id):
+        assert value is request and (workspace_id, task_id) == (task.workspace_id, task.id)
+        trace.append('open')
+    def require_actor(value, workspace_id):
+        assert value is request and workspace_id == task.workspace_id
+        trace.append('actor')
+        return actor
+    def owner_for():
+        trace.append('owner')
+        return owner
+    adapter = CoverConfirmationHttpAdapter(repository_for=lambda: state.repo,
+        require_automation_task_open=open_task, require_permit_actor=require_actor,
+        cover_use_case_for=owner_for, exact_edit_source_facts=forbidden, creation_runtime_for=forbidden,
+        montage_response=codec.creation_task_montage_response, topic_failure_response=main._topic_failure_response)
+    def facts():
+        with state.repo._connect() as connection:
+            tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {name: sorted((tuple(row) for row in connection.execute(
+                'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+    before = facts()
+    with pytest.raises(HTTPException) as refused:
+        adapter.confirm_cover_response(task, proposal, request, request_id='declared-cover-request')
+    assert refused.value.status_code == 503 and isinstance(refused.value.__cause__, CoverUnavailable)
+    assert refused.value.detail == {'error': 'cover_budget_unavailable', 'reason': str(refused.value.__cause__),
+        'impact': '当前时间线和已有成片保持不变。', 'repair_action': '先完成独立封面资源标定。', 'retryable': False}
+    assert trace == ['open', 'actor', 'owner'] and declared == ['identity']
+    assert facts() == before and state.repo.job_records.list_job_runs(task.workspace_id, task.id) == []
+    # Declare adopted history through real record writers, not cover generation.
+    operation_id = 'declared-cover-operation'
+    snapshot = {**state.base.snapshot, 'montage': {**state.base.snapshot['montage'],
+        'message': '声明的封面采用版本'}}
+    version = TimelineVersion('declared-cover-result', task.workspace_id, task.id, state.base.id, 2,
+        snapshot, operation_id)
+    state.repo.timeline_records.create_timeline_version(version)
+    state.repo.edit_records.transition_edit_proposal(task.workspace_id, task.id, proposal.id, status='confirmed')
+    now = datetime.now(timezone.utc)
+    operation = EditOperation(operation_id, task.workspace_id, task.id, proposal.id, 'GenerateCoverFromFrame',
+        {**original, 'title_position': 'bottom'}, state.base.id, version.id, 'applied', created_at=now, applied_at=now)
+    state.repo.edit_records.create_edit_operation(operation)
+    monkeypatch.setattr(owner, 'require_budget', forbidden)
+    before = facts()
+    trace.clear()
+    for _ in range(2):
+        response = adapter.confirm_cover_response(task, proposal, request, request_id='declared-cover-request')
+        assert response.operation.id == operation.id and response.operation.result_version_id == version.id
+        assert response.montage.id == state.plan.id and response.montage.message == '声明的封面采用版本'
+        assert response.narration is None
+        assert facts() == before
+    assert trace == ['open', 'actor', 'owner'] * 2 and declared == ['identity'] * 3
+    assert state.repo.job_records.list_job_runs(task.workspace_id, task.id) == []

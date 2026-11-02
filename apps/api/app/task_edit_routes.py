@@ -4,6 +4,7 @@ import json
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.creation.cover_use_case import CoverUnavailable, CoverUnresolved
 from app.montage import creation_task_montage_plan_from_payload
 from typing import Literal
 from uuid import UUID
@@ -409,3 +410,51 @@ class TaskEditReceiptHttpAdapter:
         result = CreationTaskEditJobReplayResponse(status=row["status"], job_id=row["job_id"],
             request_id=row["request_id"], failure_reason=row["failure_reason"])
         return JSONResponse(status_code=202 if row["status"] in {"queued", "running", "interrupted"} else 200, content=result.model_dump(mode="json"))
+
+
+class CoverConfirmationHttpAdapter:
+    def __init__(self, *, repository_for, require_automation_task_open, require_permit_actor,
+                 cover_use_case_for, exact_edit_source_facts, creation_runtime_for,
+                 montage_response, topic_failure_response):
+        self.repository_for = repository_for
+        self.require_automation_task_open = require_automation_task_open
+        self.require_permit_actor = require_permit_actor
+        self.cover_use_case_for = cover_use_case_for
+        self.exact_edit_source_facts = exact_edit_source_facts
+        self.creation_runtime_for = creation_runtime_for
+        self.montage_response = montage_response
+        self.topic_failure_response = topic_failure_response
+
+    def cover_confirm_response(self, result):
+        montage = creation_task_montage_plan_from_payload(result.version.snapshot["montage"])
+        return CreationTaskEditConfirmResponse(operation=asdict(result.operation),
+            montage=self.montage_response(montage), narration=None)
+
+    def confirm_cover_response(self, task, proposal, request, *, request_id=None):
+        self.require_automation_task_open(request, task.workspace_id, task.id)
+        actor = self.require_permit_actor(request, task.workspace_id)
+        try:
+            owner = self.cover_use_case_for()
+            previous = owner.original_result(actor, task.id, proposal.id)
+            if previous is not None:
+                return self.cover_confirm_response(previous)
+            owner.require_budget()
+            source = self.repository_for().edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get('request_source')
+            if source is not None and source['source_facts'] != self.exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
+                raise ValueError('预览后的源文件或片段修订已变化，请重新预览')
+            runtime = self.creation_runtime_for()
+            registered = runtime.registrations["creation_job"].owner.cover
+            return self.cover_confirm_response(registered.submit(runtime, actor, task.id, proposal.id,
+                                                             request_id=request_id))
+        except CoverUnavailable as exc:
+            raise self.topic_failure_response(status_code=503, error='cover_budget_unavailable', reason=str(exc),
+                impact='当前时间线和已有成片保持不变。', repair_action='先完成独立封面资源标定。', retryable=False) from exc
+        except CoverUnresolved as exc:
+            raise HTTPException(status_code=503, detail={'error': 'cover_generation_unknown',
+                'reason': str(exc), 'job_id': exc.job.id, 'status': exc.job.status,
+                'request_id': request_id, 'impact': '当前时间线保持不变，未伪造采用或释放。',
+                'repair_action': '查询原封面请求与设备许可，续交原固定回执，不重复生成。', 'retryable': False}) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -213,7 +213,7 @@ def _device_operation_budget(name):
         return None
 
 from app.visual_understanding import LocalVisualUnderstanding
-from app.creation.cover_use_case import CoverUseCase, CoverUnavailable, CoverUnresolved, COVER_JOB_KIND, COVER_OPERATION
+from app.creation.cover_use_case import CoverUseCase, COVER_JOB_KIND, COVER_OPERATION
 from app.cover_generation import (
     CoverSafeArea,
     unconfigured_image_generation_capability,
@@ -1926,7 +1926,7 @@ def _task_edit_receipt_http_adapter():
 
 
 
-from app.task_edit_routes import TaskEditReceiptHttpAdapter, build_task_edit_router
+from app.task_edit_routes import CoverConfirmationHttpAdapter, TaskEditReceiptHttpAdapter, build_task_edit_router
 
 
 def _task_edit_http_router(route_names):
@@ -1958,7 +1958,7 @@ def _task_edit_http_router(route_names):
         command_preview_use_case_for=lambda: _command_preview_use_case,
         compound_edit_use_case_for=lambda: _compound_edit_use_case,
         compound_proposal_command_for=lambda: _compound_proposal_command,
-        confirm_cover_response_for=lambda: _confirm_cover_response,
+        confirm_cover_response_for=lambda: _cover_confirmation_http_adapter().confirm_cover_response,
         confirm_creation_task_edit_for=lambda: _confirm_creation_task_edit,
         confirm_linked_timeline_response_for=lambda: _confirm_linked_timeline_response,
         content_reader_for=lambda: _content_reader,
@@ -4436,40 +4436,20 @@ def _cover_use_case(repository=None, *, budget=_RESOURCE_BUDGET_UNSET):
         on_settled=_wake_assistant_continuations)
 
 
-def _cover_confirm_response(result):
-    montage = creation_task_montage_plan_from_payload(result.version.snapshot["montage"])
-    return CreationTaskEditConfirmResponse(operation=asdict(result.operation),
-        montage=_creation_task_response_adapter().creation_task_montage_response(montage), narration=None)
+def _cover_confirmation_http_adapter():
+    return CoverConfirmationHttpAdapter(
+        repository_for=lambda: production_repo,
+        require_automation_task_open=lambda request, workspace_id, task_id: _require_automation_task_open(request, workspace_id, task_id),
+        require_permit_actor=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
+        cover_use_case_for=lambda: _cover_use_case(),
+        exact_edit_source_facts=lambda task, payload, request: _exact_edit_source_facts(task, payload, request),
+        creation_runtime_for=lambda: _creation_runtime(),
+        montage_response=lambda plan: _creation_task_response_adapter().creation_task_montage_response(plan),
+        topic_failure_response=lambda *, status_code, error, reason, impact, repair_action, retryable: _topic_failure_response(
+            status_code=status_code, error=error, reason=reason, impact=impact, repair_action=repair_action, retryable=retryable),
+    )
 
 
-def _confirm_cover_response(task, proposal, request, *, request_id=None):
-    _require_automation_task_open(request, task.workspace_id, task.id)
-    actor = _require_permit_actor(request, task.workspace_id)
-    try:
-        owner = _cover_use_case()
-        previous = owner.original_result(actor, task.id, proposal.id)
-        if previous is not None:
-            return _cover_confirm_response(previous)
-        owner.require_budget()
-        source = production_repo.edit_records.get_edit_intent(task.workspace_id, proposal.intent_id).constraints.get('request_source')
-        if source is not None and source['source_facts'] != _exact_edit_source_facts(task, CreationTaskExactEditRequest.model_validate(source['action']), request):
-            raise ValueError('预览后的源文件或片段修订已变化，请重新预览')
-        runtime = _creation_runtime()
-        registered = runtime.registrations["creation_job"].owner.cover
-        return _cover_confirm_response(registered.submit(runtime, actor, task.id, proposal.id,
-                                                         request_id=request_id))
-    except CoverUnavailable as exc:
-        raise _topic_failure_response(status_code=503, error='cover_budget_unavailable', reason=str(exc),
-            impact='当前时间线和已有成片保持不变。', repair_action='先完成独立封面资源标定。', retryable=False) from exc
-    except CoverUnresolved as exc:
-        raise HTTPException(status_code=503, detail={'error': 'cover_generation_unknown',
-            'reason': str(exc), 'job_id': exc.job.id, 'status': exc.job.status,
-            'request_id': request_id, 'impact': '当前时间线保持不变，未伪造采用或释放。',
-            'repair_action': '查询原封面请求与设备许可，续交原固定回执，不重复生成。', 'retryable': False}) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _metadata_edit_use_case():
@@ -4852,7 +4832,7 @@ def _confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='creation task edit proposal not found') from exc
     if proposal.task_id == task_id and proposal.operation.get('operation_type') == COVER_OPERATION:
-        return _confirm_cover_response(task, proposal, request)
+        return _cover_confirmation_http_adapter().confirm_cover_response(task, proposal, request)
     if proposal.task_id != task_id or proposal.status != 'proposed':
         raise HTTPException(status_code=409, detail='creation task edit proposal is not confirmable')
     if proposal.operation.get('operation_type') in LINKED_EDIT_OPERATIONS:
