@@ -472,7 +472,7 @@ class TaskAssistantTurnUseCase:
             edit_request = (yield ReadAppliedEdit(task_id, turn_id, preview['applied_edit']))
             timeline_action = 'apply'
         if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
-            from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
+            from app.assistant.result_projection import quality_continuation_message
             origin = self._conversations_for().task_turn_source(str(turn_id), workspace_id, (yield ReadMember(workspace_id)), task_id)
             try:
                 quality_continuation = (yield ResolveQuality(preview, task_id=task_id, invocation_input_id=origin.get('input_id') or str(turn_id)))
@@ -481,7 +481,7 @@ class TaskAssistantTurnUseCase:
             reply = quality_continuation_message(quality_continuation)
             edit_preview = None
         elif isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
-            from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
+            from app.assistant.script_window_receipts import script_window_message
             origin = self._conversations_for().task_turn_source(str(turn_id), workspace_id, (yield ReadMember(workspace_id)), task_id)
             if preview.get('input_id') != origin.get('input_id'):
                 raise TurnRejected(status_code=502, detail='文案原请求不属于当前输入')
@@ -490,14 +490,14 @@ class TaskAssistantTurnUseCase:
             reply = script_window_message(resolved)
             edit_preview = None
         elif isinstance(preview, dict) and preview.get('kind') == 'segment_revision':
-            from app.assistant.result_projection import resolve_segment_revision, segment_revision_message
+            from app.assistant.result_projection import segment_revision_message
             actor = (yield RequireActor(workspace_id))
             origin = self._conversations_for().task_turn_source(str(turn_id), workspace_id, (yield ReadMember(workspace_id)), task_id)
             segment_revision = (yield ResolveSegmentRevision(preview, task_id=task_id, input_id=origin['input_id'], actor=actor, workspace_id=workspace_id))
             reply = segment_revision_message(segment_revision)
             edit_preview = None
         elif isinstance(preview, dict) and preview.get('kind') == 'timeline_restore_request':
-            from app.assistant.result_projection import resolve_timeline_restore, timeline_restore_message
+            from app.assistant.result_projection import timeline_restore_message
             actor = (yield RequireActor(workspace_id))
             timeline_restore = (yield ResolveTimelineRestore(preview, task_id=task_id, actor=actor, workspace_id=workspace_id))
             reply = timeline_restore_message(timeline_restore)

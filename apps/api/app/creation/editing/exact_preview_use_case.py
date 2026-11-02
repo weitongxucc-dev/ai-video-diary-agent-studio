@@ -13,8 +13,7 @@ from app.creation.editing.audio_edit_use_case import AudioEditRejected
 from app.creation.execution_control import ExecutionControlRejected
 from app.media.picture_preview import PicturePreviewRejected
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
-from app.creation.editing.metadata_use_case import (EditPreviewRejected, edit_preview_failure,
-    metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
+from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
@@ -678,7 +677,6 @@ class ExactPreviewUseCase:
         return self._record(task, event_id, result)
 
     def submit_preview(self, runtime_for, actor, task, payload, *, identity, project_media, origin=None, expected_input_id=None, draft_only=False):
-        from app.task_audio import TaskMediaRequired
         event_id = None
         inputs = {**payload.model_dump(mode='json', exclude_unset=True), '_draft':draft_only}
         if payload.request_id is not None:

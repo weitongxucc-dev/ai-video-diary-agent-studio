@@ -1,11 +1,9 @@
 """One command application: ordered compilation, source binding and explicit media work."""
 from __future__ import annotations
 
-from app.audio_timeline import AudioEditRequest
 from collections import Counter
 from app.creation.editing.picture import EditConflict
 from app.production import TimelineVersionConflict
-from app.audio_timeline import apply_audio_edit
 from app.task_audio import audio_mix_resources
 from app.audio_timeline import compile_audio_command
 from app.compound_edits import compile_compound_edit
@@ -20,9 +18,9 @@ from app.task_audio import media_digest
 import re
 import subprocess
 from dataclasses import asdict
-from app.creation.editing.command_compile import (AudioCommandPreview,CommandParseRejected,indexed_reorder_command,canvas_request,display_request,selected_reference,clip_request)
-from app.creation.editing.metadata_use_case import EditPreviewRejected,edit_preview_failure,effective_audio_timeline,metadata_edit_command
-from app.creation.editing.compound_use_case import CompoundEditUseCase,CompoundPreviewCommand
+from app.creation.editing.command_compile import (AudioCommandPreview,indexed_reorder_command,canvas_request,display_request,selected_reference,clip_request)
+from app.creation.editing.metadata_use_case import EditPreviewRejected,edit_preview_failure,effective_audio_timeline
+from app.creation.editing.compound_use_case import CompoundPreviewCommand
 from app.creation.clip_preview import ClipPreviewCommand,needs_full_visual_preview
 from app.schemas import CreationTaskExactEditRequest,CreationTaskEditPreviewRequest,CreationTaskEditPreviewResponse
 from app.visual_effects import VisualEditRequest
@@ -220,7 +218,6 @@ class CommandPreviewUseCase:
 
 
     def facts(self, workspace_id, task_id, arguments, actor):
-        from app.canvas import canvas_size
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')

@@ -3,21 +3,21 @@ from __future__ import annotations
 # Stable public host boundary. Concrete runtime modules own their private state;
 # this module assembles dependencies and preserves existing caller entry points.
 import os
-import shutil
+import shutil as shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
 from app.config import Settings
 from app.assistant.script_generation_policy import is_script_generation
 from app.assistant.catalogue import (SCRIPT_GENERATION_TOOLS, MEMORY_TOOLS, SCRIPT_TOOL_READS, ASSISTANT_BUSINESS_TOOLS,
-    TASK_READ_PREVIEW_TOOLS, SYSTEM_PROMPT, PLAN_PROMPT, MATERIAL_PROMPT, SCRIPT_PROMPT, TOPIC_PROMPT, _PI_TOOL_LABELS)
-from app.assistant.failures import (AssistantUnavailable, _fail, _classify_output, _tool_error_seen,
-    _FAILURES, FAILURE_KEY_REJECTED, FAILURE_ADDRESS_UNREACHABLE, FAILURE_TIMEOUT, FAILURE_RUNTIME_MISSING,
-    FAILURE_TOOL_FAILED, FAILURE_UNKNOWN)
-from app.assistant.projection import _safe_tool_result_summary, _business_event_lines, _PiStreamProjector
+    TASK_READ_PREVIEW_TOOLS, SYSTEM_PROMPT, PLAN_PROMPT, MATERIAL_PROMPT, SCRIPT_PROMPT, TOPIC_PROMPT, _PI_TOOL_LABELS as _PI_TOOL_LABELS)
+from app.assistant.failures import (AssistantUnavailable as AssistantUnavailable, _fail as _fail, _classify_output, _tool_error_seen,
+    _FAILURES, FAILURE_KEY_REJECTED as FAILURE_KEY_REJECTED, FAILURE_ADDRESS_UNREACHABLE as FAILURE_ADDRESS_UNREACHABLE, FAILURE_TIMEOUT as FAILURE_TIMEOUT, FAILURE_RUNTIME_MISSING as FAILURE_RUNTIME_MISSING,
+    FAILURE_TOOL_FAILED as FAILURE_TOOL_FAILED, FAILURE_UNKNOWN as FAILURE_UNKNOWN)
+from app.assistant.projection import _safe_tool_result_summary as _safe_tool_result_summary, _business_event_lines, _PiStreamProjector
 from app.assistant.result_projection import read_sdk_result
 from app.assistant.service_observations import _record_service
-from app.assistant.turn_control import AssistantStopped, TurnControl, _terminate_process_group
+from app.assistant.turn_control import AssistantStopped as AssistantStopped, TurnControl, _terminate_process_group
 from app.assistant.sessions import SessionLocks
 from app.assistant.runtime_configuration import _agent_root, _configured_model
 from app.assistant.runtime_checks import _pi_executable, runtime_checks

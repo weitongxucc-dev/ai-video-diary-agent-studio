@@ -1,11 +1,11 @@
 """Canonical picture source qualification and the original montage renderer."""
 from __future__ import annotations
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 from pathlib import Path
 import re
 from app.audio_timeline import bounded_audio_context, render_audio_mix
-from app.creation_execution import CreationExecutionActor, CpuRenderGrantContext, presenter_inputs, current_presenter_render
+from app.creation_execution import CreationExecutionActor, CpuRenderGrantContext
 from app.creation.editing.metadata_use_case import effective_audio_timeline, InvalidMontage
 from app.graphic_sources import graphic_source_facts
 from app.linked_timeline import remove_time_ranges

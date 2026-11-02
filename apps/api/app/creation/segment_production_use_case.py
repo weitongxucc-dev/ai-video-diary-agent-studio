@@ -8,7 +8,6 @@ import json
 import math
 from pathlib import Path
 
-from app.creation.contracts import JobRun
 from app.creation.editing.narration_preview_use_case import inspect_narration_revision
 from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork, RecoveryBlocked
 from app.models import utc_now
@@ -955,7 +954,6 @@ class SegmentProductionUseCase:
         from app.creation.contracts import TaskEvent, ArtifactRecord, TransformRun, DependencyEdge
         from app.device_scheduler import RecoveryBlocked
         from app.host_resource_probes import HostResourceRefusal
-        from app.granted_subprocess import GrantedCommandCancelled
         from app.schemas import NarrationRevisionRequest
 
         owner = scheduler.owners

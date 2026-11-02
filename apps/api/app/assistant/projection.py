@@ -6,7 +6,7 @@ import re
 from app.assistant.catalogue import _PI_TOOL_LABELS, SCRIPT_WINDOW_TOOL_OPERATIONS
 
 
-from app.assistant.business_failure import _safe_business_failure, _safe_failure_text
+from app.assistant.business_failure import _safe_business_failure
 from app.assistant.script_window_receipts import project_script_window_request
 
 

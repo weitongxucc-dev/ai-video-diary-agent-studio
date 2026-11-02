@@ -10,14 +10,11 @@ from pathlib import Path
 from typing import Literal
 
 from app.model_install_jobs import ModelInstallError, InstallJobStore, InstallWriter, _utc_now
-from app.model_install_execution import MODEL_RUNTIME_REQUIREMENTS, ensure_runtime, download_model, download_file, publish_model
+from app.model_install_execution import ensure_runtime, download_model, download_file, publish_model
 
 from app.model_runtime import (
-    CHINESE_CLIP_VIT_B16,
     MODEL_FILES,
     MODEL_SPECS,
-    QWEN3_TTS_06B_BASE_8BIT,
-    QWEN3_VL_4B_4BIT,
     DownloadFile,
     ModelCatalog,
     ModelSpec,

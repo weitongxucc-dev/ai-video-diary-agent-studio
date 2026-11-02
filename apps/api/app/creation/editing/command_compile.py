@@ -71,7 +71,6 @@ def edit_material_constraint(command: str) -> str:
 
 
 from dataclasses import dataclass
-from app.audio_timeline import AudioEditRequest
 from app.creation.editing.clips import ClipPreviewCommand
 from app.schemas import CreationTaskExactEditRequest
 

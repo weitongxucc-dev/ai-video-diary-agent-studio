@@ -362,7 +362,6 @@ class ConversationRepository:
 
     def claim_pending_goal_input(self, candidate, *, validate, seal):
         """Claim a received input once in the existing goal/turn transaction."""
-        from app.assistant.inputs import AssistantInputConflict
         with self._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             root=self._goal_root(conn,candidate['source_turn_id'])

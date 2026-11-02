@@ -88,14 +88,14 @@ from app.profiles.workspace_profile import WorkspaceProductionProfileStore, Prod
 from app.creation.production_foundation_readiness import ProductionFoundationReadiness
 from app.profiles.input_resolution import ProfileInputResolver
 from app.profiles.records import (
-    ProfileRecordStore, _versioned_voice_profile_payload,
+    ProfileRecordStore, _versioned_voice_profile_payload as _versioned_voice_profile_payload,
 )
 from app.production_schema import initialize_production_schema
 from app.visual_understanding import LocalVisualUnderstanding
 from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
-from app.materials.assets import MaterialAssetStore, MaterialVersionConflict, _normalized_labels, _infer_system_tags, _segment_id
+from app.materials.assets import MaterialAssetStore, MaterialVersionConflict as MaterialVersionConflict, _normalized_labels, _infer_system_tags as _infer_system_tags, _segment_id as _segment_id
 from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.usage_records import MaterialUsageRecordReader
@@ -117,29 +117,29 @@ from app.creation.contracts import (
     CreationPlanPersonReference as _CreationPlanPersonReference,
 )
 from app.persistence_json import (
-    _json_payload, _json_object, _json_default, _with_datetime,
+    _json_payload, _json_object, _json_default as _json_default, _with_datetime,
 )
 from app.materials.segment_search_use_case import MaterialSegmentSearchUseCase
 from app.materials.contracts import (
     AssetReviewStatus,
     ContentVisibility,
     AssetUsageRole,
-    SuggestedUsageRole,
-    AnalysisStatus,
+    SuggestedUsageRole as SuggestedUsageRole,
+    AnalysisStatus as AnalysisStatus,
     MaterialMediaType,
-    MATERIAL_MEDIA_BY_SUFFIX,
-    BUSINESS_OBJECT_KINDS,
+    MATERIAL_MEDIA_BY_SUFFIX as MATERIAL_MEDIA_BY_SUFFIX,
+    BUSINESS_OBJECT_KINDS as BUSINESS_OBJECT_KINDS,
     ContentUseState,
     MaterialSegment as MaterialSegment,
     MaterialAsset,
     MaterialAssetNote,
     MaterialBusinessObject,
     MaterialCollection,
-    MaterialSegmentMatch,
-    material_media_type_for,
-    material_media_type_label,
-    material_allows_footage,
-    material_allows_automation,
+    MaterialSegmentMatch as MaterialSegmentMatch,
+    material_media_type_for as material_media_type_for,
+    material_media_type_label as material_media_type_label,
+    material_allows_footage as material_allows_footage,
+    material_allows_automation as material_allows_automation,
     material_usage_eligibility,
     effective_segment_usage_role as effective_segment_usage_role,
 )

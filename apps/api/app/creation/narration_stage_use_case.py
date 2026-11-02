@@ -5,7 +5,6 @@ from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.creation.contracts import NarrationSegment
 from app.creation.contracts import CreationTask
 from app.montage import CreationTaskMontagePlan
-from app.voice_clone import VoiceCloneError
 from app.visual_effects import clip_playback_rate
 from app.montage import creation_task_montage_plan_from_payload
 from app.montage import creation_task_montage_plan_to_payload

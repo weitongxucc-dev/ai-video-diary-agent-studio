@@ -1,13 +1,11 @@
 """Visual preview preparation, original full-tail comparison and explicit execution."""
 from dataclasses import asdict, replace
 from collections import Counter
-from pathlib import Path
 import subprocess
 from uuid import uuid4
 from app.creation.contracts import EditIntent, EditProposal
 from app.creation.editing.clips import ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit
 from app.creation.editing.metadata_use_case import effective_audio_timeline, logical_montage_output_refs
-from app.graphic_sources import graphic_source_facts
 from app.linked_timeline import remove_time_ranges
 from app.media.picture_preview import PicturePreviewRejected
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload

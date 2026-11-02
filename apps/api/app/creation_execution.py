@@ -27,7 +27,7 @@ from app.host_resource_probes import HostResourceRefusal, MontageBudget, Narrati
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
 from app.creation.plan_contracts import CreationPlan
-from app.creation.contracts import CreationTask, NarrationSegment
+from app.creation.contracts import CreationTask
 from app.creation.script_contracts import CreationTaskScript
 from app.creation.contracts import (JobRun, TaskEvent)
 from app.repository import reset_workspace_context, set_workspace_context
@@ -3056,7 +3056,6 @@ class CreationJobUnitExecutor:
         return event_id
 
     def _execute_narration_edit(self, grant, scheduler):
-        from app.granted_subprocess import GrantedCommandCancelled
         scheduler.assert_grant(grant)
         with self.repository._connect() as conn:
             row=conn.execute('SELECT * FROM device_work_requests WHERE id=?',(grant.request_id,)).fetchone()

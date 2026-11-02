@@ -10,7 +10,7 @@ from app.narration import compile_narration_command
 from app.montage import creation_task_montage_plan_from_payload
 from app.models import utc_now
 from uuid import uuid4
-from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs
+from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, logical_montage_output_refs
 
 
 def inspect_narration_revision(source_text, replacement_text, protected_rules):

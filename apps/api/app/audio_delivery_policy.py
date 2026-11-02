@@ -9,8 +9,7 @@ import math
 from pathlib import Path
 
 from app.packet_copy_policy import (
-    _digest, _sha, _positive, _locations, packet_copy_output_allocation,
-    packet_copy_remaining_allocations,
+    _digest, _sha, _positive, _locations,
 )
 
 

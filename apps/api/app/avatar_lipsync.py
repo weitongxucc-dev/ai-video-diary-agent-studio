@@ -14,12 +14,12 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.profiles.contracts import (
-    AuthorizationStatus,
+    AuthorizationStatus as AuthorizationStatus,
     Authorization,
-    ProfileReference,
+    ProfileReference as ProfileReference,
     PersonProfile,
     VoiceProfile,
-    PronunciationEntry,
+    PronunciationEntry as PronunciationEntry,
     profile_use_failure,
     profile_cache_identity,
     _as_utc,

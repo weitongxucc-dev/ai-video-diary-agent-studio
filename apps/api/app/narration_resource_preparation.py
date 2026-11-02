@@ -17,8 +17,7 @@ import psutil
 
 from app.device_resource_preparation import (DeviceResourcePreparation, OWNER_TYPE,
     _atomic_json, _profile_lock, _profile_state, _read)
-from app.device_resource_profile import (DeviceProfileUnavailable, _digest, _budget,
-    host_budget_from_payload, load_device_resource_profile)
+from app.device_resource_profile import (DeviceProfileUnavailable, _digest, host_budget_from_payload, load_device_resource_profile)
 from app.device_resource_configuration import backend_identity, _hash_file, narration_provider_binding
 from app.device_resource_volumes import narration_write_paths, sample_write_volumes
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, VerifiedWork

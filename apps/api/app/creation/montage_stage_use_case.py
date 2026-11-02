@@ -305,7 +305,7 @@ class MontageStageUseCase:
         return (montage, dependency) if with_dependency else montage
 
     def include_adopted_sections(self,task,montage):
-        from app.audio_timeline import AudioTimeline,narration_audio_timeline
+        from app.audio_timeline import AudioTimeline
         with self.repository.execution_inputs.creation_execution_read() as conn:
             snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             task, header = snapshot.task, snapshot.script_header

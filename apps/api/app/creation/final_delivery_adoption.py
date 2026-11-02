@@ -11,9 +11,6 @@ from app.task_audio import media_digest
 
 
 def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragments, recovery_plan=None):
-    from app.creation.render_stage_use_case import render_input_payload, render_input_digest_for
-    from app.creation.duration_requirement import DurationRequirement
-    from app.subtitle_schedule import subtitle_schedule, narration_schedule
     repo = delivery.repository
     manifest = delivery.manifest(job, actor=actor, connection=conn)
     if recovery_plan is None:

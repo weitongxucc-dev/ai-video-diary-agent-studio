@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from app.env_files import (
-    write_dotenv_values,
+    write_dotenv_values as write_dotenv_values,
     prepare_dotenv_values,
     commit_prepared_dotenv_values,
     restore_prepared_dotenv_values,

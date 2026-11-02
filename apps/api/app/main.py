@@ -73,15 +73,15 @@ import httpx
 from app.assistant_pi import (
     ASSISTANT_BUSINESS_TOOLS, AssistantStopped as AssistantStopped, AssistantUnavailable as AssistantUnavailable, forget_turn_control,
     pi_runtime_checks, register_turn_control,
-    request_stop_turn, run_material_turn, run_plan_turn, run_task_turn,
+    request_stop_turn, run_material_turn as run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
 from app.assistant.projection import _safe_business_failure, _safe_compaction_event
 from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection, GoalProjectionRejected
 
-from app.compound_edits import compile_compound_edit
+from app.compound_edits import compile_compound_edit as compile_compound_edit
 from app.graphic_sources import import_graphic_source, graphic_sources, resolve_graphic_source, graphic_source_facts
-from app.visual_effects import clip_playback_rate
+from app.visual_effects import clip_playback_rate as clip_playback_rate
 from app.subtitle_edits import normalize_subtitle_text_and_breaks
 from app.profiles.contracts import (Authorization, PersonProfile, VoiceProfile as VersionedVoiceProfile, profile_use_failure)
 from app.auth import (
@@ -97,10 +97,10 @@ from app.companion.routes import build_companion_router, companion_http_error
 from app.companion.pairing import CompanionPairingService
 from app.mobile_transfer_routes import build_mobile_transfer_router
 from app.mobile_transfers import MobileTransferActor
-from app.artifact_store import ArtifactStore
+from app.artifact_store import ArtifactStore as ArtifactStore
 from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_dependencies, bind_device_runtime
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
-from app.audio_timeline import AudioEditRequest, narration_audio_timeline
+from app.audio_timeline import AudioEditRequest, narration_audio_timeline as narration_audio_timeline
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest
 from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewUnavailable, needs_full_visual_preview
 from app.media.clip_preview import ClipPreviewExecutor
@@ -142,7 +142,7 @@ from app.creation import media_script_submission_use_case as script_submission
 from app.media_script import MediaScriptError
 from app.media_script_jobs import read_script_toolchain, MediaScriptPreviewUseCase, MEDIA_SCRIPT_ACTIONS
 from app.media_script_tools import MediaScriptTools, ScriptToolError, ScriptToolConflict, ScriptToolUnknown
-from app.visual_effects import with_visual_effects
+from app.visual_effects import with_visual_effects as with_visual_effects
 from app.local_portrait import LocalPortrait
 from app.local_members import LocalMember, LocalMembersError
 from app.local_member_routes import build_local_member_router
@@ -201,14 +201,14 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
-    presenter_inputs, presenter_input_facts, current_presenter_render,
+    presenter_inputs, presenter_input_facts as presenter_input_facts, current_presenter_render,
     CpuRenderGrantContext, CreationStageGrantContext, CreationExecution, CreationExecutionActor,
     CreationJobUnitExecutor,
-    revision_digest, submit_creation_stage, PERSON_EDIT_KIND, NARRATION_EDIT_KIND,
+    revision_digest as revision_digest, submit_creation_stage as submit_creation_stage, PERSON_EDIT_KIND, NARRATION_EDIT_KIND,
 )
 from app.creator_profile import get_creator_profile
 from app.creator_profile_routes import build_creator_profile_router
-from app.drafts import DraftWorkspace
+from app.drafts import DraftWorkspace as DraftWorkspace
 from app.edit_plan import (
     build_edit_plan_workspace,
     safe_processed_video_path,
@@ -237,7 +237,7 @@ from app.montage import (
     MontageClip as MontageClip,
     creation_task_montage_plan_from_payload,
     creation_task_montage_plan_to_payload,
-    _validate_rendered_media,
+    _validate_rendered_media as _validate_rendered_media,
 )
 from app.preference_routes import build_preference_router
 from app.preflight import setup_preflight, workspace_preflight
@@ -257,7 +257,7 @@ from app.creation.video_template_use_case import VideoTemplateUseCase
 from app.creation import request_workflow_use_case as request_workflow
 from app.creation.plan_preflight_use_case import (CreationPlanPreflightInput,
     CreationPlanPreflightUseCase)
-from app.source_types import source_item_identity
+from app.source_types import source_item_identity as source_item_identity
 from app.creation.contracts import (
     CoverAsset,
     EditIntent,
@@ -265,7 +265,7 @@ from app.creation.contracts import (
     TimelineVersion,
     SubtitleTrack,
 )
-from app.quality_inspection import QualityCheckRepository
+from app.quality_inspection import QualityCheckRepository as QualityCheckRepository
 from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND
 from app.creation.quality_execution import quality_check_registration
 from app.schemas import CreationTaskObservationRequest, CreationTaskObservationTarget
@@ -298,7 +298,7 @@ from app.knowledge_routes import build_knowledge_router
 from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.home_aggregation import aggregate_home
-from app.schemas import ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanPreviewRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantHistoryResponse, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MediaCapabilityResponse, MontageClipCandidateResponse, MontagePlansResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse
+from app.schemas import ScriptLibrarySourceResponse as ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanPreviewRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskScriptConfirmRequest as CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest as CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantHistoryResponse, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MediaCapabilityResponse, MontageClipCandidateResponse, MontagePlansResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
 from app.knowledge_grants import VerifiedMemberGrantTargetResolver
@@ -308,7 +308,7 @@ from app.platform_publish import (
     platform_publish_registration,
     recover_platform_publish_jobs,
 )
-from app.sources import ObsidianVault
+from app.sources import ObsidianVault as ObsidianVault
 from app.source_types import SourceConnector, SourceItem
 from app.source_sync import SourceBoundaryError, SourceSyncFailedError, sync_source_connector
 

@@ -15,7 +15,7 @@ from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository
-from app.source_types import SourceItem, source_item_identity
+from app.source_types import source_item_identity
 
 
 @dataclass(frozen=True)

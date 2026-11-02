@@ -5,7 +5,6 @@ Only explicit owner/access ports are assembled by the application host.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Request
 
 from app.assistant import turn_admission_use_case as admission

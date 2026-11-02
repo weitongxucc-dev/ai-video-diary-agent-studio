@@ -4,7 +4,6 @@ from app.schemas import CreationTaskExactEditRequest
 import re
 from app.creation.editing.command_compile import subtitle_text_from_command
 from dataclasses import asdict, dataclass, replace
-import subprocess
 from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, metadata_edit_command
 from app.production import TimelineVersionConflict
 from app.subtitle_tracks import subtitle_translation_provider_from_settings, SubtitleTranslationService

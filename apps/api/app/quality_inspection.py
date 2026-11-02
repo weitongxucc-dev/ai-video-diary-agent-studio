@@ -15,7 +15,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.montage import CreationTaskMontagePlan
-from app.quality_checks import quality_report_evidence
+from app.quality_checks import quality_report_evidence as quality_report_evidence
 from app.quality_worker_runtime import (source_receipt, quality_phase_request,
     quality_unit_key, validate_phase_measurement, QUALITY_PHASES)
 

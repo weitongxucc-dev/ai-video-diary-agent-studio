@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.assistant.script_generation_policy import SCRIPT_GENERATION_TOOLS
+from app.assistant.script_generation_policy import SCRIPT_GENERATION_TOOLS as SCRIPT_GENERATION_TOOLS
 
 MEMORY_TOOLS = ("read_preference_memory", "update_preference_memory")
 SCRIPT_TOOL_READS = ("read_media_script_tool_capabilities", "list_media_script_tools", "describe_media_script_tool", "read_media_script_tool_creation")

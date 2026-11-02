@@ -3,14 +3,14 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from app.creation.editing.clips import ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit, needs_full_visual_preview
+from app.creation.editing.clips import ClipPreviewCommand as ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit, needs_full_visual_preview
 from app.canvas import preview_size
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload
 from app.source_policy import knowledge_item_readable as content_readable
 from app.production import material_allows_footage, material_segment_eligible, effective_segment_usage_role
 from app.creation.contracts import (EditIntent, EditProposal, EditCommand)
-from app.visual_effects import VisualEffects, with_visual_effects, fade_filters, clip_playback_rate
+from app.visual_effects import VisualEffects
 
 
 class ClipPreviewUnavailable(ValueError):
