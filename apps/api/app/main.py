@@ -121,7 +121,7 @@ from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_d
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
 from app.audio_timeline import AudioEditRequest, apply_audio_edit, audio_edit_preview_range, compile_audio_command, narration_audio_timeline, probe_audio_source, render_audio_mix, rebind_narration_audio, bounded_audio_context
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
-from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewConflict, ClipPreviewUnavailable, prepare_clip_edit, needs_full_visual_preview
+from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewUnavailable, prepare_clip_edit, needs_full_visual_preview
 from app.media.clip_preview import ClipPreviewExecutor
 from app.media.picture_preview import PicturePreviewRenderer, PicturePreviewRejected
 from app.creation.visual_preview_use_case import VisualPreviewUseCase
@@ -181,7 +181,7 @@ from app.profiles.preview_routes import build_preview_router
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.device_scheduler import SessionHeartbeat, SubmissionIntent, SchedulePolicy, RecoveryBlocked
 from app.member_permits import (
-    HostBudgetUncalibrated, MemberDeviceAccess,
+    HostBudgetUncalibrated,
     creation_job_registration, find_member, permit_actor, resolve_member_token,
 )
 from app.device_resource_configuration import resolve_device_resources

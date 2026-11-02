@@ -14,7 +14,6 @@ import re
 
 from app.assistant.inputs import active_input, latest_consumed_input
 from app.creation.contracts import CreationTask
-from app.creation.intent_use_case import CreationIntentUseCase
 from app.creation.plan_preflight_use_case import CreationPlanPreflightInput, CreationPlanPreflightRejected
 
 

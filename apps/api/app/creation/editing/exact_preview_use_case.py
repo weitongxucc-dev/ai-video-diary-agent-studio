@@ -14,7 +14,7 @@ from app.creation.execution_control import ExecutionControlRejected
 from app.media.picture_preview import PicturePreviewRejected
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, edit_preview_failure,
-    metadata_edit_command, effective_audio_timeline, logical_montage_output_refs, MetadataEditReplay)
+    metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
