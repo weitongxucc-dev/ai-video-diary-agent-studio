@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import project_event_fixture
 """Run the shipped Node extension across task/material operations, without a model."""
+
+from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
 import subprocess

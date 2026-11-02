@@ -1,6 +1,7 @@
+"""Actual collection/API consumers share the neutral persistence helpers."""
+
 
 from app.materials.intake import MaterialIntakeUseCase
-"""Actual collection/API consumers share the neutral persistence helpers."""
 from fastapi.testclient import TestClient
 
 import app.main as main

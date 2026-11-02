@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import project_event_fixture
 """Shipped tools and installed QuickJS, with HTTP doubles and no model/media calls."""
+
+from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
 import re

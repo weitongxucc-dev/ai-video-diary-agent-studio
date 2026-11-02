@@ -19,9 +19,10 @@ from app.task_audio import TaskAudio, TASK_MEDIA_CONTEXT
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
 from _media_preview_test_fixtures import write_synthetic_video
 
+from app.creation.output_observation_use_case import OutputObservationUseCase
+
 REAL_AUDIO_FACTORY = main._task_audio
 REAL_MEASURE = TaskAudio._measure_publication
-from app.creation.output_observation_use_case import OutputObservationUseCase
 REAL_CURRENT = OutputObservationUseCase.published_outputs_current
 
 

@@ -152,6 +152,20 @@ from app.visual_semantics import (
 if TYPE_CHECKING:
     from app.profile_reference_media import ProfileReferenceInput, ProfileReferenceArtifact
 
+# Public imports retained while downstream creation consumers migrate.
+from app.creation.contracts import (
+    JobRunStatus as _JobRunStatus,
+    SubtitleTrackStatus as _SubtitleTrackStatus,
+    SubtitleCue as _SubtitleCue,
+    SubtitleTrack as _SubtitleTrack,
+    CoverAsset as _CoverAsset,
+    TaskEvent as _TaskEvent,
+    TransformRunStatus as _TransformRunStatus,
+    EditProposalStatus as _EditProposalStatus,
+    EditOperationStatus as _EditOperationStatus,
+    EditOperationType as _EditOperationType,
+)
+
 logger = logging.getLogger(__name__)
 EXACT_EDIT_SOURCE = ContextVar("exact_edit_source", default=None)
 
@@ -317,19 +331,6 @@ class ProductionBatch:
 
 
 
-# Public imports retained while downstream creation consumers migrate.
-from app.creation.contracts import (
-    JobRunStatus as _JobRunStatus,
-    SubtitleTrackStatus as _SubtitleTrackStatus,
-    SubtitleCue as _SubtitleCue,
-    SubtitleTrack as _SubtitleTrack,
-    CoverAsset as _CoverAsset,
-    TaskEvent as _TaskEvent,
-    TransformRunStatus as _TransformRunStatus,
-    EditProposalStatus as _EditProposalStatus,
-    EditOperationStatus as _EditOperationStatus,
-    EditOperationType as _EditOperationType,
-)
 
 
 _JobRun = _creation_contracts.JobRun

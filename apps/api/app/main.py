@@ -159,32 +159,6 @@ from app.device_resource_configuration import resolve_device_resources
 from app.device_resource_profile import DeviceProfileUnavailable
 from app.device_runtime import RuntimeUnavailable
 
-_RESOURCE_BUDGET_UNSET = object()
-
-
-def _device_resource_profile():
-    # A running driver keeps its selected revision; existing grants remain sealed.
-    active = getattr(device_runtime, "resource_profile", None)
-    if active is not None:
-        return active
-    try:
-        return resolve_device_resources(settings, os.environ, model_catalog=model_catalog,
-                                        select_packet_copy_preparation=True,
-                                        select_audio_delivery_preparation=True)
-    except DeviceProfileUnavailable as exc:
-        raise HostBudgetUncalibrated(str(exc)) from exc
-
-
-def _device_host_budget():
-    return _device_resource_profile().budget
-
-
-def _device_operation_budget(name):
-    try:
-        return getattr(_device_host_budget(), name)
-    except HostBudgetUncalibrated:
-        # Missing media configuration must not disable metadata-only reads.
-        return None
 
 from app.visual_understanding import LocalVisualUnderstanding
 from app.creation.cover_use_case import CoverUseCase, COVER_JOB_KIND, COVER_OPERATION
@@ -323,6 +297,33 @@ from app.automation_routes import build_automation_guarded_publish_router
 from contextlib import contextmanager
 from app.automation_routes import build_automation_router
 from app.automation_runtime import AutomationRuntime
+
+_RESOURCE_BUDGET_UNSET = object()
+
+
+def _device_resource_profile():
+    # A running driver keeps its selected revision; existing grants remain sealed.
+    active = getattr(device_runtime, "resource_profile", None)
+    if active is not None:
+        return active
+    try:
+        return resolve_device_resources(settings, os.environ, model_catalog=model_catalog,
+                                        select_packet_copy_preparation=True,
+                                        select_audio_delivery_preparation=True)
+    except DeviceProfileUnavailable as exc:
+        raise HostBudgetUncalibrated(str(exc)) from exc
+
+
+def _device_host_budget():
+    return _device_resource_profile().budget
+
+
+def _device_operation_budget(name):
+    try:
+        return getattr(_device_host_budget(), name)
+    except HostBudgetUncalibrated:
+        # Missing media configuration must not disable metadata-only reads.
+        return None
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
 logger = logging.getLogger(__name__)

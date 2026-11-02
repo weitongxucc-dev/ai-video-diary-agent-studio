@@ -1,6 +1,7 @@
+"""Member boundary, bounded windows and live preflight revalidation over SQLite."""
+
 from app.materials.library_routes import MaterialLibraryHTTPAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
-"""Member boundary, bounded windows and live preflight revalidation over SQLite."""
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4

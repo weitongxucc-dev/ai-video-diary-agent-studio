@@ -15,6 +15,8 @@ from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
 from app.schemas import CreationTaskScriptDraftRequest, CreationTaskScriptConfirmRequest, CreationTaskTopicConfirmRequest
 
 
+from contextlib import nullcontext as _Borrow
+
 def record_narration_semantic_review(production, task, origin, payload, *, write_guard):
     """Store a model comparison, never a deterministic factual verdict."""
     from app.creation.contracts import TaskEvent
@@ -780,6 +782,3 @@ class TaskBusiness:
                 query_url=f'/api/creation-tasks/{task_id}/execution')
             raise failure from exc
         return result
-
-
-from contextlib import nullcontext as _Borrow

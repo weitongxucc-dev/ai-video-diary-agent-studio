@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import sdk_completed
 """Current-turn capabilities across one conversation; no service or model calls."""
+
+from assistant_sdk_fixtures import sdk_completed
 
 import json
 import os

@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import project_event_fixture
 """API doubles and installed QuickJS only; never execute Python, model, or real media."""
+
+from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
 from pathlib import Path

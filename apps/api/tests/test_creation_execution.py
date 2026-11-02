@@ -55,6 +55,8 @@ from _media_preview_test_fixtures import (
 )
 
 
+from app.voice_clone import Qwen3TTSSubprocessProvider
+
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True, task_suffix: str = "", duration_seconds: int = 30):
     library = tmp_path / "library"
     library.mkdir(exist_ok=True)
@@ -2858,7 +2860,6 @@ def test_creation_static_refusal_rolls_back_with_request_transaction(tmp_path,mo
     assert scheduler._get(request.id).state=='waiting'
     assert not [event for event in repo.execution_records.list_task_events('local',task_id)
         if event.payload.get('failure_kind')=='input_budget_exceeded']
-from app.voice_clone import Qwen3TTSSubprocessProvider
 
 
 def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, seconds=1, pcm_inprocess=True, local_policy=False, duration_seconds=30, start_job=True):

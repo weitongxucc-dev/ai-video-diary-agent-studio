@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import sdk_completed
 """Shipped Node extension reads the actual member-scoped API before a model call."""
+
+from assistant_sdk_fixtures import sdk_completed
 import json
 import os
 import threading

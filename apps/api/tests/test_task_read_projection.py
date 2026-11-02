@@ -6,6 +6,8 @@ from test_task_media_grants import case
 from fastapi.testclient import TestClient
 
 
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state
+
 def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monkeypatch):
     main,repo,actor,media,runtime,client,original,track,store=_visual_scope_case(tmp_path,monkeypatch)
     try:
@@ -123,6 +125,3 @@ def test_no_history_and_script_revision_rule_are_real_entity_facts(tmp_path,monk
     script=replace(task,confirmed_script_id='script',stage='script',stage_status='failed')
     assert script.can_revise_script
     assert project_task_summary(repo,script).summary['can_revise_script'] is True
-
-
-from test_montage_pipeline import person_render_edit_state as person_render_edit_state

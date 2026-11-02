@@ -16,12 +16,6 @@ import psutil
 from tests.host_memory_boundary import IsolatedMemoryMonitor, isolated_runtime_limits
 
 
-@pytest.fixture(autouse=True)
-def isolated_native_pressure_boundary(monkeypatch):
-    # This file isolates CPU/IO/child-group behavior. Native policy/recovery has
-    # its own counterexamples in test_host_memory.py; never read the developer's
-    # changing OS warning state to decide these unrelated checks.
-    monkeypatch.setattr("app.host_resource_probes.HostMemoryMonitor", lambda *_: IsolatedMemoryMonitor())
 
 from app.host_resource_probes import MediaScriptBudget
 from app.host_resource_probes import RuntimeCpuPolicy
@@ -57,6 +51,13 @@ from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork
 
+
+@pytest.fixture(autouse=True)
+def isolated_native_pressure_boundary(monkeypatch):
+    # This file isolates CPU/IO/child-group behavior. Native policy/recovery has
+    # its own counterexamples in test_host_memory.py; never read the developer's
+    # changing OS warning state to decide these unrelated checks.
+    monkeypatch.setattr("app.host_resource_probes.HostMemoryMonitor", lambda *_: IsolatedMemoryMonitor())
 
 class RecordingScheduler:
     def __init__(self, *, reject_registration=False, cancel_on_registration=None):

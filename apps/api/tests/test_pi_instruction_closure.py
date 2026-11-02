@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import project_event_fixture, sdk_completed
 """Trusted instruction binding and actual shipped-Node preflight; never call a model."""
+
+from assistant_sdk_fixtures import project_event_fixture, sdk_completed
 import json
 import os
 import threading

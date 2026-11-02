@@ -1,5 +1,6 @@
-from assistant_sdk_fixtures import project_event_fixture
 """Recipe proxies consume actual DTOs; HTTP doubles, no producer/runtime execution."""
+
+from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
 from pathlib import Path

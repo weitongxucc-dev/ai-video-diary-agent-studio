@@ -1,6 +1,7 @@
+"""Normal HTTP, persistent business events and lifecycle driver; bounded model seam."""
+
 from assistant_sdk_fixtures import project_event_fixture
 from app.task_media_script_routes import media_script_submission_source
-"""Normal HTTP, persistent business events and lifecycle driver; bounded model seam."""
 import time
 import json
 from types import SimpleNamespace
