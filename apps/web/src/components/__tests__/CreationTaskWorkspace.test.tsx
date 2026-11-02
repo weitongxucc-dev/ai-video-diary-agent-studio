@@ -5480,28 +5480,36 @@ it('shows complete black-frame totals separately from samples and keeps delivery
 });
 
 it.each([false,true])('does not equate all stored sections with a complete draft when sections_loaded=%s',async(loaded)=>{
-  const stored=sectionReaderScript();
-  const partial:import('@/lib/types').CreationTaskScript=loaded
-    ? {...stored,selection_status:'draft',draft_complete:false}
-    : {...stored,selection_status:'draft',draft_complete:false,sections_loaded:false,sections:null};
-  const complete={...partial,draft_complete:true,updated_at:'2026-10-24T00:08:00Z'};
-  vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
-    const version=new URL(url,'http://local').searchParams.get('expected_updated_at')??partial.updated_at;
-    const page=sectionReaderPage(partial,0,version);
-    return new Response(JSON.stringify({...page,items:page.items.slice(0,1),total_count:1,next_after_ordinal:null,truncated:false}));
-  }));
-  const confirm=vi.fn();
-  const view=render(<ScriptEditor taskId={partial.task_id} script={partial} busy={false} repairing={false} onConfirm={confirm}/>);
-  await screen.findByText('窗口正文 reader-script 1');
-  expect(screen.getByText(/当前为部分稿，已存 1 段不代表目标已完整/)).toBeInTheDocument();
-  expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
-  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
-  expect(screen.getByLabelText('第 1 段正文')).toBeEnabled();
-  expect(confirm).not.toHaveBeenCalled();
-  view.rerender(<ScriptEditor taskId={complete.task_id} script={complete} busy={false} repairing={false} onConfirm={confirm}/>);
-  await screen.findByLabelText('第 1 段正文');
-  expect(screen.queryByText(/当前为部分稿/)).not.toBeInTheDocument();
-  expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled();
+  const scopeSpy=vi.spyOn(await import('@/lib/preflight-draft'),'readPreflightDraftScope').mockResolvedValue({memberId:mocks.memberId,workspaceId:baseTask.workspace_id});
+  try {
+    const stored=sectionReaderScript();
+    const partial:import('@/lib/types').CreationTaskScript=loaded
+      ? {...stored,selection_status:'draft',draft_complete:false}
+      : {...stored,selection_status:'draft',draft_complete:false,sections_loaded:false,sections:null};
+    const complete={...partial,draft_complete:true,updated_at:'2026-10-24T00:08:00Z'};
+    vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
+      const pathname=new URL(url,'http://local').pathname;
+      if(pathname.endsWith(`/scripts/${partial.id}/sources`)) return new Response(JSON.stringify({task_id:partial.task_id,script_id:partial.id,sources:[]}));
+      if(!pathname.endsWith(`/scripts/${partial.id}/sections`)) throw new Error(`未预期的文案读取：${pathname}`);
+      const version=new URL(url,'http://local').searchParams.get('expected_updated_at')??partial.updated_at;
+      const page=sectionReaderPage(partial,0,version);
+      return new Response(JSON.stringify({...page,items:page.items.slice(0,1),total_count:1,next_after_ordinal:null,truncated:false}));
+    }));
+    const confirm=vi.fn();
+    const view=render(<ScriptEditor taskId={partial.task_id} script={partial} busy={false} repairing={false} onConfirm={confirm}/>);
+    await screen.findByText('窗口正文 reader-script 1');
+    expect(screen.getByText(/当前为部分稿，已存 1 段不代表目标已完整/)).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('第 1 段正文')).toBeEnabled());
+    expect(confirm).not.toHaveBeenCalled();
+    view.rerender(<ScriptEditor taskId={complete.task_id} script={complete} busy={false} repairing={false} onConfirm={confirm}/>);
+    await screen.findByLabelText('第 1 段正文');
+    expect(screen.queryByText(/当前为部分稿/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled());
+  } finally {
+    scopeSpy.mockRestore();
+  }
 });
 
 it('opens manual first-window writing from the existing script workspace and continues the same partial draft',async()=>{

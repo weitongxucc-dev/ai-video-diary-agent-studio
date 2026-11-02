@@ -231,6 +231,7 @@ it('keeps an unknown first-window request without a second POST or pretending cr
   server.fail('unknown');
   const onSaved=vi.fn(async()=>undefined);
   render(<ScriptWindowStart taskId="task" onSaved={onSaved}/>);
+  await waitFor(() => expect(screen.getByLabelText('新文案标题')).toBeEnabled());
   fireEvent.change(screen.getByLabelText('新文案标题'),{target:{value:'首窗文案'}});
   fill(1);
   fireEvent.click(screen.getByRole('button',{name:'保存首窗'}));
