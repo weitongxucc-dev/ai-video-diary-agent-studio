@@ -61,7 +61,6 @@ from app.creation.topic_contracts import (
     TopicSelectionStatus as _TopicSelectionStatus,
 )
 
-import hashlib
 import io
 import json
 import logging
@@ -77,7 +76,10 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from app.profiles.preview_records import PreviewRecordStore
+from app.creation.task_media_submission_transactions import TaskMediaSubmissionTransactions
+from app.creation.task_media_publication import TaskMediaPublicationTransaction
 from app.creation.transactions import EditAdoptionTransaction
+from app.creation import contracts as _creation_contracts
 from app.creation.timeline_restore_records import TimelineRestoreRecordStore
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import unquote
@@ -348,6 +350,7 @@ class ProductionBatch:
 
 
 
+
 # Public imports retained while downstream creation consumers migrate.
 from app.creation.contracts import (
     JobRunStatus as _JobRunStatus,
@@ -355,18 +358,20 @@ from app.creation.contracts import (
     SubtitleCue as _SubtitleCue,
     SubtitleTrack as _SubtitleTrack,
     CoverAsset as _CoverAsset,
-    JobRun as _JobRun,
-    ArtifactRecord as _ArtifactRecord,
     TaskEvent as _TaskEvent,
     TransformRunStatus as _TransformRunStatus,
-    TransformRun as _TransformRun,
-    DependencyEdge as _DependencyEdge,
-    EditIntent as _EditIntent,
     EditProposalStatus as _EditProposalStatus,
-    EditProposal as _EditProposal,
     EditOperationStatus as _EditOperationStatus,
     EditOperationType as _EditOperationType,
 )
+
+
+_JobRun = _creation_contracts.JobRun
+_ArtifactRecord = _creation_contracts.ArtifactRecord
+_TransformRun = _creation_contracts.TransformRun
+_DependencyEdge = _creation_contracts.DependencyEdge
+_EditIntent = _creation_contracts.EditIntent
+_EditProposal = _creation_contracts.EditProposal
 
 
 class TimelineVersionConflict(ValueError):
@@ -603,7 +608,10 @@ class ProductionRepository:
             create_version=self.timeline_records.create_timeline_version)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
             require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
-            create_intent=self.edit_records.create_edit_intent, create_proposal=self.edit_records.create_edit_proposal,
+            create_intent=lambda intent, *, connection=None, source=False: self.edit_records.create_edit_intent(
+                intent, connection=connection, source=source),
+            create_proposal=lambda proposal, *, connection=None: self.edit_records.create_edit_proposal(
+                proposal, connection=connection),
             version_conflict=TimelineVersionConflict,
             read_task=self.task_records.get_creation_task, read_proposal=self.edit_records.get_edit_proposal,
             read_operation=self.edit_records.get_edit_operation, read_version=self.timeline_records.get_timeline_version,
@@ -615,6 +623,15 @@ class ProductionRepository:
             upsert_narration_segments=self.narration_records.upsert_narration_segments,
             validate_operation=validate_edit_operation, validate_version=validate_timeline_version,
             validate_track=validate_subtitle_track, validate_cover=validate_cover_asset)
+        self.task_media_submissions = TaskMediaSubmissionTransactions(
+            connection_factory=lambda: self._connect(), edit_records=self.edit_records,
+            job_records=self.job_records, execution_records=self.execution_records,
+            version_conflict=TimelineVersionConflict,
+        )
+        self.task_media_publication = TaskMediaPublicationTransaction(
+            connection_factory=lambda: self._connect(), execution_records=self.execution_records,
+            lineage_records=self.lineage_records,
+        )
         from app.creation.editing.sources import EditClipSourceReader
         self.clip_sources = EditClipSourceReader(
             connection_factory=self._connect, read_montage=self.get_creation_task_montage_plan,
@@ -1516,72 +1533,9 @@ class ProductionRepository:
 
 
 
-    def save_clip_preview_proposal(self, intent: _EditIntent, proposal: _EditProposal, *, expected_version_id: str):
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            task = require_creation_task(conn, intent.workspace_id, intent.task_id)
-            if task.current_timeline_version_id != expected_version_id:
-                raise TimelineVersionConflict("预览期间时间线发生变化，请重新预览")
-            if (proposal.workspace_id, proposal.task_id, proposal.intent_id) != (intent.workspace_id, intent.task_id, intent.id):
-                raise ValueError("预览提案不属于原编辑意图")
-            self.edit_records.create_edit_intent(intent, connection=conn, source=None)
-            self.edit_records.create_edit_proposal(proposal, connection=conn)
-        return intent, proposal
 
-    def create_cover_generation_job(self, run: _JobRun, payload: dict, *, expected_version_id: str) -> _JobRun:
-        """Save the original cover Job and sealed identity/input in one transaction."""
-        command = payload["command"]
-        operation = json.loads(command["operation_json"])
-        identity = json.loads(command["identity_json"])
-        if (run.kind != "cover_frame_generation" or run.idempotency_key != f"cover:{command['proposal_id']}"
-                or (run.workspace_id, run.task_id) != (command["workspace_id"], command["task_id"])
-                or run.input_digest != hashlib.sha256(command["operation_json"].encode()).hexdigest()
-                or operation["base_version_id"] != expected_version_id
-                or identity != {key: payload[key] for key in identity}):
-            raise ValueError("封面Job与原封存输入或身份不一致")
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            task = require_creation_task(conn, run.workspace_id, run.task_id)
-            if task.current_timeline_version_id != expected_version_id:
-                raise TimelineVersionConflict("提交封面前时间线发生变化，请重新预览")
-            if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
-                raise PermissionError("当前成员不能安排此任务的封面")
-            proposal = self.edit_records.get_edit_proposal(run.workspace_id, command["proposal_id"])
-            original = proposal.operation.get("payload", {})
-            normalized = {**original, "title_position": original.get("title_position", "bottom")}
-            if (proposal.task_id != run.task_id or proposal.status != "proposed"
-                    or proposal.operation.get("operation_type") != "GenerateCoverFromFrame"
-                    or normalized != operation):
-                raise ValueError("封面原提案已经变化")
-            job = self.job_records.create_job_run(run, connection=conn)
-            self.execution_records.append_task_event(_TaskEvent(id=f"event_{job.id}_cover_start", workspace_id=job.workspace_id,
-                task_id=job.task_id, job_id=job.id, event_type="cover_submitted", payload=payload,
-                created_at=job.created_at), connection=conn)
-        return job
 
-    def create_clip_preview_job(self, run: _JobRun, payload: dict, *, expected_version_id: str) -> _JobRun:
-        """Compare the caller's original version and save the job/input together."""
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            task = require_creation_task(conn, run.workspace_id, run.task_id)
-            if task.current_timeline_version_id != expected_version_id:
-                raise TimelineVersionConflict("提交预览前时间线发生变化，请重新预览")
-            if task.owner_user_id and task.owner_user_id != (payload.get("user_id") or payload["member_id"]):
-                raise PermissionError("当前成员不能安排此任务的媒体处理")
-            job = self.job_records.create_job_run(run, connection=conn)
-            self.execution_records.append_task_event(_TaskEvent(id=f"event_{job.id}_start", workspace_id=job.workspace_id,
-                task_id=job.task_id, job_id=job.id, event_type="task_media_submitted", payload=payload,
-                created_at=job.created_at), connection=conn)
-        return job
 
-    def record_task_media_publication(self, artifact: _ArtifactRecord, transform: _TransformRun, edges: list[_DependencyEdge]):
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self.execution_records.create_artifact_record(artifact, connection=conn)
-            self.lineage_records.create_transform_run(transform, connection=conn)
-            for edge in edges:
-                self.lineage_records.create_dependency_edge(edge, connection=conn)
-        return artifact
 
 
 

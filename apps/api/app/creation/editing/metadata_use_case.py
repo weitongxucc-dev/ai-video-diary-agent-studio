@@ -845,7 +845,7 @@ class MetadataEditUseCase:
             command = self.bind_affected_source_command(verifier, command, plan, _changed)
             intent = replace(intent, constraints={**intent.constraints, 'affected_source_scope': verifier.scope_payload(command)})
             proposal = replace(proposal, invalidated_refs=logical_montage_output_refs(plan))
-            return (*self.repository.save_clip_preview_proposal(intent, proposal, expected_version_id=base_version_id),)
+            return (*self.repository.edit_adoption.save_clip_preview_proposal(intent, proposal, expected_version_id=base_version_id),)
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except KeyError as exc:

@@ -810,7 +810,7 @@ class NativeTaskOperations:
                 input_digest=job.input_digest,input_refs=input_refs,output_refs=[artifact.logical_ref],engine='native_task_command',
                 parameters={'source_execution_job_id':source_job.id,'source_input_digest':source_job.input_digest,'owner_member_id':actor.user_id or actor.member_id,
                     'mime_type':mime,'role':item['role'],**extra},status='succeeded',started_at=job.created_at,finished_at=now)
-            self.repository.record_task_media_publication(artifact,transform,[])
+            self.repository.task_media_publication.record_task_media_publication(artifact,transform,[])
             values.append({'artifact_id':artifact.id,'source_ref':artifact.logical_ref,'logical_ref':artifact.logical_ref,
                 'sha256':artifact.sha256,'size_bytes':artifact.size_bytes,'media_type':mime,'role':item['role'],
                 'preview_url':f'/api/creation-tasks/{job.task_id}/native-artifacts/{artifact.id}/content','adopted':False})

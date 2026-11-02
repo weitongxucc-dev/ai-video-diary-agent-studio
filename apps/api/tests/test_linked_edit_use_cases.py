@@ -218,7 +218,7 @@ def test_linked_preview_cas_refuses_version_advanced_at_repository_save(linked_s
     from fastapi.testclient import TestClient
 
     repo, task, plan, track, identity, verifier = linked_state
-    save = repo.save_clip_preview_proposal
+    save = repo.edit_adoption.save_clip_preview_proposal
 
     def advance_before_save(intent, proposal, *, expected_version_id):
         assert expected_version_id == "linked-base"
@@ -227,7 +227,7 @@ def test_linked_preview_cas_refuses_version_advanced_at_repository_save(linked_s
             sequence=base.sequence + 1))
         return save(intent, proposal, expected_version_id=expected_version_id)
 
-    monkeypatch.setattr(repo, "save_clip_preview_proposal", advance_before_save)
+    monkeypatch.setattr(repo.edit_adoption, "save_clip_preview_proposal", advance_before_save)
     response = TestClient(main.app).post("/api/creation-tasks/task/edits/exact/preview?draft=true", json={
         "operation_type": "DeleteClip", "clip_id": "clip_1",
     })

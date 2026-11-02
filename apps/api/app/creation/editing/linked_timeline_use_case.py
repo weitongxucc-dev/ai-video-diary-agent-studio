@@ -126,7 +126,7 @@ class LinkedTimelineEditUseCase:
         else:
             prepared = prepare_linked_insert(task, plan, tracks, effective_audio_timeline(plan), command, inserted,
                 verifier=verifier, output_refs=logical_montage_output_refs(plan))
-        return self.repository.save_clip_preview_proposal(prepared.intent, prepared.proposal, expected_version_id=base.id)
+        return self.repository.edit_adoption.save_clip_preview_proposal(prepared.intent, prepared.proposal, expected_version_id=base.id)
 
     def _inserted_clip(self, command: EditCommand) -> MontageClip:
         values = command.values

@@ -364,7 +364,7 @@ def test_same_audio_recipe_has_distinct_persistent_task_and_producer_instances(t
             output_refs=[record.logical_ref], engine='isolated-instance-identity-fixture',
             parameters={'manifest_digest': plan.digest}, status='succeeded', started_at=datetime.now(timezone.utc),
             finished_at=datetime.now(timezone.utc))
-        repo.record_task_media_publication(record, transform, [])
+        repo.task_media_publication.record_task_media_publication(record, transform, [])
         restored = AudioAssemblyManifest.from_payload(json.loads(json.dumps(plan.payload())))
         assert restored == plan
         restored.validate_scope('local', task_id, job.id)

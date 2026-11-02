@@ -175,4 +175,4 @@ class ClipPreviewUseCase:
             operation={"operation_type":command.operation_type, "payload":values}, invalidated_refs=invalidated,
             external_effects=["已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。"] if records else [],
             preview=previews, created_at=now, updated_at=now)
-        return self.repository.save_clip_preview_proposal(intent, proposal, expected_version_id=base.id)
+        return self.repository.edit_adoption.save_clip_preview_proposal(intent, proposal, expected_version_id=base.id)

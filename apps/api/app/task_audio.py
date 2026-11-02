@@ -371,7 +371,7 @@ class TaskAudio:
             task_id=task_id, upstream_ref=reference, downstream_ref=record.logical_ref,
             created_by_transform_id=transform.id) for index, reference in enumerate(unit.input_refs)]
         context.check()
-        return self.repository.record_task_media_publication(record, transform, edges)
+        return self.repository.task_media_publication.record_task_media_publication(record, transform, edges)
 
     def source(self, workspace_id: str, task_id: str, reference: str, *, actor=None) -> Path:
         self.repository.task_records.get_creation_task(workspace_id, task_id)
@@ -759,7 +759,7 @@ class TaskAudio:
                 workspace_id=workspace_id, task_id=task_id, upstream_ref=reference,
                 downstream_ref=record.logical_ref, created_by_transform_id=transform.id, created_at=job.created_at)
             for index, reference in enumerate(input_refs)]
-        return self.repository.record_task_media_publication(record, transform, edges)
+        return self.repository.task_media_publication.record_task_media_publication(record, transform, edges)
 
 
 # The context exists only while the sole device driver executes a persisted job.
@@ -1059,7 +1059,7 @@ class TaskMediaJobs:
             idempotency_key=f"task-media:{task_id}:{digest}", input_digest=digest)
         payload["input_digest"] = digest
         if "_clip_preview" in arguments:
-            job = self.repository.create_clip_preview_job(run, payload,
+            job = self.repository.task_media_submissions.create_clip_preview_job(run, payload,
                 expected_version_id=arguments["_clip_preview"]["base_version_id"])
         else:
             with self.repository._connect() as conn:

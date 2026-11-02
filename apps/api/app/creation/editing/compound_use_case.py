@@ -114,7 +114,7 @@ class CompoundEditUseCase:
         return PreparedCompoundEdit(task, base, plan, tracks, calculated, command, intent, proposal)
 
     def save_preview(self, prepared: PreparedCompoundEdit):
-        return self.repository.save_clip_preview_proposal(prepared.intent, prepared.proposal,
+        return self.repository.edit_adoption.save_clip_preview_proposal(prepared.intent, prepared.proposal,
             expected_version_id=prepared.base.id)
 
     def prepare_selection(self, control: CompoundSelectionCommand):

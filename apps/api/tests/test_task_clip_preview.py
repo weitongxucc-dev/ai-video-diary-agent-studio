@@ -252,12 +252,12 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
                 return sealed
             monkeypatch.setattr(media, 'facts', after_sealing)
         else:
-            save = repo.save_clip_preview_proposal
+            save = repo.edit_adoption.save_clip_preview_proposal
             def before_proposal_write(*args, **kwargs):
                 assert kwargs['expected_version_id'] == 'timeline'
                 commit_other_edit()
                 return save(*args, **kwargs)
-            monkeypatch.setattr(repo, 'save_clip_preview_proposal', before_proposal_write)
+            monkeypatch.setattr(repo.edit_adoption, 'save_clip_preview_proposal', before_proposal_write)
         if route == 'visual':
             path = '/api/creation-tasks/task/visual/preview'
             payload = {'base_version_id':'timeline', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}

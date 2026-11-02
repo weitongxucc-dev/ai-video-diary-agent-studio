@@ -4654,7 +4654,7 @@ def test_lineage_owner_borrows_pending_facts_and_publication_tail_failure_is_ato
             WHEN NEW.id = 'lineage-tail'
             BEGIN SELECT RAISE(ABORT, 'isolated lineage tail refusal'); END""")
     with pytest.raises(ValueError, match="依赖边 ID 或同一变换中的边已存在") as refused:
-        production.record_task_media_publication(artifact, transform, [edge, tail])
+        production.task_media_publication.record_task_media_publication(artifact, transform, [edge, tail])
     assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
     assert str(refused.value.__cause__) == "isolated lineage tail refusal"
     assert production.job_records.get_job_run("workspace_a", job.id) == job
@@ -5015,3 +5015,99 @@ def test_task_record_stage_writes_keep_caller_clock_payload_and_transaction_boun
     assert persisted.stage_status == 'failed' and persisted.stage_retryable and persisted.visibility == 'shared'
     assert len(rereads) == 2
     assert not any(sql.strip().upper().startswith('BEGIN') for conn in connections[before:] for sql in conn.statements)
+
+
+def test_task_media_transactions_keep_proposal_and_submission_atomicity(tmp_path, monkeypatch, lineage_no_execution):
+    import socket
+    import threading
+    from PIL import Image
+    from app.task_audio import TASK_MEDIA_KIND
+    from app.production import TimelineVersionConflict
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('task media transaction metadata forbids media, network and execution')
+    monkeypatch.setattr(threading.Thread, 'start', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    production = _repository(tmp_path)
+    task = _save_creation_task(production, workspace_id='metadata-ws', task_id='media-task')
+    head = TimelineVersion('media-head', task.workspace_id, task.id, None, 1, {'metadata_only': True}, None)
+    production.timeline_records.create_timeline_version(head, expected_current_version_id=None)
+    task = production.task_records.get_creation_task(task.workspace_id, task.id)
+    task.owner_user_id = 'metadata-member'
+    with production._connect() as connection:
+        connection.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task), default=str), task.workspace_id, task.id))
+    intent = EditIntent('media-intent', task.workspace_id, task.id, '声明封面', 'subtitle_cover', [], None,
+        'generate_cover', {'kind': 'task'}, {}, 1.0, 'interpreted')
+    original = {'base_version_id': head.id, 'frame_time_seconds': 0.0, 'title': '声明封面'}
+    proposal = EditProposal('media-proposal', task.workspace_id, task.id, intent.id, '声明封面提案',
+        [f'timeline://{task.id}/{head.id}'], {'operation_type': 'GenerateCoverFromFrame', 'payload': original},
+        [], {'metadata_only': True}, [])
+    with pytest.raises(TimelineVersionConflict, match='预览期间'):
+        production.edit_adoption.save_clip_preview_proposal(intent, proposal, expected_version_id='stale-head')
+    assert production.edit_records.list_edit_intents(task.workspace_id, task.id) == []
+    assert production.edit_records.list_edit_proposals(task.workspace_id, task.id) == []
+    create_proposal = production.edit_records.create_edit_proposal
+    observed = []
+    def proposal_then_fail(value, *, connection=None):
+        saved = create_proposal(value, connection=connection)
+        assert saved == proposal and connection.in_transaction
+        assert connection.execute('SELECT id FROM edit_intents WHERE id=?', (intent.id,)).fetchone()[0] == intent.id
+        observed.append(connection)
+        raise RuntimeError('metadata proposal tail after actual insert')
+    with monkeypatch.context() as patch:
+        patch.setattr(production.edit_records, 'create_edit_proposal', proposal_then_fail)
+        with pytest.raises(RuntimeError, match='proposal tail'):
+            production.edit_adoption.save_clip_preview_proposal(intent, proposal, expected_version_id=head.id)
+    assert len(observed) == 1
+    assert production.edit_records.list_edit_intents(task.workspace_id, task.id) == []
+    assert production.edit_records.list_edit_proposals(task.workspace_id, task.id) == []
+    assert production.edit_adoption.save_clip_preview_proposal(intent, proposal, expected_version_id=head.id) == (intent, proposal)
+    # Commit the real proposal before the cover transaction's original independent read.
+    assert production.edit_records.get_edit_proposal(task.workspace_id, proposal.id) == proposal
+    identity = {'workspace_id': task.workspace_id, 'member_id': task.owner_user_id,
+        'identity_kind': 'device', 'device_id': 'metadata-device', 'user_id': None}
+    operation_json = json.dumps({**original, 'title_position': 'bottom'}, ensure_ascii=False, sort_keys=True)
+    cover_payload = {**identity, 'command': {'workspace_id': task.workspace_id, 'task_id': task.id,
+        'proposal_id': proposal.id, 'operation_json': operation_json,
+        'identity_json': json.dumps(identity, sort_keys=True)}}
+    cover = JobRun('declared-cover-job', task.workspace_id, task.id, 'cover_frame_generation',
+        f'cover:{proposal.id}', hashlib.sha256(operation_json.encode()).hexdigest())
+    saved_cover = production.task_media_submissions.create_cover_generation_job(cover, cover_payload, expected_version_id=head.id)
+    assert saved_cover == cover and saved_cover.status == 'queued'
+    cover_start = production.execution_records.get_task_event(task.workspace_id, f'event_{cover.id}_cover_start')
+    assert cover_start.job_id == cover.id and cover_start.payload == cover_payload and cover_start.created_at == cover.created_at
+    clip = JobRun('declared-clip-job', task.workspace_id, task.id, TASK_MEDIA_KIND,
+        f'task-media:{task.id}:metadata-clip', 'b' * 64)
+    clip_payload = {**identity, 'operation': 'clip_preview', 'input_digest': clip.input_digest,
+        'arguments': {'_clip_preview': {'base_version_id': head.id}}}
+    with pytest.raises(TimelineVersionConflict, match='提交预览前'):
+        production.task_media_submissions.create_clip_preview_job(clip, clip_payload, expected_version_id='stale-head')
+    with pytest.raises(KeyError):
+        production.job_records.get_job_run(task.workspace_id, clip.id)
+    with pytest.raises(KeyError):
+        production.execution_records.get_task_event(task.workspace_id, f'event_{clip.id}_start')
+    append = production.execution_records.append_task_event
+    def event_then_fail(event, *, connection=None):
+        saved = append(event, connection=connection)
+        assert saved.job_id == clip.id and connection.in_transaction
+        assert production.job_records.get_job_run(task.workspace_id, clip.id, connection=connection).id == clip.id
+        raise RuntimeError('metadata clip tail after actual append')
+    with monkeypatch.context() as patch:
+        patch.setattr(production.execution_records, 'append_task_event', event_then_fail)
+        with pytest.raises(RuntimeError, match='clip tail'):
+            production.task_media_submissions.create_clip_preview_job(clip, clip_payload, expected_version_id=head.id)
+    with pytest.raises(KeyError):
+        production.job_records.get_job_run(task.workspace_id, clip.id)
+    with pytest.raises(KeyError):
+        production.execution_records.get_task_event(task.workspace_id, f'event_{clip.id}_start')
+    assert production.job_records.get_job_run(task.workspace_id, cover.id) == saved_cover
+    assert production.execution_records.get_task_event(task.workspace_id, cover_start.id) == cover_start
+    saved_clip = production.task_media_submissions.create_clip_preview_job(clip, clip_payload, expected_version_id=head.id)
+    clip_start = production.execution_records.get_task_event(task.workspace_id, f'event_{clip.id}_start')
+    assert saved_clip == clip and clip_start.payload == clip_payload and clip_start.created_at == clip.created_at

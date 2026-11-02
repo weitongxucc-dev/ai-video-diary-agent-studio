@@ -100,7 +100,7 @@ class SubtitleEditUseCase:
             intent = self.repository.edit_records.create_edit_intent(prepared.intent, source=prepared.intent.constraints.get('request_source'))
             proposal = self.repository.edit_records.create_edit_proposal(prepared.proposal)
             return intent, proposal
-        return self.repository.save_clip_preview_proposal(prepared.intent, prepared.proposal,
+        return self.repository.edit_adoption.save_clip_preview_proposal(prepared.intent, prepared.proposal,
             expected_version_id=prepared.base.id)
 
     def _binding(self, command, proposal_id):

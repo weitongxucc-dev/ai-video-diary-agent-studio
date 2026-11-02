@@ -573,3 +573,15 @@ class EditAdoptionTransaction:
             self.read_version(workspace_id, result_version.id),
             self.read_task(workspace_id, task_id),
         )
+
+    def save_clip_preview_proposal(self, intent: EditIntent, proposal: EditProposal, *, expected_version_id: str):
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self.require_task(conn, intent.workspace_id, intent.task_id)
+            if task.current_timeline_version_id != expected_version_id:
+                raise self.version_conflict("预览期间时间线发生变化，请重新预览")
+            if (proposal.workspace_id, proposal.task_id, proposal.intent_id) != (intent.workspace_id, intent.task_id, intent.id):
+                raise ValueError("预览提案不属于原编辑意图")
+            self.create_intent(intent, connection=conn, source=None)
+            self.create_proposal(proposal, connection=conn)
+        return intent, proposal

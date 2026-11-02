@@ -92,7 +92,7 @@ def _packet_case(tmp_path, monkeypatch, *, before_prepare=None, montage_adjust=N
             parameters={'picture_fragment': {**fragment, 'recipe_digest': recipe,
                 'producer_request_id': grant.request_id, 'producer_generation': grant.generation}},
             status='succeeded', started_at=now, finished_at=utc_now())
-        case.repo.record_task_media_publication(record, transform, [])
+        case.repo.task_media_publication.record_task_media_publication(record, transform, [])
         case.scheduler.complete_unit(grant, checkpoint_database_path=case.repo.database_path,
             checkpoint_write=lambda conn, current: 'fixture-leaf-completed')
         identities.append(identity)

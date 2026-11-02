@@ -48,7 +48,7 @@ def test_prepared_master_reads_original_receipt_and_clock_without_remixing(tmp_p
         output_refs=[record.logical_ref], engine='audio-mix/v2', parameters={'manifest_digest': manifest.digest,
             'master': True, 'duration_ms': 1000, 'sample_rate': 48000, 'channels': 2},
         status='succeeded', started_at=utc_now(), finished_at=utc_now())
-    case.repo.record_task_media_publication(record, transform, [])
+    case.repo.task_media_publication.record_task_media_publication(record, transform, [])
     def commit(conn, current):
         case.repo.execution_records.append_task_event(TaskEvent('fixture-original-master-receipt', 'local', case.task_id, case.job.id,
             'task_execution_unit_settled', {'usage_id': f'{current.request_id}:{current.generation}',

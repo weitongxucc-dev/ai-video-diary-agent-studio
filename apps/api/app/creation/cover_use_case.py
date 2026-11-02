@@ -534,7 +534,7 @@ class CoverUseCase:
                        "submitted_at_utc": submitted.isoformat(),
                        "deadline_utc": (submitted + timedelta(seconds=budget.max_timeout_seconds)).isoformat(),
                        "edit_proposal_id": proposal_id, **actor.identity_payload()}
-            job = self.repository.create_cover_generation_job(JobRun(id=f"job_{uuid4().hex}",
+            job = self.repository.task_media_submissions.create_cover_generation_job(JobRun(id=f"job_{uuid4().hex}",
                 workspace_id=actor.workspace_id, task_id=task_id, kind=COVER_JOB_KIND,
                 idempotency_key=command.idempotency_key, input_digest=command.input_digest), payload,
                 expected_version_id=command.operation["base_version_id"])
