@@ -1,4 +1,5 @@
 """Synthetic/isolated API and queue consumers; not model or GUI acceptance."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 
 from dataclasses import replace
 from pathlib import Path
@@ -72,9 +73,9 @@ def client(repo, monkeypatch):
         lambda request: request.headers.get("x-test-workspace", "ws"),
     )
     monkeypatch.setattr(
-        main,
-        "_content_reader",
-        lambda request, ws: (request.headers.get("x-test-member", "member"), False),
+        ContentIdentityHttpAdapter,
+        'reader',
+        lambda adapter, request, ws: (request.headers.get("x-test-member", "member"), False),
     )
     return TestClient(main.app)
 

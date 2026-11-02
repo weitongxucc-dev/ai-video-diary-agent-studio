@@ -1,4 +1,5 @@
 """Template metadata only; rendered task/output qualification below is declared."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
@@ -59,7 +60,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
 
     monkeypatch.setattr(main, "production_repo", repository)
     monkeypatch.setattr(main, "current_workspace_id", workspace_for)
-    monkeypatch.setattr(main, "_content_reader", trusted_reader)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *args, **kwargs: trusted_reader(*args, **kwargs))
     monkeypatch.setattr(repository.video_templates, "get_video_template", observe_template)
     monkeypatch.setattr(repository.video_templates, "save_video_template", observe_save)
     request = Request({"type": "http", "method": "POST", "path": "/metadata", "headers": []})

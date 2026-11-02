@@ -1,4 +1,5 @@
 """Direct metadata controls and adopted proposals share one complete version transaction."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import replace
 import ast
 import json
@@ -193,7 +194,7 @@ def test_source_change_after_binding_before_direct_transaction_creates_no_lineag
         return commit(command, *args, **kwargs)
     try:
         # Plain controls also carry the trusted member, so private ownership cannot turn into diagnostic access.
-        monkeypatch.setattr(main, '_content_reader', lambda *args:(actor.member_id, False))
+        monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *args:(actor.member_id, False))
         monkeypatch.setattr(repo.edit_adoption, 'confirm_direct', change_source)
         payload = {'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}
         if typed:

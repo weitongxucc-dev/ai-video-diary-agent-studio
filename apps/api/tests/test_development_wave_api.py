@@ -1,4 +1,5 @@
 """Shared HTTP integration with isolated SQLite/files; no model, microphone or GUI."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 import io
 import wave
 from uuid import uuid4
@@ -260,7 +261,7 @@ def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, 
     records = []
     monkeypatch.setattr(main, "_read_bound_execution_result", lambda *_: receipt)
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "local")
-    monkeypatch.setattr(main, "_assistant_member_id", lambda *_: owner.member_id)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'assistant_member', lambda adapter, *_: owner.member_id)
     monkeypatch.setattr(repository.task_records, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
     monkeypatch.setattr(main, "_goal_projection", lambda: SimpleNamespace(
         execution_source_current=lambda *_: True))

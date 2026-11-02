@@ -162,6 +162,7 @@ from app.creation_task_responses import CreationTaskResponseAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
 from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter, MetadataEditConfirmationHttpAdapter
 from app.task_edit_commands import TaskEditCommandHttpAdapter
+from app.content_identity_http import ContentIdentityHttpAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
     clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset)
@@ -819,62 +820,16 @@ def _local_member_write_guard(request: Request) -> JSONResponse | None:
     return None
 
 
-def _content_include_private(request: Request) -> bool:
-    """Member visibility for content list routes.
-
-    Anonymous and owner callers see everything; a valid member token sees only
-    shared content. An unknown token is a 401 in the content routes' own
-    HTTPException style.
-    """
-    token = _local_member_token(request)
-    if not token:
-        return True
-    try:
-        member = local_members_service.resolve_member(token)
-    except LocalMembersError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-    assert member is not None  # a present, valid token always resolves
-    return member.role == "owner"
+def _content_identity_http_adapter():
+    return ContentIdentityHttpAdapter(
+        local_token_for=lambda request: _local_member_token(request),
+        resolve_member=lambda token: local_members_service.resolve_member(token),
+        auth_enabled=lambda: auth_context.enabled,
+    )
 
 
-def _content_reader(request: Request, workspace_id: str) -> tuple[str | None, bool]:
-    """解析这次调用的可信内容读取身份：`(user_id, local_diagnostic)`。
-
-    两种既有身份归一成一个 id 参与判据，不新造第二套：
-    - 已验证的 Bearer 身份：`request.state.principal.user_id`；
-    - 本地成员令牌：`local_members_service.resolve_member` 的 `member_id`。
-    令牌无效按 401 处理，不降级成「没带令牌所以按 owner 看全部」。
-
-    `local_diagnostic` 只在保留的 local 工作区、且请求确实没有任何认证身份时为真：
-    单机本地正常使用不受影响，但这不是多人隔离——带了无效身份或已开认证的请求
-    不得借此看到别人的私有内容。
-    """
-    principal = getattr(request.state, "principal", None)
-    if principal is not None and principal.user_id:
-        return str(principal.user_id), False
-
-    token = _local_member_token(request)
-    if token:
-        try:
-            member = local_members_service.resolve_member(token)
-        except LocalMembersError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        assert member is not None
-        return str(member.member_id), False
-
-    if auth_context.enabled:
-        # 已开认证却没有可信身份：没有可读身份，不退回共享或 local。
-        return None, False
-    # 受控诊断只限保留的 local 工作区：本机单人使用照常可读自己的私有内容。
-    # 其他 workspace 没有这个范围——那里的匿名请求没有可信身份，读不到私有内容。
-    return None, workspace_id == LEGACY_WORKSPACE_ID
 
 
-def _assistant_member_id(request: Request, workspace_id: str) -> str:
-    member_id, _local_diagnostic = _content_reader(request, workspace_id)
-    if not member_id:
-        raise HTTPException(status_code=403, detail="请先确认当前成员身份，再使用可恢复的对话会话。")
-    return member_id
 
 
 def _assistant_scope_id(kind: str, *, task_id: str | None = None,
@@ -894,7 +849,7 @@ def _validate_assistant_scope(request: Request, kind: str, scope_id: str) -> Non
         return
     if kind == "task":
         task = _creation_task_or_404(workspace_id, scope_id)
-        if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+        if not _content_identity_http_adapter().visible(request, workspace_id, task.visibility, task.owner_user_id):
             raise HTTPException(status_code=404, detail="creation task not found")
         return
     if kind == "material" and scope_id in {"library", "browse"}:
@@ -914,22 +869,11 @@ def _validate_assistant_scope(request: Request, kind: str, scope_id: str) -> Non
     raise HTTPException(status_code=422, detail="对话范围与当前可见对象不匹配。")
 
 
-def _content_visible(
-    request: Request, workspace_id: str, visibility: str, owner_user_id: str | None
-) -> bool:
-    """内容可见范围判据，与仓储层共用同一规则（app.source_policy.knowledge_item_readable）。"""
-    user_id, local_diagnostic = _content_reader(request, workspace_id)
-    return content_readable(
-        user_id=user_id,
-        local_diagnostic=local_diagnostic,
-        visibility=visibility,
-        owner_user_id=owner_user_id,
-    )
 
 
-# 知识授权路由复用本文件既有的身份与工作区解析，不新造第二套：
-# - `workspace_for` / `content_reader` 就是上面两个函数，判据与列表、详情、搜索、
-#   助手共用同一套 `_content_reader`；
+# 知识授权路由复用既有的身份与工作区解析，不新造第二套：
+# - `workspace_for` 保持当前工作区解析，`content_reader` 使用
+#   `ContentIdentityHttpAdapter.reader`，与列表、详情、搜索、助手共用同一判据；
 # - 目标解析用 `VerifiedMemberGrantTargetResolver`：这台机器上没有「已验证的同设备
 #   成员 → 空间」事实源，所以生产解析返回 unresolved、本地模式返回 same_workspace，
 #   响应里如实标注「仅同空间」与 `cross_workspace_status=UNVERIFIED`。
@@ -961,11 +905,11 @@ def _prepare_runtime_routes(database: DatabaseOwners, auth: SupabaseAuthContext)
         pairings=CompanionPairingService(database.production.database_path),
     ))
     router.include_router(knowledge_grant_router(
-        database.sources, workspace_for=current_workspace_id, content_reader=_content_reader,
+        database.sources, workspace_for=current_workspace_id, content_reader=_content_identity_http_adapter().reader,
         target_resolver=VerifiedMemberGrantTargetResolver(local_mode=not auth.enabled),
     ))
     router.include_router(build_automation_guarded_publish_router(build_platform_publish_router(
-        database.production, workspace_for=current_workspace_id, content_reader=_content_reader,
+        database.production, workspace_for=current_workspace_id, content_reader=_content_identity_http_adapter().reader,
         actor_for=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
         auth_service=database.platform_auth,
         task_for_user=lambda workspace_id, task_id, user_id: _platform_publish_task_for_user(
@@ -1090,7 +1034,7 @@ def _video_template_http_adapter():
         case_for=lambda: VideoTemplateUseCase(production_repo),
         records_for=lambda: production_repo.video_templates,
         workspace_for=current_workspace_id,
-        reader_for=_content_reader,
+        reader_for=_content_identity_http_adapter().reader,
         write_guard=_local_member_write_guard,
         task_for=_creation_task_or_404,
         plan_for=_creation_plan_for_task_or_404,
@@ -1118,7 +1062,7 @@ def _production_profile_http_router(route_names):
         voice_spec_for=lambda: QWEN3_TTS_06B_BASE_8BIT,
         replace_for=lambda: replace,
         workspace_for=lambda: current_workspace_id,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         foundation_type_for=lambda: ProductionFoundationResponse,
         profile_response_type_for=lambda: ProductionProfileResponse,
         sources_configured_for=lambda: topic_sources_configured,
@@ -1239,7 +1183,7 @@ def _authorization_response(authorization: Authorization) -> AuthorizationRespon
 
 
 def _profile_read_facts(profile, request: Request):
-    user_id, diagnostic = _content_reader(request, profile.workspace_id)
+    user_id, diagnostic = _content_identity_http_adapter().reader(request, profile.workspace_id)
     current = production_repo.profile_records.get_person_profile(profile.workspace_id, profile.id) if isinstance(profile, PersonProfile) else production_repo.profile_records.get_versioned_voice_profile(profile.workspace_id, profile.id)
     if any(not production_repo.profile_readable(item, user_id, diagnostic) for item in (profile, current)):
         raise HTTPException(status_code=404, detail="profile not found")
@@ -1302,7 +1246,7 @@ def _profile_http_router(route_names):
     return build_profile_router(
         records_for=lambda: production_repo,
         workspace_for=lambda request: current_workspace_id(request),
-        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        reader_for=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
         voice_response_for=lambda voice, request: _versioned_voice_profile_response(voice, request),
         person_response_for=lambda person, request: _person_profile_response(person, request),
         read_facts_for=lambda profile, request: _profile_read_facts(profile, request),
@@ -1342,14 +1286,14 @@ app.include_router(build_voice_reference_router(
     http_error_type_for=lambda: HTTPException,
     records_for=lambda: production_repo,
     workspace_for=lambda: current_workspace_id,
-    reader_for=lambda: _content_reader,
+    reader_for=lambda: _content_identity_http_adapter().reader,
     response_type_for=lambda: VoiceReferenceImportResponse,
 ))
 
 
 def _member_owned_content_scope(request: Request) -> tuple[str, str]:
     workspace_id = current_workspace_id(request)
-    owner, _diagnostic = _content_reader(request, workspace_id)
+    owner, _diagnostic = _content_identity_http_adapter().reader(request, workspace_id)
     if not owner:
         raise HTTPException(status_code=403, detail="请先确认当前成员身份，再操作私人素材。")
     return workspace_id, owner
@@ -1417,7 +1361,7 @@ def _media_preview_http_router():
     return build_preview_router(
         records_for=lambda: production_repo,
         workspace_for=lambda request: current_workspace_id(request),
-        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        reader_for=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
         actor_for=lambda request, workspace_id: _require_permit_actor(request, workspace_id),
         runtime_for=lambda: _creation_runtime(),
         voice_service_for=lambda: voice_preview_service,
@@ -1513,7 +1457,7 @@ def _creation_plan_preflight_http_adapter():
         case_for=lambda: CreationPlanPreflightUseCase(production_repo, source_repository, model_catalog,
             lipsync_provider_for=_lipsync_provider),
         read_template=lambda request, workspace_id, template_id, version: _video_template_http_adapter().read_template(request, workspace_id, template_id, version),
-        content_reader=lambda request, workspace_id: _content_reader(request, workspace_id),
+        content_reader=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
     )
 
 
@@ -1595,8 +1539,8 @@ def _portrait_processor(workspace_id: str) -> LocalPortrait:
 def _exact_edit_access(task_id, request, *, write=False):
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    member_id = _assistant_member_id(request, workspace_id)
-    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+    member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
+    if not _content_identity_http_adapter().visible(request, workspace_id, task.visibility, task.owner_user_id):
         raise HTTPException(status_code=404, detail="creation task not found")
     if write and task.owner_user_id and task.owner_user_id != member_id:
         raise HTTPException(status_code=403, detail="当前成员不能修改此任务")
@@ -1630,7 +1574,7 @@ def _exact_edit_source_facts(task,payload,request):
             return case.audio_source_facts(task,graph,actor)
         ids=payload.clip_ids if payload.operation_type == 'AdjustVisualEffects' else [payload.clip_id] if payload.clip_id else []
         if not ids:return []
-        reader,diagnostic=_content_reader(request,task.workspace_id)
+        reader,diagnostic=_content_identity_http_adapter().reader(request,task.workspace_id)
         return case.source_facts(task,payload,{'member_id':reader,'local_diagnostic':diagnostic},None)
     except EditPreviewRejected as exc:
         raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
@@ -1684,7 +1628,7 @@ def _task_edit_http_router(route_names):
         task_media_required_for=lambda: TaskMediaRequired,
         timeline_version_conflict_for=lambda: TimelineVersionConflict,
         assistant_conversation_for_request_for=lambda: _assistant_conversation_for_request,
-        assistant_member_id_for=lambda: _assistant_member_id,
+        assistant_member_id_for=lambda: _content_identity_http_adapter().assistant_member,
         bind_assistant_edit_instruction_for=lambda: _bind_assistant_edit_instruction,
         claim_edit_request_for=lambda: _task_edit_receipt_http_adapter().claim_edit_request,
         command_preview_use_case_for=lambda: _command_preview_use_case,
@@ -1693,8 +1637,8 @@ def _task_edit_http_router(route_names):
         confirm_cover_response_for=lambda: _cover_confirmation_http_adapter().confirm_cover_response,
         confirm_creation_task_edit_for=lambda: _task_edit_confirmation_http_adapter().confirm,
         confirm_linked_timeline_response_for=lambda: _metadata_edit_confirmation_http_adapter().confirm_linked_timeline_response,
-        content_reader_for=lambda: _content_reader,
-        content_visible_for=lambda: _content_visible,
+        content_reader_for=lambda: _content_identity_http_adapter().reader,
+        content_visible_for=lambda: _content_identity_http_adapter().visible,
         creation_runtime_for=lambda: _creation_runtime,
         creation_task_or_404_for=lambda: _creation_task_or_404,
         current_narration_snapshot_for=lambda: _current_narration_snapshot,
@@ -2568,7 +2512,7 @@ def _task_workspace_response_adapter():
     )
 def _assistant_profile_snapshot(request: Request, kind: str, profile_id: str, version: str) -> dict:
     workspace_id = current_workspace_id(request)
-    user_id, diagnostic = _content_reader(request, workspace_id)
+    user_id, diagnostic = _content_identity_http_adapter().reader(request, workspace_id)
     try:
         profile = (production_repo.profile_records.get_person_profile(workspace_id, profile_id, version) if kind == "person"
                    else production_repo.profile_records.get_versioned_voice_profile(workspace_id, profile_id, version))
@@ -2594,7 +2538,7 @@ from app.assistant_reference_routes import build_assistant_reference_router
 
 def _assistant_reference_http_router(route_names):
     return build_assistant_reference_router(
-        member_for=lambda: _assistant_member_id,
+        member_for=lambda: _content_identity_http_adapter().assistant_member,
         workspace_for=lambda: current_workspace_id,
         profile_snapshot_for=lambda: _assistant_profile_snapshot,
         knowledge_snapshot_for=lambda: _assistant_knowledge_snapshot,
@@ -2607,7 +2551,7 @@ app.include_router(_assistant_reference_http_router(("assistant_profile_referenc
 
 def _assistant_knowledge_snapshot(request: Request, knowledge_item_id: str, version: str, locator: str | None = None, *, include_content: bool = False) -> dict:
     workspace_id = current_workspace_id(request)
-    user_id, diagnostic = _content_reader(request, workspace_id)
+    user_id, diagnostic = _content_identity_http_adapter().reader(request, workspace_id)
     try:
         item = source_repository.get_knowledge_reference_readable_by(
             workspace_id, knowledge_item_id, version, user_id=user_id, local_diagnostic=diagnostic,
@@ -2645,7 +2589,7 @@ def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict |
         if isinstance(stage, home_plan.ReadConversationOwner):
             answer = _assistant_conversation_for_request(request, stage.conversation_id)[0]
         elif isinstance(stage, home_plan.ReadCurrentReader):
-            answer = _content_reader(request, stage.workspace_id)[0]
+            answer = _content_identity_http_adapter().reader(request, stage.workspace_id)[0]
         else:
             raise TypeError(f"Unsupported home request recovery stage: {type(stage).__name__}")
         try:
@@ -2658,7 +2602,7 @@ def _assistant_creation_request_for_turn(request: Request, turn: dict) -> dict |
 
 def _assistant_conversation_for_request(request: Request, conversation_id: str) -> tuple[str, str, dict]:
     workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
+    member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
     row = conversation_repo.get(conversation_id, workspace_id, member_id)
     if row is None:
         raise HTTPException(status_code=404, detail="对话不存在或当前成员无权访问。")
@@ -2682,7 +2626,7 @@ def _assistant_conversation_for_request(request: Request, conversation_id: str) 
 def _conversation_http_adapter():
     return ConversationHTTPAdapter(
         conversations_for=lambda: conversation_repo,
-        workspace_for=current_workspace_id, member_for=_assistant_member_id,
+        workspace_for=current_workspace_id, member_for=_content_identity_http_adapter().assistant_member,
         validate_scope=_validate_assistant_scope,
         owned_conversation=_assistant_conversation_for_request,
         clean_text=_assistant_text_without_credentials,
@@ -2752,7 +2696,7 @@ from app.assistant_capability_routes import build_assistant_capability_router
 
 app.include_router(build_assistant_capability_router(
     workspace_for=lambda: current_workspace_id,
-    member_for=lambda: _assistant_member_id,
+    member_for=lambda: _content_identity_http_adapter().assistant_member,
     checks_for=lambda: pi_runtime_checks,
     tools_for=lambda: ASSISTANT_BUSINESS_TOOLS,
 ))
@@ -2776,7 +2720,7 @@ def _workspace_assistant_turn_http_router(route_names):
         workspace_for=lambda: current_workspace_id,
         stream_for=lambda: _assistant_stream_transport,
         plan_for=lambda: _home_plan_http_adapter().execute,
-        member_for=lambda: _assistant_member_id,
+        member_for=lambda: _content_identity_http_adapter().assistant_member,
         conversations_for=lambda: conversation_repo,
         selection_for=lambda: _assistant_material_selection_snapshot,
         plan_request_for=lambda: WorkspaceAssistantPlanTurnRequest,
@@ -2803,7 +2747,7 @@ def _home_plan_http_adapter():
         assistant_profile_snapshot_for=lambda: _assistant_profile_snapshot,
         assistant_stream_safe_text_for=lambda: _assistant_stream_safe_text,
         assistant_text_without_credentials_for=lambda: _assistant_text_without_credentials,
-        content_reader_for=lambda: _content_reader,
+        content_reader_for=lambda: _content_identity_http_adapter().reader,
         creation_request_or_404_for=lambda: _creation_request_or_404,
         creation_request_response_for=lambda: _creation_request_response,
         home_plan_turn_use_case_for=lambda: _home_plan_turn_use_case,
@@ -2891,7 +2835,7 @@ def _creation_request_item_response(item: dict) -> dict:
 
 def _creation_request_or_404(request: Request, request_id: str) -> dict:
     workspace_id = current_workspace_id(request)
-    owner, diagnostic = _content_reader(request, workspace_id)
+    owner, diagnostic = _content_identity_http_adapter().reader(request, workspace_id)
     if not owner:
         raise HTTPException(status_code=403, detail="请先确认当前成员，再读取制作目标。")
     try:
@@ -2934,7 +2878,7 @@ def _creation_request_http_router(route_names):
         plan_request_type_for=lambda: CreationPlanPreviewRequest,
         preflight_input_type_for=lambda: CreationPlanPreflightInput,
         workspace_for=lambda: current_workspace_id,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         owned_request_for=lambda: _creation_request_or_404,
         reply_for=lambda: _verified_assistant_reply,
         template_for=lambda: _video_template_http_adapter,
@@ -2991,7 +2935,7 @@ app.include_router(build_creation_plan_router(
     workspace_for=lambda: current_workspace_id,
     http_error_for=lambda: HTTPException,
     reply_for=lambda: _verified_assistant_reply,
-    reader_for=lambda: _content_reader,
+    reader_for=lambda: _content_identity_http_adapter().reader,
     now_for=lambda: utc_now,
     uuid_for=lambda: uuid4,
     task_type_for=lambda: CreationTask,
@@ -3011,7 +2955,7 @@ def _bind_script_library_use_case(draft_use_case, reader):
 
 def _script_library_use_case(request: Request):
     workspace_id = current_workspace_id(request)
-    reader = lambda ws: _content_reader(request, ws)
+    reader = lambda ws: _content_identity_http_adapter().reader(request, ws)
     draft_use_case = _script_draft_use_case(workspace_id,
         validate_inputs=lambda ws, plan, refs: _validate_script_input_sources(ws, plan, refs, *reader(ws)))
     return _bind_script_library_use_case(draft_use_case, reader)
@@ -3029,9 +2973,9 @@ from app.task_workspace_routes import TaskWorkspaceResponseAdapter, build_task_w
 def _task_workspace_http_router(route_names):
     return build_task_workspace_router(
         workspace_for=lambda: current_workspace_id,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         production_for=lambda: production_repo,
-        private_for=lambda: _content_include_private,
+        private_for=lambda: _content_identity_http_adapter().include_private,
         list_response_for=lambda: CreationTasksResponse,
         summary_for=lambda: project_task_summary,
         write_guard_for=lambda: _local_member_write_guard,
@@ -3056,7 +3000,7 @@ def _creation_task_or_404(workspace_id: str, task_id: str) -> CreationTask:
 def _readable_creation_task(request: Request, task_id: str) -> CreationTask:
     workspace_id = current_workspace_id(request)
     task = _creation_task_or_404(workspace_id, task_id)
-    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+    if not _content_identity_http_adapter().visible(request, workspace_id, task.visibility, task.owner_user_id):
         raise HTTPException(status_code=404, detail="creation task not found")
     return task
 
@@ -3127,7 +3071,7 @@ app.include_router(build_task_topic_router(
     http_error_for=lambda: HTTPException,
     adoption_for=lambda: _assistant_creation_adoption_scope,
     production_for=lambda: production_repo,
-    reader_for=lambda: _content_reader,
+    reader_for=lambda: _content_identity_http_adapter().reader,
     failure_for=lambda: _topic_failure_response,
 ))
 
@@ -3151,7 +3095,7 @@ app.include_router(build_task_knowledge_adoption_router(
 def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: str, *, draft_only: bool = False):
     from app.creation.intent_use_case import CreationIntentUseCase
     workspace_id = current_workspace_id(request)
-    owner = _content_reader(request, workspace_id)[0]
+    owner = _content_identity_http_adapter().reader(request, workspace_id)[0]
     try:
         origin = conversation_repo.task_turn_source(turn_id, workspace_id, owner, task_id)
         if origin.get("input_id") != request.headers.get("x-assistant-input-id"):
@@ -3178,7 +3122,7 @@ from app.task_script_routes import build_task_script_router
 def _task_script_http_router(route_names):
     return build_task_script_router(
         workspace_for=lambda: current_workspace_id,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         context_for=lambda: _script_context_use_case,
         draft_error_for=lambda: ScriptDraftRejected,
         http_error_for=lambda: HTTPException,
@@ -3225,7 +3169,7 @@ def _require_current_script_inputs(
     request: Request, workspace_id: str, plan: CreationPlan,
     input_references: list[dict[str, object]],
 ) -> tuple[str | None, bool]:
-    return _validate_script_input_sources(workspace_id,plan,input_references,*_content_reader(request,workspace_id))
+    return _validate_script_input_sources(workspace_id,plan,input_references,*_content_identity_http_adapter().reader(request,workspace_id))
 
 
 def _validate_script_input_sources(workspace_id,plan,input_references,reader_id,local_diagnostic=False):
@@ -3318,9 +3262,9 @@ def _task_turn_http_adapter():
         workspace_for=current_workspace_id,
         read_task=_creation_task_or_404,
         read_task_record=lambda ws, task_id: production_repo.task_records.get_creation_task(ws, task_id),
-        read_caller=_content_reader,
-        content_visible=_content_visible,
-        read_member=_assistant_member_id,
+        read_caller=_content_identity_http_adapter().reader,
+        content_visible=_content_identity_http_adapter().visible,
+        read_member=_content_identity_http_adapter().assistant_member,
         conversation_owner=_assistant_conversation_for_request,
         member_scope=_member_owned_content_scope,
         clean_text=_assistant_text_without_credentials,
@@ -3406,7 +3350,7 @@ def _assistant_turn_scope(
 
 def _assistant_result_binding(task_id, request, turn_id, details):
     workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
+    member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
     try:
         return conversation_repo.task_result_source(turn_id, workspace_id, member_id, task_id,
             input_id=details.get("input_id"), input_turn_id=details.get("input_turn_id"))
@@ -3424,7 +3368,7 @@ def _resolve_assistant_edit_request(task_id, request, turn_id, details):
         reference = binding.request_reference(task_id, turn_id, details)
         try:
             task = _creation_task_or_404(current_workspace_id(request), task_id)
-            member_id = _assistant_member_id(request, task.workspace_id)
+            member_id = _content_identity_http_adapter().assistant_member(request, task.workspace_id)
             actual = _exact_preview_use_case().read_request_receipt(
                 task, member_id, str(reference.request_id), reference.phase)
         except (HTTPException, GoalProjectionRejected, EditPreviewRejected) as exc:
@@ -3433,7 +3377,7 @@ def _resolve_assistant_edit_request(task_id, request, turn_id, details):
             actual = binding.missing_result(task_id, turn_id, reference, details)
         locator = binding.locator(task_id, reference, actual)
         workspace_id = current_workspace_id(request)
-        member_id = _assistant_member_id(request, workspace_id)
+        member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
         prepared = binding.prepare_binding(workspace_id, task_id, member_id, turn_id, locator, details)
         actor = None
         if prepared.source is None:
@@ -3452,7 +3396,7 @@ def _resolve_assistant_edit_request(task_id, request, turn_id, details):
 
 def _resolve_assistant_script_tool(task_id, request, turn_id, details):
     workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
+    member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
     actor = _require_permit_actor(request, workspace_id)
     binding = AssistantScriptToolResultBinding(production_repo, conversation_repo, _media_script_tools(),
         verify_reader=lambda actor: _assistant_execution_binding().require_actor(actor))
@@ -3495,11 +3439,11 @@ def _storyboard_result_binding():
 
 def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, details):
     workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
+    member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
     binding = _storyboard_result_binding()
     try:
         origin = binding.source(workspace_id, task_id, member_id, turn_id, details)
-        member_id = _assistant_member_id(request, workspace_id)
+        member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
         reference = binding.reference(workspace_id, task_id, member_id, turn_id, details, origin)
         _exact_edit_access(task_id, request)
         actor = _require_permit_actor(request, workspace_id)
@@ -3539,7 +3483,7 @@ def _script_window_http_adapter():
         adoption_scope=lambda task_id, request, turn_id, **values: _assistant_creation_adoption_scope(task_id, request, turn_id, **values),
         draft_use_case=lambda workspace_id, **values: _script_draft_use_case(workspace_id, **values),
         current_script_inputs=lambda request, ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
-        content_reader=lambda request, ws: _content_reader(request, ws),
+        content_reader=lambda request, ws: _content_identity_http_adapter().reader(request, ws),
     )
 
 
@@ -3590,7 +3534,7 @@ def _accept_script_generation(request, task_id, request_id):
 
 def _read_script_generation(request, task_id, request_id):
     task = _readable_creation_task(request, task_id)
-    member_id = _assistant_member_id(request, task.workspace_id)
+    member_id = _content_identity_http_adapter().assistant_member(request, task.workspace_id)
     case = _script_generation_intent(task.workspace_id)
     return case.public_projection(case.read(task.workspace_id, task_id, request_id, member_id))
 
@@ -3763,7 +3707,7 @@ def _task_montage_control_http_router(route_names):
         production_for=lambda: production_repo,
         http_error_for=lambda: HTTPException,
         candidates_for=lambda: _creation_task_montage_candidates,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         save_for=lambda: _save_direct_metadata_edit,
         edit_request_for=lambda: CreationTaskExactEditRequest,
         fields_for=lambda: EXACT_EDIT_FIELDS,
@@ -4023,8 +3967,8 @@ def _linked_timeline_values(payload):
 def _task_edit_command_http_adapter():
     return TaskEditCommandHttpAdapter(
         repo_for=lambda: production_repo,
-        content_reader=lambda request, workspace_id: _content_reader(request, workspace_id),
-        assistant_member=lambda request, workspace_id: _assistant_member_id(request, workspace_id),
+        content_reader=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
+        assistant_member=lambda request, workspace_id: _content_identity_http_adapter().assistant_member(request, workspace_id),
         exact_case_for=lambda: _exact_preview_use_case(),
     )
 
@@ -4039,8 +3983,8 @@ def _task_edit_confirmation_http_adapter():
         cover_confirmation=lambda task, proposal, request: _cover_confirmation_http_adapter().confirm_cover_response(task, proposal, request),
         metadata_confirmations_for=lambda: _metadata_edit_confirmation_http_adapter(),
         source_facts=lambda task, action, request: _exact_edit_source_facts(task, action, request),
-        content_reader=lambda request, workspace_id: _content_reader(request, workspace_id),
-        member_id=lambda request, workspace_id: _assistant_member_id(request, workspace_id),
+        content_reader=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
+        member_id=lambda request, workspace_id: _content_identity_http_adapter().assistant_member(request, workspace_id),
         task_open=lambda request, workspace_id, task_id: _require_automation_task_open(request, workspace_id, task_id),
         auth_enabled=lambda: auth_context.enabled,
         request_actor=lambda request, workspace_id: _request_permit_actor(request, workspace_id),
@@ -4091,10 +4035,10 @@ def _metadata_edit_response(outcome):
 
 
 def _preview_metadata_settings(task, request, operation_type, values, base_version_id):
-    reader, diagnostic = _content_reader(request, task.workspace_id)
+    reader, diagnostic = _content_identity_http_adapter().reader(request, task.workspace_id)
     source = EXACT_EDIT_SOURCE.get()
     if source is not None:
-        reader, diagnostic = _assistant_member_id(request, task.workspace_id), False
+        reader, diagnostic = _content_identity_http_adapter().assistant_member(request, task.workspace_id), False
     try:
         return _edit_preview_response(*_metadata_edit_use_case().preview_metadata_settings(task, operation_type, values, base_version_id,
             identity={'member_id':reader,'local_diagnostic':diagnostic}, source=source))
@@ -4367,7 +4311,7 @@ app.include_router(_timeline_restore_http_router(('get_creation_task_timeline_re
 
 
 def _apply_creation_task_montage_clip_update(workspace_id,task_id,plan,clip_id,payload,*,request):
-    reader,diagnostic=_content_reader(request,workspace_id)
+    reader,diagnostic=_content_identity_http_adapter().reader(request,workspace_id)
     try:return _metadata_edit_use_case().apply_clip_update(workspace_id,task_id,plan,clip_id,payload,
         reader_identity={'member_id':reader,'local_diagnostic':diagnostic})
     except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
@@ -4417,14 +4361,14 @@ def _platform_publish_output_for(workspace_id: str, task_id: str, user_id: str) 
 
 
 def _quality_check_task_access(request: Request, workspace_id: str, task_id: str) -> CreationTask:
-    user_id, _ = _content_reader(request, workspace_id)
+    user_id, _ = _content_identity_http_adapter().reader(request, workspace_id)
     if user_id is None:
         raise HTTPException(status_code=401, detail="请使用可信成员身份检查成片")
     if (_local_member_token(request) and workspace_id != LEGACY_WORKSPACE_ID
             and getattr(request.state, "principal", None) is None):
         raise HTTPException(status_code=403, detail="本机成员与工作区不匹配")
     task = _creation_task_or_404(workspace_id, task_id)
-    if not _content_visible(request, workspace_id, task.visibility, task.owner_user_id):
+    if not _content_identity_http_adapter().visible(request, workspace_id, task.visibility, task.owner_user_id):
         raise HTTPException(status_code=404, detail="creation task not found")
     return task
 
@@ -4482,7 +4426,7 @@ def _quality_http_router(route_names, *, read_continuation=None):
         account_error_for=lambda: DeviceAccountError,
         response_type_for=lambda: CreationTaskQualityCheckResponse,
         application_for=lambda: _quality_application,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         start_for=lambda: _start_creation_task_quality_check,
         require_actor_for=lambda: _require_permit_actor,
         projection_for=lambda: _creation_task_quality_check_response,
@@ -4662,11 +4606,11 @@ from app.home_routes import build_home_router
 app.include_router(build_home_router(
     http_error_for=lambda: HTTPException,
     workspace_for=lambda: current_workspace_id,
-    reader_for=lambda: _content_reader,
+    reader_for=lambda: _content_identity_http_adapter().reader,
     aggregate_for=lambda: aggregate_home,
     production_for=lambda: production_repo,
     sources_for=lambda: source_repository,
-    private_for=lambda: _content_include_private,
+    private_for=lambda: _content_identity_http_adapter().include_private,
 ))
 
 
@@ -4675,8 +4619,8 @@ def _material_library_http_adapter():
         records_for=lambda: production_repo,
         search_for=lambda: production_repo.material_search,
         workspace_for=current_workspace_id,
-        reader_for=_content_reader,
-        visible=_content_visible,
+        reader_for=_content_identity_http_adapter().reader,
+        visible=_content_identity_http_adapter().visible,
         write_guard=_local_member_write_guard,
         library_root=lambda: settings.video_inbox_path,
         asset_response=_material_asset_response,
@@ -4689,7 +4633,7 @@ from app.material_insights_routes import build_material_insights_router
 app.include_router(build_material_insights_router(
     workspace_for=lambda: current_workspace_id,
     montages_for=lambda: montage_repo,
-    reader_for=lambda: _content_reader,
+    reader_for=lambda: _content_identity_http_adapter().reader,
     response_for=lambda: MaterialLibraryInsightsResponse,
     production_for=lambda: production_repo,
     render_for=lambda: _render_stage_use_case,
@@ -4734,7 +4678,7 @@ def _material_intake_http_adapter():
         records_for=lambda: production_repo,
         discovery_for=lambda repository=None: (production_repo if repository is None else repository).material_discovery,
         workspace_for=current_workspace_id,
-        reader_for=_content_reader,
+        reader_for=_content_identity_http_adapter().reader,
         member_scope=_member_owned_content_scope,
         ingestion_for=_material_ingestion_for,
         execution_mode=lambda: material_execution_mode,
@@ -4767,7 +4711,7 @@ def _material_link_http_adapter():
     return MaterialLinkHTTPAdapter(
         records_for=lambda: production_repo,
         workspace_for=current_workspace_id,
-        reader_for=_content_reader,
+        reader_for=_content_identity_http_adapter().reader,
         provenance_for=lambda repository, workspace_id, verified_owner_user_id, local_diagnostic: MaterialLinkProvenanceSink(
             repository.material_links, workspace_id, verified_owner_user_id, local_diagnostic),
     )
@@ -4854,7 +4798,7 @@ from app.material_processing_routes import build_material_processing_router
 
 app.include_router(build_material_processing_router(
     workspace_for=lambda: current_workspace_id,
-    reader_for=lambda: _content_reader,
+    reader_for=lambda: _content_identity_http_adapter().reader,
     mode_for=lambda: material_execution_mode,
     ingestion_for=lambda: _material_ingestion_for,
     production_for=lambda: production_repo,
@@ -4889,7 +4833,7 @@ def _legacy_montage_http_router(route_names):
         safe_path_for=lambda: _safe_montage_media_path,
         file_response_for=lambda: FileResponse,
         candidate_type_for=lambda: MontageClipCandidateResponse,
-        reader_for=lambda: _content_reader,
+        reader_for=lambda: _content_identity_http_adapter().reader,
         eligible_for=lambda: material_segment_eligible,
         route_names=route_names,
     )
@@ -5184,7 +5128,7 @@ def _source_item_http_router(route_names):
     return build_source_item_router(
         records_for=lambda: source_repository,
         workspace_for=lambda request: current_workspace_id(request),
-        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        reader_for=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
         sync_for=lambda workspace_id, connector: _sync_connector(workspace_id, connector),
         failure_for=lambda failure: _source_failure_http_exception(failure),
         html_client_for=lambda urls: HtmlPageSourceClient(urls),
@@ -5200,7 +5144,7 @@ def _knowledge_http_router(route_names):
     return build_knowledge_router(
         records_for=lambda: source_repository,
         workspace_for=lambda request: current_workspace_id(request),
-        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
+        reader_for=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
         write_guard=lambda request: _local_member_write_guard(request),
         route_names=route_names,
     )
@@ -5493,8 +5437,8 @@ def _creator_profile_response(profile) -> CreatorProfileResponse:
 def _creator_profile_http_router():
     return build_creator_profile_router(
         workspace_for=lambda request: current_workspace_id(request),
-        reader_for=lambda request, workspace_id: _content_reader(request, workspace_id),
-        member_for=lambda request, workspace_id: _assistant_member_id(request, workspace_id),
+        reader_for=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
+        member_for=lambda request, workspace_id: _content_identity_http_adapter().assistant_member(request, workspace_id),
         database_for=lambda: settings.database_path,
         conversations_for=lambda: conversation_repo,
         profile_response=_creator_profile_response,
@@ -6315,7 +6259,7 @@ def _register_adopted_creation_goals(request, turn_id, creation_request):
     if creation_request is None:
         return
     workspace_id = current_workspace_id(request)
-    member_id = _content_reader(request, workspace_id)[0]
+    member_id = _content_identity_http_adapter().reader(request, workspace_id)[0]
     # Never bind the model's returned task IDs. Read the owning repository's
     # actual window/tasks/adoption again through the same member boundary.
     current = _creation_request_response(_creation_request_or_404(request, creation_request.id)).model_dump(mode="json")
@@ -6359,7 +6303,7 @@ def _read_bound_execution_result(task_id, request, job_id):
 
 def _bind_assistant_execution_observation(task_id, request, turn_id, details, result):
     workspace_id = current_workspace_id(request)
-    member_id = _assistant_member_id(request, workspace_id)
+    member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
     binding = _assistant_execution_binding()
     try:
         prepared = binding.prepare_observation(workspace_id, task_id, member_id, turn_id, details)
@@ -6413,7 +6357,7 @@ def _bind_assistant_execution_result(task_id, request, turn_id, candidate, *, so
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         workspace_id = current_workspace_id(request)
-        member_id = _assistant_member_id(request, workspace_id)
+        member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
         result = binding.record_result(workspace_id, task_id, member_id, turn_id, result, source=source)
     except ExecutionBindingRejected as exc:
         raise _execution_binding_http(exc) from exc

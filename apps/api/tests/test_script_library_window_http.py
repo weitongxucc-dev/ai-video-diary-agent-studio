@@ -1,4 +1,5 @@
 """Library browsing reads metadata and actual indexed body windows."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 import pytest
 from uuid import uuid4
 
@@ -66,7 +67,7 @@ def test_library_write_requests_replay_original_receipts_without_full_bodies(lib
     assert client.get(f"/api/production/script-library-requests/{reuse_input['request_id']}?operation=reuse").json() == result
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 2
-    monkeypatch.setattr(main, '_content_reader', lambda *a: ('other-member', False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *a: ('other-member', False))
     assert client.get(query).status_code == 404
     assert client.get(f"/api/production/script-library-requests/{reuse_input['request_id']}?operation=reuse").status_code == 404
 

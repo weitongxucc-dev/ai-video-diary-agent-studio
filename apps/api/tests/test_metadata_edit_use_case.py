@@ -1,4 +1,5 @@
 """Metadata-only real SQLite use cases; no HTTP, renderer or model calls."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
@@ -802,7 +803,7 @@ def test_workspace_response_http_read_and_agent_port_share_real_metadata(tmp_pat
     monkeypatch.setattr(main, 'production_repo', s.repo)
     monkeypatch.setattr(main, 'artifact_store', s.store)
     monkeypatch.setattr(main, 'current_workspace_id', lambda _: 'ws')
-    monkeypatch.setattr(main, '_content_reader', lambda *_: (s.member.member_id, False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *_: (s.member.member_id, False))
     monkeypatch.setattr(main, '_metadata_edit_use_case', lambda: s.case)
     monkeypatch.setattr(main, '_lipsync_provider', lambda *_: None)
     monkeypatch.setattr(main, 'subtitle_translation_provider_from_settings', lambda _: None)
@@ -1885,8 +1886,8 @@ def test_http_linked_apply_command_preserves_source_and_explicit_base_protocol(t
         return ("reader-before-source" if len(reads) % 2 else "material-reader"), True
 
     monkeypatch.setattr(main, "production_repo", state.repo)
-    monkeypatch.setattr(main, "_content_reader", reader)
-    monkeypatch.setattr(main, "_assistant_member_id", lambda incoming, ws: "assistant-declared")
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *args, **kwargs: reader(*args, **kwargs))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'assistant_member', lambda adapter, incoming, ws: "assistant-declared")
     monkeypatch.setattr(main, "_exact_preview_use_case", lambda: exact)
 
     def facts():

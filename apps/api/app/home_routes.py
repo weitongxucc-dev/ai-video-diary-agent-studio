@@ -10,7 +10,7 @@ def build_home_router(*, http_error_for, workspace_for, reader_for, aggregate_fo
         """首页一次取齐：当前身份可见的统计、真实日趋势、可进入的队列/待办/成果、
     整机匿名接收数量和真实存储事实。
 
-    身份解析完全沿用既有读过滤（`_content_reader` 与 `_content_include_private`），
+    身份解析完全沿用既有读过滤（`ContentIdentityHttpAdapter.reader` 与 `ContentIdentityHttpAdapter.include_private`），
     聚合模块不另写可见性判据。`days` 只影响日趋势跨度，不改变其他统计口径。
     """
         if days not in {7, 30}:

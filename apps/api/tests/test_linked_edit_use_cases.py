@@ -1,4 +1,5 @@
 """Linked use cases keep one clock, source scope and repository CAS transaction."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import shutil
@@ -47,7 +48,7 @@ def linked_state(tmp_path, monkeypatch):
     task = repo.task_records.get_creation_task("local", "task")
     identity = {"member_id": actor.member_id, "local_diagnostic": False}
     verifier = EditSourceVerifier(repo, identity=identity)
-    monkeypatch.setattr(main, "_content_reader", lambda *_: (actor.member_id, False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *_: (actor.member_id, False))
     try:
         yield repo, task, plan, captions, identity, verifier
     finally:

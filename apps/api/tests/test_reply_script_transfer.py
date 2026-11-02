@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.content_identity_http import ContentIdentityHttpAdapter
 from app.creation_plan_routes import CreationPlanPreflightHttpAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
 from app.creation_task_responses import CreationTaskResponseAdapter
@@ -465,7 +466,7 @@ def test_http_transfer_reads_completed_reply_and_rechecks_current_source_then_re
         "result": {"response": {"reply": REPLY_TEXT}},
     }
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: WORKSPACE)
-    monkeypatch.setattr(main_module, "_content_reader", lambda _request, _workspace: (OWNER, False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, _request, _workspace: (OWNER, False))
     monkeypatch.setattr(main_module, "_validate_assistant_scope", lambda *_args: None)
     monkeypatch.setattr(main_module, "conversation_repo", SimpleNamespace(
         get=lambda _conversation_id, _workspace, _member: {
@@ -533,7 +534,7 @@ def test_http_plan_confirmation_trusts_home_reply_origin_and_replays_same_plan(t
         "result": {"response": {"reply": REPLY_TEXT}},
     }
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: WORKSPACE)
-    monkeypatch.setattr(main_module, "_content_reader", lambda _request, _workspace: (OWNER, False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, _request, _workspace: (OWNER, False))
     monkeypatch.setattr(main_module, "_validate_assistant_scope", lambda *_args: None)
     monkeypatch.setattr(main_module, "conversation_repo", SimpleNamespace(
         get=lambda _conversation_id, _workspace, _member: {

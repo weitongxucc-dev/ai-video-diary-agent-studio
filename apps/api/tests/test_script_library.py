@@ -1,3 +1,4 @@
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -328,7 +329,7 @@ def test_citation_reports_the_cited_version_facts_after_the_current_version_move
     # A shared task does not disclose a privately owned source's old snapshot.
     repo.task_records.set_creation_task_visibility("local", "task_original", "shared")
     sources.set_knowledge_item_visibility("local", versioned.id, "private")
-    monkeypatch.setattr(main, "_content_reader", lambda *_: ("another-member", False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *_: ("another-member", False))
     hidden = client.get(f"/api/production/script-library/{entry['id']}/sources")
     assert hidden.status_code == 200, hidden.text
     hidden_state = hidden.json()[0]

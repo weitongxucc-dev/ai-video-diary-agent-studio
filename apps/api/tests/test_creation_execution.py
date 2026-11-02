@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.content_identity_http import ContentIdentityHttpAdapter
 
 from app.materials.intake_routes import material_binding_status
 
@@ -1961,7 +1962,7 @@ def test_raw_material_qualification_agrees_for_search_preflight_and_edit(tmp_pat
     assert matches() and not repo.automatic_material_segments('local',viewer_user_id='owner')
     monkeypatch.setattr(main_module,'production_repo',repo)
     monkeypatch.setattr(main_module,'current_workspace_id',lambda request:'local')
-    monkeypatch.setattr(main_module,'_content_reader',lambda request,workspace_id:('owner',False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter,'reader',lambda adapter, request,workspace_id:('owner',False))
     client=TestClient(main_module.app)
     automatic=client.get('/api/production/materials/search',params={'purpose':'automatic','include_eligibility':True})
     assert automatic.status_code==200,automatic.text

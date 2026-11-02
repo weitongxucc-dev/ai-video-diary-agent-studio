@@ -158,16 +158,16 @@ def test_cited_version_facts_are_not_returned_to_a_reader_without_permission(tmp
     member_request = reader(party["member_token"])
 
     # 归属是别人时，带令牌的成员读不到。
-    assert main_module._content_visible(
+    assert main_module._content_identity_http_adapter().visible(
         member_request, WORKSPACE, "private", "somebody-else"
     ) is False
 
     # 这条以所有者身份保存，归属就是所有者本人：本人读得到，别人读不到。
     assert item.owner_user_id == party["owner_member"].member_id
-    assert main_module._content_visible(
+    assert main_module._content_identity_http_adapter().visible(
         member_request, WORKSPACE, "private", item.owner_user_id
     ) is False
-    assert main_module._content_visible(
+    assert main_module._content_identity_http_adapter().visible(
         reader(party["owner_token"]), WORKSPACE, "private", item.owner_user_id
     ) is True
 

@@ -1,4 +1,5 @@
 """A long movie's selected-clip preview remains a silent five-second unit."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -321,7 +322,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'output'))
     monkeypatch.setattr(main,'settings',replace(main.settings,temporary_root_path=str(tmp_path/'temp'),video_output_path=str(tmp_path/'output')))
     monkeypatch.setattr(main,'_require_permit_actor',lambda *args:actor)
-    monkeypatch.setattr(main,'_assistant_member_id',lambda *args:actor.member_id)
+    monkeypatch.setattr(ContentIdentityHttpAdapter,'assistant_member',lambda adapter, *args:actor.member_id)
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
     media.facts=main._task_media_facts
     from app.media.clip_preview import ClipPreviewExecutor

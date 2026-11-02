@@ -1,4 +1,5 @@
 """Remaining shot controls use the same command and joint version transaction."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 import shutil
 from pathlib import Path
@@ -95,7 +96,7 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
         repo.subtitle_records.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
-        monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
+        monkeypatch.setattr(ContentIdentityHttpAdapter,'reader',lambda adapter, *args:(actor.member_id,False))
         commit = repo.edit_adoption.confirm_direct
         def revise(command,*args,**kwargs):
             assert f'clip_{source_index}' in command.affected_clip_ids
@@ -157,7 +158,7 @@ def test_unaffected_distant_private_source_is_not_part_of_a_reorder(tmp_path,mon
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
         repo.subtitle_records.create_subtitle_track(copied)
         seed=repo.get_creation_task_montage_plan('local','task')
-        monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
+        monkeypatch.setattr(ContentIdentityHttpAdapter,'reader',lambda adapter, *args:(actor.member_id,False))
         response=client.post('/api/creation-tasks/task/edits/exact',json={
             'operation_type':'ReorderClip','clip_id':'clip_1','position':2})
         assert response.status_code==200,response.text
@@ -190,7 +191,7 @@ def test_transition_adoption_rechecks_frozen_predecessor_inside_the_version_tran
         repo.timeline_records.create_timeline_version(TimelineVersion('transition-base','local','task','timeline',2,
             {'montage':seed,'subtitle_track_ids':[copied.id]},None))
         repo.subtitle_records.create_subtitle_track(copied)
-        monkeypatch.setattr(main,'_content_reader',lambda *args:(actor.member_id,False))
+        monkeypatch.setattr(ContentIdentityHttpAdapter,'reader',lambda adapter, *args:(actor.member_id,False))
         prepared=client.post('/api/creation-tasks/task/edits/exact/preview?draft=true',json={
             'operation_type':'SetClipTransition','clip_id':'clip_2','transition_seconds':.1})
         assert prepared.status_code==200,prepared.text

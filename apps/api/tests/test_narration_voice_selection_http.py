@@ -1,3 +1,4 @@
+from app.content_identity_http import ContentIdentityHttpAdapter
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ def http_state(state, monkeypatch):
     monkeypatch.setattr(main, 'creation_execution', SimpleNamespace(latest=lambda *_:None))
     monkeypatch.setattr(main, 'device_runtime', None)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'workspace')
-    monkeypatch.setattr(main, '_content_reader', lambda request, workspace: ('owner', False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, request, workspace: ('owner', False))
     monkeypatch.setattr(main, '_exact_edit_access', lambda task_id, request, **kwargs:
         (state.repo.task_records.get_creation_task('workspace', task_id), request.headers.get('X-Test-Member', 'owner')))
     conversations = ConversationRepository(state.repo.database_path)

@@ -1,4 +1,5 @@
 """Production delegates asset aggregates without changing caller transactions."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -60,7 +61,7 @@ def test_actual_material_http_page_filters_before_count_and_preserves_owned_fact
         segments=[replace(asset.segments[0], id="other-segment", asset_id="other")]))
     monkeypatch.setattr(main, "production_repo", repo)
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "local")
-    monkeypatch.setattr(main, "_content_reader", lambda *_: ("member", False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *_: ("member", False))
     monkeypatch.setattr(main, "settings", replace(main.settings, video_inbox_path=str(repo.video_library_path)))
     response = TestClient(main.app).get("/api/production/materials?limit=1&offset=0")
     assert response.status_code == 200, response.text

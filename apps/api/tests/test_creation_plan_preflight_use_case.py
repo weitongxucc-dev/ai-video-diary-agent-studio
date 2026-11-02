@@ -1,4 +1,5 @@
 """Metadata boundary check; material/model facts below are declared, not executed."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
@@ -124,7 +125,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     monkeypatch.setattr(main, "source_repository", sources)
     monkeypatch.setattr(main, "model_catalog", CatalogFacts())
     monkeypatch.setattr(main, "_lipsync_provider", lazy_provider)
-    monkeypatch.setattr(main, "_content_reader", trusted_reader)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *args, **kwargs: trusted_reader(*args, **kwargs))
     monkeypatch.setattr(VideoTemplateHTTPAdapter, "read_template", observe_resolver)
     monkeypatch.setattr(CreationPlanPreflightUseCase, "prepare", observe_prepare)
     monkeypatch.setattr(production, "automatic_material_segments", material_facts)

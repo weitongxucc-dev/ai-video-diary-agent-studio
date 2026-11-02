@@ -1,4 +1,5 @@
 """Persistent task-media work uses the sole device grant and isolated stores."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -574,7 +575,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     monkeypatch.setattr(main, 'montage_renderer', MontageRenderer(tmp_path/'render'))
     monkeypatch.setattr(main, '_task_audio', lambda:service)
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args:actor)
-    monkeypatch.setattr(main, '_assistant_member_id', lambda *args:actor.member_id)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'assistant_member', lambda adapter, *args:actor.member_id)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request:'local')
     media.facts = main._task_media_facts
     from app.media.clip_preview import ClipPreviewExecutor

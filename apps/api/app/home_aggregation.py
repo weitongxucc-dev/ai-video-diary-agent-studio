@@ -253,7 +253,7 @@ def aggregate_home(
     """按当前身份汇总整机首页。
 
     ``viewer_user_id`` / ``local_diagnostic`` / ``include_private`` 直接来自既有的
-    ``_content_reader`` 与 ``_content_include_private``，路由层照旧解析后传入；
+    ``ContentIdentityHttpAdapter.reader`` 与 ``ContentIdentityHttpAdapter.include_private``，路由层照旧解析后传入；
     认证态拿不到可信身份时，知识读取照旧失败，不退化成只看共享。
 
     ``days`` 只影响日趋势的跨度，不改变其他统计的口径。
