@@ -3571,7 +3571,7 @@ def _task_turn_http_adapter():
         bind_goal_scope=_bind_goal_business_scope,
         wake=_wake_assistant_continuations,
         read_quality=_read_creation_quality_continuation,
-        read_window=_read_creation_script_window_request,
+        read_window=_script_window_http_adapter().read_creation_script_window_request,
         read_segment=lambda ws, task_id, request_id, actor: _segment_production_use_case().read_request(ws, task_id, request_id, actor),
         read_restore=lambda ws, task_id, request_id, actor: _timeline_restore_use_case().read_request(ws, task_id, request_id, actor),
         generation_for=_script_generation_intent,
@@ -3732,73 +3732,35 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
 app.include_router(_task_script_http_router(('get_creation_task_scripts',)))
 
 
-from app.creation.script_routes import build_script_sections_router
+from app.creation.script_routes import ScriptWindowHttpAdapter, build_script_sections_router
 
 
-def _patch_creation_script_sections(request, task_id, script_id, payload):
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
-              if payload.assistant_turn_id is not None else None)
-    case = _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
-        content_reader=lambda ws: _content_reader(request, ws))
-    return case.patch(task.workspace_id, task_id, script_id, payload, member_id=member_id,
-        instruction_origin=origin,
-        reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
-            task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+def _script_window_http_adapter():
+    return ScriptWindowHttpAdapter(
+        exact_edit_access=lambda task_id, request, **values: _exact_edit_access(task_id, request, **values),
+        adoption_scope=lambda task_id, request, turn_id, **values: _assistant_creation_adoption_scope(task_id, request, turn_id, **values),
+        draft_use_case=lambda workspace_id, **values: _script_draft_use_case(workspace_id, **values),
+        current_script_inputs=lambda request, ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
+        content_reader=lambda request, ws: _content_reader(request, ws),
+    )
 
 
-def _start_creation_script_window(request, task_id, payload):
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
-              if payload.assistant_turn_id is not None else None)
-    case = _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
-        content_reader=lambda ws: _content_reader(request, ws))
-    return case.start_window(task.workspace_id, task_id, payload, member_id=member_id,
-        instruction_origin=origin,
-        reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
-            task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
 
 
-def _confirm_saved_creation_script(request, task_id, script_id, payload):
-    task, member_id = _exact_edit_access(task_id, request, write=True)
-    origin = (_assistant_creation_adoption_scope(task_id, request, str(payload.assistant_turn_id))
-              if payload.assistant_turn_id is not None else None)
-    case = _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
-        content_reader=lambda ws: _content_reader(request, ws))
-    return case.confirm_saved(task.workspace_id, task_id, script_id, payload, member_id=member_id,
-        instruction_origin=origin,
-        reread_origin=lambda draft_only: _assistant_creation_adoption_scope(
-            task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
 
 
-def _read_creation_script_window_request(request, task_id, request_id, operation, script_id, *, include_input=False):
-    task, member_id = _exact_edit_access(task_id, request)
-    return _script_draft_use_case(task.workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs)
-    ).window_request_result(task.workspace_id, task_id, request_id, member_id=member_id,
-                            operation=operation, script_id=script_id, include_input=include_input)
 
 
-def _read_creation_script_edit_sources(request, task_id, script_id):
-    task, _member_id = _exact_edit_access(task_id, request)
-    workspace_id = task.workspace_id
-    return _script_draft_use_case(workspace_id,
-        validate_inputs=lambda ws, plan, refs: _require_current_script_inputs(request, ws, plan, refs),
-        content_reader=lambda ws: _content_reader(request, ws),
-    ).read_edit_sources(workspace_id, task_id, script_id)
 
 
 app.include_router(build_script_sections_router(
     readable_task=_readable_creation_task,
     read_sections=lambda *args, **kwargs: production_repo.script_records.read_creation_task_script_sections(*args, **kwargs),
-    patch_sections=_patch_creation_script_sections,
-    start_window=_start_creation_script_window,
-    confirm_saved=_confirm_saved_creation_script,
-    read_request=_read_creation_script_window_request,
-    read_sources=_read_creation_script_edit_sources,
+    patch_sections=_script_window_http_adapter().patch_creation_script_sections,
+    start_window=_script_window_http_adapter().start_creation_script_window,
+    confirm_saved=_script_window_http_adapter().confirm_saved_creation_script,
+    read_request=_script_window_http_adapter().read_creation_script_window_request,
+    read_sources=_script_window_http_adapter().read_creation_script_edit_sources,
 ))
 
 

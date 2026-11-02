@@ -11,6 +11,66 @@ from app.schemas import (
 )
 
 
+class ScriptWindowHttpAdapter:
+    def __init__(self, *, exact_edit_access, adoption_scope, draft_use_case, current_script_inputs, content_reader):
+        self.exact_edit_access = exact_edit_access
+        self.adoption_scope = adoption_scope
+        self.draft_use_case = draft_use_case
+        self.current_script_inputs = current_script_inputs
+        self.content_reader = content_reader
+
+    def patch_creation_script_sections(self, request, task_id, script_id, payload):
+        task, member_id = self.exact_edit_access(task_id, request, write=True)
+        origin = (self.adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
+                  if payload.assistant_turn_id is not None else None)
+        case = self.draft_use_case(task.workspace_id,
+            validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
+            content_reader=lambda ws: self.content_reader(request, ws))
+        return case.patch(task.workspace_id, task_id, script_id, payload, member_id=member_id,
+            instruction_origin=origin,
+            reread_origin=lambda draft_only: self.adoption_scope(
+                task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+
+    def start_creation_script_window(self, request, task_id, payload):
+        task, member_id = self.exact_edit_access(task_id, request, write=True)
+        origin = (self.adoption_scope(task_id, request, str(payload.assistant_turn_id), draft_only=True)
+                  if payload.assistant_turn_id is not None else None)
+        case = self.draft_use_case(task.workspace_id,
+            validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
+            content_reader=lambda ws: self.content_reader(request, ws))
+        return case.start_window(task.workspace_id, task_id, payload, member_id=member_id,
+            instruction_origin=origin,
+            reread_origin=lambda draft_only: self.adoption_scope(
+                task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+
+    def confirm_saved_creation_script(self, request, task_id, script_id, payload):
+        task, member_id = self.exact_edit_access(task_id, request, write=True)
+        origin = (self.adoption_scope(task_id, request, str(payload.assistant_turn_id))
+                  if payload.assistant_turn_id is not None else None)
+        case = self.draft_use_case(task.workspace_id,
+            validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
+            content_reader=lambda ws: self.content_reader(request, ws))
+        return case.confirm_saved(task.workspace_id, task_id, script_id, payload, member_id=member_id,
+            instruction_origin=origin,
+            reread_origin=lambda draft_only: self.adoption_scope(
+                task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+
+    def read_creation_script_window_request(self, request, task_id, request_id, operation, script_id, *, include_input=False):
+        task, member_id = self.exact_edit_access(task_id, request)
+        return self.draft_use_case(task.workspace_id,
+            validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs)
+        ).window_request_result(task.workspace_id, task_id, request_id, member_id=member_id,
+                                operation=operation, script_id=script_id, include_input=include_input)
+
+    def read_creation_script_edit_sources(self, request, task_id, script_id):
+        task, _member_id = self.exact_edit_access(task_id, request)
+        workspace_id = task.workspace_id
+        return self.draft_use_case(workspace_id,
+            validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
+            content_reader=lambda ws: self.content_reader(request, ws),
+        ).read_edit_sources(workspace_id, task_id, script_id)
+
+
 def _write_response(action):
     try:
         return action()

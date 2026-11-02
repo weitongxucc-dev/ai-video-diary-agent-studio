@@ -21,7 +21,7 @@ def test_patch_http_preserves_unread_sections_and_replays_original_receipt(api_s
     state.client.app.include_router(build_script_sections_router(
         readable_task=main._readable_creation_task,
         read_sections=state.repository.script_records.read_creation_task_script_sections,
-        patch_sections=main._patch_creation_script_sections,
+        patch_sections=main._script_window_http_adapter().patch_creation_script_sections,
     ))
     calls = []
     set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
@@ -82,10 +82,10 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
     state.client.app.include_router(build_script_sections_router(
         readable_task=main._readable_creation_task,
         read_sections=state.repository.script_records.read_creation_task_script_sections,
-        patch_sections=main._patch_creation_script_sections,
-        start_window=main._start_creation_script_window,
-        confirm_saved=main._confirm_saved_creation_script,
-        read_request=main._read_creation_script_window_request,
+        patch_sections=main._script_window_http_adapter().patch_creation_script_sections,
+        start_window=main._script_window_http_adapter().start_creation_script_window,
+        confirm_saved=main._script_window_http_adapter().confirm_saved_creation_script,
+        read_request=main._script_window_http_adapter().read_creation_script_window_request,
     ))
     calls = []
     set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
@@ -146,10 +146,10 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
     state.client.app.include_router(build_script_sections_router(
         readable_task=main._readable_creation_task,
         read_sections=state.repository.script_records.read_creation_task_script_sections,
-        patch_sections=main._patch_creation_script_sections,
-        start_window=main._start_creation_script_window,
-        confirm_saved=main._confirm_saved_creation_script,
-        read_request=main._read_creation_script_window_request,
+        patch_sections=main._script_window_http_adapter().patch_creation_script_sections,
+        start_window=main._script_window_http_adapter().start_creation_script_window,
+        confirm_saved=main._script_window_http_adapter().confirm_saved_creation_script,
+        read_request=main._script_window_http_adapter().read_creation_script_window_request,
     ))
     def sections(start, end):
         return [{'id': f'section-{index}', 'title': f'段落{index}', 'content': FACT,
