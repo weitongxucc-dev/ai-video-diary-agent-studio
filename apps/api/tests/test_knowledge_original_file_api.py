@@ -6,7 +6,7 @@ import pytest
 import app.main as main
 from app.knowledge_file_store import KnowledgeFileStore
 from app.source_repository import SourceRepository
-from test_creation_request_api import client_state  # noqa: F401
+from test_creation_request_api import client_state as client_state  # noqa: F401
 from tests.test_knowledge_office_ingestion import word_file
 
 

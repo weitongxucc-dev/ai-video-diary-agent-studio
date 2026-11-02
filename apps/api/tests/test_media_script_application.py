@@ -15,8 +15,8 @@ import app.media_script_jobs as scripts
 from app.media_script import MeasuredScriptOutput
 from test_media_script_api import (
     state as legacy_state,
-    material_edit_state,
-    person_render_edit_state,
+    material_edit_state as material_edit_state,
+    person_render_edit_state as person_render_edit_state,
 )
 
 

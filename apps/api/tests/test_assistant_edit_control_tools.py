@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from test_timeline_history import history_task  # noqa: F401
+from test_timeline_history import history_task as history_task  # noqa: F401
 
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"

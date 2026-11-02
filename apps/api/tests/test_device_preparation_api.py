@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import app.main as main
 import app.device_resource_preparation as preparation
-from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
+from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
 
 
 def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_http_state, monkeypatch, tmp_path):

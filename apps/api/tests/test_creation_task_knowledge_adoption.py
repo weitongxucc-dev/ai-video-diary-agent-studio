@@ -12,7 +12,7 @@ from app.creation.script_contracts import CreationTaskScriptSection, ScriptGener
 from app.creation.contracts import JobRun
 from app.source_types import KnowledgeItem
 from test_creation_task_script_grounding import (
-    api_state, draft, reviewed, saved_agent_draft, set_api_provider,
+    api_state as api_state, draft, reviewed, saved_agent_draft, set_api_provider,
 )
 from test_knowledge_original_files import uploaded, word_file
 

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 from app.conversation_repository import ConversationRepository
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest
-from test_narration_voice_selection_receipts import state, command
+from test_narration_voice_selection_receipts import state as state, command
 
 
 @pytest.fixture

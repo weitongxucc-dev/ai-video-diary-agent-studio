@@ -11,7 +11,7 @@ from app.assistant.task_turn_use_case import TaskAssistantTurnUseCase
 from app.conversation_repository import ConversationRepository
 from app.schemas import CreationTaskScriptWindowStartRequest
 from test_creation_task_script_grounding import (
-    api_state, agent_payload, draft, reviewed, set_agent_reviewer,  # noqa: F401
+    api_state as api_state, agent_payload, draft, reviewed, set_agent_reviewer,  # noqa: F401
 )
 
 

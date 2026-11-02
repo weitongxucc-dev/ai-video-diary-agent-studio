@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import app.main as main
 from app.quality_worker_runtime import QUALITY_PHASES
-from test_quality_inspection_api import system, seed_render  # noqa: F401
+from test_quality_inspection_api import system as system, seed_render  # noqa: F401
 from test_quality_resource_owner import metadata_result
 
 

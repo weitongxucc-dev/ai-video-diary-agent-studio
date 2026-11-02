@@ -17,7 +17,7 @@ from app.production import EXACT_EDIT_SOURCE
 import test_montage_pipeline as domain_fixture
 import test_visual_preview_application as visual_fixture
 import test_task_media_grants as grant_fixture
-from test_montage_pipeline import person_render_edit_state
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 from test_visual_preview_application import _inspect
 
 

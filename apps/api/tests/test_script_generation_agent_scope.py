@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from test_script_generation_intent import generation  # noqa: F401
+from test_script_generation_intent import generation as generation  # noqa: F401
 from test_creation_task_script_grounding import script_domain_state  # noqa: F401
 
 from app.assistant import task_business as domain

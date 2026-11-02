@@ -14,7 +14,7 @@ from app.assistant_goal_continuation import GoalContinuationService, GoalResultP
 from app.conversation_repository import ConversationRepository
 from app.creation.contracts import JobRun, TaskEvent
 from app.creation_execution import CreationExecutionActor
-from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
+from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

@@ -2,7 +2,7 @@
 import pytest
 
 import app.main as main
-from test_creation_task_script_grounding import api_state  # noqa: F401
+from test_creation_task_script_grounding import api_state as api_state  # noqa: F401
 
 
 def test_generation_source_preflight_records_original_run_without_model(api_state, monkeypatch):

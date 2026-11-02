@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import app.main as main
 from app.conversation_repository import ConversationRepository
-from test_creation_request_api import client_state  # noqa: F401
+from test_creation_request_api import client_state as client_state  # noqa: F401
 
 
 def request_url(chat, request_id):

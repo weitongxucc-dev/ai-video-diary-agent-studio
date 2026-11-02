@@ -13,7 +13,7 @@ import app.main as main
 from app.assistant_goal_continuation import GoalContinuationService
 from app.config import Settings
 from app.schemas import WorkspaceAssistantPlanTurnRequest
-from test_creation_request_api import client_state, create
+from test_creation_request_api import client_state as client_state, create
 
 
 def adopted(c, *, count=1, kind="goal_delegation", confirm=True, finish=True, workspace_id="request-test"):

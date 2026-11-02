@@ -11,7 +11,7 @@ from app.creation.intent_use_case import CreationIntentUseCase
 from app.production import ProductionRepository
 from test_creation_requests import OWNER, WORKSPACE, entries
 from test_creation_task_script_grounding import (
-    FACT, agent_payload, api_state, draft, reviewed, set_agent_reviewer, set_api_provider,
+    FACT, agent_payload, api_state as api_state, draft, reviewed, set_agent_reviewer, set_api_provider,
 )
 
 

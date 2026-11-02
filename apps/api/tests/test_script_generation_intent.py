@@ -11,7 +11,7 @@ from app.creation.script_generation_intent import (
 )
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 from app.creation_execution import CreationExecutionActor
-from test_creation_task_script_grounding import script_domain_state  # noqa: F401
+from test_creation_task_script_grounding import script_domain_state as script_domain_state  # noqa: F401
 
 
 @pytest.fixture

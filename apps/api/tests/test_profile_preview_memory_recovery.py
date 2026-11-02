@@ -11,7 +11,7 @@ from app.granted_subprocess import GrantedCommandMemoryPressure
 from app.host_memory import MemoryDecision, MemorySample
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
 from app.persistence_json import _json_payload
-from tests.test_profile_api_contract import repo, setup_preview, VoiceProvider, record_only_preview
+from tests.test_profile_api_contract import repo as repo, setup_preview, VoiceProvider, record_only_preview
 
 
 class PressureProvider(VoiceProvider):

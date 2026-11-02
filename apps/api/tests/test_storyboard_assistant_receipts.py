@@ -10,7 +10,7 @@ import pytest
 import app.main as main
 from app.assistant.result_projection import project_business_result
 from app.conversation_repository import ConversationRepository
-from test_storyboard_regeneration import state, inputs, run  # noqa: F401
+from test_storyboard_regeneration import state as state, inputs, run  # noqa: F401
 
 
 def completion(details, *, query=False, input_id="current", status="settled", extra=()):

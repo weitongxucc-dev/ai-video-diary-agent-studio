@@ -7,7 +7,7 @@ import app.main as main
 from app.conversation_repository import ConversationRepository
 from app.assistant_goal_continuation import GoalContinuationService
 from test_creation_task_script_grounding import (
-    api_state, agent_payload, draft, reviewed, rejected, set_agent_reviewer, private_task_rows,
+    api_state as api_state, agent_payload, draft, reviewed, rejected, set_agent_reviewer, private_task_rows,
     saved_agent_draft,
 )
 

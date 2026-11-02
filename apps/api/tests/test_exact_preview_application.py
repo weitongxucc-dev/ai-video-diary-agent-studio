@@ -17,8 +17,8 @@ from app.creation_execution import CreationExecutionActor
 from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
 from app.creation.editing.metadata_use_case import EditPreviewRejected
 from app.schemas import CreationTaskExactEditRequest
-from test_visual_preview_application import visual_application, _inspect
-from test_montage_pipeline import person_render_edit_state, permitted_media_state
+from test_visual_preview_application import visual_application as visual_application, _inspect
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
 
 
 def test_typed_graphic_action_keeps_validated_id_and_defaults_out_of_request_digest():

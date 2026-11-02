@@ -21,7 +21,7 @@ from app.assistant.result_projection import read_sdk_result
 from app.assistant.runtime_checks import _pi_executable, sdk_module
 from app.conversation_repository import ConversationRepository
 from app.assistant_goal_continuation import GoalResultProjection, GoalCandidate
-from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
+from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

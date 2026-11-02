@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from app import main
 from app.creation.script_contracts import CreationTaskScriptSection
-from test_script_library import library  # noqa: F401
+from test_script_library import library as library  # noqa: F401
 
 
 def _bind_library_member(library, monkeypatch):

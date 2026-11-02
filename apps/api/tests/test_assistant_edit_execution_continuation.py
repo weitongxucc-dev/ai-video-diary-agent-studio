@@ -13,7 +13,7 @@ import app.main as main
 from app.conversation_repository import ConversationRepository
 from app.assistant.result_projection import project_business_result, read_sdk_result
 from app.assistant.failures import AssistantUnavailable, FAILURE_OVERLOADED
-from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
+from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
 
 
 def source_turn(state, conversations):

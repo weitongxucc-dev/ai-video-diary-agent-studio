@@ -10,8 +10,8 @@ import pytest
 
 import app.main as main
 from app.task_audio import TASK_MEDIA_CONTEXT
-from test_visual_preview_application import visual_application, _inspect
-from test_montage_pipeline import person_render_edit_state, permitted_media_state
+from test_visual_preview_application import visual_application as visual_application, _inspect
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='native media tools unavailable')

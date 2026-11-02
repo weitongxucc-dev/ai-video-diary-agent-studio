@@ -4,7 +4,7 @@ from uuid import uuid4
 import app.main as main
 from app.creation_plan_routes import CreationPlanPreflightHttpAdapter
 import pytest
-from test_creation_request_api import client_state, create, prepare_one
+from test_creation_request_api import client_state as client_state, create, prepare_one
 
 
 def test_lost_creation_reply_is_read_by_original_input_without_creating_again(client_state):

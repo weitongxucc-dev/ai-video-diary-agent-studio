@@ -17,7 +17,7 @@ from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation_execution import CreationExecutionActor
 from app.topics import OpenAICompatibleCreationTaskScriptGenerator
 from test_creation_task_script_grounding import FACT, _review_tool_response
-from test_creation_task_script_grounding import api_state, script_domain_state  # noqa: F401
+from test_creation_task_script_grounding import api_state as api_state, script_domain_state  # noqa: F401
 
 
 def test_generation_http_acceptance_query_and_early_stop_keep_one_original_run(api_state, monkeypatch):

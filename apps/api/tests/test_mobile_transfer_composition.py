@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.production import ProductionRepository
-from test_companion_identity_http import linked, USER, OTHER, WORKSPACE
+from test_companion_identity_http import linked as linked, USER, OTHER, WORKSPACE
 from test_mobile_transfers import DATA, declaration
 
 

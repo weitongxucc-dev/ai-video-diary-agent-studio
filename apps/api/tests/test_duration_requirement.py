@@ -8,7 +8,7 @@ from app.creation.duration_requirement import DurationConflict, DurationRequirem
 from app.montage import MontagePlanner
 from app.creation.script_contracts import CreationTaskScriptSection
 from app.subtitle_schedule import narration_schedule
-from test_task_montage_duration_policy import task_inputs  # noqa: F401
+from test_task_montage_duration_policy import task_inputs as task_inputs  # noqa: F401
 
 
 def test_goal_duration_is_independent_of_execution_window():

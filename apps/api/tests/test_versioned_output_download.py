@@ -9,7 +9,7 @@ from app.artifact_store import ArtifactStore
 from app.creation.contracts import ArtifactRecord, JobRun, TimelineVersion
 from app.creation.contracts import CreationTask
 from app.production import ProductionRepository
-from test_companion_identity_http import linked, USER, WORKSPACE
+from test_companion_identity_http import linked as linked, USER, WORKSPACE
 from test_reply_script_transfer import make_plan
 
 

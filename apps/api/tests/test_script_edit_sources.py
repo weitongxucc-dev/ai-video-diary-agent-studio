@@ -1,6 +1,6 @@
 """Saved library drafts read source choices without a generated-topic context."""
 from app import main
-from test_script_library import library, reuse, save  # noqa: F401
+from test_script_library import library as library, reuse, save  # noqa: F401
 
 
 def test_library_draft_sources_use_current_permissions_without_topic_or_body(library, monkeypatch):
