@@ -249,7 +249,7 @@ def test_resource_wait_get_list_missing_cancel_stale_and_actor_scope(tmp_path, m
 
 def test_terminal_conversation_uses_same_resource_history_without_changing_cancel_status(tmp_path, monkeypatch):
     import json
-    from dataclasses import asdict, replace
+    from dataclasses import asdict
     from types import SimpleNamespace
     from app.conversation_repository import ConversationRepository
     (repo, actor, _, _, _, media, runtime, _), client = _resource_api_case(tmp_path, monkeypatch)
@@ -296,7 +296,6 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     import wave
     import shutil
     from dataclasses import asdict, replace
-    from types import SimpleNamespace
     from app.artifact_store import ArtifactStore
     from app.host_resource_probes import HostProcessProbe
     from test_cpu_audio_budget import audio_budget

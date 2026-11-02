@@ -258,7 +258,6 @@ def _montage_stream_case(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('outcome', ['normal', 'save_base_gap', 'tail', 'revoked', 'checkpoint_revoked', 'save_base_gap_changed_audio'])
 def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, outcome):
-    from app.montage import creation_task_montage_plan_from_payload
     case = _montage_stream_case(tmp_path, monkeypatch)
     builds = []
     build = MontagePlanner._build_creation_plan

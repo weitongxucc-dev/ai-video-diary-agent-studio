@@ -9,8 +9,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import signal
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 

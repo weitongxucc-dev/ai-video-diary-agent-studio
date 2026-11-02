@@ -21,7 +21,7 @@ from app.creation.plan_contracts import CreationPlan
 from app.quality_checks import QualityReport, QualityUnavailable, quality_report_evidence
 from app.quality_inspection import QualityCheckRepository
 from app.quality_worker_runtime import (QualityBudget, source_receipt, QUALITY_PHASES,
-    quality_phase_request, quality_unit_key)
+    quality_phase_request)
 from app.task_audio import TaskAudio
 
 

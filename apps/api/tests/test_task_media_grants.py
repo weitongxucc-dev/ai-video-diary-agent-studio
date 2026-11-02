@@ -495,7 +495,6 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     import json
     import subprocess
     from dataclasses import asdict
-    from types import SimpleNamespace
     from fastapi.testclient import TestClient
     import app.main as main
     from app.artifact_store import ArtifactStore

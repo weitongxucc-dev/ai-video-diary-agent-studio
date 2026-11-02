@@ -92,7 +92,6 @@ def test_actual_twenty_source_float_reduction_matches_one_master_mix(tmp_path, g
     (False, 'wrong_manifest'), (False, 'revoke'), (False, 'normalization_failure'),
     (False, 'normalization_unknown'), (False, 'same_transaction_head')])
 def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_path, monkeypatch, restart_after_first, preflight_attack):
-    import json
     import subprocess
     from datetime import datetime, timezone
     from types import SimpleNamespace

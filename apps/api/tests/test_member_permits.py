@@ -1029,7 +1029,6 @@ def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(pre
 
 
 def test_presenter_cpu_row_inputs_keep_actual_source_accounting_and_cache_revalidation(presenter_input_stream_case, monkeypatch):
-    from app.creation_execution import CpuRenderLimits, cpu_render_facts
     case = presenter_input_stream_case
     render = _complete_presenter_fixture(case)
     task = _presenter_montage_fixture(case, render)

@@ -1,22 +1,17 @@
 """Two finite audio editor journeys on real isolated stores and synthetic original grants."""
 from dataclasses import asdict,replace
 from datetime import datetime,timezone
-import hashlib
 import io
 import json
 import wave
-from pathlib import Path
 from uuid import uuid4
 
-import pytest
 
 from app import main
-from app.audio_timeline import TimelineAudioTrack
-from app.creation.contracts import TimelineVersion
-from app.montage import MontageClip,creation_task_montage_plan_to_payload
+from app.montage import MontageClip
 from app.production import MaterialAsset,MaterialSegment
 from app.task_audio import TASK_MEDIA_CONTEXT
-from test_audio_ingress_application import audio_state,seed_narration,settled,pcm_bytes
+from test_audio_ingress_application import audio_state,seed_narration,settled
 
 
 def edit_state(tmp_path,monkeypatch):

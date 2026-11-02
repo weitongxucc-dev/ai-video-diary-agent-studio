@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from app.creation.contracts import JobRun, TaskEvent
+from app.creation.contracts import JobRun
 from app.creation.execution_budget_scope import BudgetScopeConflict, BudgetScopeExhausted, ExecutionBudgetScopes
 from app.creation_execution import CreationExecutionActor
 from test_creation_execution import _seed

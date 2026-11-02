@@ -542,7 +542,6 @@ def test_montage_stream_preserves_raw_stage_person_and_narration_signature_bytes
 @pytest.mark.parametrize('outcome', ['normal', 'unknown_commit', 'tail', 'source', 'revoked', 'head'])
 def test_whole_montage_stream_real_regeneration_owner_and_original_receipt(tmp_path, monkeypatch, outcome):
     from app.creation.contracts import TimelineVersion
-    from app.creation.storyboard_regeneration import StoryboardRegeneration
     from test_montage_stage_application import _montage_stream_case
     case = _montage_stream_case(tmp_path, monkeypatch)
     repo = case.repo

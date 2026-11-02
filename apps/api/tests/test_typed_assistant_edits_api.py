@@ -522,7 +522,6 @@ def test_task_workspace_facts_keep_owner_voice_and_latest_provider_result(worksp
 
 
 def test_script_section_http_reads_complete_versioned_windows_without_full_hydration(metadata_http_state, monkeypatch):
-    from app.creation.script_windows import write_script_sections
     state = metadata_http_state
     version, script_id, sections = _workspace_row_script(state)
 
@@ -1390,7 +1389,6 @@ def test_subtitle_direct_and_natural_consumers_use_real_family(subtitle_http_sta
 
 
 def test_subtitle_unknown_claim_and_HTTP_projection_are_not_application_facts(subtitle_http_state):
-    from app.task_audio import media_digest
     state = subtitle_http_state
     preview = state.client.post(state.url + '/edits/exact/preview', json=subtitle_action(state, 'ReplaceSubtitleText'))
     assert preview.status_code == 200, preview.text

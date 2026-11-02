@@ -3,7 +3,6 @@ from pathlib import Path
 from assistant_sdk_fixtures import project_event_fixture
 """Pi event parsing and task-turn receipts with isolated runtime doubles."""
 import json
-import subprocess
 import sys
 
 import pytest

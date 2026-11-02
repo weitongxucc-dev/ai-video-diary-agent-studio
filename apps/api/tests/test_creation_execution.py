@@ -3073,10 +3073,8 @@ def test_pcm_original_job_appends_within_parent_and_keeps_unknown_unpublished(tm
 @pytest.mark.parametrize('interrupt_final',[False,True,'dependency_changed','source_changed'])
 def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption(tmp_path,monkeypatch,interrupt_final):
     from model_workers.pcm_assembly import execute as assemble
-    from app.creation.contracts import EditIntent,EditProposal,JobRun,TaskEvent
+    from app.creation.contracts import EditIntent,EditProposal
     from app.creation.editing.metadata_use_case import MetadataEditUseCase
-    from app.creation_execution import NARRATION_EDIT_KIND,narration_edit_digest
-    from app.device_scheduler import SubmissionIntent,SchedulePolicy
     case=_narration_units_case(tmp_path,section_count=3,audio_input_count=2,pcm_inprocess=False)
     wav_reads=_assert_wav_reads_outside_writer(monkeypatch,case)
     def worker(_scheduler,_grant,command,**_kwargs):
@@ -4892,7 +4890,6 @@ def _legacy_generated_segment_case(tmp_path, monkeypatch, *, declared_source=Fal
 
 @pytest.mark.parametrize('mismatch', [None, 'output', 'source'])
 def test_resume_original_legacy_audio_recovers_metadata_without_provider_or_new_charge(tmp_path, monkeypatch, mismatch):
-    from app.device_scheduler import RecoveryBlocked
     case = _legacy_generated_segment_case(tmp_path, monkeypatch, declared_source=True)
     before = case.repo.narration_units.creation_narration_usage('local', case.job.id)
     if mismatch == 'output':

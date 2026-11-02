@@ -103,7 +103,7 @@ def test_task_media_local_check_fences_its_sources_and_leaves_unrelated_assets_o
 def test_task_media_retry_reopens_owner_and_device_attempt_in_one_transaction(tmp_path, monkeypatch, rollback):
     from app.task_audio import TaskMediaJobs
     from app.device_runtime import OwnerRegistration, OwnerRouter
-    from app.device_scheduler import DeviceScheduler, SubmissionIntent, SchedulePolicy
+    from app.device_scheduler import DeviceScheduler
     from tests.test_device_scheduler import Resources, Processes
     repo, task_id, _, _ = _seed(tmp_path, voice=False)
     actor = CreationExecutionActor("workspace_a", "member")
@@ -197,7 +197,6 @@ def test_publish_local_check_never_reopens_output_and_refuses_account_change(tmp
 def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(tmp_path, monkeypatch):
     from app.artifact_store import ArtifactStore
     from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND
-    from app.creation.quality_execution import QualityCheckOwnerVerifier
     from app.creation.output_observation_use_case import OutputObservationUseCase
     from app.quality_inspection import QualityCheckRepository
     from app.creation.plan_contracts import CreationPlan

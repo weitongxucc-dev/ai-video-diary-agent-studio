@@ -151,7 +151,6 @@ def test_task_file_count_failure_keeps_actual_limit_and_release_receipt(tmp_path
 
 
 def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
-    from app.host_resource_probes import SceneRuntimeLimits
     import app.granted_subprocess as commands
 
     grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
@@ -305,7 +304,6 @@ def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch
 def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,rss,threads,accepted):
     from app.granted_subprocess import _check_scene_runtime
     from app.device_scheduler import ProcessIdentity
-    from app.host_resource_probes import SceneRuntimeLimits
     child=ProcessIdentity(100,'1.000000','synthetic-boot')
     current=SimpleNamespace(pid=100,create_time=lambda:1,memory_info=lambda:SimpleNamespace(rss=rss),num_threads=lambda:threads)
     monkeypatch.setattr(psutil,'Process',lambda _:current)
@@ -1144,7 +1142,6 @@ def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(
 @pytest.mark.parametrize("release_unknown", [False, True])
 def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, monkeypatch, caplog, release_unknown):
     import app.granted_subprocess as commands
-    from app.host_resource_probes import SceneRuntimeLimits
     grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
                   "a" * 64, 1, 1, "token", tmp_path / "isolated.sqlite")
     decision = HostResourceDecision(False, {}, {
@@ -1557,7 +1554,6 @@ def test_media_preview_child_requires_real_probe_and_declared_budget(tmp_path, u
 @pytest.mark.parametrize("scenario", ["allowed", "register_refused", "cancel_before_exec", "revoked", "resource_limit", "timeout"])
 def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeypatch, scenario):
     """Real POSIX children, controlled resource facts; no host capacity sampling/model."""
-    from app.host_resource_probes import SceneRuntimeLimits
     import app.granted_subprocess as commands
     grant = Grant("preview-request", "local", "media_preview", "preview", "voice:input",
                   "digest", 1, 1, "token", tmp_path / "db")

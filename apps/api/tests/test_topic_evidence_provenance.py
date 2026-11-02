@@ -1,7 +1,6 @@
 from dataclasses import replace
 
 import pytest
-from fastapi import HTTPException
 
 import app.main as main
 from app.production import ProductionRepository

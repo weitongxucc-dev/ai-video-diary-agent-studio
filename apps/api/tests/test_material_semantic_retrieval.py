@@ -1,5 +1,4 @@
 """Real SQLite/queue contracts with explicit synthetic encoder boundaries; no model load."""
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -16,7 +15,7 @@ from app.materials.retrieval import MaterialRetrievalService, OWNER
 from app.host_resource_probes import MaterialVisualQueryBudget
 from app.models import utc_now
 from app.persistence_json import _json_payload
-from app.visual_semantics import ChineseClipSubprocessProvider, VisualQueryExecutionLimits, visual_feature_version
+from app.visual_semantics import ChineseClipSubprocessProvider, visual_feature_version
 from tests.test_device_scheduler import Resources, Processes
 from tests.test_material_search_candidates import _approved_asset, _repository
 

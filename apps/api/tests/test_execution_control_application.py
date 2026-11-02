@@ -19,7 +19,6 @@ from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.creation.contracts import CreationPlanVoiceReference
 from app.task_audio import TASK_MEDIA_KIND
-from _media_preview_test_fixtures import register_synthetic_profiles
 from test_creation_execution import _seed
 import pytest
 

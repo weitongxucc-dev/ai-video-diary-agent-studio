@@ -20,7 +20,6 @@ from fastapi import FastAPI, Request
 
 import app.main as main_module
 from app.auth import (
-    ForbiddenError,
     SupabaseAuthContext,
     UnauthorizedError,
     extract_bearer_token,

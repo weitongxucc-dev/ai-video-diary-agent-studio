@@ -13,7 +13,7 @@ from PIL import Image
 import pytest
 
 import app.main as main
-from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+from app.montage import creation_task_montage_plan_to_payload
 from app.creation.contracts import SubtitleTrack, SubtitleCue
 from app.task_audio import TaskAudio, TASK_MEDIA_CONTEXT
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state

@@ -2,8 +2,6 @@
 from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 import shutil
-from pathlib import Path
-import json
 
 import pytest
 

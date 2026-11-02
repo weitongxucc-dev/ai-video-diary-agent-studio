@@ -3,7 +3,6 @@ from dataclasses import asdict, replace
 import hashlib
 import io
 import json
-from pathlib import Path
 import wave
 
 import pytest
